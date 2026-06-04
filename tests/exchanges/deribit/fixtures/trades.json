@@ -1,0 +1,4 @@
+{"params":{"channel":"trades.BTC-PERPETUAL.raw","data":[
+ {"trade_id":"ETH-1","price":2000.5,"amount":10.0,"direction":"buy","timestamp":1700000000000,"instrument_name":"BTC-PERPETUAL","index_price":2000.0,"mark_price":2000.4},
+ {"trade_id":"ETH-2","price":1999.0,"amount":3.0,"direction":"sell","timestamp":1700000000500,"instrument_name":"BTC-PERPETUAL","index_price":1999.5,"mark_price":1999.4,"liquidation":"T"}
+]}}
