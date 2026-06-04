@@ -17,6 +17,7 @@ from crocodile.exchanges.deribit.connector import DeribitConnector
 from crocodile.ingest.transport import FakeTransport
 from crocodile.instruments.registry import InstrumentRegistry
 from crocodile.schema.records import Trade
+from crocodile.sink.base import Sink
 from crocodile.store.parquet_sink import ParquetSink
 
 # ─── fixture helpers ────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ _ETH_TRADES_FRAME = json.dumps(
 
 
 def _make_connector(
-    sink: ParquetSink,
+    sink: Sink,
     frames: list[bytes],
     symbol: str = "BTC-PERPETUAL",
 ) -> DeribitConnector:
@@ -89,7 +90,7 @@ async def test_collect_two_connectors_write_parquet_files(tmp_path: pathlib.Path
     conn1 = _make_connector(sink, frames=[_TRADES_FRAME], symbol="BTC-PERPETUAL")
     conn2 = _make_connector(sink, frames=[_ETH_TRADES_FRAME], symbol="ETH-PERPETUAL")
 
-    await collect([conn1, conn2], sink)
+    await collect([conn1, conn2], sink, max_reconnects=0)
 
     parquet_files = _find_parquets(tmp_path)
     assert len(parquet_files) > 0, "No Parquet files written after collect()"
@@ -106,10 +107,10 @@ async def test_collect_records_reach_sink(tmp_path: pathlib.Path) -> None:
 
     sink = MemorySink()
     # Two connectors, different symbols, each emitting one Trade
-    conn1 = _make_connector(sink, frames=[_TRADES_FRAME], symbol="BTC-PERPETUAL")  # type: ignore[arg-type]
-    conn2 = _make_connector(sink, frames=[_ETH_TRADES_FRAME], symbol="ETH-PERPETUAL")  # type: ignore[arg-type]
+    conn1 = _make_connector(sink, frames=[_TRADES_FRAME], symbol="BTC-PERPETUAL")
+    conn2 = _make_connector(sink, frames=[_ETH_TRADES_FRAME], symbol="ETH-PERPETUAL")
 
-    await collect([conn1, conn2], sink)  # type: ignore[arg-type]
+    await collect([conn1, conn2], sink, max_reconnects=0)
 
     trades = [r for r in sink.records if isinstance(r, Trade)]
     assert len(trades) == 2
@@ -133,14 +134,14 @@ async def test_collect_one_connector_raises_does_not_crash(tmp_path: pathlib.Pat
     sink = MemorySink()
 
     # Connector A — will raise on connect
-    conn_bad = _make_connector(sink, frames=[], symbol="BTC-PERPETUAL")  # type: ignore[arg-type]
+    conn_bad = _make_connector(sink, frames=[], symbol="BTC-PERPETUAL")
     conn_bad.transport = _BrokenTransport(frames=[])
 
     # Connector B — healthy; emits one trade
-    conn_good = _make_connector(sink, frames=[_ETH_TRADES_FRAME], symbol="ETH-PERPETUAL")  # type: ignore[arg-type]
+    conn_good = _make_connector(sink, frames=[_ETH_TRADES_FRAME], symbol="ETH-PERPETUAL")
 
     # Must not raise — bad connector is isolated
-    await collect([conn_bad, conn_good], sink)  # type: ignore[arg-type]
+    await collect([conn_bad, conn_good], sink, max_reconnects=0)
 
     trades = [r for r in sink.records if isinstance(r, Trade)]
     # The good connector delivered its record
@@ -154,7 +155,7 @@ async def test_collect_empty_connectors_is_noop(tmp_path: pathlib.Path) -> None:
     from crocodile.sink.memory import MemorySink
 
     sink = MemorySink()
-    await collect([], sink)  # type: ignore[arg-type]
+    await collect([], sink, max_reconnects=0)
     assert sink.records == []
 
 
@@ -177,16 +178,16 @@ async def test_collect_sigint_closes_sink(tmp_path: pathlib.Path) -> None:
 
     # Infinite transport — never stops on its own
     class _InfiniteTransport(FakeTransport):
-        async def _iter(self) -> None:  # type: ignore[override]
+        async def _iter(self) -> None:  # type: ignore[override, misc]
             while True:
                 await asyncio.sleep(0)
                 yield _TRADES_FRAME
 
     sink = _TrackCloseSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
-    conn = _make_connector(sink, frames=[], symbol="BTC-PERPETUAL")  # type: ignore[arg-type]
+    conn = _make_connector(sink, frames=[], symbol="BTC-PERPETUAL")
     conn.transport = _InfiniteTransport(frames=[])
 
-    task = asyncio.create_task(collect([conn], sink))  # type: ignore[arg-type]
+    task = asyncio.create_task(collect([conn], sink))
     # Give it a moment to start
     await asyncio.sleep(0.05)
     task.cancel()
