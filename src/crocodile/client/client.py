@@ -165,8 +165,11 @@ class CrocodileClient:
             Record objects in non-decreasing ``local_ts`` order.
 
         Note:
-            The returned iterator is lazy — Parquet scans happen as the caller
-            consumes records, one stream at a time.  If you need all records
+            DataFrames are loaded eagerly per-(channel, symbol) pair before
+            merging begins: all ``catalog.scan()`` calls complete upfront and
+            their results are materialised into memory.  The k-way merge then
+            iterates over those in-memory frames lazily (row by row), but the
+            Parquet scan itself is not deferred.  If you need all records
             in memory, wrap with ``list(client.replay(...))``.
         """
         if not symbols or not channels:

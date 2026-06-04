@@ -11,7 +11,7 @@ from __future__ import annotations
 import pathlib
 
 from crocodile.schema.enums import Side
-from crocodile.schema.records import Trade
+from crocodile.schema.records import BookDelta, Trade
 from crocodile.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -191,3 +191,90 @@ async def test_replay_record_types_are_correct(tmp_path: pathlib.Path) -> None:
     assert all(isinstance(r, Trade) for r in records), (
         f"Expected all Trade, got {[type(r).__name__ for r in records]}"
     )
+
+
+async def test_replay_empty_channels_returns_empty(tmp_path: pathlib.Path) -> None:
+    """replay() with empty channels list yields nothing (early-return guard)."""
+    from crocodile.client.client import CrocodileClient
+
+    await _write_two_symbol_fixtures(tmp_path)
+    client = CrocodileClient(data_dir=tmp_path)
+    records = list(
+        client.replay(
+            channels=[],
+            symbols=["deribit:BTC-PERPETUAL"],
+            frm=_BASE_TS,
+            to=_BASE_TS + 3_000_000_000,
+        )
+    )
+    assert records == [], f"Expected empty list, got {records}"
+
+
+async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
+    """replay() across trade + book_delta channels yields all records globally sorted."""
+    from crocodile.client.client import CrocodileClient
+
+    # Write Trade records at even offsets and BookDelta records at odd offsets
+    # so they interleave strictly when merged by local_ts.
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    symbol = "deribit:BTC-PERPETUAL"
+
+    # Trades at _BASE_TS + 0, +2s, +4s
+    for i, price in enumerate([1.0, 2.0, 3.0]):
+        ts = _BASE_TS + i * 2_000_000_000
+        await sink.put(
+            Trade(
+                exchange="deribit",
+                symbol=symbol,
+                symbol_raw="BTC-PERPETUAL",
+                exchange_ts=ts,
+                local_ts=ts,
+                id=str(ts),
+                price=price,
+                amount=1.0,
+                side=Side.BUY,
+            )
+        )
+
+    # BookDeltas at _BASE_TS + 1s, +3s (interleaved between trades)
+    for i in range(2):
+        ts = _BASE_TS + 1_000_000_000 + i * 2_000_000_000
+        await sink.put(
+            BookDelta(
+                exchange="deribit",
+                symbol=symbol,
+                symbol_raw="BTC-PERPETUAL",
+                exchange_ts=ts,
+                local_ts=ts,
+                bids=[(100.0 + i, 1.0)],
+                asks=[],
+                seq_id=i + 1,
+                prev_seq_id=i if i > 0 else None,
+                is_snapshot=False,
+            )
+        )
+
+    await sink.flush()
+
+    client = CrocodileClient(data_dir=tmp_path)
+    records = list(
+        client.replay(
+            channels=["trade", "book_delta"],
+            symbols=[symbol],
+            frm=_BASE_TS,
+            to=_BASE_TS + 5_000_000_000,
+        )
+    )
+
+    # All 5 records (3 trades + 2 book_deltas) should appear
+    assert len(records) == 5, f"Expected 5 records, got {len(records)}: {records}"
+
+    # Output must be globally non-decreasing in local_ts
+    local_tss = [r.local_ts for r in records]
+    assert local_tss == sorted(local_tss), f"replay() output is not sorted: {local_tss}"
+
+    # Both channel types must be present
+    types = {type(r).__name__ for r in records}
+    assert "Trade" in types, "Expected Trade records in multi-channel replay"
+    assert "BookDelta" in types, "Expected BookDelta records in multi-channel replay"
