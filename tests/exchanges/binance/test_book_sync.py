@@ -31,6 +31,57 @@ def test_futures_first_event_no_offset_and_pu_continuity():
     assert s.feed(U=111, u=120, pu=999) == SyncResult.RESYNC  # pu != prev_u
 
 
+def test_resync_cycle_resets_state_machine():
+    """set_snapshot called a second time (resync) must reset _prev_u / _have_first
+    so the state machine can re-sync cleanly from the new snapshot."""
+    s = OrderBookSync(venue="spot")
+
+    # --- first sync ---
+    s.set_snapshot(last_update_id=100)
+    assert s.feed(U=101, u=105, pu=None) == SyncResult.APPLY
+    assert s.feed(U=106, u=110, pu=None) == SyncResult.APPLY
+
+    # --- resync: caller re-fetches snapshot and calls set_snapshot again ---
+    s.set_snapshot(last_update_id=200)
+
+    # Events from the old sync that are now stale must be dropped (u <= 200)
+    assert s.feed(U=106, u=110, pu=None) == SyncResult.DROP
+
+    # First event that qualifies against the new snapshot must APPLY
+    assert s.feed(U=201, u=205, pu=None) == SyncResult.APPLY
+
+    # Continuity must be tracked relative to the *new* sync, not the old one
+    assert s.feed(U=206, u=210, pu=None) == SyncResult.APPLY
+
+    # A gap after the new sync triggers another RESYNC signal
+    assert s.feed(U=300, u=310, pu=None) == SyncResult.RESYNC
+
+
+def test_resync_cycle_futures():
+    """Futures venue: second set_snapshot also resets the state machine correctly."""
+    s = OrderBookSync(venue="futures")
+
+    # --- first sync ---
+    s.set_snapshot(last_update_id=100)
+    assert s.feed(U=95, u=100, pu=90) == SyncResult.APPLY
+    assert s.feed(U=101, u=110, pu=100) == SyncResult.APPLY
+
+    # --- resync ---
+    s.set_snapshot(last_update_id=200)
+
+    # stale events (u < 200) are dropped
+    assert s.feed(U=101, u=110, pu=100) == SyncResult.DROP
+
+    # first valid event against new snapshot: U<=200 AND u>=200
+    assert s.feed(U=195, u=200, pu=190) == SyncResult.APPLY
+
+    # continuity via pu == prev_u (200)
+    assert s.feed(U=201, u=210, pu=200) == SyncResult.APPLY
+
+    # continuity break -> RESYNC
+    assert s.feed(U=211, u=220, pu=999) == SyncResult.RESYNC
+
+
 def test_invalid_venue_raises():
     with pytest.raises(ValueError, match="venue must be 'spot' or 'futures'"):
         OrderBookSync(venue="binance-spot")  # type: ignore[arg-type]

@@ -90,8 +90,14 @@ class OrderBookSync:
                     return SyncResult.APPLY
                 return SyncResult.RESYNC
         else:
-            # Subsequent events — check continuity
-            assert self._prev_u is not None
+            # Subsequent events — check continuity.
+            # Invariant: both branches that set _have_first=True also set _prev_u=u,
+            # so _prev_u can never be None here.  If somehow it were, we would crash
+            # with a confusing TypeError on `self._prev_u + 1`; raise explicitly instead.
+            if self._prev_u is None:
+                raise RuntimeError(
+                    "invariant violated: _prev_u is None with _have_first=True"
+                )
             if self._venue == "spot":
                 if U == self._prev_u + 1:
                     self._prev_u = u
