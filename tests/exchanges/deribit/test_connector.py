@@ -1,4 +1,8 @@
+import json
 import logging
+import pathlib
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from crocodile.exchanges.deribit.connector import (
     DeribitConnector,
@@ -8,6 +12,8 @@ from crocodile.exchanges.deribit.connector import (
 from crocodile.instruments.registry import InstrumentRegistry
 from crocodile.schema.records import Record, Trade
 from crocodile.sink.base import Sink
+
+_FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 
 # ---------------------------------------------------------------------------
 # Minimal in-memory sink for testing
@@ -228,3 +234,67 @@ def test_connector_normalize_non_dict_returns_empty():
     )
     records = list(conn.normalize("not a dict", local_ts=0))
     assert records == []
+
+
+# ---------------------------------------------------------------------------
+# DeribitConnector.list_instruments — fixture-driven, no live network
+# ---------------------------------------------------------------------------
+
+async def test_list_instruments_calls_full_cartesian_product() -> None:
+    """list_instruments must call public/get_instruments for every currency x kind
+    combination, including USDC and both combo kinds (appendix §3.1 authoritative)."""
+    fixture_data: dict[str, Any] = json.loads(
+        (_FIXTURE_DIR / "get_instruments.json").read_text()
+    )
+
+    # Track every (currency, kind) pair that was requested.
+    requested_pairs: list[tuple[str, str]] = []
+
+    # Build a mock aiohttp response that returns the fixture JSON.
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value=fixture_data)
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+
+    def fake_get(url: str, params: dict[str, str]) -> Any:
+        requested_pairs.append((params["currency"], params["kind"]))
+        return mock_response
+
+    mock_session = MagicMock()
+    mock_session.get = fake_get
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    registry = InstrumentRegistry()
+    sink = _MemSink()
+    conn = DeribitConnector(
+        symbols=["BTC-PERPETUAL"],
+        channels=["trade"],
+        out=sink,
+        registry=registry,
+    )
+
+    with patch("crocodile.exchanges.deribit.connector.aiohttp.ClientSession") as mock_cls:
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        instruments = await conn.list_instruments()
+
+    # Verify currencies covered
+    currencies = {c for c, _ in requested_pairs}
+    assert currencies == {"BTC", "ETH", "SOL", "USDC"}, (
+        f"Missing currencies: {currencies!r}"
+    )
+
+    # Verify all five kinds are requested (including the two combos)
+    kinds = {k for _, k in requested_pairs}
+    expected_kinds = {"future", "option", "spot", "future_combo", "option_combo"}
+    assert kinds == expected_kinds, f"Missing kinds: {expected_kinds - kinds}"
+
+    # Verify full Cartesian product: 4 currencies x 5 kinds = 20 calls
+    assert len(requested_pairs) == 20, (
+        f"Expected 20 REST calls (4 currencies x 5 kinds), got {len(requested_pairs)}"
+    )
+
+    # Verify parsed instruments come back
+    assert len(instruments) > 0

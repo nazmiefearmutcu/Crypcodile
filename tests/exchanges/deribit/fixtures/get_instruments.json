@@ -1,0 +1,5 @@
+{"result":[
+  {"instrument_name":"BTC-PERPETUAL","kind":"future","base_currency":"BTC","quote_currency":"USD","tick_size":0.5,"contract_size":10.0,"settlement_currency":"USD"},
+  {"instrument_name":"BTC-27JUN25","kind":"future","base_currency":"BTC","quote_currency":"USD","expiration_timestamp":1751004000000,"tick_size":0.5,"contract_size":10.0,"settlement_currency":"USD"},
+  {"instrument_name":"BTC-30JUN-50000-C","kind":"option","base_currency":"BTC","quote_currency":"USD","strike":50000.0,"expiration_timestamp":1751004000000,"option_type":"call","tick_size":0.0005,"contract_size":1.0,"settlement_currency":"BTC"}
+]}

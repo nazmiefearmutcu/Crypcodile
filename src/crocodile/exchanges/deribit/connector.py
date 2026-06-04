@@ -140,7 +140,7 @@ class DeribitConnector(Connector):
             # Fetch all currencies x kinds (§3.1: BTC|ETH|SOL|USDC)
             instruments: list[Instrument] = []
             for currency in ("BTC", "ETH", "SOL", "USDC"):
-                for kind in ("future", "option", "spot"):
+                for kind in ("future", "option", "spot", "future_combo", "option_combo"):
                     url = f"{REST_BASE}/public/get_instruments"
                     params = {"currency": currency, "kind": kind, "expired": "false"}
                     async with session.get(url, params=params) as resp:

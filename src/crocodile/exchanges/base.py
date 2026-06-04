@@ -40,8 +40,15 @@ class Connector(ABC):
     @abstractmethod
     async def list_instruments(self) -> list[Instrument]: ...
 
-    @abstractmethod
-    def subscribe_channels(self) -> list[str]: ...
+    def subscribe_channels(self) -> list[str]:
+        """Return the list of WS channel strings this connector will subscribe to.
+
+        Override in concrete connectors. Not abstract so that future connectors
+        (Binance T1.9, Bybit T4.4, OKX T4.5, Coinbase T4.6) are not forced to
+        implement it before they are ready; the ABC contract (appendix §2) does
+        not list subscribe_channels() — only subscribe() is specified there.
+        """
+        raise NotImplementedError
 
     async def backfill(
         self,
