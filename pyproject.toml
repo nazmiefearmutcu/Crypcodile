@@ -25,6 +25,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
+    "pytest-timeout>=2",
     "ruff>=0.6",
     "mypy>=1.11",
 ]
@@ -40,6 +41,8 @@ packages = ["src/crocodile"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
+timeout = 120
+timeout_method = "thread"
 
 [tool.ruff]
 line-length = 100
