@@ -29,6 +29,22 @@
 Python 3.12+ · asyncio · msgspec · Polars · PyArrow · DuckDB · websockets/aiohttp ·
 Typer · Apache-2.0.
 
+## Development
+
+```bash
+# Install all dependencies (including dev extras) into a local .venv
+uv sync
+
+# Run the test suite
+uv run pytest
+
+# Lint (ruff)
+uv run ruff check .
+
+# Type-check (mypy)
+uv run mypy
+```
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
