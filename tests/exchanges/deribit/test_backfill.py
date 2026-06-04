@@ -2,6 +2,7 @@
 
 import json
 import pathlib
+from typing import Any
 
 import pytest
 
@@ -84,6 +85,21 @@ def test_parse_funding_page_maps_interest_8h_as_funding_rate():
     assert f1.predicted_funding_rate == pytest.approx(0.000011)
 
 
+def test_parse_funding_page_populates_funding_timestamp() -> None:
+    """funding_timestamp must equal exchange_ts (settlement time per Deribit docs)."""
+    raw = json.loads((FIXTURES / "rest_funding.json").read_text())
+    records = list(parse_funding_page(raw, symbol="BTC-PERPETUAL", local_ts=99))
+
+    f0 = records[0]
+    # entry['timestamp'] = 1700000000000 ms → funding_timestamp = 1700000000000 * 1_000_000 ns
+    assert f0.funding_timestamp == 1700000000000 * 1_000_000
+    # must equal exchange_ts (both derived from the same entry['timestamp'])
+    assert f0.funding_timestamp == f0.exchange_ts
+
+    f1 = records[1]
+    assert f1.funding_timestamp == 1700003600000 * 1_000_000
+
+
 # ---------------------------------------------------------------------------
 # backfill_trades — pagination via end_timestamp walking
 # ---------------------------------------------------------------------------
@@ -123,9 +139,10 @@ async def test_backfill_trades_paginates_until_has_more_false():
     # 1 from page1, 2 from page2 (plus 1 liquidation from page2's second trade)
     assert len(trades) == 3
     assert len(call_args) == 2
-    # second call's end_ts should walk to the last trade's timestamp from page1
-    # page1 has trade at timestamp=1700000002000ms → next page end = that ts
-    assert call_args[1][1] == 1700000002000  # end_ts_ms walked back
+    # second call's end_ts should walk back to the earliest timestamp on page1
+    # page1 has a single trade at timestamp=1700000001500ms (strictly below end_ms=1700000002000ms)
+    # so pagination actually moved backward, proving the walk is working
+    assert call_args[1][1] == 1700000001500  # end_ts_ms walked back
 
 
 @pytest.mark.asyncio
@@ -150,3 +167,63 @@ async def test_backfill_funding_yields_funding_records():
     assert len(records) == 2
     assert all(isinstance(r, Funding) for r in records)
     assert records[0].funding_rate == pytest.approx(0.0001)
+
+
+# ---------------------------------------------------------------------------
+# backfill_trades — infinite-loop guard (same-millisecond page)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_trades_stops_on_no_progress() -> None:
+    """When all trades on a page share the same ms as current_end_ms (e.g. a
+    liquidation cascade with 1000+ trades in one millisecond), the loop must
+    break rather than re-fetching the same page indefinitely."""
+    from crocodile.exchanges.deribit.backfill import DeribitBackfill
+
+    # All trades share timestamp=1700000002000ms == end_ms → no progress possible
+    same_ms_page = {
+        "result": {
+            "trades": [
+                {
+                    "trade_id": f"LIQ-{i}",
+                    "trade_seq": i,
+                    "instrument_name": "BTC-PERPETUAL",
+                    "price": 48000.0,
+                    "amount": 1.0,
+                    "direction": "sell",
+                    "timestamp": 1700000002000,  # identical to end_ms
+                    "index_price": 48000.0,
+                    "mark_price": 48000.0,
+                    "iv": None,
+                }
+                for i in range(5)
+            ],
+            "has_more": True,  # server claims more pages exist
+        }
+    }
+
+    call_count = 0
+
+    async def fake_fetch_no_progress(
+        instrument: str, end_ts_ms: int, count: int, start_ts_ms: int
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        if call_count > 3:
+            raise RuntimeError("Infinite loop: fetch called too many times")
+        return same_ms_page
+
+    bf = DeribitBackfill(fetch_trades=fake_fetch_no_progress, fetch_funding=None)
+
+    start_ns = 1700000000000 * 1_000_000
+    end_ns = 1700000002000 * 1_000_000  # end_ms = 1700000002000
+
+    records = []
+    async for r in bf.backfill_trades("BTC-PERPETUAL", start_ns=start_ns, end_ns=end_ns):
+        records.append(r)
+
+    # Must have fetched exactly once and then stopped (no progress → break)
+    assert call_count == 1
+    trades = [r for r in records if isinstance(r, Trade)]
+    assert len(trades) == 5

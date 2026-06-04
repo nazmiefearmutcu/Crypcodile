@@ -98,6 +98,7 @@ def parse_funding_page(
                 funding_rate=float(entry["interest_8h"]),
                 predicted_funding_rate=float(entry["interest_1h"]),
                 interval_hours=8,
+                funding_timestamp=ms_to_ns(entry["timestamp"]),
             )
         )
     return out
@@ -181,8 +182,13 @@ class DeribitBackfill:
             if not has_more or not trades_data:
                 break
 
-            # Walk end_timestamp to the earliest trade on this page
+            # Walk end_timestamp to the earliest trade on this page.
+            # Guard: if the earliest timestamp is >= current_end_ms, no progress
+            # was made (e.g. 1000+ trades sharing the same millisecond during a
+            # liquidation cascade). Break to avoid an infinite re-fetch loop.
             earliest_ts_ms = min(t["timestamp"] for t in trades_data)
+            if earliest_ts_ms >= current_end_ms:
+                break
             if earliest_ts_ms <= start_ms:
                 break
             current_end_ms = earliest_ts_ms

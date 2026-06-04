@@ -8,7 +8,7 @@
         "price": 48000.0,
         "amount": 5.0,
         "direction": "buy",
-        "timestamp": 1700000002000,
+        "timestamp": 1700000001500,
         "index_price": 48000.0,
         "mark_price": 48000.1,
         "iv": null
