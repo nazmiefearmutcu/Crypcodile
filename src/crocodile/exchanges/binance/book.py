@@ -20,7 +20,7 @@ OrderBookSync state machine:
 
 from collections.abc import Iterable
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from crocodile.instruments.registry import InstrumentRegistry
 from crocodile.schema.records import BookDelta, Record
@@ -36,8 +36,10 @@ class SyncResult(StrEnum):
 class OrderBookSync:
     """State machine for synchronising a Binance depth stream with a REST snapshot."""
 
-    def __init__(self, venue: str) -> None:
+    def __init__(self, venue: Literal["spot", "futures"]) -> None:
         """Initialise for 'spot' or 'futures' venue."""
+        if venue not in ("spot", "futures"):
+            raise ValueError(f"venue must be 'spot' or 'futures', got {venue!r}")
         self._venue = venue  # "spot" or "futures"
         self._snapshot_id: int | None = None
         self._prev_u: int | None = None
