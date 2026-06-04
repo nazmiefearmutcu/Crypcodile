@@ -64,6 +64,19 @@ class Connector(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    async def _subscribe(self, transport: Transport) -> None:
+        """Send exchange-specific subscribe frames over *transport*.
+
+        Each exchange uses a completely different wire format for subscription
+        (Deribit: JSON-RPC 2.0 ``public/subscribe``; Binance: ``{"method":
+        "SUBSCRIBE", "params": [...]}``; Bybit/OKX/Coinbase differ again —
+        appendix §4 table, §3.2).  This method is therefore abstract: every
+        concrete connector is responsible for composing and sending its own
+        subscribe frame(s).  A connector that needs no subscription (e.g. a
+        pure pull source) should implement an explicit no-op.
+        """
+
     async def backfill(
         self,
         channel: str,
@@ -74,18 +87,6 @@ class Connector(ABC):
         raise NotImplementedError
         yield  # pragma: no cover  (makes this an async generator)
 
-    async def _subscribe(self, transport: Transport) -> None:
-        """Send subscribe frames for cached channel list."""
-        try:
-            channels = self.subscribe_channels()
-        except NotImplementedError:
-            return
-        if channels:
-            frame = json.dumps(
-                {"jsonrpc": "2.0", "method": "public/subscribe", "params": {"channels": channels}}
-            ).encode()
-            await transport.send(frame)
-
     async def run(self, max_reconnects: int = -1) -> None:
         """Supervised run loop.
 
@@ -93,6 +94,8 @@ class Connector(ABC):
         On exception: exponential backoff then reconnect (up to max_reconnects).
         max_reconnects=-1 means unlimited; max_reconnects=0 means no reconnect.
         Unparseable frames go to the DLQ; the loop continues.
+        ``transport.close()`` is always called — on clean exit and on exception
+        — via a ``try/finally`` block so that socket handles are never leaked.
         """
         attempt = 0
         while True:
@@ -128,9 +131,9 @@ class Connector(ABC):
                 log.warning("Connector %s error (attempt %d): %s", self.name, attempt, exc)
                 if max_reconnects == 0 or (max_reconnects > 0 and attempt >= max_reconnects):
                     raise
-                delay = backoff_delays(
-                    attempt, jitter=0.25, rand=random.random()
-                )
+                delay = backoff_delays(attempt, jitter=0.25, rand=random.random())
                 log.info("Reconnecting in %.2fs...", delay)
                 await asyncio.sleep(delay)
                 attempt += 1
+            finally:
+                await transport.close()

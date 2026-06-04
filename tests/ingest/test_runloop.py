@@ -6,7 +6,10 @@ from crocodile.instruments.registry import InstrumentRegistry
 from crocodile.schema.records import Trade
 from crocodile.sink.memory import MemorySink
 
-FIX = pathlib.Path("tests/exchanges/deribit/fixtures/trades.json").read_text()
+_FIXTURE = (
+    pathlib.Path(__file__).parent.parent / "exchanges" / "deribit" / "fixtures" / "trades.json"
+)
+FIX = _FIXTURE.read_text()
 
 
 async def test_runloop_drains_transport_into_sink():

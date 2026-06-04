@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import aiohttp
 
 from crocodile.exchanges.base import Connector
+from crocodile.ingest.transport import Transport
 from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
 from crocodile.schema.records import Record
 from crocodile.sink.base import Sink
@@ -152,3 +154,16 @@ class DeribitConnector(Connector):
     def subscribe_channels(self) -> list[str]:
         """Return the list of Deribit channel strings this connector will subscribe to."""
         return self._sub_channels
+
+    async def _subscribe(self, transport: Transport) -> None:
+        """Send a Deribit JSON-RPC 2.0 ``public/subscribe`` frame."""
+        channels = self.subscribe_channels()
+        if channels:
+            frame = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "public/subscribe",
+                    "params": {"channels": channels},
+                }
+            ).encode()
+            await transport.send(frame)
