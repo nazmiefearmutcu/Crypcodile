@@ -1,0 +1,4 @@
+[
+ {"params":{"channel":"book.BTC-PERPETUAL.raw","data":{"type":"snapshot","timestamp":1700000000000,"instrument_name":"BTC-PERPETUAL","change_id":100,"bids":[["new",100.0,5.0],["new",99.0,2.0]],"asks":[["new",101.0,4.0]]}}},
+ {"params":{"channel":"book.BTC-PERPETUAL.raw","data":{"type":"change","timestamp":1700000000100,"instrument_name":"BTC-PERPETUAL","change_id":101,"prev_change_id":100,"bids":[["delete",99.0,0.0],["change",100.0,7.0]],"asks":[["new",102.0,1.0]]}}}
+]
