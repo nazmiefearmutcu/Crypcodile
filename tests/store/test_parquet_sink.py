@@ -1,0 +1,157 @@
+"""Acceptance tests for ParquetSink (Task 2.2)."""
+
+from __future__ import annotations
+
+import pathlib
+
+import polars as pl
+
+from crocodile.schema.enums import Side
+from crocodile.schema.records import BookSnapshot, Trade
+from crocodile.store.parquet_sink import ParquetSink
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _trade(price: float = 1.0, local_ts: int = 1700000000000000000) -> Trade:
+    return Trade(
+        exchange="deribit",
+        symbol="deribit:BTC-PERPETUAL",
+        symbol_raw="BTC-PERPETUAL",
+        exchange_ts=local_ts,
+        local_ts=local_ts,
+        id=str(price),
+        price=price,
+        amount=2.0,
+        side=Side.BUY,
+    )
+
+
+def _snap(local_ts: int = 1700000000000000000) -> BookSnapshot:
+    return BookSnapshot(
+        exchange="deribit",
+        symbol="deribit:BTC-PERPETUAL",
+        symbol_raw="BTC-PERPETUAL",
+        exchange_ts=local_ts,
+        local_ts=local_ts,
+        bids=[(100.0, 5.0), (99.0, 0.0)],  # (99.0, 0.0) is a canonical removal
+        asks=[(101.0, 4.0)],
+        depth=2,
+        sequence_id=42,
+        is_snapshot=True,
+    )
+
+
+def _find_parquets(base: pathlib.Path, pattern: str = "*.parquet") -> list[pathlib.Path]:
+    """Collect parquet files synchronously (safe to call from sync context)."""
+    return list(base.rglob(pattern))
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+async def test_parquet_sink_writes_files_by_channel(tmp_path: pathlib.Path) -> None:
+    """3 trades + 1 book_snapshot → files under trade/ and book_snapshot/ dirs."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+
+    await sink.put(_trade(1.0))
+    await sink.put(_trade(2.0))
+    await sink.put(_trade(3.0))
+    await sink.put(_snap())
+
+    await sink.flush()
+
+    all_files = _find_parquets(tmp_path)
+    trade_files = [p for p in all_files if "channel=trade" in str(p)]
+    snap_files = [p for p in all_files if "channel=book_snapshot" in str(p)]
+
+    assert len(trade_files) >= 1, "Expected at least one trade parquet file"
+    assert len(snap_files) >= 1, "Expected at least one book_snapshot parquet file"
+
+
+async def test_parquet_sink_path_structure(tmp_path: pathlib.Path) -> None:
+    """Hive path: exchange=.../channel=.../date=.../bucket=.../part-*.parquet."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    await sink.put(_trade())
+    await sink.flush()
+
+    all_parquets = _find_parquets(tmp_path)
+    assert all_parquets, "No parquet files written"
+    for p in all_parquets:
+        parts = p.parts
+        # Each path segment should contain hive key=value pairs
+        assert any("exchange=" in part for part in parts)
+        assert any("channel=" in part for part in parts)
+        assert any("date=" in part for part in parts)
+        assert any("bucket=" in part for part in parts)
+
+
+async def test_parquet_sink_read_back_rows(tmp_path: pathlib.Path) -> None:
+    """Row count + field values survive round-trip."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    t1 = _trade(50000.1)
+    t2 = _trade(50001.2)
+    await sink.put(t1)
+    await sink.put(t2)
+    await sink.flush()
+
+    # Collect actual file paths (pl.read_parquet needs a list, not a generator)
+    all_files = _find_parquets(tmp_path)
+    trade_files = [p for p in all_files if "channel=trade" in str(p)]
+    assert trade_files, "No trade parquet files found"
+    df = pl.read_parquet(trade_files)
+    assert len(df) == 2
+    prices = set(df["price"].to_list())
+    assert 50000.1 in prices
+    assert 50001.2 in prices
+    assert df["side"][0] == "buy"
+
+
+async def test_parquet_sink_book_removal_level_round_trips(tmp_path: pathlib.Path) -> None:
+    """A canonical removal level (px, 0.0) must round-trip through Parquet."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    await sink.put(_snap())
+    await sink.flush()
+
+    all_files = _find_parquets(tmp_path)
+    snap_files = [p for p in all_files if "channel=book_snapshot" in str(p)]
+    assert snap_files, "No book_snapshot parquet files found"
+    df = pl.read_parquet(snap_files)
+    assert len(df) == 1
+    # bids col is stored as list[struct{price,amount}] — Polars returns list of dicts
+    bids = df["bids"][0]
+    price_amount_pairs = [(b["price"], b["amount"]) for b in bids]
+    assert (99.0, 0.0) in price_amount_pairs  # canonical removal survives
+
+
+async def test_parquet_sink_auto_flush_on_row_limit(tmp_path: pathlib.Path) -> None:
+    """Buffer auto-flushes when max_buffer_rows is reached."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=3, flush_interval_seconds=9999)
+
+    # After 3 puts the buffer should flush automatically
+    await sink.put(_trade(1.0))
+    await sink.put(_trade(2.0))
+    await sink.put(_trade(3.0))
+
+    # Without explicit flush, files should already exist
+    trade_files = [p for p in _find_parquets(tmp_path) if "channel=trade" in str(p)]
+    assert len(trade_files) >= 1, "Expected auto-flush after max_buffer_rows"
+
+
+async def test_parquet_sink_never_appends_new_part_files(tmp_path: pathlib.Path) -> None:
+    """Two separate flushes produce two distinct part-*.parquet files."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    await sink.put(_trade(1.0))
+    await sink.flush()
+    files_after_first = set(_find_parquets(tmp_path))
+
+    await sink.put(_trade(2.0))
+    await sink.flush()
+    files_after_second = set(_find_parquets(tmp_path))
+
+    new_files = files_after_second - files_after_first
+    assert len(new_files) >= 1, "Second flush should write a new part file, not append"
