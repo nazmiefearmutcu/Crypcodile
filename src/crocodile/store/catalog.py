@@ -18,6 +18,12 @@ Views registered:
     One DuckDB VIEW per channel found on disk, named by the channel string
     (e.g. ``trade``, ``book_snapshot``).  Views are created lazily on first
     access and re-created whenever ``refresh_views()`` is called explicitly.
+
+Empty-result contract:
+    ``scan()`` returns ``pl.DataFrame()`` (zero columns, zero rows) whenever
+    no rows match — whether because no files exist for the channel/date or
+    because all files are filtered out by the WHERE clause.  Callers must
+    check ``len(df) == 0`` before accessing named columns.
 """
 
 from __future__ import annotations
@@ -95,6 +101,8 @@ class Catalog:
 
         if not glob_paths:
             # No matching date partitions exist on disk → empty result.
+            # Return schemaless DataFrame — consistent with the WHERE-filtered
+            # empty path below (callers must check len == 0 before column access).
             return pl.DataFrame()
 
         # Deduplicate (different (exchange, date) combos may share same date).
@@ -104,6 +112,9 @@ class Catalog:
         # DuckDB accepts a list literal:  ['path1', 'path2', ...]
         paths_literal = ", ".join(f"'{p}'" for p in unique_globs)
 
+        # Use parameterized query to avoid SQL injection on the symbol value.
+        # start_ns and end_ns are ints (no injection risk) but kept as parameters
+        # for consistency and to let DuckDB optimise them as typed literals.
         sql = f"""
             SELECT *
             FROM read_parquet(
@@ -111,18 +122,18 @@ class Catalog:
                 hive_partitioning => true,
                 union_by_name => true
             )
-            WHERE symbol = '{symbol}'
-              AND local_ts >= {start_ns}
-              AND local_ts <= {end_ns}
+            WHERE symbol = ?
+              AND local_ts >= ?
+              AND local_ts <= ?
             ORDER BY local_ts
         """
-        try:
-            result = self._conn.execute(sql)
-            return result.pl()
-        except duckdb.IOException:
-            # Glob matched directory patterns but the actual files may not
-            # exist yet (race condition or empty dirs).
+        result = self._conn.execute(sql, [symbol, start_ns, end_ns])
+        df = result.pl()
+        # Normalise: return a bare schemaless DataFrame when no rows match so
+        # both empty-result paths have the same shape (consistent contract).
+        if len(df) == 0:
             return pl.DataFrame()
+        return df
 
     def refresh_views(self) -> None:
         """Re-scan the data directory and re-register channel views.

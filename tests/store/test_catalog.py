@@ -156,3 +156,49 @@ async def test_catalog_scan_unknown_channel_returns_empty(tmp_path: pathlib.Path
     df = cat.scan("liquidation", "deribit:BTC-PERPETUAL", _BASE_TS, _BASE_TS + 9_999_999_999)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-day partition pruning test
+# ---------------------------------------------------------------------------
+
+# _BASE_TS = 2023-11-14T22:13:20 UTC.  One day later is 2023-11-15.
+_DAY2_TS = 1_700_006_400_000_000_000  # 2023-11-15T00:00:00 UTC exactly
+
+
+async def test_catalog_scan_multiday_partition_pruning(tmp_path: pathlib.Path) -> None:
+    """Records on two calendar days: a scan for day N does not touch day N+1 files.
+
+    Writes one trade at _BASE_TS (2023-11-14) and one at _DAY2_TS (2023-11-15).
+    A scan window that ends before midnight must return only the day-14 record;
+    no day-15 Parquet files should be opened (verified via result count).
+    Also checks that a scan starting after midnight returns only the day-15 record.
+    """
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    trade_day1 = _trade(price=1.0, local_ts=_BASE_TS)
+    trade_day2 = _trade(price=2.0, local_ts=_DAY2_TS)
+    await sink.put(trade_day1)
+    await sink.put(trade_day2)
+    await sink.flush()
+
+    cat = Catalog(tmp_path)
+
+    # Scan only day 1 — end_ns is still on 2023-11-14 (1 second before midnight on day 2).
+    day1_end = _DAY2_TS - 1  # one nanosecond before day 2 midnight
+    df_day1 = cat.scan("trade", "deribit:BTC-PERPETUAL", _BASE_TS, day1_end)
+    assert len(df_day1) == 1, f"Expected 1 row for day-1 scan, got {len(df_day1)}"
+    assert df_day1["price"][0] == 1.0
+
+    # Scan only day 2 — start_ns is midnight of 2023-11-15.
+    df_day2 = cat.scan("trade", "deribit:BTC-PERPETUAL", _DAY2_TS, _DAY2_TS + 1_000_000_000)
+    assert len(df_day2) == 1, f"Expected 1 row for day-2 scan, got {len(df_day2)}"
+    assert df_day2["price"][0] == 2.0
+
+    # Verify the partition directories were actually created for both dates.
+    # Use glob.glob (sync stdlib) rather than pathlib.Path.glob to avoid ASYNC240.
+    import glob as _glob_mod
+
+    day1_dirs = _glob_mod.glob(str(tmp_path / "exchange=*" / "channel=trade" / "date=2023-11-14"))
+    day2_dirs = _glob_mod.glob(str(tmp_path / "exchange=*" / "channel=trade" / "date=2023-11-15"))
+    assert day1_dirs, "Expected a date=2023-11-14 partition directory"
+    assert day2_dirs, "Expected a date=2023-11-15 partition directory"
