@@ -1,0 +1,330 @@
+"""Tests for Binance REST backfill: parse saved fixtures, pagination logic, field mapping.
+
+Appendix §3.2:
+- aggTrades: paginate by fromId; m=true -> SELL (buyer is maker, taker sold).
+- klines -> OHLCV (openTime, o, h, l, c, v, ..., takerBuyBaseVol, takerBuyQuoteVol).
+- openInterest -> OpenInterest (snapshot and historical).
+"""
+
+from __future__ import annotations
+
+import json
+import pathlib
+from typing import Any
+
+import pytest
+
+from crocodile.exchanges.binance.backfill import (
+    BinanceBackfill,
+    parse_aggtrades_page,
+    parse_klines_page,
+    parse_open_interest,
+    parse_open_interest_hist,
+)
+from crocodile.schema.enums import Side
+from crocodile.schema.records import OHLCV, OpenInterest, Trade
+
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+
+# ---------------------------------------------------------------------------
+# parse_aggtrades_page
+# ---------------------------------------------------------------------------
+
+
+def test_parse_aggtrades_page_maps_fields() -> None:
+    raw: list[dict[str, Any]] = json.loads((FIXTURES / "rest_aggtrades.json").read_text())
+    records = parse_aggtrades_page(raw, venue="binance-spot", symbol="BTCUSDT", local_ts=42)
+    trades = [r for r in records if isinstance(r, Trade)]
+
+    assert len(trades) == 2
+
+    t0 = trades[0]
+    assert t0.exchange == "binance-spot"
+    assert t0.symbol == "binance-spot:BTCUSDT"
+    assert t0.symbol_raw == "BTCUSDT"
+    assert t0.price == 50000.10
+    assert t0.amount == 0.5
+    # m=true -> buyer is maker -> taker sold -> SELL
+    assert t0.side == Side.SELL
+    assert t0.exchange_ts == 1700000000100 * 1_000_000  # T ms -> ns
+    assert t0.local_ts == 42
+    assert t0.id == "1001"
+
+    t1 = trades[1]
+    # m=false -> buyer is taker -> BUY
+    assert t1.side == Side.BUY
+    assert t1.id == "1002"
+
+
+def test_parse_aggtrades_returns_last_id() -> None:
+    """parse_aggtrades_page must expose the last agg trade id for fromId pagination."""
+    raw: list[dict[str, Any]] = json.loads((FIXTURES / "rest_aggtrades.json").read_text())
+    records = parse_aggtrades_page(raw, venue="binance-spot", symbol="BTCUSDT", local_ts=0)
+    trades = [r for r in records if isinstance(r, Trade)]
+    # last trade in this page has agg id 1002
+    assert int(trades[-1].id) == 1002
+
+
+# ---------------------------------------------------------------------------
+# parse_klines_page
+# ---------------------------------------------------------------------------
+
+
+def test_parse_klines_page_maps_fields() -> None:
+    raw: list[list[Any]] = json.loads((FIXTURES / "rest_klines.json").read_text())
+    records = parse_klines_page(
+        raw, venue="binance-spot", symbol="BTCUSDT", interval="1m", local_ts=99
+    )
+    bars = [r for r in records if isinstance(r, OHLCV)]
+
+    assert len(bars) == 2
+
+    b0 = bars[0]
+    assert b0.exchange == "binance-spot"
+    assert b0.symbol == "binance-spot:BTCUSDT"
+    assert b0.symbol_raw == "BTCUSDT"
+    assert b0.interval == "1m"
+    assert b0.open == 50000.0
+    assert b0.high == 50100.0
+    assert b0.low == 49900.0
+    assert b0.close == 50050.0
+    assert b0.volume == pytest.approx(10.5)
+    # takerBuyBaseVol = buy_volume
+    assert b0.buy_volume == pytest.approx(6.3)
+    # sell_volume = total - buy
+    assert b0.sell_volume == pytest.approx(10.5 - 6.3)
+    # num_trades from count field (index 8)
+    assert b0.num_trades == 150
+    # exchange_ts from openTime (ms -> ns)
+    assert b0.exchange_ts == 1700000000000 * 1_000_000
+    assert b0.local_ts == 99
+
+    b1 = bars[1]
+    assert b1.open == 50050.0
+    assert b1.num_trades == 120
+
+
+# ---------------------------------------------------------------------------
+# parse_open_interest (snapshot endpoint)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_open_interest_snapshot() -> None:
+    raw: dict[str, Any] = json.loads((FIXTURES / "rest_open_interest.json").read_text())
+    oi = parse_open_interest(raw, venue="binance-usdm", local_ts=7)
+
+    assert isinstance(oi, OpenInterest)
+    assert oi.exchange == "binance-usdm"
+    assert oi.symbol == "binance-usdm:BTCUSDT"
+    assert oi.symbol_raw == "BTCUSDT"
+    assert oi.open_interest == pytest.approx(12345.678)
+    # time field (ms) -> exchange_ts (ns)
+    assert oi.exchange_ts == 1700000000000 * 1_000_000
+    assert oi.local_ts == 7
+
+
+# ---------------------------------------------------------------------------
+# parse_open_interest_hist (historical endpoint)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_open_interest_hist() -> None:
+    raw: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_open_interest_hist.json").read_text()
+    )
+    records = parse_open_interest_hist(raw, venue="binance-usdm", symbol="BTCUSDT", local_ts=5)
+    ois = [r for r in records if isinstance(r, OpenInterest)]
+
+    assert len(ois) == 2
+
+    oi0 = ois[0]
+    assert oi0.open_interest == pytest.approx(12000.0)
+    assert oi0.open_interest_value == pytest.approx(600000000.0)
+    assert oi0.exchange_ts == 1700000000000 * 1_000_000
+    assert oi0.local_ts == 5
+
+    oi1 = ois[1]
+    assert oi1.open_interest == pytest.approx(12500.0)
+    assert oi1.open_interest_value == pytest.approx(625000000.0)
+    assert oi1.exchange_ts == 1700003600000 * 1_000_000
+
+
+# ---------------------------------------------------------------------------
+# BinanceBackfill — pagination (fromId walk for aggTrades)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_aggtrades_paginates_by_from_id() -> None:
+    """BinanceBackfill.backfill_aggtrades iterates pages via fromId until limit < page_size."""
+    page1: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_aggtrades_page1.json").read_text()
+    )
+    page2: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_aggtrades.json").read_text()
+    )
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_fetch_aggtrades(
+        symbol: str,
+        from_id: int | None,
+        start_time_ms: int | None,
+        end_time_ms: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        calls.append(
+            {
+                "from_id": from_id,
+                "start_time_ms": start_time_ms,
+                "end_time_ms": end_time_ms,
+                "limit": limit,
+            }
+        )
+        if from_id is None:
+            return page1
+        # Second call uses fromId = page1 last id (1000) + 1 = 1001
+        if len(calls) == 2:
+            return page2
+        # Third call onward: no more data -> paginator stops
+        return []
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=fake_fetch_aggtrades,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+
+    trades: list[Trade] = []
+    async for rec in bf.backfill_aggtrades(
+        venue="binance-spot",
+        symbol="BTCUSDT",
+        start_ns=0,
+        end_ns=9_999_999_999_999_999_999,
+        page_size=2,
+        local_ts=0,
+    ):
+        if isinstance(rec, Trade):
+            trades.append(rec)
+
+    # Two pages, 2 trades each = 4 total
+    assert len(trades) == 4
+    # Second call used fromId = last id of page1 + 1 = 1001
+    assert calls[1]["from_id"] == 1001
+
+
+@pytest.mark.asyncio
+async def test_backfill_aggtrades_stops_on_partial_page() -> None:
+    """BinanceBackfill stops when a page has fewer items than page_size (no more data)."""
+    single: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_aggtrades.json").read_text()
+    )  # 2 items
+
+    async def fake_fetch_aggtrades(
+        symbol: str,
+        from_id: int | None,
+        start_time_ms: int | None,
+        end_time_ms: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        return single  # always 2 items
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=fake_fetch_aggtrades,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+
+    trades: list[Trade] = []
+    async for rec in bf.backfill_aggtrades(
+        venue="binance-spot",
+        symbol="BTCUSDT",
+        start_ns=0,
+        end_ns=9_999_999_999_999_999_999,
+        page_size=5,  # page_size > result size -> stop
+        local_ts=0,
+    ):
+        if isinstance(rec, Trade):
+            trades.append(rec)
+
+    # Only one page returned (< page_size items -> done)
+    assert len(trades) == 2
+
+
+@pytest.mark.asyncio
+async def test_backfill_klines_yields_ohlcv() -> None:
+    """BinanceBackfill.backfill_klines returns OHLCV bars."""
+    raw: list[list[Any]] = json.loads((FIXTURES / "rest_klines.json").read_text())
+
+    async def fake_fetch_klines(
+        symbol: str,
+        interval: str,
+        start_time_ms: int | None,
+        end_time_ms: int | None,
+        limit: int,
+    ) -> list[list[Any]]:
+        return raw
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=fake_fetch_klines,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+
+    bars: list[OHLCV] = []
+    async for rec in bf.backfill_klines(
+        venue="binance-spot",
+        symbol="BTCUSDT",
+        interval="1m",
+        start_ns=0,
+        end_ns=9_999_999_999_999_999_999,
+        local_ts=0,
+    ):
+        if isinstance(rec, OHLCV):
+            bars.append(rec)
+
+    assert len(bars) == 2
+    assert bars[0].open == 50000.0
+
+
+@pytest.mark.asyncio
+async def test_backfill_open_interest_hist_yields_records() -> None:
+    """BinanceBackfill.backfill_open_interest_hist yields OpenInterest records."""
+    raw: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_open_interest_hist.json").read_text()
+    )
+
+    async def fake_fetch_oi_hist(
+        symbol: str,
+        period: str,
+        start_time_ms: int | None,
+        end_time_ms: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        return raw
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=fake_fetch_oi_hist,
+    )
+
+    ois: list[OpenInterest] = []
+    async for rec in bf.backfill_open_interest_hist(
+        venue="binance-usdm",
+        symbol="BTCUSDT",
+        period="1h",
+        start_ns=0,
+        end_ns=9_999_999_999_999_999_999,
+        local_ts=0,
+    ):
+        if isinstance(rec, OpenInterest):
+            ois.append(rec)
+
+    assert len(ois) == 2
+    assert ois[0].open_interest == pytest.approx(12000.0)
