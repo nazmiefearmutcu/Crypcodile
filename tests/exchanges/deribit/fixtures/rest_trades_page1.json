@@ -1,0 +1,19 @@
+{
+  "result": {
+    "trades": [
+      {
+        "trade_id": "REST-3",
+        "trade_seq": 20,
+        "instrument_name": "BTC-PERPETUAL",
+        "price": 48000.0,
+        "amount": 5.0,
+        "direction": "buy",
+        "timestamp": 1700000002000,
+        "index_price": 48000.0,
+        "mark_price": 48000.1,
+        "iv": null
+      }
+    ],
+    "has_more": true
+  }
+}

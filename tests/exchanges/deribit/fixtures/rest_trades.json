@@ -1,0 +1,32 @@
+{
+  "result": {
+    "trades": [
+      {
+        "trade_id": "REST-1",
+        "trade_seq": 10,
+        "instrument_name": "BTC-PERPETUAL",
+        "price": 50000.5,
+        "amount": 2.0,
+        "direction": "buy",
+        "timestamp": 1700000000000,
+        "index_price": 50000.0,
+        "mark_price": 50000.4,
+        "iv": null
+      },
+      {
+        "trade_id": "REST-2",
+        "trade_seq": 11,
+        "instrument_name": "BTC-PERPETUAL",
+        "price": 49999.0,
+        "amount": 1.0,
+        "direction": "sell",
+        "timestamp": 1700000001000,
+        "index_price": 49999.5,
+        "mark_price": 49999.3,
+        "iv": null,
+        "liquidation": "T"
+      }
+    ],
+    "has_more": false
+  }
+}
