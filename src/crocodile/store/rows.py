@@ -10,31 +10,32 @@ from __future__ import annotations
 
 import datetime
 import enum
-import hashlib
 from typing import Any
+
+import mmh3
+import msgspec.structs
 
 from crocodile.schema.records import Record
 
 
 def _symbol_bucket(symbol: str) -> int:
-    """Stable MurmurHash3-equivalent bucket for a canonical symbol string.
+    """Stable MurmurHash3 bucket for a canonical symbol string.
 
-    Uses MD5 (stdlib, deterministic) over the UTF-8 bytes of symbol,
-    taking the first 4 bytes as an unsigned little-endian integer mod 128.
+    Uses MurmurHash3 (unsigned) over the UTF-8 bytes of symbol mod 128.
     This gives uniform distribution across [0, 127].
     """
-    digest = hashlib.md5(symbol.encode(), usedforsecurity=False).digest()
-    return int.from_bytes(digest[:4], "little") % 128
+    return mmh3.hash(symbol, signed=False) % 128
 
 
 def _date_from_ns(local_ts: int) -> str:
     """Return UTC date string "YYYY-MM-DD" from a nanosecond epoch integer."""
-    dt = datetime.datetime.fromtimestamp(local_ts / 1_000_000_000.0, tz=datetime.UTC)
+    seconds = local_ts // 1_000_000_000
+    dt = datetime.datetime.fromtimestamp(seconds, tz=datetime.UTC)
     return dt.strftime("%Y-%m-%d")
 
 
 def _convert_value(v: Any) -> Any:
-    """Recursively coerce enum values to their primitive form."""
+    """Coerce enum values to their primitive form."""
     if isinstance(v, enum.Enum):
         return v.value
     return v
@@ -52,8 +53,6 @@ def to_row(record: Record) -> dict[str, Any]:
     List-of-tuple fields (``bids``, ``asks``) are preserved as Python
     ``list[tuple[float, float]]`` — Polars can infer these as list[struct].
     """
-    import msgspec.structs
-
     # Extract channel tag from the struct class metadata
     channel: str = type(record).__struct_config__.tag  # type: ignore[assignment]
 
