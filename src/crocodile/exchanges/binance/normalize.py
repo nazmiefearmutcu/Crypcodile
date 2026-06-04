@@ -76,6 +76,7 @@ def normalize_message(
         inst = registry.get_raw(venue, raw_symbol) if registry is not None else None
         canonical = inst.canonical if inst is not None else f"{venue}:{raw_symbol}"
         exchange_ts = ms_to_ns(data["E"])
+        funding_ts_raw = data.get("T")
         yield DerivativeTicker(
             exchange=venue,
             symbol=canonical,
@@ -85,9 +86,8 @@ def normalize_message(
             mark_price=float(data["p"]),
             index_price=float(data["i"]),
             funding_rate=float(data["r"]),
-            funding_timestamp=ms_to_ns(data["T"]),
+            funding_timestamp=ms_to_ns(funding_ts_raw) if funding_ts_raw is not None else None,
         )
-        funding_ts_raw = data.get("T")
         yield Funding(
             exchange=venue,
             symbol=canonical,
@@ -103,7 +103,8 @@ def normalize_message(
         raw_symbol = order["s"]
         inst = registry.get_raw(venue, raw_symbol) if registry is not None else None
         canonical = inst.canonical if inst is not None else f"{venue}:{raw_symbol}"
-        side = Side.BUY if order["S"] == "BUY" else Side.SELL
+        raw_side = order["S"]
+        side = Side.BUY if raw_side == "BUY" else Side.SELL if raw_side == "SELL" else Side.UNKNOWN
         yield Liquidation(
             exchange=venue,
             symbol=canonical,
