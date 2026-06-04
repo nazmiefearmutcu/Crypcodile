@@ -1,4 +1,4 @@
-"""CrocodileClient — high-level API wrapping the DuckDB Catalog (Task 3.1 + 3.2).
+"""CrocodileClient - high-level API wrapping the DuckDB Catalog (Task 3.1-3.3).
 
 ``CrocodileClient(data_dir)`` is the primary entry-point for users who want to
 query and scan the Parquet data lake without interacting with the lower-level
@@ -21,6 +21,11 @@ replay(channels, symbols, frm, to)
     Iterate over canonical Records across one or more channels and symbols
     within a nanosecond time range, globally sorted by ``local_ts``.  Uses
     the M2 k-way merge engine to combine per-(channel, symbol) streams.
+
+export(channel, symbols, frm, to, fmt, dest)
+    Write rows for the given channel x symbols x time range to a file in the
+    specified format.  Supported formats: ``parquet``, ``csv``, ``arrow``,
+    ``json``, ``jsonl``.  Parent directories are created automatically.
 """
 
 from __future__ import annotations
@@ -30,6 +35,8 @@ from pathlib import Path
 
 import polars as pl
 
+from crocodile.client.export import ExportFmt
+from crocodile.client.export import export as _export
 from crocodile.replay.merge import replay as _kway_merge
 from crocodile.schema.records import Record
 from crocodile.store.catalog import Catalog
@@ -187,3 +194,45 @@ class CrocodileClient:
             return iter([])
 
         return _kway_merge(streams)
+
+    def export(
+        self,
+        channel: str,
+        symbols: list[str],
+        frm: int,
+        to: int,
+        fmt: ExportFmt,
+        dest: Path | str,
+    ) -> None:
+        """Write rows for a channel x symbols x time range to a file.
+
+        Supported formats are ``parquet``, ``csv``, ``arrow``, ``json``,
+        and ``jsonl``.  Parent directories of ``dest`` are created
+        automatically.  An empty result (no matching rows) still creates
+        the destination file.
+
+        Args:
+            channel: Channel name, e.g. ``"trade"``, ``"book_snapshot"``.
+            symbols: Canonical symbol strings to include.  An empty list
+                     writes an empty file.
+            frm:     Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+            to:      Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+            fmt:     Output format — one of ``parquet``, ``csv``, ``arrow``,
+                     ``json``, ``jsonl``.
+            dest:    Destination file path (string or :class:`~pathlib.Path`).
+
+        Raises:
+            ValueError: If ``fmt`` is not a recognised format string.
+
+        Example::
+
+            client.export(
+                "trade",
+                ["deribit:BTC-PERPETUAL"],
+                start_ns,
+                end_ns,
+                fmt="csv",
+                dest="/tmp/btc_trades.csv",
+            )
+        """
+        _export(self._catalog, channel, symbols, frm, to, fmt, Path(dest))
