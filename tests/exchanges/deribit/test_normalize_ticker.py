@@ -1,5 +1,6 @@
 import json
 import pathlib
+import time
 
 from crocodile.exchanges.deribit.normalize import normalize_message
 from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
@@ -38,3 +39,21 @@ def test_option_ticker_emits_options_chain():
     oc = next(r for r in out if isinstance(r, OptionsChain))
     assert oc.strike == 50000.0 and oc.opt_type == OptType.CALL
     assert oc.mark_iv == 65.0 and oc.delta == 0.5 and oc.bid_iv == 64.0
+
+
+def test_option_ticker_fallback_no_registry():
+    """Registry-fallback path: symbol parsed directly when no registry is supplied.
+
+    The fixture symbol is BTC-30JUN-50000-C.  Without a registry the normalizer
+    must parse it and produce structurally correct output.  The expiry must be a
+    future timestamp (not a date in 2025 or earlier).
+    """
+    msg = json.loads((P / "ticker_option.json").read_text())
+    # Pass no registry — exercises the symbol-parsing branch in _parse_option_symbol
+    out = list(normalize_message(msg, local_ts=7))
+    oc = next(r for r in out if isinstance(r, OptionsChain))
+    assert oc.underlying == "BTC"
+    assert oc.strike == 50000.0
+    assert oc.opt_type == OptType.CALL
+    # expiry must be a future nanosecond timestamp (not stuck in 2025)
+    assert oc.expiry > int(time.time()) * 1_000_000_000

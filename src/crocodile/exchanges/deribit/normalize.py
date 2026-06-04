@@ -65,11 +65,19 @@ def _parse_option_symbol(sym: str) -> tuple[str, float, int, OptType]:
     day = date_str[:2]
     mon_abbr = date_str[2:5].upper()
     month = _MONTH_MAP.get(mon_abbr, "01")
-    # Use current decade as best guess (expiry year in symbol is ambiguous without full year)
-    # Approximate: 2020-2030 range; for golden tests exact value comes from registry
-    year = "2025"  # fallback; registry overrides this
+    # Use current year as best guess; advance by 1 if the resolved date is already in the past
+    # (Deribit options are always future-expiring at subscription time).
+    # Registry values are preferred and will override this.
+    current_year = _time.gmtime().tm_year
+    year = str(current_year)
     struct = _time.strptime(f"{day} {month} {year}", "%d %m %Y")
-    expiry_ns = int(calendar.timegm(struct)) * 1_000_000_000
+    expiry_epoch = int(calendar.timegm(struct))
+    # If the resolved date has already passed, assume next year
+    if expiry_epoch < _time.time():
+        year = str(current_year + 1)
+        struct = _time.strptime(f"{day} {month} {year}", "%d %m %Y")
+        expiry_epoch = int(calendar.timegm(struct))
+    expiry_ns = expiry_epoch * 1_000_000_000
     return underlying, strike, expiry_ns, opt_type
 
 
