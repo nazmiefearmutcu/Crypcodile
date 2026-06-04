@@ -233,3 +233,65 @@ async def test_export_invalid_fmt_raises(tmp_path: pathlib.Path) -> None:
     dest = tmp_path / "out.xyz"
     with pytest.raises(ValueError, match="fmt"):
         client.export("trade", [_SYMBOL], _FRM, _TO, fmt="xyz", dest=dest)
+
+
+# ---------------------------------------------------------------------------
+# Multi-symbol export (diagonal concat + time-order correctness)
+# ---------------------------------------------------------------------------
+
+_SYMBOL_B = "deribit:ETH-PERPETUAL"
+
+
+async def test_export_multi_symbol_sorted_and_no_null_leakage(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two interleaved symbols are merged, sorted by local_ts, and have no spurious nulls.
+
+    This exercises the ``pl.concat(frames, how="diagonal").sort("local_ts")`` path
+    in export().  Both symbols share the same schema (same columns), so a diagonal
+    concat must NOT introduce null columns.  The output must be globally non-decreasing
+    in ``local_ts``.
+    """
+    from crocodile.client.client import CrocodileClient
+
+    # Write trades for _SYMBOL and _SYMBOL_B with interleaved timestamps.
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    # Interleave: A@T+0, B@T+1, A@T+2, B@T+3
+    for i in range(4):
+        sym = _SYMBOL if i % 2 == 0 else _SYMBOL_B
+        ts = _BASE_TS + i * 1_000_000_000
+        trade = Trade(
+            exchange="deribit",
+            symbol=sym,
+            symbol_raw=sym.split(":")[1],
+            exchange_ts=ts,
+            local_ts=ts,
+            id=str(ts),
+            price=float(i + 1),
+            amount=1.0,
+            side=Side.BUY,
+        )
+        await sink.put(trade)
+    await sink.flush()
+
+    client = CrocodileClient(data_dir=tmp_path)
+    dest = tmp_path / "out" / "multi.parquet"
+    client.export("trade", [_SYMBOL, _SYMBOL_B], _FRM, _TO, fmt="parquet", dest=dest)
+
+    assert dest.exists()
+    assert dest.stat().st_size > 0
+
+    df = pl.read_parquet(dest)
+
+    # Total row count: 2 from each symbol
+    assert len(df) == 4, f"Expected 4 rows (2 per symbol), got {len(df)}"
+
+    # Output must be non-decreasing in local_ts (merge+sort correctness)
+    ts_values = df["local_ts"].to_list()
+    assert ts_values == sorted(ts_values), "Rows must be sorted by local_ts"
+
+    # No spurious nulls introduced by diagonal concat in shared columns
+    for col in ("exchange", "symbol", "price", "amount", "side"):
+        null_count = df[col].null_count()
+        assert null_count == 0, f"Column {col!r} has {null_count} unexpected nulls"

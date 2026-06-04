@@ -117,14 +117,17 @@ def _write(df: pl.DataFrame, fmt: str, dest: Path) -> None:
         _write_json(df, dest)
     elif fmt == "jsonl":
         _write_jsonl(df, dest)
+    else:
+        raise AssertionError(fmt)  # unreachable: all _VALID_FMTS must be handled above
 
 
 def _write_parquet(df: pl.DataFrame, dest: Path) -> None:
-    """Write a Polars DataFrame as Parquet (zstd-5, row_group_size=250k)."""
-    if len(df) == 0:
-        # write_parquet on an empty DataFrame still produces a valid file.
-        dest.write_bytes(b"")
-        return
+    """Write a Polars DataFrame as Parquet (zstd-5, row_group_size=250k).
+
+    Polars produces a valid ~135-byte Parquet file even for empty DataFrames
+    (proper header + footer), so we always delegate to write_parquet rather than
+    short-circuiting to zero bytes (which would produce an unreadable file).
+    """
     df.write_parquet(
         dest,
         compression="zstd",
@@ -142,14 +145,18 @@ def _write_csv(df: pl.DataFrame, dest: Path) -> None:
 
 
 def _write_arrow(df: pl.DataFrame, dest: Path) -> None:
-    """Write a Polars DataFrame as Arrow IPC (Feather v2) using PyArrow IPC."""
-    if len(df) == 0:
-        dest.write_bytes(b"")
-        return
+    """Write a Polars DataFrame as Arrow IPC (Feather v2) using PyArrow IPC.
+
+    PyArrow's new_file produces a valid ~146-byte IPC file even when zero batches
+    are written (proper magic bytes + schema block + footer), so we always use the
+    IPC writer rather than short-circuiting to zero bytes (which would produce an
+    unreadable file for downstream pa_ipc.open_file callers).
+    """
     # Convert to PyArrow Table then write IPC stream.
     table = df.to_arrow()
     with pa_ipc.new_file(str(dest), table.schema) as writer:  # type: ignore[no-untyped-call]
-        writer.write_table(table)
+        if len(table) > 0:
+            writer.write_table(table)
 
 
 def _write_json(df: pl.DataFrame, dest: Path) -> None:
