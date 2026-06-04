@@ -40,6 +40,9 @@ class Connector(ABC):
     @abstractmethod
     async def list_instruments(self) -> list[Instrument]: ...
 
+    @abstractmethod
+    def subscribe_channels(self) -> list[str]: ...
+
     async def backfill(
         self,
         channel: str,

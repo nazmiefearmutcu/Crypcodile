@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -14,6 +15,8 @@ from crocodile.sink.base import Sink
 from crocodile.util.time import ms_to_ns
 
 from .normalize import normalize_message
+
+log = logging.getLogger(__name__)
 
 EXCHANGE = "deribit"
 REST_BASE = "https://www.deribit.com/api/v2"
@@ -74,7 +77,18 @@ def parse_instruments(raw: dict[str, Any]) -> list[Instrument]:
         option_type_raw: str | None = item.get("option_type")
         opt_type: str | None = None
         if option_type_raw is not None:
-            opt_type = "C" if option_type_raw.lower() == "call" else "P"
+            lowered = option_type_raw.lower()
+            if lowered == "call":
+                opt_type = "C"
+            elif lowered == "put":
+                opt_type = "P"
+            else:
+                log.warning(
+                    "parse_instruments: unexpected option_type %r for %s; skipping instrument",
+                    option_type_raw,
+                    name,
+                )
+                continue
 
         tick_size: float | None = item.get("tick_size")
         contract_size: float | None = item.get("contract_size")
@@ -123,13 +137,14 @@ class DeribitConnector(Connector):
     async def list_instruments(self) -> list[Instrument]:
         """Fetch instruments from Deribit REST API and parse them."""
         async with aiohttp.ClientSession() as session:
-            # Fetch all currencies x kinds
+            # Fetch all currencies x kinds (§3.1: BTC|ETH|SOL|USDC)
             instruments: list[Instrument] = []
-            for currency in ("BTC", "ETH", "SOL"):
+            for currency in ("BTC", "ETH", "SOL", "USDC"):
                 for kind in ("future", "option", "spot"):
                     url = f"{REST_BASE}/public/get_instruments"
                     params = {"currency": currency, "kind": kind, "expired": "false"}
                     async with session.get(url, params=params) as resp:
+                        resp.raise_for_status()
                         data: dict[str, Any] = await resp.json()
                         instruments.extend(parse_instruments(data))
             return instruments
