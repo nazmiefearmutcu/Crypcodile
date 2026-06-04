@@ -218,10 +218,10 @@ __version__ = "0.0.1"
 ```
 `src/crocodile/py.typed`: (empty file)
 
-- [ ] **Step 3: Sync and verify**
+- [ ] **Step 3: Pin Python + sync and verify**
 
-Run: `uv sync`
-Expected: resolves and installs all deps into `.venv`.
+Run: `uv python pin 3.12 && uv sync`
+Expected: pins a stable CPython 3.12 (guaranteed wheels for msgspec/polars/pyarrow/duckdb), then resolves and installs all deps into `.venv`. (Python 3.14 on this host is too new for some binary wheels — pin 3.12.)
 
 - [ ] **Step 4: Commit**
 
