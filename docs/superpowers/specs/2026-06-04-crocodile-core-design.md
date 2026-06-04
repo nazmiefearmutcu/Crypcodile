@@ -7,6 +7,13 @@ shared by Tardis.dev (normalized replay), Laevitas (derivatives analytics), and
 Amberdata (data API). Analytics, the server API, and the dashboard are **separate
 future specs** that build on top of this core.
 
+**Companion (authoritative implementation detail):**
+[`2026-06-04-crocodile-core-research-appendix.md`](2026-06-04-crocodile-core-research-appendix.md)
+— exchange-verified field mappings, order-book diff-sync algorithms (Binance spot ≠ futures,
+Deribit `action=delete`), the Connector ABC, storage/replay/ingestion patterns, and a
+consolidated gotchas list. Where this design and the appendix differ on a low-level detail,
+**the appendix wins** (it is sourced from official docs and was adversarially gap-checked).
+
 ---
 
 ## 1. Vision & Goal
