@@ -13,7 +13,7 @@ query(sql)
 scan(channel, symbols, start_ns, end_ns)
     Return rows for one or more canonical symbols within a nanosecond time
     range, ordered by ``local_ts`` ascending.  When multiple symbols are
-    provided the per-symbol DataFrames are concatenated (union_by_name) and
+    provided the per-symbol DataFrames are concatenated (diagonal) and
     sorted globally.  Returns an empty DataFrame (0 rows, 0 columns) when no
     matching rows exist.
 

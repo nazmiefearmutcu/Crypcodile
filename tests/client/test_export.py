@@ -202,25 +202,61 @@ async def test_export_creates_parent_dirs(tmp_path: pathlib.Path) -> None:
     assert dest.exists()
 
 
-async def test_export_empty_result_creates_empty_file(tmp_path: pathlib.Path) -> None:
-    """export() with a time range that matches nothing still creates the dest file."""
+@pytest.mark.parametrize(
+    "fmt,extension",
+    [
+        ("csv", "csv"),
+        ("parquet", "parquet"),
+        ("arrow", "arrow"),
+        ("json", "json"),
+        ("jsonl", "jsonl"),
+    ],
+)
+async def test_export_empty_result_creates_empty_file(
+    tmp_path: pathlib.Path, fmt: str, extension: str
+) -> None:
+    """export() with a time range that matches nothing still creates the dest file.
+
+    Parquet and Arrow formats must produce valid/readable files even when there
+    are zero matching rows (regression guard against the empty-file bug fixed in
+    the 3.3 commit).  CSV and JSON formats are also verified for completeness.
+    """
     from crocodile.client.client import CrocodileClient
 
     await _write_fixtures(tmp_path)
     client = CrocodileClient(data_dir=tmp_path)
 
-    dest = tmp_path / "out" / "empty.csv"
+    dest = tmp_path / "out" / f"empty.{extension}"
     # Far-future range — no data
     client.export(
         "trade",
         [_SYMBOL],
         _BASE_TS + 999_000_000_000_000,
         _BASE_TS + 999_999_000_000_000,
-        fmt="csv",
+        fmt=fmt,  # type: ignore[arg-type]
         dest=dest,
     )
 
-    assert dest.exists()
+    assert dest.exists(), f"Output file must be created for fmt={fmt!r}"
+
+    # Read-back assertions per format — ensures the file is valid, not just present.
+    if fmt == "parquet":
+        df = pl.read_parquet(dest)
+        assert len(df) == 0, f"Empty parquet must have 0 rows, got {len(df)}"
+    elif fmt == "arrow":
+        with pa_ipc.open_file(str(dest)) as reader:
+            table = reader.read_all()
+        assert table.num_rows == 0, f"Empty arrow must have 0 rows, got {table.num_rows}"
+    elif fmt == "csv":
+        content = dest.read_text()
+        # Empty CSV is written as a zero-byte file (no header when schema is unknown)
+        assert content == "", f"Empty CSV must be empty bytes, got {content!r}"
+    elif fmt == "json":
+        content = dest.read_text()
+        assert content == "[]", f"Empty JSON must be '[]', got {content!r}"
+    elif fmt == "jsonl":
+        content = dest.read_text()
+        assert content == "", f"Empty JSONL must be empty bytes, got {content!r}"
 
 
 async def test_export_invalid_fmt_raises(tmp_path: pathlib.Path) -> None:
