@@ -210,15 +210,19 @@ def _normalize_tickers(
     venue: str,
     registry: InstrumentRegistry | None,
 ) -> Iterable[Record]:
-    """``tickers`` channel → DerivativeTicker + Funding (for SWAP/FUTURES).
+    """``tickers`` channel → DerivativeTicker only.
 
     Fields:
-    - ``last``          → last_price
-    - ``markPx``        → mark_price
-    - ``indexPx``       → index_price
-    - ``openInterest``  → open_interest
-    - ``fundingRate``   → funding_rate
-    - ``nextFundingTime``→ funding_timestamp (ms → ns)
+    - ``last``           → last_price
+    - ``markPx``         → mark_price
+    - ``indexPx``        → index_price
+    - ``openInterest``   → open_interest
+    - ``fundingRate``    → funding_rate (carried on the ticker; no separate Funding record)
+    - ``nextFundingTime``→ funding_timestamp (ms → ns; carried on the ticker)
+
+    Note: ``Funding`` records are emitted **exclusively** from the ``funding-rate``
+    channel (``_normalize_funding_rate``).  Emitting Funding here would create
+    duplicate records when both channels are subscribed simultaneously.
     """
     for entry in data:
         sym: str = entry.get("instId", arg.get("instId", ""))
@@ -253,18 +257,6 @@ def _normalize_tickers(
             open_interest=open_interest,
         )
 
-        if funding_rate is not None:
-            yield Funding(
-                exchange=venue,
-                symbol=canonical,
-                symbol_raw=sym,
-                exchange_ts=exchange_ts,
-                local_ts=local_ts,
-                funding_rate=funding_rate,
-                funding_timestamp=funding_ts,
-                interval_hours=8,  # OKX default 8h cadence
-            )
-
 
 def _normalize_funding_rate(
     arg: dict[str, Any],
@@ -276,23 +268,32 @@ def _normalize_funding_rate(
     """``funding-rate`` channel → Funding records.
 
     Fields:
+    - ``ts``              → exchange_ts (message/event time, ms → ns; fallback: local_ts)
     - ``fundingRate``     → funding_rate (canonical)
-    - ``fundingTime``     → funding_timestamp (settlement time, ms → ns) + exchange_ts
+    - ``fundingTime``     → funding_timestamp (settlement time, ms → ns)
     - ``nextFundingRate`` → predicted_funding_rate
     - ``nextFundingTime`` → (not used in canonical Funding record)
+
+    ``exchange_ts`` is the message/event time (``ts``); ``funding_timestamp`` is the
+    *future* settlement time (``fundingTime``).  Every other connector separates
+    event-time from settlement-time — OKX must do the same.
     """
     for entry in data:
         sym: str = entry.get("instId", arg.get("instId", ""))
         canonical = _canonical(venue, sym, registry)
-        ts_ns = ms_to_ns(int(entry["fundingTime"]))
+        # exchange_ts = message/event time ("ts"); fallback to local_ts if absent
+        raw_ts = entry.get("ts")
+        exchange_ts = ms_to_ns(int(raw_ts)) if raw_ts is not None else local_ts
+        # funding_timestamp = settlement time ("fundingTime")
+        funding_ts_ns = ms_to_ns(int(entry["fundingTime"]))
         yield Funding(
             exchange=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=ts_ns,
+            exchange_ts=exchange_ts,
             local_ts=local_ts,
             funding_rate=float(entry["fundingRate"]),
-            funding_timestamp=ts_ns,
+            funding_timestamp=funding_ts_ns,
             predicted_funding_rate=(
                 float(entry["nextFundingRate"]) if entry.get("nextFundingRate") else None
             ),
@@ -471,7 +472,7 @@ def normalize_message(
     ``books``           → BookSnapshot (action=snapshot) | BookDelta (action=update)
     ``bbo-tbt``         → BookSnapshot | BookDelta
     ``books50-l2-tbt``  → BookSnapshot | BookDelta
-    ``tickers``         → DerivativeTicker + Funding  (SWAP / FUTURES only)
+    ``tickers``         → DerivativeTicker  (funding fields carried inline; no Funding record)
     ``funding-rate``    → Funding
     ``open-interest``   → OpenInterest
     ``liq-orders``      → Liquidation

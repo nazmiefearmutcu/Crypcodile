@@ -99,7 +99,14 @@ def test_books_update_with_removal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ticker_swap_emits_derivative_and_funding() -> None:
+def test_ticker_swap_emits_derivative_ticker_with_funding_fields() -> None:
+    """tickers channel emits DerivativeTicker only (no Funding — T2-okx fix).
+
+    The DerivativeTicker carries funding_rate and funding_timestamp so callers
+    can read them, but the separate Funding record comes exclusively from the
+    funding-rate channel to avoid duplication when both channels are subscribed.
+    (Updated from the pre-fix assertion that incorrectly expected fn_list length 1.)
+    """
     msg = json.loads((FIXTURES / "ticker_swap.json").read_text())
     out = list(normalize_message(msg, local_ts=9, venue="okx"))
     dt_list = [r for r in out if isinstance(r, DerivativeTicker)]
@@ -114,10 +121,8 @@ def test_ticker_swap_emits_derivative_and_funding() -> None:
     # nextFundingTime ms → ns
     assert dt.funding_timestamp == 1700003600000 * 1_000_000
 
-    assert len(fn_list) == 1
-    fn = fn_list[0]
-    assert fn.funding_rate == 0.0001
-    assert fn.funding_timestamp == 1700003600000 * 1_000_000
+    # T2-okx fix: tickers must NOT emit a separate Funding record
+    assert len(fn_list) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +267,73 @@ def test_option_summary_malformed_instid_is_skipped() -> None:
         f"Expected 0 OptionsChain records for malformed instId, got {len(oc_list)}: "
         f"strike={oc_list[0].strike if oc_list else 'N/A'}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Verify _side() is NOT duplicated between normalize.py and backfill.py
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# T2-okx regression: funding-rate exchange_ts != funding_timestamp
+# ---------------------------------------------------------------------------
+
+
+def test_funding_rate_exchange_ts_is_event_time_not_settlement() -> None:
+    """exchange_ts must be the message/event time (ts), NOT the settlement time (fundingTime).
+
+    OKX funding-rate fixture has:
+      - ts            = 1700000100000  (event time, ms)
+      - fundingTime   = 1700003600000  (settlement time, ms)
+
+    Before the fix both exchange_ts and funding_timestamp were set to fundingTime,
+    making them equal.  After the fix exchange_ts == ts_ns != fundingTime_ns.
+    """
+    msg = json.loads((FIXTURES / "funding_rate.json").read_text())
+    out = list(normalize_message(msg, local_ts=99, venue="okx"))
+    fn_list = [r for r in out if isinstance(r, Funding)]
+    assert len(fn_list) == 1
+    fn = fn_list[0]
+    event_ts_ns = 1700000100000 * 1_000_000    # ts field
+    settlement_ts_ns = 1700003600000 * 1_000_000  # fundingTime field
+    assert fn.exchange_ts == event_ts_ns, (
+        f"exchange_ts should be event time {event_ts_ns}, got {fn.exchange_ts}"
+    )
+    assert fn.funding_timestamp == settlement_ts_ns, (
+        f"funding_timestamp should be settlement time {settlement_ts_ns}, "
+        f"got {fn.funding_timestamp}"
+    )
+    assert fn.exchange_ts != fn.funding_timestamp, (
+        "exchange_ts must differ from funding_timestamp (event time vs settlement time)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T2-okx regression: tickers channel must yield ONLY DerivativeTicker, no Funding
+# ---------------------------------------------------------------------------
+
+
+def test_ticker_swap_emits_only_derivative_ticker_not_funding() -> None:
+    """_normalize_tickers must NOT emit Funding — that comes exclusively from funding-rate channel.
+
+    Before the fix, tickers emitted both DerivativeTicker and Funding, causing
+    duplicate Funding records when both channels are subscribed simultaneously.
+    After the fix, only DerivativeTicker is emitted; funding_rate/funding_timestamp
+    fields are still present on the DerivativeTicker itself.
+    """
+    msg = json.loads((FIXTURES / "ticker_swap.json").read_text())
+    out = list(normalize_message(msg, local_ts=9, venue="okx"))
+    dt_list = [r for r in out if isinstance(r, DerivativeTicker)]
+    fn_list = [r for r in out if isinstance(r, Funding)]
+    assert len(dt_list) == 1, f"Expected 1 DerivativeTicker, got {len(dt_list)}"
+    assert len(fn_list) == 0, (
+        f"Expected 0 Funding records from tickers channel (got {len(fn_list)}); "
+        "Funding must come exclusively from the funding-rate channel"
+    )
+    # DerivativeTicker still carries the funding fields
+    dt = dt_list[0]
+    assert dt.funding_rate == 0.0001
+    assert dt.funding_timestamp == 1700003600000 * 1_000_000
 
 
 # ---------------------------------------------------------------------------
