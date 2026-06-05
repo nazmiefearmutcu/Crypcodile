@@ -1,0 +1,1 @@
+{"products":[{"product_id":"BTC-USD","base_currency":"BTC","quote_currency":"USD","base_min_size":"0.00000001","base_max_size":"10000","quote_increment":"0.01","status":"online"},{"product_id":"ETH-USD","base_currency":"ETH","quote_currency":"USD","base_min_size":"0.00000001","base_max_size":"100000","quote_increment":"0.01","status":"online"}]}

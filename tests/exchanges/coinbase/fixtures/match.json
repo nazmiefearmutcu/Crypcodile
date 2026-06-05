@@ -1,0 +1,1 @@
+{"type":"match","trade_id":123456,"sequence":42,"maker_order_id":"abc","taker_order_id":"def","time":"2023-11-14T22:13:20.000000Z","product_id":"BTC-USD","size":"0.5","price":"50000.10","side":"buy"}
