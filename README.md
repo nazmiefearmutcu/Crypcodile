@@ -234,6 +234,151 @@ for snap in resample_book_snapshots(
 
 ---
 
+## Analytics
+
+The `crocodile.analytics` package computes derived metrics — funding APR, basis,
+implied-vol surface, and term structure — directly from the stored Parquet lake.
+No new exchange calls; all computation is offline.
+
+### 8. Funding APR
+
+Annualise per-event perpetual funding rates and track cumulative funding:
+
+```python
+from crocodile.store.catalog import Catalog
+from crocodile.analytics.funding import funding_apr, funding_summary
+
+catalog = Catalog("data")
+
+# Per-event APR (positive rate = longs pay shorts)
+df = funding_apr(catalog, "deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
+print(df)
+# columns: funding_ts, funding_rate, interval_hours, apr, cumulative_funding
+
+# Summary stats
+summary = funding_summary(catalog, "deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
+print(summary)
+# columns: n_events, mean_rate, mean_apr, total_funding
+```
+
+Via the CLI:
+
+```bash
+uv run crocodile funding-apr \
+  --symbol deribit:BTC-PERPETUAL \
+  --start 0 --end 9223372036854775807 \
+  --data-dir data
+```
+
+Or run the offline example script end-to-end:
+
+```bash
+uv run python examples/analytics_funding.py \
+  --symbol deribit:BTC-PERPETUAL \
+  --data-dir data
+```
+
+### 9. Basis (spot-future and perpetual)
+
+Spot-future basis uses a DuckDB ASOF JOIN to align future trades with the nearest
+prior spot trade:
+
+```python
+from crocodile.analytics.basis import spot_future_basis, perp_basis
+
+# Spot-future basis (annualised when expiry_ns is given)
+ONE_YEAR_NS = 365 * 24 * 3600 * 1_000_000_000
+df = spot_future_basis(
+    catalog,
+    future_symbol="deribit:BTC-FUTURE",
+    spot_symbol="binance-spot:BTCUSDT",
+    start_ns=0,
+    end_ns=9_223_372_036_854_775_807,
+    expiry_ns=1_735_689_600_000_000_000,  # optional
+)
+# columns: local_ts, future_price, spot_price, basis, basis_pct [, annualized_pct]
+
+# Perpetual basis (mark vs index)
+df_perp = perp_basis(catalog, "deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
+# columns: local_ts, mark_price, index_price, basis, basis_pct
+```
+
+Via the CLI:
+
+```bash
+# Spot-future mode
+uv run crocodile basis \
+  --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \
+  --start 0 --end 9223372036854775807 --data-dir data
+
+# Perpetual mode
+uv run crocodile basis \
+  --perp deribit:BTC-PERPETUAL \
+  --start 0 --end 9223372036854775807 --data-dir data
+```
+
+### 10. IV surface and term structure
+
+Compute a cross-sectional snapshot of the options market at any instant.  IV is
+taken from `mark_iv` (exchange-provided) when available; otherwise solved via
+Black-76 using `mark_price + underlying_price`:
+
+```python
+from crocodile.analytics.volsurface import iv_surface, vol_skew, term_structure
+
+AT_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
+
+# Full IV surface
+surface = iv_surface(catalog, "BTC", AT_NS)
+print(surface)
+# columns: expiry, strike, moneyness, opt_type, iv, source
+
+# Per-strike skew for one expiry (with delta column)
+EXPIRY_NS = 1_735_689_600_000_000_000
+skew = vol_skew(catalog, "BTC", EXPIRY_NS, AT_NS)
+print(skew)
+# columns: strike, moneyness, opt_type, iv, delta
+
+# ATM IV per expiry (term structure)
+ts_df = term_structure(catalog, "BTC", AT_NS)
+print(ts_df)
+# columns: expiry, days_to_expiry, atm_strike, atm_iv
+```
+
+Via the CLI:
+
+```bash
+uv run crocodile iv-surface \
+  --underlying BTC --at 1704067200000000000 --data-dir data
+
+uv run crocodile term-structure \
+  --underlying BTC --at 1704067200000000000 --data-dir data
+```
+
+Or run the offline example script:
+
+```bash
+uv run python examples/analytics_iv_surface.py \
+  --underlying BTC \
+  --data-dir data
+```
+
+Via the `CrocodileClient` (all analytics are also available as client methods):
+
+```python
+from crocodile.client.client import CrocodileClient
+
+client = CrocodileClient("data")
+
+funding_df   = client.funding_apr("deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
+basis_df     = client.spot_future_basis("deribit:BTC-FUTURE", "binance-spot:BTCUSDT", 0, 9_223_372_036_854_775_807)
+perp_df      = client.perp_basis("deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
+surface_df   = client.iv_surface("BTC", AT_NS)
+ts_df        = client.term_structure("BTC", AT_NS)
+```
+
+---
+
 ## Supported exchanges and channels
 
 | Exchange | Venue key | Trades | L2 book | Tickers | Funding | OI | Liq | Options |
