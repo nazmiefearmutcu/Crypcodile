@@ -1,0 +1,1 @@
+{"topic":"publicTrade.BTCUSDT","type":"snapshot","ts":1700000000123,"data":[{"i":"trade-001","T":1700000000100,"p":"50000.10","v":"0.5","S":"Buy","BT":false},{"i":"trade-002","T":1700000000200,"p":"49999.50","v":"1.2","S":"Sell","BT":false}]}

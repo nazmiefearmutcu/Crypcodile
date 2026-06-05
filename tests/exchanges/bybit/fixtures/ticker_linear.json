@@ -1,0 +1,1 @@
+{"topic":"tickers.BTCUSDT","type":"snapshot","ts":1700000000000,"data":{"symbol":"BTCUSDT","lastPrice":"50000.0","markPrice":"50001.0","indexPrice":"49999.5","openInterest":"12345.6","fundingRate":"0.0001","nextFundingTime":"1700003600000","bid1Price":"49999.0","bid1Size":"1.5","ask1Price":"50001.0","ask1Size":"0.8"}}

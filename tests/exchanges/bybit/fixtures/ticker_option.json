@@ -1,0 +1,1 @@
+{"topic":"tickers.BTC-30JUN25-50000-C","type":"snapshot","ts":1700000000000,"data":{"symbol":"BTC-30JUN25-50000-C","underlyingPrice":"50000.0","markPrice":"0.05","markIv":"0.65","bid1Price":"0.04","bid1Size":"2.0","ask1Price":"0.06","ask1Size":"1.0","delta":"0.5","gamma":"0.001","vega":"12.0","theta":"-3.0","openInterest":"10.0"}}
