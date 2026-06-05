@@ -1,0 +1,1 @@
+{"arg": {"channel": "books", "instId": "BTC-USDT"}, "action": "snapshot", "data": [{"bids": [["50000.0", "5.0", "0", "1"], ["49999.0", "2.0", "0", "1"]], "asks": [["50001.0", "4.0", "0", "1"]], "ts": "1700000000000", "checksum": 12345, "seqId": 100, "prevSeqId": -1}]}
