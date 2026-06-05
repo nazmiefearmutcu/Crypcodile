@@ -3,7 +3,7 @@
 Acceptance criteria:
   - Both example scripts (analytics_funding.py and analytics_iv_surface.py)
     exist in the examples/ directory.
-  - Both scripts can be imported without error (syntax-check via importlib).
+  - Both scripts compile without error (syntax-check via compile()).
   - Both scripts run to exit 0 against an empty lake (graceful "no data" path).
   - Both scripts run to exit 0 against a populated fixture lake.
   - README.md contains an "Analytics" section with key snippet markers.
@@ -20,7 +20,6 @@ Additional coverage tests added here to push crocodile.analytics above 90%:
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -127,19 +126,27 @@ def test_analytics_iv_surface_example_exists() -> None:
 
 
 def test_analytics_funding_example_syntax() -> None:
-    """analytics_funding.py must parse without import errors."""
+    """analytics_funding.py must compile (parse) without syntax errors.
+
+    Uses ``compile()`` to actually parse the AST — unlike
+    ``spec_from_file_location`` which only checks the file exists, this will
+    raise ``SyntaxError`` on any invalid Python syntax.
+    """
     script = _examples_dir() / "analytics_funding.py"
-    spec = importlib.util.spec_from_file_location("analytics_funding", script)
-    assert spec is not None
-    # We only check that the spec can be created (file parses).
-    # Full load would execute the __main__ guard; we don't do that here.
+    source = script.read_text(encoding="utf-8")
+    compile(source, str(script), "exec")  # raises SyntaxError on bad syntax
 
 
 def test_analytics_iv_surface_example_syntax() -> None:
-    """analytics_iv_surface.py must parse without import errors."""
+    """analytics_iv_surface.py must compile (parse) without syntax errors.
+
+    Uses ``compile()`` to actually parse the AST — unlike
+    ``spec_from_file_location`` which only checks the file exists, this will
+    raise ``SyntaxError`` on any invalid Python syntax.
+    """
     script = _examples_dir() / "analytics_iv_surface.py"
-    spec = importlib.util.spec_from_file_location("analytics_iv_surface", script)
-    assert spec is not None
+    source = script.read_text(encoding="utf-8")
+    compile(source, str(script), "exec")  # raises SyntaxError on bad syntax
 
 
 # ---------------------------------------------------------------------------
@@ -671,3 +678,214 @@ def test_term_structure_moneyness_fallback(tmp_path: Path) -> None:
     row = df.row(0, named=True)
     # ATM strike should be 100 (nearest to underlying_price=100)
     assert abs(row["atm_strike"] - 100.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Extra coverage: basis.py — DuckDB exception handler (lines 125-126)
+# ---------------------------------------------------------------------------
+
+
+def test_spot_future_basis_duckdb_exception_returns_empty(tmp_path: Path) -> None:
+    """When DuckDB raises during the ASOF JOIN, the function returns empty DF.
+
+    This covers the ``except (duckdb.CatalogException, ...)`` branch at
+    basis.py lines 125-126.
+
+    DuckDB's C-extension connection object has read-only methods, so we swap
+    out ``catalog._conn`` with a thin proxy that delegates to the real
+    connection but raises on the ASOF-JOIN ``execute`` call.
+    """
+    import duckdb
+
+    from crocodile.analytics.basis import spot_future_basis
+    from crocodile.schema.enums import Side
+    from crocodile.schema.records import Trade
+    from crocodile.store.catalog import Catalog
+    from crocodile.store.parquet_sink import ParquetSink
+
+    async def _write() -> None:
+        sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for symbol, price in [("deribit:F2", 101.0), ("deribit:S2", 100.0)]:
+            rec = Trade(
+                exchange=_EXCHANGE,
+                symbol=symbol,
+                symbol_raw=symbol.split(":", 1)[-1],
+                exchange_ts=_BASE_NS,
+                local_ts=_BASE_NS,
+                id=f"t_{symbol}",
+                price=price,
+                amount=1.0,
+                side=Side.BUY,
+            )
+            await sink.put(rec)
+        await sink.flush()
+
+    asyncio.run(_write())
+    catalog = Catalog(tmp_path)
+
+    # Build a proxy that wraps the real DuckDB connection but raises a
+    # BinderException when the ASOF-JOIN SQL (which references _basis_future)
+    # is executed.  We swap catalog._conn with this proxy so that basis.py's
+    # ``conn = catalog._conn`` picks it up.
+    real_conn = catalog._conn
+
+    class _ProxyConn:
+        def register(self, name: str, df: object) -> None:
+            real_conn.register(name, df)
+
+        def unregister(self, name: str) -> None:
+            real_conn.unregister(name)
+
+        def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+            if "_basis_future" in sql:
+                raise duckdb.BinderException("forced test error")
+            return real_conn.execute(sql, *args, **kwargs)
+
+    catalog._conn = _ProxyConn()  # type: ignore[assignment]
+    try:
+        df = spot_future_basis(catalog, "deribit:F2", "deribit:S2", 0, _BASE_NS + 1)
+    finally:
+        catalog._conn = real_conn  # restore
+
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 0, "DuckDB exception branch must return empty DataFrame"
+
+
+# ---------------------------------------------------------------------------
+# Extra coverage: basis.py — unregister exception-suppression branches
+# (lines 130-131, 134-135)
+# ---------------------------------------------------------------------------
+
+
+def test_spot_future_basis_unregister_exception_suppressed(tmp_path: Path) -> None:
+    """Exceptions from conn.unregister() in the finally block are suppressed.
+
+    This covers the ``except Exception: pass`` branches at basis.py lines
+    130-131 and 134-135.
+
+    Same proxy technique: swap ``catalog._conn`` with a proxy whose
+    ``unregister`` always raises.
+    """
+    from crocodile.analytics.basis import spot_future_basis
+    from crocodile.schema.enums import Side
+    from crocodile.schema.records import Trade
+    from crocodile.store.catalog import Catalog
+    from crocodile.store.parquet_sink import ParquetSink
+
+    async def _write() -> None:
+        sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for symbol, price in [("deribit:F3", 101.0), ("deribit:S3", 100.0)]:
+            rec = Trade(
+                exchange=_EXCHANGE,
+                symbol=symbol,
+                symbol_raw=symbol.split(":", 1)[-1],
+                exchange_ts=_BASE_NS,
+                local_ts=_BASE_NS,
+                id=f"t_{symbol}",
+                price=price,
+                amount=1.0,
+                side=Side.BUY,
+            )
+            await sink.put(rec)
+        await sink.flush()
+
+    asyncio.run(_write())
+    catalog = Catalog(tmp_path)
+    real_conn = catalog._conn
+
+    class _ProxyConn:
+        def register(self, name: str, df: object) -> None:
+            real_conn.register(name, df)
+
+        def unregister(self, name: str) -> None:
+            raise RuntimeError("forced unregister failure")
+
+        def execute(self, sql: str, *args: object, **kwargs: object) -> object:
+            return real_conn.execute(sql, *args, **kwargs)
+
+    catalog._conn = _ProxyConn()  # type: ignore[assignment]
+    try:
+        # Should NOT raise; both except-pass branches swallow the unregister error.
+        df = spot_future_basis(catalog, "deribit:F3", "deribit:S3", 0, _BASE_NS + 1)
+    finally:
+        catalog._conn = real_conn  # restore
+
+    # Result may be valid data or empty — both fine; what matters is no exception.
+    assert isinstance(df, pl.DataFrame)
+
+
+# ---------------------------------------------------------------------------
+# Extra coverage: basis.py — len(df)==0 after ASOF JOIN (line 138)
+# ---------------------------------------------------------------------------
+
+
+def test_spot_future_basis_asof_join_empty_result(tmp_path: Path) -> None:
+    """ASOF JOIN returns zero rows when spot is strictly AFTER future.
+
+    DuckDB ASOF JOIN ``ON future.ts >= spot.ts`` finds no match when all spot
+    timestamps are later than the future timestamp.  This covers line 138
+    (the ``if len(df) == 0: return pl.DataFrame()`` guard after the JOIN).
+    """
+    from crocodile.analytics.basis import spot_future_basis
+    from crocodile.schema.enums import Side
+    from crocodile.schema.records import Trade
+    from crocodile.store.catalog import Catalog
+    from crocodile.store.parquet_sink import ParquetSink
+
+    # Future trade at T1; spot trade at T2 (AFTER the future) — no prior spot exists.
+    async def _write() -> None:
+        sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for symbol, ts, price in [
+            ("deribit:F4", _BASE_NS + 1_000, 101.0),   # future — earlier
+            ("deribit:S4", _BASE_NS + 2_000, 100.0),   # spot   — later (no prior match)
+        ]:
+            rec = Trade(
+                exchange=_EXCHANGE,
+                symbol=symbol,
+                symbol_raw=symbol.split(":", 1)[-1],
+                exchange_ts=ts,
+                local_ts=ts,
+                id=f"t_{symbol}",
+                price=price,
+                amount=1.0,
+                side=Side.BUY,
+            )
+            await sink.put(rec)
+        await sink.flush()
+
+    asyncio.run(_write())
+    catalog = Catalog(tmp_path)
+    df = spot_future_basis(
+        catalog, "deribit:F4", "deribit:S4", 0, _BASE_NS + 3_000
+    )
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 0, f"Expected 0 rows (no prior spot), got {len(df)}"
+
+
+# ---------------------------------------------------------------------------
+# Extra coverage: basis.py — perp_basis missing mark_price/index_price columns
+# (line 200)
+# ---------------------------------------------------------------------------
+
+
+def test_perp_basis_raw_missing_price_columns(tmp_path: Path) -> None:
+    """perp_basis returns empty DF when scan returns a DF missing price columns.
+
+    Covers the ``if 'mark_price' not in raw.columns`` guard at basis.py line 200
+    by mocking catalog.scan to return a DataFrame without those columns.
+    """
+    from unittest.mock import patch
+
+    from crocodile.analytics.basis import perp_basis
+    from crocodile.store.catalog import Catalog
+
+    catalog = Catalog(tmp_path)
+
+    # Mock scan to return a DF that has rows but lacks mark_price / index_price
+    stub_df = pl.DataFrame({"local_ts": [_BASE_NS], "some_other_col": [42.0]})
+
+    with patch.object(catalog, "scan", return_value=stub_df):
+        df = perp_basis(catalog, _PERP_SYMBOL, 0, _BASE_NS + 1)
+
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 0, "Missing columns branch must return empty DataFrame"

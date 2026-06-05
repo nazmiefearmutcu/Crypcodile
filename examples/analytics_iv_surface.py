@@ -103,14 +103,18 @@ def main(argv: list[str] | None = None) -> int:
         at_ns = args.at_ns
     else:
         # Default: latest local_ts in the options_chain table for this underlying.
+        # Use the public catalog.query() API with the underlying literal inlined
+        # as a safe SQL string (no user-controlled input reaches this path;
+        # args.underlying comes from --underlying which defaults to "BTC").
         try:
-            catalog.refresh_views()
-            res = catalog._conn.execute(
-                "SELECT MAX(local_ts) FROM options_chain WHERE underlying = ?",
-                [args.underlying],
+            underlying_escaped = args.underlying.replace("'", "''")
+            sql = (
+                f"SELECT MAX(local_ts) FROM options_chain"
+                f" WHERE underlying = '{underlying_escaped}'"
             )
-            row = res.fetchone()
-            at_ns = int(row[0]) if row and row[0] is not None else _NS_MAX
+            result_df = catalog.query(sql)
+            val = result_df[0, 0] if len(result_df) > 0 else None
+            at_ns = int(val) if val is not None else _NS_MAX
         except Exception:
             at_ns = _NS_MAX
 
@@ -135,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n{'expiry (UTC)':<14} {'strike':>10} {'type':>5} {'moneyness':>10} "
           f"{'iv':>8} {'source':>12}")
     print("-" * 68)
-    for row in surface.sort(["expiry", "strike"]).iter_rows(named=True):
+    for row in surface.sort(["expiry", "strike"]).to_dicts():
         expiry_str = _ns_to_utc_date(row["expiry"])
         strike = f"{row['strike']:.1f}"
         opt_type = str(row["opt_type"])
@@ -160,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         f"\n{'expiry (UTC)':<14} {'days':>8} {'atm_strike':>12} {'atm_iv':>10}"
     )
     print("-" * 50)
-    for row in ts_df.iter_rows(named=True):
+    for row in ts_df.to_dicts():
         expiry_str = _ns_to_utc_date(row["expiry"])
         days = f"{row['days_to_expiry']:.1f}"
         atm_strike = f"{row['atm_strike']:.1f}"
