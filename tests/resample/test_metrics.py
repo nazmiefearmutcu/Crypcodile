@@ -151,7 +151,7 @@ def test_metrics_dollar_volume_sum_conserved(catalog: Catalog) -> None:
         _ts(int(3 * _1S_NS)),
         "1s",
     )
-    assert abs(df["dollar_volume"].sum() - _TOTAL_DOLLAR_VOLUME) < 1e-6, (
+    assert abs(float(df["dollar_volume"].sum()) - _TOTAL_DOLLAR_VOLUME) < 1e-6, (
         f"dollar_volume sum mismatch: {df['dollar_volume'].sum()} != {_TOTAL_DOLLAR_VOLUME}"
     )
 
@@ -292,3 +292,43 @@ def test_metrics_invalid_interval_raises(catalog: Catalog) -> None:
             _ts(int(3 * _1S_NS)),
             "bad",
         )
+
+
+def test_metrics_vwap_multi_trade_per_bar(tmp_path: Path) -> None:
+    """VWAP is correctly weighted when multiple trades fall in the same bar.
+
+    Two trades in the same 1-minute bucket:
+        trade A: price=100.0, amount=1.0  → contribution 100.0
+        trade B: price=300.0, amount=3.0  → contribution 900.0
+
+    Expected VWAP = (100*1 + 300*3) / (1 + 3) = 1000 / 4 = 250.0
+    A simple avg(price) would give (100+300)/2 = 200.0, which is WRONG.
+    """
+    trade_a = _make_trade(_ts(0), 100.0, 1.0, Side.BUY, "ma1")
+    # Same 1-minute bucket: offset 30 seconds
+    trade_b = _make_trade(_ts(30 * _1S_NS), 300.0, 3.0, Side.SELL, "ma2")
+
+    asyncio.run(_write_trades(tmp_path, [trade_a, trade_b]))
+    cat = Catalog(tmp_path)
+
+    df = resample_metrics(
+        cat,
+        "deribit:BTC-PERPETUAL",
+        _ts(0),
+        _ts(60 * _1S_NS),
+        "1m",
+    )
+
+    assert len(df) == 1, f"expected 1 bar, got {len(df)}"
+    row = df.row(0, named=True)
+
+    expected_vwap = (100.0 * 1.0 + 300.0 * 3.0) / (1.0 + 3.0)  # 250.0
+    wrong_avg = (100.0 + 300.0) / 2  # 200.0 — simple price average (wrong)
+
+    assert abs(row["vwap"] - expected_vwap) < 1e-6, (
+        f"VWAP={row['vwap']} expected weighted={expected_vwap}"
+        f" (simple avg would give {wrong_avg})"
+    )
+    assert row["trade_count"] == 2
+    expected_dv = 100.0 * 1.0 + 300.0 * 3.0  # 1000.0
+    assert abs(float(row["dollar_volume"]) - expected_dv) < 1e-6
