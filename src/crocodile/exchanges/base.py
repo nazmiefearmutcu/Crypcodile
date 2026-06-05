@@ -54,13 +54,18 @@ class Connector(ABC):
     @abstractmethod
     async def list_instruments(self) -> list[Instrument]: ...
 
-    def subscribe_channels(self) -> list[str]:
-        """Return the list of WS channel strings this connector will subscribe to.
+    def subscribe_channels(self) -> list[str] | list[dict[str, str]]:
+        """Return the WS channel descriptors this connector will subscribe to.
 
-        Override in concrete connectors. Not abstract so that future connectors
-        (Binance T1.9, Bybit T4.4, OKX T4.5, Coinbase T4.6) are not forced to
-        implement it before they are ready; the ABC contract (appendix §2) does
-        not list subscribe_channels() — only subscribe() is specified there.
+        Override in concrete connectors.  Not abstract so that future connectors
+        are not forced to implement it before they are ready.
+
+        String-arg connectors (Deribit, Binance, Bybit) return ``list[str]``.
+        Dict-arg connectors (OKX) return ``list[dict[str, str]]`` because the
+        OKX subscribe frame uses ``{"channel": "...", "instId": "..."}`` objects
+        rather than plain topic strings.  The ABC is widened to accommodate both
+        forms so the override in OKXConnector does not need a ``# type: ignore``
+        suppression.
         """
         raise NotImplementedError
 

@@ -403,6 +403,13 @@ def _normalize_option_summary(
         if strike is None or opt_type_enum is None:
             strike, opt_type_enum = _parse_option_instid(sym)
 
+        if strike is None or opt_type_enum is None:
+            log.warning(
+                "okx: option-summary: cannot parse strike/opt_type from instId %r — skipping",
+                sym,
+            )
+            continue
+
         underlying: str = entry.get("uly", sym.rsplit("-", 2)[0] if sym.count("-") >= 2 else sym)
         fwd_px_raw = entry.get("fwdPx")
         underlying_price = float(fwd_px_raw) if fwd_px_raw else None
@@ -423,9 +430,9 @@ def _normalize_option_summary(
             local_ts=local_ts,
             underlying=underlying,
             underlying_price=underlying_price,
-            strike=strike or 0.0,
+            strike=strike,
             expiry=expiry or 0,
-            opt_type=opt_type_enum or OptType.CALL,
+            opt_type=opt_type_enum,
             mark_iv=float(mark_vol_raw) if mark_vol_raw else None,
             bid_iv=float(bid_vol_raw) if bid_vol_raw else None,
             ask_iv=float(ask_vol_raw) if ask_vol_raw else None,

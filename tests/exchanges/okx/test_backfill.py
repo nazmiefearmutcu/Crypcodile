@@ -295,3 +295,126 @@ async def test_backfill_trades_stops_on_empty_page() -> None:
     # Should yield the 1 record from page 1 then stop on empty page 2
     assert len(records) == 1
     assert records[0].id == "page1-trade"
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: backfill_open_interest must filter by start_ns / end_ns
+# ---------------------------------------------------------------------------
+
+_OI_THREE_RECORDS: dict[str, Any] = {
+    "code": "0",
+    "data": [
+        # ts=1700000002000 ms → inside range [1700000001_000_000_000, 1700000003_000_000_000]
+        {"instId": "BTC-USDT-SWAP", "oi": "100", "oiCcy": "10", "ts": "1700000002000"},
+        # ts=1700000000000 ms → BEFORE start_ns → must be excluded
+        {"instId": "BTC-USDT-SWAP", "oi": "200", "oiCcy": "20", "ts": "1700000000000"},
+        # ts=1700000004000 ms → AFTER end_ns → must be excluded
+        {"instId": "BTC-USDT-SWAP", "oi": "300", "oiCcy": "30", "ts": "1700000004000"},
+    ],
+    "msg": "",
+}
+
+_START_NS = 1_700_000_001_000_000_000  # 1700000001 s
+_END_NS   = 1_700_000_003_000_000_000  # 1700000003 s
+
+
+async def test_backfill_open_interest_filters_by_time_range() -> None:
+    """backfill_open_interest must skip records outside [start_ns, end_ns]."""
+    call_count = 0
+
+    async def _fake_fetch(
+        symbol: str,
+        inst_type: str,
+        period: str,
+        after: str | None,
+        before: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _OI_THREE_RECORDS
+        return {"code": "0", "data": [], "msg": ""}
+
+    bf = OKXBackfill(
+        fetch_trades=None,
+        fetch_funding=None,
+        fetch_open_interest=_fake_fetch,
+    )
+    records = []
+    async for r in bf.backfill_open_interest(
+        venue="okx",
+        symbol="BTC-USDT-SWAP",
+        inst_type="SWAP",
+        start_ns=_START_NS,
+        end_ns=_END_NS,
+    ):
+        records.append(r)
+    # Only the record with ts=1700000002000 ms is inside the window
+    assert len(records) == 1
+    assert records[0].open_interest == 100.0
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: backfill_funding must break (not just skip) when records < start_ns
+# ---------------------------------------------------------------------------
+
+# Two pages: page 1 has one record below start_ns; page 2 would be an HTTP hit
+# that must NOT occur once we detect we've passed below start_ns.
+_FUNDING_BELOW_START: dict[str, Any] = {
+    "code": "0",
+    "data": [
+        {
+            "instId": "BTC-USDT-SWAP",
+            "instType": "SWAP",
+            "fundingRate": "0.0003",
+            "fundingTime": "1699990000000",  # far before _START_NS → must break
+        }
+    ],
+    "msg": "",
+}
+
+
+async def test_backfill_funding_breaks_on_first_record_below_start_ns() -> None:
+    """Once a funding record falls below start_ns, pagination must stop immediately
+    (no further HTTP pages), matching the behaviour of backfill_trades.
+
+    The fake fetch returns an empty page after 2 calls so the test terminates
+    even on the unfixed code path.  We then assert only 1 call occurred
+    (i.e. the break fired before the second page request).
+    """
+    fetch_calls: list[int] = []
+
+    async def _fake_fetch(
+        symbol: str,
+        inst_type: str,
+        after: str | None,
+        before: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        fetch_calls.append(1)
+        if len(fetch_calls) == 1:
+            return _FUNDING_BELOW_START
+        # Second call: return empty to terminate the unfixed loop
+        return {"code": "0", "data": [], "msg": ""}
+
+    bf = OKXBackfill(
+        fetch_trades=None,
+        fetch_funding=_fake_fetch,
+        fetch_open_interest=None,
+    )
+    records = []
+    async for r in bf.backfill_funding(
+        venue="okx",
+        symbol="BTC-USDT-SWAP",
+        inst_type="SWAP",
+        start_ns=_START_NS,
+        end_ns=_END_NS,
+    ):
+        records.append(r)
+    # No in-range records expected (the only record is below start_ns)
+    assert len(records) == 0
+    # Crucially: only ONE fetch call must have occurred — early break, not skip
+    assert len(fetch_calls) == 1, (
+        f"Expected 1 HTTP call (early break) but got {len(fetch_calls)}"
+    )

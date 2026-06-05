@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crocodile.exchanges.okx.connector import build_channels, parse_instruments
-from crocodile.instruments.registry import Kind
+from crocodile.exchanges.base import Connector
+from crocodile.exchanges.okx.connector import OKXConnector, build_channels, parse_instruments
+from crocodile.instruments.registry import InstrumentRegistry, Kind
+from crocodile.sink.memory import MemorySink
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -65,3 +67,47 @@ def test_parse_instruments_option() -> None:
     # expTime 1700000000000 ms → ns
     assert inst.expiry == 1700000000000 * 1_000_000
     assert inst.tick_size == 0.0005
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: subscribe_channels() return type must satisfy the ABC without suppression
+# ---------------------------------------------------------------------------
+
+
+def test_subscribe_channels_return_type_is_list_of_dicts() -> None:
+    """OKXConnector.subscribe_channels() returns list[dict[str,str]].
+
+    After removing the # type: ignore[override] suppression, the ABC must
+    be widened to accept dict args. This test verifies the return value
+    is actually a list of dicts at runtime.
+    """
+    sink = MemorySink()
+    registry = InstrumentRegistry()
+    conn = OKXConnector(
+        symbols=["BTC-USDT-SWAP"],
+        channels=["trade", "funding"],
+        out=sink,
+        registry=registry,
+    )
+    result = conn.subscribe_channels()
+    assert isinstance(result, list)
+    assert len(result) >= 1
+    for item in result:
+        assert isinstance(item, dict), f"Expected dict, got {type(item)}"
+        assert "channel" in item
+        assert "instId" in item
+
+
+def test_subscribe_channels_is_callable_as_connector() -> None:
+    """subscribe_channels() is callable on the base class reference (no override error)."""
+    sink = MemorySink()
+    registry = InstrumentRegistry()
+    conn: Connector = OKXConnector(
+        symbols=["BTC-USDT-SWAP"],
+        channels=["trade"],
+        out=sink,
+        registry=registry,
+    )
+    # Calling via base class reference must work without type errors
+    result = conn.subscribe_channels()
+    assert result is not None

@@ -223,3 +223,70 @@ def test_option_summary_no_registry_fallback() -> None:
     # OKX option instId: BTC-USD-25DEC22-40000-C → strike=40000.0, opt_type=CALL
     assert oc.strike == 40000.0
     assert oc.opt_type == OptType.CALL
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: malformed instId → record must be skipped (not emitted with sentinel 0)
+# ---------------------------------------------------------------------------
+
+
+def test_option_summary_malformed_instid_is_skipped() -> None:
+    """_parse_option_instid returns (None, None) for a short/malformed instId.
+
+    Previously the normalizer would emit a nonsensical OptionsChain with
+    strike=0.0, expiry=0, opt_type=CALL (sentinel defaults).  After the fix
+    such records are silently dropped (no yield).
+    """
+    # Deliberately malformed instId: too few dash-segments → _parse_option_instid → (None, None)
+    msg: dict = {
+        "arg": {"channel": "option-summary", "instId": "MALFORMED"},
+        "data": [
+            {
+                "instId": "MALFORMED",  # <5 parts → cannot parse strike/opt_type
+                "uly": "BTC-USD",
+                "ts": "1700000000000",
+                "markVol": "0.5",
+                "bidVol": "0.49",
+                "askVol": "0.51",
+                "delta": "0.5",
+                "gamma": "0.001",
+                "vega": "10.0",
+                "theta": "-2.0",
+            }
+        ],
+    }
+    out = list(normalize_message(msg, local_ts=99, venue="okx", registry=None))
+    oc_list = [r for r in out if isinstance(r, OptionsChain)]
+    # Malformed record must NOT be emitted
+    assert len(oc_list) == 0, (
+        f"Expected 0 OptionsChain records for malformed instId, got {len(oc_list)}: "
+        f"strike={oc_list[0].strike if oc_list else 'N/A'}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Verify _side() is NOT duplicated between normalize.py and backfill.py
+# ---------------------------------------------------------------------------
+
+
+def test_side_helper_not_duplicated() -> None:
+    """_side() in normalize.py and backfill.py must share one implementation.
+
+    After deduplication, backfill.py must import _side from normalize.py
+    (or a shared location) rather than defining its own copy.
+    """
+    import inspect
+
+    from crocodile.exchanges.okx import backfill as bf_mod
+    from crocodile.exchanges.okx import normalize as norm_mod
+
+    # After deduplication, backfill._side must be the same object as normalize._side
+    # OR backfill must not define _side at all (it imports from normalize or shared util).
+    bf_side_src = inspect.getsource(bf_mod._side)
+    norm_side_src = inspect.getsource(norm_mod._side)
+
+    # The canonical test: they must point to the same function
+    assert bf_mod._side is norm_mod._side, (
+        "backfill._side and normalize._side are different functions — "
+        "_side() is duplicated. Deduplicate by importing from one module."
+    )

@@ -21,9 +21,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
-from crocodile.schema.enums import Side
 from crocodile.schema.records import Funding, OpenInterest, Record, Trade
 from crocodile.util.time import ms_to_ns
+
+from .normalize import _side
 
 EXCHANGE = "okx"
 REST_BASE = "https://openapi.okx.com/api/v5"
@@ -33,14 +34,6 @@ _DEFAULT_PAGE_SIZE = 100  # OKX max is 500 for trades, 100 for funding/OI
 # ---------------------------------------------------------------------------
 # Pure page parsers (no I/O — testable independently)
 # ---------------------------------------------------------------------------
-
-
-def _side(raw: str) -> Side:
-    if raw == "buy":
-        return Side.BUY
-    if raw == "sell":
-        return Side.SELL
-    return Side.UNKNOWN
 
 
 def parse_trades_page(
@@ -256,11 +249,18 @@ class OKXBackfill:
             if not records:
                 break
 
+            stop = False
             for record in records:
                 if record.exchange_ts is not None:
-                    if record.exchange_ts > end_ns or record.exchange_ts < start_ns:
+                    if record.exchange_ts > end_ns:
                         continue
+                    if record.exchange_ts < start_ns:
+                        stop = True
+                        break
                 yield record
+
+            if stop:
+                break
 
             # Advance cursor using the last fundingTime string
             raw_items: list[dict[str, Any]] = raw.get("data") or []
@@ -302,8 +302,18 @@ class OKXBackfill:
             if not records:
                 break
 
+            stop = False
             for record in records:
+                if record.exchange_ts is not None:
+                    if record.exchange_ts > end_ns:
+                        continue
+                    if record.exchange_ts < start_ns:
+                        stop = True
+                        break
                 yield record
+
+            if stop:
+                break
 
             # Advance cursor using the last ts
             raw_items = raw.get("data") or []

@@ -222,7 +222,7 @@ class OKXConnector(Connector):
                     log.warning("OKX: failed to fetch %s instruments: %s", inst_type, exc)
         return instruments
 
-    def subscribe_channels(self) -> list[dict[str, str]]:  # type: ignore[override]
+    def subscribe_channels(self) -> list[dict[str, str]]:
         """Return the list of OKX subscribe arg dicts."""
         return self._sub_args
 
