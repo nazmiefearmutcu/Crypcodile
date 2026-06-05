@@ -215,4 +215,5 @@ def normalize_message(
                     local_ts=local_ts,
                     funding_rate=float(td["current_funding"]),
                     predicted_funding_rate=td.get("funding_8h"),
+                    interval_hours=8,  # Deribit perpetual funding settles every 8 hours
                 )
