@@ -84,3 +84,170 @@ def test_parse_instruments_option() -> None:
     assert inst.strike == 50000.0
     # deliveryTime 1751241600000 ms → ns
     assert inst.expiry == 1751241600000 * 1_000_000
+
+
+def test_parse_instruments_future_kind() -> None:
+    """LinearFuture contractType → Kind.FUTURE."""
+    raw = {
+        "result": {
+            "list": [
+                {
+                    "symbol": "BTCUSDT-31DEC25",
+                    "contractType": "LinearFuture",
+                    "baseCoin": "BTC",
+                    "quoteCoin": "USDT",
+                    "settleCoin": "USDT",
+                    "tickSize": "0.1",
+                    "lotSizeFilter": {"qtyStep": "0.001"},
+                }
+            ]
+        }
+    }
+    insts = parse_instruments(raw, category="linear")
+    assert len(insts) == 1
+    from crocodile.instruments.registry import Kind
+    assert insts[0].kind == Kind.FUTURE
+
+
+def test_parse_instruments_spot_kind() -> None:
+    """category='spot' with no contractType → Kind.SPOT."""
+    raw = {
+        "result": {
+            "list": [
+                {
+                    "symbol": "BTCUSDT",
+                    "contractType": "",
+                    "baseCoin": "BTC",
+                    "quoteCoin": "USDT",
+                    "settleCoin": None,
+                    "tickSize": "0.01",
+                    "lotSizeFilter": {"qtyStep": "0.001"},
+                }
+            ]
+        }
+    }
+    insts = parse_instruments(raw, category="spot")
+    assert len(insts) == 1
+    from crocodile.instruments.registry import Kind
+    assert insts[0].kind == Kind.SPOT
+
+
+def test_parse_instruments_pricefilter_tick_size() -> None:
+    """priceFilter.tickSize takes priority over top-level tickSize."""
+    raw = {
+        "result": {
+            "list": [
+                {
+                    "symbol": "BTCUSDT",
+                    "contractType": "LinearPerpetual",
+                    "baseCoin": "BTC",
+                    "quoteCoin": "USDT",
+                    "settleCoin": "USDT",
+                    "priceFilter": {"tickSize": "0.5"},
+                    "lotSizeFilter": {"qtyStep": "0.001"},
+                }
+            ]
+        }
+    }
+    insts = parse_instruments(raw, category="linear")
+    assert insts[0].tick_size == 0.5
+
+
+def test_parse_instruments_put_option() -> None:
+    """optionsType='Put' → opt_type='P'."""
+    raw = {
+        "result": {
+            "list": [
+                {
+                    "symbol": "BTC-30JUN25-50000-P",
+                    "contractType": "Option",
+                    "baseCoin": "BTC",
+                    "quoteCoin": "USD",
+                    "settleCoin": "BTC",
+                    "optionsType": "Put",
+                    "strikePrice": "50000",
+                    "deliveryTime": "1751241600000",
+                    "tickSize": "0.0005",
+                    "lotSizeFilter": {"qtyStep": "0.01"},
+                }
+            ]
+        }
+    }
+    insts = parse_instruments(raw, category="option")
+    assert insts[0].opt_type == "P"
+
+
+def test_parse_instruments_option_unknown_type() -> None:
+    """Unknown optionsType → opt_type=None (no crash)."""
+    raw = {
+        "result": {
+            "list": [
+                {
+                    "symbol": "BTC-30JUN25-50000-X",
+                    "contractType": "Option",
+                    "baseCoin": "BTC",
+                    "quoteCoin": "USD",
+                    "settleCoin": "BTC",
+                    "optionsType": "Exotic",
+                    "strikePrice": "50000",
+                    "deliveryTime": "1751241600000",
+                    "tickSize": "0.0005",
+                    "lotSizeFilter": {"qtyStep": "0.01"},
+                }
+            ]
+        }
+    }
+    insts = parse_instruments(raw, category="option")
+    assert insts[0].opt_type is None
+
+
+def test_parse_instruments_no_delivery_time() -> None:
+    """Missing deliveryTime → expiry=None (no crash)."""
+    raw = {
+        "result": {
+            "list": [
+                {
+                    "symbol": "BTC-30JUN25-50000-C",
+                    "contractType": "Option",
+                    "baseCoin": "BTC",
+                    "quoteCoin": "USD",
+                    "settleCoin": "BTC",
+                    "optionsType": "Call",
+                    "strikePrice": "50000",
+                    "tickSize": "0.0005",
+                    "lotSizeFilter": {"qtyStep": "0.01"},
+                }
+            ]
+        }
+    }
+    insts = parse_instruments(raw, category="option")
+    assert insts[0].expiry is None
+
+
+def test_build_channels_spot_category() -> None:
+    """Spot category builds the same topic patterns (no separate WS for spot)."""
+    chans = build_channels(["BTCUSDT"], ["trade"], "spot")
+    assert "publicTrade.BTCUSDT" in chans
+
+
+def test_bybit_connector_normalize_delegates() -> None:
+    """BybitConnector.normalize dispatches dict messages to normalize_message."""
+    from crocodile.exchanges.bybit.connector import BybitConnector
+    from crocodile.instruments.registry import InstrumentRegistry
+    from crocodile.sink.memory import MemorySink
+
+    sink = MemorySink()
+    conn = BybitConnector(
+        symbols=["BTCUSDT"],
+        channels=["trade"],
+        out=sink,
+        registry=InstrumentRegistry(),
+        category="linear",
+    )
+    # Non-dict messages must produce no records (no crash)
+    result = list(conn.normalize("not a dict", local_ts=1))
+    assert result == []
+
+    # A dict that doesn't match any known topic → empty (no crash)
+    result2 = list(conn.normalize({"topic": "unknown", "data": {}}, local_ts=1))
+    assert result2 == []

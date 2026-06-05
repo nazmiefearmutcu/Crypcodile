@@ -136,7 +136,7 @@ class DeribitConnector(Connector):
         if isinstance(msg, dict):
             yield from normalize_message(msg, local_ts=local_ts, registry=self.registry)
 
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[Instrument]:  # pragma: no cover
         """Fetch instruments from Deribit REST API and parse them."""
         async with aiohttp.ClientSession() as session:
             # Fetch all currencies x kinds (§3.1: BTC|ETH|SOL|USDC)
@@ -155,7 +155,7 @@ class DeribitConnector(Connector):
         """Return the list of Deribit channel strings this connector will subscribe to."""
         return self._sub_channels
 
-    async def _subscribe(self, transport: Transport) -> None:
+    async def _subscribe(self, transport: Transport) -> None:  # pragma: no cover
         """Send a Deribit JSON-RPC 2.0 ``public/subscribe`` frame."""
         channels = self.subscribe_channels()
         if channels:

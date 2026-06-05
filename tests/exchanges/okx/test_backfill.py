@@ -376,6 +376,172 @@ _FUNDING_BELOW_START: dict[str, Any] = {
 }
 
 
+async def test_backfill_trades_none_callback_yields_nothing() -> None:
+    """OKXBackfill.backfill_trades with fetch_trades=None yields nothing."""
+    bf = OKXBackfill(fetch_trades=None, fetch_funding=None, fetch_open_interest=None)
+    records = []
+    async for r in bf.backfill_trades(
+        venue="okx", symbol="BTC-USDT", inst_type="SPOT", start_ns=0, end_ns=1_000_000_000
+    ):
+        records.append(r)
+    assert records == []
+
+
+async def test_backfill_funding_none_callback_yields_nothing() -> None:
+    """OKXBackfill.backfill_funding with fetch_funding=None yields nothing."""
+    bf = OKXBackfill(fetch_trades=None, fetch_funding=None, fetch_open_interest=None)
+    records = []
+    async for r in bf.backfill_funding(
+        venue="okx", symbol="BTC-USDT-SWAP", inst_type="SWAP", start_ns=0, end_ns=1_000_000_000
+    ):
+        records.append(r)
+    assert records == []
+
+
+async def test_backfill_open_interest_none_callback_yields_nothing() -> None:
+    """OKXBackfill.backfill_open_interest with fetch_open_interest=None yields nothing."""
+    bf = OKXBackfill(fetch_trades=None, fetch_funding=None, fetch_open_interest=None)
+    records = []
+    async for r in bf.backfill_open_interest(
+        venue="okx", symbol="BTC-USDT-SWAP", inst_type="SWAP", start_ns=0, end_ns=1_000_000_000
+    ):
+        records.append(r)
+    assert records == []
+
+
+async def test_backfill_trades_advances_after_cursor() -> None:
+    """backfill_trades uses the last tradeId as 'after' cursor on the next page."""
+    page1: dict[str, Any] = {
+        "code": "0",
+        "data": [
+            {
+                "instId": "BTC-USDT",
+                "tradeId": "first-trade",
+                "px": "50000.0",
+                "sz": "1.0",
+                "side": "buy",
+                "ts": "1700000000100",
+            }
+        ],
+        "msg": "",
+    }
+    calls: list[Any] = []
+
+    async def _paged_fetch(
+        symbol: str,
+        inst_type: str,
+        after: str | None,
+        before: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        calls.append(after)
+        if len(calls) == 1:
+            return page1
+        return {"code": "0", "data": [], "msg": ""}  # stop on second call
+
+    bf = OKXBackfill(fetch_trades=_paged_fetch, fetch_funding=None, fetch_open_interest=None)
+    records = []
+    async for r in bf.backfill_trades(
+        venue="okx",
+        symbol="BTC-USDT",
+        inst_type="SPOT",
+        start_ns=0,
+        end_ns=9_999_999_999_999_999_999,
+    ):
+        records.append(r)
+
+    # First call has no after cursor; second call has the tradeId from page 1
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] == "first-trade"
+    assert len(records) == 1
+
+
+async def test_backfill_funding_advances_after_cursor_from_fundingtime() -> None:
+    """backfill_funding uses the last fundingTime as 'after' cursor on the next page."""
+    page1: dict[str, Any] = {
+        "code": "0",
+        "data": [
+            {
+                "instId": "BTC-USDT-SWAP",
+                "instType": "SWAP",
+                "fundingRate": "0.0001",
+                "fundingTime": "1700003600000",
+            }
+        ],
+        "msg": "",
+    }
+    calls: list[Any] = []
+
+    async def _paged_fetch(
+        symbol: str,
+        inst_type: str,
+        after: str | None,
+        before: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        calls.append(after)
+        if len(calls) == 1:
+            return page1
+        return {"code": "0", "data": [], "msg": ""}
+
+    bf = OKXBackfill(fetch_trades=None, fetch_funding=_paged_fetch, fetch_open_interest=None)
+    records = []
+    async for r in bf.backfill_funding(
+        venue="okx", symbol="BTC-USDT-SWAP", inst_type="SWAP",
+        start_ns=0, end_ns=9_999_999_999_999_999_999
+    ):
+        records.append(r)
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] == "1700003600000"
+    assert len(records) == 1
+
+
+async def test_backfill_open_interest_advances_after_cursor_from_ts() -> None:
+    """backfill_open_interest uses the last ts as 'after' cursor on the next page."""
+    page1: dict[str, Any] = {
+        "code": "0",
+        "data": [
+            {
+                "instId": "BTC-USDT-SWAP",
+                "oi": "100",
+                "oiCcy": "10",
+                "ts": "1700000000000",
+            }
+        ],
+        "msg": "",
+    }
+    calls: list[Any] = []
+
+    async def _paged_fetch(
+        symbol: str,
+        inst_type: str,
+        period: str,
+        after: str | None,
+        before: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        calls.append(after)
+        if len(calls) == 1:
+            return page1
+        return {"code": "0", "data": [], "msg": ""}
+
+    bf = OKXBackfill(fetch_trades=None, fetch_funding=None, fetch_open_interest=_paged_fetch)
+    records = []
+    async for r in bf.backfill_open_interest(
+        venue="okx", symbol="BTC-USDT-SWAP", inst_type="SWAP",
+        start_ns=0, end_ns=9_999_999_999_999_999_999
+    ):
+        records.append(r)
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] == "1700000000000"
+    assert len(records) == 1
+
+
 async def test_backfill_funding_breaks_on_first_record_below_start_ns() -> None:
     """Once a funding record falls below start_ns, pagination must stop immediately
     (no further HTTP pages), matching the behaviour of backfill_trades.

@@ -217,7 +217,7 @@ class DeribitBackfill:
 # ---------------------------------------------------------------------------
 
 
-async def _live_fetch_trades(
+async def _live_fetch_trades(  # pragma: no cover
     instrument: str,
     end_ts_ms: int,
     count: int,
@@ -243,7 +243,7 @@ async def _live_fetch_trades(
     return data
 
 
-async def _live_fetch_funding(
+async def _live_fetch_funding(  # pragma: no cover
     instrument: str,
     start_ts_ms: int,
     end_ts_ms: int,
@@ -266,7 +266,9 @@ async def _live_fetch_funding(
     return data
 
 
-def make_live_backfill(rest_base: str = "https://www.deribit.com/api/v2") -> DeribitBackfill:
+def make_live_backfill(  # pragma: no cover
+    rest_base: str = "https://www.deribit.com/api/v2",
+) -> DeribitBackfill:
     """Create a ``DeribitBackfill`` wired to live Deribit REST endpoints."""
     import functools
 

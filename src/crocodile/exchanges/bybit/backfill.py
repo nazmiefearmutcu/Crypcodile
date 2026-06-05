@@ -316,7 +316,7 @@ class BybitBackfill:
 # ---------------------------------------------------------------------------
 
 
-async def _live_fetch_trades(
+async def _live_fetch_trades(  # pragma: no cover
     symbol: str,
     category: str,
     limit: int,
@@ -338,7 +338,7 @@ async def _live_fetch_trades(
     return data
 
 
-async def _live_fetch_funding(
+async def _live_fetch_funding(  # pragma: no cover
     symbol: str,
     category: str,
     start_time_ms: int,
@@ -368,7 +368,7 @@ async def _live_fetch_funding(
     return data
 
 
-async def _live_fetch_open_interest(
+async def _live_fetch_open_interest(  # pragma: no cover
     symbol: str,
     category: str,
     interval_min: int,
@@ -414,7 +414,7 @@ async def _live_fetch_open_interest(
     return data
 
 
-def make_live_backfill(rest_base: str = REST_BASE) -> BybitBackfill:
+def make_live_backfill(rest_base: str = REST_BASE) -> BybitBackfill:  # pragma: no cover
     """Create a ``BybitBackfill`` wired to live Bybit V5 REST endpoints."""
     import functools
 

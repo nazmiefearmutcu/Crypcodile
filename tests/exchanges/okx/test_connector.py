@@ -111,3 +111,159 @@ def test_subscribe_channels_is_callable_as_connector() -> None:
     # Calling via base class reference must work without type errors
     result = conn.subscribe_channels()
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# parse_instruments — additional instType paths
+# ---------------------------------------------------------------------------
+
+
+def test_parse_instruments_futures_kind() -> None:
+    """instType=FUTURES → Kind.FUTURE."""
+    from crocodile.instruments.registry import Kind as K
+
+    raw = {
+        "data": [
+            {
+                "instType": "FUTURES",
+                "instId": "BTC-USDT-20251231",
+                "baseCcy": "BTC",
+                "quoteCcy": "USDT",
+                "settleCcy": "USDT",
+                "tickSz": "0.1",
+            }
+        ]
+    }
+    insts = parse_instruments(raw)
+    assert len(insts) == 1
+    assert insts[0].kind == K.FUTURE
+
+
+def test_parse_instruments_spot_kind() -> None:
+    """instType=SPOT → Kind.SPOT."""
+    raw = {
+        "data": [
+            {
+                "instType": "SPOT",
+                "instId": "BTC-USDT",
+                "baseCcy": "BTC",
+                "quoteCcy": "USDT",
+                "settleCcy": "",
+                "tickSz": "0.01",
+            }
+        ]
+    }
+    insts = parse_instruments(raw)
+    from crocodile.instruments.registry import Kind as K
+    assert len(insts) == 1
+    assert insts[0].kind == K.SPOT
+
+
+def test_parse_instruments_put_option() -> None:
+    """optType='P' → opt_type='P'."""
+    raw = {
+        "data": [
+            {
+                "instType": "OPTION",
+                "instId": "BTC-USD-25DEC22-40000-P",
+                "baseCcy": "BTC",
+                "quoteCcy": "USD",
+                "settleCcy": "BTC",
+                "stk": "40000",
+                "expTime": "1700000000000",
+                "optType": "P",
+                "tickSz": "0.0005",
+            }
+        ]
+    }
+    insts = parse_instruments(raw)
+    assert insts[0].opt_type == "P"
+
+
+def test_parse_instruments_invalid_tick_size() -> None:
+    """Non-numeric tickSz does not crash — tick_size stays None."""
+    raw = {
+        "data": [
+            {
+                "instType": "SWAP",
+                "instId": "BTC-USDT-SWAP",
+                "baseCcy": "BTC",
+                "quoteCcy": "USDT",
+                "settleCcy": "USDT",
+                "tickSz": "N/A",
+            }
+        ]
+    }
+    insts = parse_instruments(raw)
+    assert insts[0].tick_size is None
+
+
+def test_parse_instruments_unknown_opt_type() -> None:
+    """Unknown optType that is neither C/CALL nor P/PUT → opt_type=None."""
+    raw = {
+        "data": [
+            {
+                "instType": "OPTION",
+                "instId": "BTC-USD-25DEC22-40000-X",
+                "baseCcy": "BTC",
+                "quoteCcy": "USD",
+                "settleCcy": "BTC",
+                "stk": "40000",
+                "expTime": "1700000000000",
+                "optType": "exotic",
+                "tickSz": "0.0005",
+            }
+        ]
+    }
+    insts = parse_instruments(raw)
+    assert insts[0].opt_type is None
+
+
+# ---------------------------------------------------------------------------
+# OKXConnector — region selection
+# ---------------------------------------------------------------------------
+
+
+def test_okx_connector_us_region_ws_url() -> None:
+    """OKXConnector with region='us' uses the US WS endpoint."""
+    sink = MemorySink()
+    conn = OKXConnector(
+        symbols=["BTC-USDT-SWAP"],
+        channels=["trade"],
+        out=sink,
+        registry=InstrumentRegistry(),
+        region="us",
+    )
+    assert "us.okx.com" in conn.ws_url
+
+
+def test_okx_connector_eu_region_ws_url() -> None:
+    """OKXConnector with region='eu' uses the EU WS endpoint."""
+    sink = MemorySink()
+    conn = OKXConnector(
+        symbols=["BTC-USDT-SWAP"],
+        channels=["trade"],
+        out=sink,
+        registry=InstrumentRegistry(),
+        region="eu",
+    )
+    assert "eea.okx.com" in conn.ws_url
+
+
+def test_okx_connector_normalize_non_dict_ignored() -> None:
+    """Non-dict messages in normalize() produce no records."""
+    sink = MemorySink()
+    conn = OKXConnector(
+        symbols=["BTC-USDT-SWAP"],
+        channels=["trade"],
+        out=sink,
+        registry=InstrumentRegistry(),
+    )
+    result = list(conn.normalize("not a dict", local_ts=1))
+    assert result == []
+
+
+def test_build_channels_unknown_channel_skipped() -> None:
+    """Unknown canonical channel names are silently skipped (no crash, not included)."""
+    chans = build_channels(["BTC-USDT-SWAP"], ["nonexistent_channel"])
+    assert chans == []

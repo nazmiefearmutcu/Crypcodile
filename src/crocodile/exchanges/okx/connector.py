@@ -201,7 +201,7 @@ class OKXConnector(Connector):
             yield from normalize_message(msg, local_ts=local_ts, venue=self.name,
                                          registry=self.registry)
 
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[Instrument]:  # pragma: no cover
         """Fetch instruments from OKX REST API.
 
         Fetches SWAP, FUTURES, SPOT, and OPTION instrument types and merges
@@ -226,7 +226,7 @@ class OKXConnector(Connector):
         """Return the list of OKX subscribe arg dicts."""
         return self._sub_args
 
-    async def _subscribe(self, transport: Transport) -> None:
+    async def _subscribe(self, transport: Transport) -> None:  # pragma: no cover
         """Send an OKX V5 subscribe frame."""
         args = self.subscribe_channels()
         if args:

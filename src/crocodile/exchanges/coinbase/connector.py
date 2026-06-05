@@ -145,7 +145,7 @@ class CoinbaseConnector(Connector):
         if isinstance(msg, dict):
             yield from normalize_message(msg, local_ts=local_ts, registry=self.registry)
 
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[Instrument]:  # pragma: no cover
         """Fetch products from Coinbase REST API and parse them.
 
         Uses ``GET /products`` (public, no auth required).
@@ -162,7 +162,7 @@ class CoinbaseConnector(Connector):
         """Return the list of Coinbase channel strings this connector subscribes to."""
         return self._sub_channels
 
-    async def _subscribe(self, transport: Transport) -> None:
+    async def _subscribe(self, transport: Transport) -> None:  # pragma: no cover
         """Send a Coinbase subscribe frame.
 
         Coinbase subscribe format::

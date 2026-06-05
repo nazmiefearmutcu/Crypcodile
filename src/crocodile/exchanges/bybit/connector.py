@@ -183,7 +183,7 @@ class BybitConnector(Connector):
             yield from normalize_message(msg, local_ts=local_ts, venue=self.name,
                                          registry=self.registry)
 
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[Instrument]:  # pragma: no cover
         """Fetch instruments from Bybit REST API for this connector's category."""
         instruments: list[Instrument] = []
         async with aiohttp.ClientSession() as session:
@@ -206,7 +206,7 @@ class BybitConnector(Connector):
     def subscribe_channels(self) -> list[str]:
         return self._sub_topics
 
-    async def _subscribe(self, transport: Transport) -> None:
+    async def _subscribe(self, transport: Transport) -> None:  # pragma: no cover
         """Send a Bybit V5 subscribe frame."""
         topics = self.subscribe_channels()
         if topics:

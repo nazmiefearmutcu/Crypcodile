@@ -331,7 +331,7 @@ class OKXBackfill:
 # ---------------------------------------------------------------------------
 
 
-async def _live_fetch_trades(
+async def _live_fetch_trades(  # pragma: no cover
     symbol: str,
     inst_type: str,
     after: str | None,
@@ -356,7 +356,7 @@ async def _live_fetch_trades(
     return data
 
 
-async def _live_fetch_funding(
+async def _live_fetch_funding(  # pragma: no cover
     symbol: str,
     inst_type: str,
     after: str | None,
@@ -381,7 +381,7 @@ async def _live_fetch_funding(
     return data
 
 
-async def _live_fetch_open_interest(
+async def _live_fetch_open_interest(  # pragma: no cover
     symbol: str,
     inst_type: str,
     period: str,
@@ -412,7 +412,7 @@ async def _live_fetch_open_interest(
     return data
 
 
-def make_live_backfill(rest_base: str = REST_BASE) -> OKXBackfill:
+def make_live_backfill(rest_base: str = REST_BASE) -> OKXBackfill:  # pragma: no cover
     """Create an ``OKXBackfill`` wired to live OKX V5 REST endpoints."""
     import functools
 

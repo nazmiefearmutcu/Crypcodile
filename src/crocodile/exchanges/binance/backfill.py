@@ -344,7 +344,7 @@ class BinanceBackfill:
 # ---------------------------------------------------------------------------
 
 
-async def _live_fetch_aggtrades(
+async def _live_fetch_aggtrades(  # pragma: no cover
     symbol: str,
     from_id: int | None,
     start_time_ms: int | None,
@@ -372,7 +372,7 @@ async def _live_fetch_aggtrades(
     return data
 
 
-async def _live_fetch_klines(
+async def _live_fetch_klines(  # pragma: no cover
     symbol: str,
     interval: str,
     start_time_ms: int | None,
@@ -398,7 +398,7 @@ async def _live_fetch_klines(
     return data
 
 
-async def _live_fetch_open_interest(
+async def _live_fetch_open_interest(  # pragma: no cover
     symbol: str,
     *,
     rest_base: str = "https://fapi.binance.com/fapi/v1",
@@ -414,7 +414,7 @@ async def _live_fetch_open_interest(
     return data
 
 
-async def _live_fetch_open_interest_hist(
+async def _live_fetch_open_interest_hist(  # pragma: no cover
     symbol: str,
     period: str,
     start_time_ms: int | None,
@@ -440,7 +440,7 @@ async def _live_fetch_open_interest_hist(
     return data
 
 
-def make_live_backfill(
+def make_live_backfill(  # pragma: no cover
     rest_base_spot: str = "https://api.binance.com/api/v3",
     rest_base_futures: str = "https://fapi.binance.com/fapi/v1",
     rest_base_futures_data: str = "https://fapi.binance.com",

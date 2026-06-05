@@ -362,6 +362,116 @@ async def test_backfill_aggtrades_respects_end_ns() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backfill_aggtrades_none_callback_yields_nothing() -> None:
+    """BinanceBackfill.backfill_aggtrades with fetch_aggtrades=None yields nothing."""
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+    records: list[Any] = []
+    async for r in bf.backfill_aggtrades(
+        venue="binance-spot", symbol="BTCUSDT", start_ns=0, end_ns=1_000_000_000
+    ):
+        records.append(r)
+    assert records == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_klines_none_callback_yields_nothing() -> None:
+    """BinanceBackfill.backfill_klines with fetch_klines=None yields nothing."""
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+    bars: list[Any] = []
+    async for b in bf.backfill_klines(
+        venue="binance-spot", symbol="BTCUSDT", interval="1m", start_ns=0, end_ns=1_000_000_000
+    ):
+        bars.append(b)
+    assert bars == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_open_interest_snapshot_none_callback() -> None:
+    """BinanceBackfill.backfill_open_interest with fetch=None returns None."""
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+    result = await bf.backfill_open_interest(venue="binance-usdm", symbol="BTCUSDT")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_open_interest_snapshot_with_callback() -> None:
+    """BinanceBackfill.backfill_open_interest returns an OpenInterest record."""
+    from crocodile.exchanges.binance.backfill import BinanceBackfill
+    from crocodile.schema.records import OpenInterest
+
+    async def fake_fetch(symbol: str) -> dict[str, Any]:
+        return {"symbol": symbol, "openInterest": "999.0", "time": "1700000000000"}
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=None,
+        fetch_open_interest=fake_fetch,
+        fetch_open_interest_hist=None,
+    )
+    oi = await bf.backfill_open_interest(venue="binance-usdm", symbol="BTCUSDT")
+    assert isinstance(oi, OpenInterest)
+    assert oi.open_interest == 999.0
+
+
+@pytest.mark.asyncio
+async def test_backfill_open_interest_hist_none_callback_yields_nothing() -> None:
+    """BinanceBackfill.backfill_open_interest_hist with fetch=None yields nothing."""
+    bf = BinanceBackfill(
+        fetch_aggtrades=None,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+    records: list[Any] = []
+    async for r in bf.backfill_open_interest_hist(
+        venue="binance-usdm", symbol="BTCUSDT", period="1h", start_ns=0, end_ns=1_000_000_000
+    ):
+        records.append(r)
+    assert records == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_aggtrades_empty_first_page_stops() -> None:
+    """backfill_aggtrades stops immediately when first page is empty."""
+    async def fake_fetch(
+        symbol: str,
+        from_id: int | None,
+        start_time_ms: int | None,
+        end_time_ms: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        return []
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=fake_fetch,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+    records: list[Any] = []
+    async for r in bf.backfill_aggtrades(
+        venue="binance-spot", symbol="BTCUSDT", start_ns=0, end_ns=9_999_999_999_999_999_999
+    ):
+        records.append(r)
+    assert records == []
+
+
+@pytest.mark.asyncio
 async def test_backfill_open_interest_hist_yields_records() -> None:
     """BinanceBackfill.backfill_open_interest_hist yields OpenInterest records."""
     raw: list[dict[str, Any]] = json.loads(
