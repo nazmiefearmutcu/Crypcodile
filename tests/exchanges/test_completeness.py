@@ -192,9 +192,9 @@ def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
     assert oc.symbol_raw == "BTC-231215-50000-C"
     assert oc.exchange == "binance-eapi"
     assert oc.mark_price == pytest.approx(0.05)
-    assert oc.mark_iv == pytest.approx(65.0)   # vo field
-    assert oc.bid_iv == pytest.approx(64.0)    # b field
-    assert oc.ask_iv == pytest.approx(66.0)    # a field
+    assert oc.mark_iv == pytest.approx(0.65)   # vo field (divided by 100 → canonical fraction)
+    assert oc.bid_iv == pytest.approx(0.64)    # b field
+    assert oc.ask_iv == pytest.approx(0.66)    # a field
     assert oc.delta == pytest.approx(0.5)      # d field
     assert oc.gamma == pytest.approx(0.001)    # g field
     assert oc.theta == pytest.approx(-3.0)     # t field
