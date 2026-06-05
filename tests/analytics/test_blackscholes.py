@@ -273,6 +273,43 @@ def test_bs_greeks_theta_negative_for_call() -> None:
     assert g.theta < 0, f"theta should be negative, got {g.theta}"
 
 
+def test_bs_greeks_theta_nonzero_rate_golden() -> None:
+    """Theta golden pin at r=0.05: ATM call theta ≈ -3.397 (tol 1e-2).
+
+    Finite-difference confirmation (central, eps=1e-5):
+        d(price)/d(T) ≈ -3.3971
+
+    The correct Black-76 formula is:
+        theta = -D*F*n(d1)*vol/(2*sqrt_t) + rate*price
+    where the rate term is *added* (not subtracted).  Subtracting it
+    over-counts the rate drag and gives ≈ -4.155 instead of ≈ -3.397.
+    """
+    g = bs_greeks(100.0, 100.0, 1.0, 0.2, CALL, rate=0.05)
+    assert abs(g.theta - (-3.397)) < 0.01, (
+        f"theta_call(r=0.05) = {g.theta:.4f}, expected ≈ -3.397"
+    )
+
+
+def test_implied_vol_bisection_fallback() -> None:
+    """Bisection branch is exercised when Newton steps outside [_IV_MIN, _IV_MAX].
+
+    F=100, K=130, T=0.1, vol=4.0 (high-vol OTM call): the first Newton step
+    from the seed vol=0.5 overshoots to ≈ 11.56, which is above _IV_MAX=10.0.
+    The solver falls back to bisection and must still recover vol ≈ 4.0.
+
+    Verification that Newton indeed steps OOB (checked analytically):
+        At seed=0.5, vega ≈ tiny → step = 0.5 - (p_seed - target)/vega ≈ 11.56 > 10.
+    """
+    target_vol = 4.0
+    F, K, T = 100.0, 130.0, 0.1
+    price = bs_price(F, K, T, target_vol, CALL)
+    iv = implied_vol(price, F, K, T, CALL)
+    assert iv is not None, "implied_vol returned None for a valid high-vol price"
+    assert abs(iv - target_vol) < 1e-4, (
+        f"bisection fallback: IV={iv:.6f} != target={target_vol}"
+    )
+
+
 def test_bs_greeks_rho_call() -> None:
     """Black-76 rho: rho_call = -t_years * call_price."""
     F, K, T, vol = 100.0, 100.0, 1.0, 0.2

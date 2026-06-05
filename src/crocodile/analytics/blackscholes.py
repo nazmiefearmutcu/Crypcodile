@@ -179,12 +179,17 @@ def bs_greeks(
 
     # --- theta ---
     # Black-76 theta (per 1.0 year; negative = time value decay).
-    # theta_call = -D * forward * n(d1) * vol / (2 * sqrt_t) - rate * call
-    # theta_put  = -D * forward * n(d1) * vol / (2 * sqrt_t) - rate * put
-    # (The first term is the vol-decay component; the second is the rate component.)
+    # d(price)/d(T) = -D*F*n(d1)*vol/(2*sqrt_t) + rate*price
+    #
+    # The vol-decay term is always negative; the rate term is positive
+    # because D = exp(-rate*T) grows the discount factor as T shrinks.
+    # Sign convention: theta < 0 means the option loses value as time
+    # passes (T decreases), which is the standard quoting convention.
+    #
+    # Note: the rate term is ADD (+), not subtract (-).
     price = bs_price(forward, strike, t_years, vol, opt_type, rate=rate)
     common_theta = -D * forward * npd1 * vol / (2.0 * sqrt_t)
-    theta = common_theta - rate * price
+    theta = common_theta + rate * price
 
     # --- rho (Black-76 rho w.r.t. rate) ---
     # d/d_rate [D * (…)] = -t_years * price  (chain rule on D = exp(-rate*t_years))
