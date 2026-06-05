@@ -2,6 +2,8 @@ import json
 import pathlib
 import time
 
+import pytest
+
 from crocodile.exchanges.deribit.normalize import normalize_message
 from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
 from crocodile.schema.enums import OptType
@@ -38,7 +40,10 @@ def test_option_ticker_emits_options_chain():
     out = list(normalize_message(msg, local_ts=7, registry=reg))
     oc = next(r for r in out if isinstance(r, OptionsChain))
     assert oc.strike == 50000.0 and oc.opt_type == OptType.CALL
-    assert oc.mark_iv == 65.0 and oc.delta == 0.5 and oc.bid_iv == 64.0
+    # IV fields are decimal fractions (wire percent / 100): 65.0% → 0.65
+    assert oc.mark_iv == pytest.approx(0.65)
+    assert oc.delta == 0.5
+    assert oc.bid_iv == pytest.approx(0.64)
 
 
 def test_option_ticker_fallback_no_registry():

@@ -84,13 +84,13 @@ class OptionsChain(msgspec.Struct, frozen=True, tag="options_chain", tag_field="
     expiry: int
     opt_type: OptType
     mark_price: float | None = None
-    mark_iv: float | None = None
+    mark_iv: float | None = None  # decimal fraction (0.65 == 65%); all *_iv fields are decimal
     bid_px: float | None = None
     bid_sz: float | None = None
-    bid_iv: float | None = None
+    bid_iv: float | None = None  # decimal fraction
     ask_px: float | None = None
     ask_sz: float | None = None
-    ask_iv: float | None = None
+    ask_iv: float | None = None  # decimal fraction
     last_price: float | None = None
     open_interest: float | None = None
     delta: float | None = None

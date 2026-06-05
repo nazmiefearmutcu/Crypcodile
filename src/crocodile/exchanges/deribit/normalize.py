@@ -1,4 +1,5 @@
 import calendar
+import logging
 import time as _time
 from collections.abc import Iterable
 from typing import Any
@@ -18,6 +19,8 @@ from crocodile.schema.records import (
 from crocodile.util.time import ms_to_ns
 
 EXCHANGE = "deribit"
+
+log = logging.getLogger(__name__)
 
 # Month abbreviation -> numeric string used in option symbol parsing
 _MONTH_MAP = {
@@ -55,6 +58,8 @@ def _parse_option_symbol(sym: str) -> tuple[str, float, int, OptType]:
     registry values are preferred when available.
     """
     parts = sym.split("-")
+    if len(parts) < 4:
+        raise ValueError(f"deribit: option symbol has < 4 parts: {sym!r}")
     # e.g. ["BTC", "30JUN", "50000", "C"]
     underlying = parts[0]
     date_str = parts[1]  # e.g. "30JUN"
@@ -156,10 +161,32 @@ def normalize_message(
             if inst is not None:
                 strike = inst.strike
                 expiry = inst.expiry
-                opt_type = OptType(inst.opt_type) if inst.opt_type is not None else OptType.CALL
                 underlying = inst.base
+                if inst.opt_type is not None:
+                    opt_type = OptType(inst.opt_type)
+                else:
+                    # Registry instrument has opt_type=None — fall back to symbol parse
+                    try:
+                        _, _, _, opt_type = _parse_option_symbol(sym)
+                    except (ValueError, IndexError):
+                        log.warning(
+                            "deribit: cannot parse opt_type from symbol %r (registry opt_type=None)"
+                            " — skipping",
+                            sym,
+                        )
+                        return
             else:
-                underlying, strike, expiry, opt_type = _parse_option_symbol(sym)
+                try:
+                    underlying, strike, expiry, opt_type = _parse_option_symbol(sym)
+                except (ValueError, IndexError):
+                    log.warning(
+                        "deribit: cannot parse option symbol %r — skipping", sym
+                    )
+                    return
+
+            # IV fields: Deribit sends percentage (e.g. 65.0 = 65%); convert to decimal fraction
+            def _iv(val: float | None) -> float | None:
+                return val / 100.0 if val is not None else None
 
             greeks: dict[str, Any] = td.get("greeks") or {}
             yield OptionsChain(
@@ -174,13 +201,13 @@ def normalize_message(
                 expiry=expiry if expiry is not None else 0,
                 opt_type=opt_type,
                 mark_price=td.get("mark_price"),
-                mark_iv=td.get("mark_iv"),
+                mark_iv=_iv(td.get("mark_iv")),
                 bid_px=td.get("best_bid_price"),
                 bid_sz=td.get("best_bid_amount"),
-                bid_iv=td.get("bid_iv"),
+                bid_iv=_iv(td.get("bid_iv")),
                 ask_px=td.get("best_ask_price"),
                 ask_sz=td.get("best_ask_amount"),
-                ask_iv=td.get("ask_iv"),
+                ask_iv=_iv(td.get("ask_iv")),
                 last_price=td.get("last_price"),
                 open_interest=td.get("open_interest"),
                 delta=greeks.get("delta"),

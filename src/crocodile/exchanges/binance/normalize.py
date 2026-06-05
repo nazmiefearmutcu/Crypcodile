@@ -1,4 +1,6 @@
+import calendar
 import logging
+import time as _time
 from collections.abc import Iterable
 from typing import Any
 
@@ -21,31 +23,46 @@ log = logging.getLogger(__name__)
 
 def _parse_eapi_option_symbol(
     sym: str,
-) -> tuple[str, float | None, OptType | None]:
-    """Parse a Binance EAPI option symbol to (underlying, strike, opt_type).
+) -> tuple[str, float | None, OptType | None, int | None]:
+    """Parse a Binance EAPI option symbol to (underlying, strike, opt_type, expiry_ns).
 
     Binance EAPI format: ``BTC-231215-50000-C``
-    Parts: [underlying, expiry_str, strike_str, C|P]
+    Parts: [underlying, expiry_str (YYMMDD), strike_str, C|P]
 
-    Returns (underlying, strike, opt_type).  Returns (sym, None, None) if
-    the symbol cannot be parsed (caller must handle gracefully).
+    Returns (underlying, strike, opt_type, expiry_ns).
+    Returns (sym, None, None, None) if the symbol cannot be parsed
+    (caller must handle gracefully).
     """
     parts = sym.split("-")
     if len(parts) != 4:
-        return sym, None, None
+        return sym, None, None, None
     underlying = parts[0]
+    expiry_str = parts[1]  # YYMMDD, e.g. "231215"
     try:
         strike = float(parts[2])
     except ValueError:
-        return underlying, None, None
+        return underlying, None, None, None
     raw_type = parts[3].upper()
     if raw_type == "C":
         opt_type = OptType.CALL
     elif raw_type == "P":
         opt_type = OptType.PUT
     else:
-        return underlying, None, None
-    return underlying, strike, opt_type
+        return underlying, None, None, None
+    # Parse YYMMDD expiry into nanosecond timestamp
+    expiry_ns: int | None = None
+    if len(expiry_str) == 6:
+        try:
+            yy = int(expiry_str[0:2])
+            mm = int(expiry_str[2:4])
+            dd = int(expiry_str[4:6])
+            # Two-digit year: 00-99 → 2000-2099
+            full_year = 2000 + yy
+            struct = _time.strptime(f"{dd:02d} {mm:02d} {full_year}", "%d %m %Y")
+            expiry_ns = int(calendar.timegm(struct)) * 1_000_000_000
+        except (ValueError, OverflowError):
+            expiry_ns = None
+    return underlying, strike, opt_type, expiry_ns
 
 
 def _normalize_eapi_option_markprice(
@@ -86,8 +103,7 @@ def _normalize_eapi_option_markprice(
             )
             expiry: int | None = inst.expiry
         else:
-            underlying, strike, opt_type = _parse_eapi_option_symbol(sym)
-            expiry = None
+            underlying, strike, opt_type, expiry = _parse_eapi_option_symbol(sym)
 
         if strike is None or opt_type is None:
             log.warning(
@@ -118,6 +134,7 @@ def _normalize_eapi_option_markprice(
         vo_raw = entry.get("vo")
         oi_raw = entry.get("oi")
 
+        # IV fields: Binance EAPI sends percentage (e.g. 65.0 = 65%); convert to decimal fraction
         yield OptionsChain(
             exchange=venue,
             symbol=canonical,
@@ -130,9 +147,9 @@ def _normalize_eapi_option_markprice(
             expiry=expiry if expiry is not None else 0,
             opt_type=opt_type,
             mark_price=float(mp_raw) if mp_raw is not None else None,
-            mark_iv=float(vo_raw) if vo_raw is not None else None,
-            bid_iv=float(b_raw) if b_raw is not None else None,
-            ask_iv=float(a_raw) if a_raw is not None else None,
+            mark_iv=float(vo_raw) / 100.0 if vo_raw is not None else None,
+            bid_iv=float(b_raw) / 100.0 if b_raw is not None else None,
+            ask_iv=float(a_raw) / 100.0 if a_raw is not None else None,
             open_interest=float(oi_raw) if oi_raw is not None else None,
             delta=float(d_raw) if d_raw is not None else None,
             gamma=float(g_raw) if g_raw is not None else None,

@@ -287,6 +287,15 @@ def _normalize_option_ticker(
             elif raw_type == "P":
                 opt_type_enum = OptType.PUT
 
+    # After registry + symbol-parse attempts, if either strike or opt_type is still
+    # unresolved, skip the record (matches OKX/Binance skip-with-warning pattern).
+    if strike is None or opt_type_enum is None:
+        log.warning(
+            "bybit: cannot resolve strike/opt_type for option symbol %r — skipping",
+            sym,
+        )
+        return
+
     underlying_price_raw = data.get("underlyingPrice")
     underlying_price = float(underlying_price_raw) if underlying_price_raw else None
     mark_price_raw = data.get("markPrice")
@@ -302,9 +311,9 @@ def _normalize_option_ticker(
         local_ts=local_ts,
         underlying=sym.split("-")[0] if "-" in sym else sym,
         underlying_price=underlying_price,
-        strike=strike or 0.0,
+        strike=strike,
         expiry=expiry or 0,
-        opt_type=opt_type_enum or OptType.CALL,
+        opt_type=opt_type_enum,
         mark_price=mark_price,
         mark_iv=mark_iv,
         bid_px=float(data["bid1Price"]) if data.get("bid1Price") else None,
