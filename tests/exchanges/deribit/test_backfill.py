@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from crocodile.exchanges.deribit.backfill import (
+    DeribitBackfill,
     parse_funding_page,
     parse_trades_page,
 )
@@ -227,3 +228,106 @@ async def test_backfill_trades_stops_on_no_progress() -> None:
     assert call_count == 1
     trades = [r for r in records if isinstance(r, Trade)]
     assert len(trades) == 5
+
+
+# ---------------------------------------------------------------------------
+# T4.1 regression: trade exactly at start boundary must be yielded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_trades_yields_trade_exactly_at_start_ns() -> None:
+    """Regression: when a multi-page scenario has the earliest trade on page 1
+    exactly equal to start_ms and the NEXT page also contains trades at the same
+    start_ms timestamp, the old ``<= start_ms`` check prematurely breaks pagination
+    and those boundary trades on page 2 are never fetched.
+
+    Fix: change the check to ``< start_ms`` so a page whose earliest ts equals
+    start_ms does NOT trigger early termination.
+    """
+    start_ms = 1700000001000
+    start_ns = start_ms * 1_000_000
+    end_ns = 1700000002000 * 1_000_000
+
+    # Page 1: one trade above start_ms (newest) + one trade EXACTLY at start_ms.
+    # has_more=True so the loop would normally continue.
+    page1: dict[str, Any] = {
+        "result": {
+            "trades": [
+                {
+                    "trade_id": "P1-ABOVE",
+                    "trade_seq": 2,
+                    "instrument_name": "BTC-PERPETUAL",
+                    "price": 50001.0,
+                    "amount": 1.0,
+                    "direction": "buy",
+                    "timestamp": 1700000001500,  # above start_ms, below end_ms
+                    "index_price": 50001.0,
+                    "mark_price": 50001.0,
+                    "iv": None,
+                },
+                {
+                    "trade_id": "P1-BOUNDARY",
+                    "trade_seq": 1,
+                    "instrument_name": "BTC-PERPETUAL",
+                    "price": 50000.0,
+                    "amount": 2.0,
+                    "direction": "sell",
+                    "timestamp": start_ms,  # exactly at start_ms ← triggers old bug
+                    "index_price": 50000.0,
+                    "mark_price": 50000.0,
+                    "iv": None,
+                },
+            ],
+            "has_more": True,  # more pages exist at or before start_ms
+        }
+    }
+
+    # Page 2: another trade exactly at start_ms — would be missed by the old code
+    page2: dict[str, Any] = {
+        "result": {
+            "trades": [
+                {
+                    "trade_id": "P2-BOUNDARY",
+                    "trade_seq": 0,
+                    "instrument_name": "BTC-PERPETUAL",
+                    "price": 49999.0,
+                    "amount": 3.0,
+                    "direction": "buy",
+                    "timestamp": start_ms,  # still at start_ms
+                    "index_price": 49999.0,
+                    "mark_price": 49999.0,
+                    "iv": None,
+                },
+            ],
+            "has_more": False,
+        }
+    }
+
+    pages = [page1, page2]
+    call_count = 0
+
+    async def fake_fetch(
+        instrument: str, end_ts_ms: int, count: int, start_ts_ms: int
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return pages[call_count - 1]
+
+    bf = DeribitBackfill(fetch_trades=fake_fetch, fetch_funding=None)
+
+    records = []
+    async for r in bf.backfill_trades("BTC-PERPETUAL", start_ns=start_ns, end_ns=end_ns):
+        records.append(r)
+
+    trades = [r for r in records if isinstance(r, Trade)]
+    # With the fix (< start_ms), both pages are fetched → 3 trades total.
+    # With the old bug (<= start_ms), page 2 is never fetched → only 2 trades.
+    assert call_count == 2, (
+        f"Expected 2 fetch calls (both pages) but got {call_count} — "
+        "old bug: '<= start_ms' breaks too early"
+    )
+    trade_ids = {t.id for t in trades}
+    assert "P2-BOUNDARY" in trade_ids, (
+        "Trade exactly at start_ns on page 2 was not yielded — off-by-one bug not fixed"
+    )

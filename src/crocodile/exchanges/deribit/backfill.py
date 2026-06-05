@@ -189,7 +189,7 @@ class DeribitBackfill:
             earliest_ts_ms = min(t["timestamp"] for t in trades_data)
             if earliest_ts_ms >= current_end_ms:
                 break
-            if earliest_ts_ms <= start_ms:
+            if earliest_ts_ms < start_ms:
                 break
             current_end_ms = earliest_ts_ms
 

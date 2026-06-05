@@ -386,6 +386,141 @@ _TRADES_MIXED_PAGE: dict[str, Any] = {
 _END_NS_MIXED = 1700000000200 * 1_000_000  # 1700000000200 ms in ns
 
 
+# ---------------------------------------------------------------------------
+# T4.2 regression: backfill_funding and backfill_open_interest must filter by
+# [start_ns, end_ns] bounds — currently they yield all cursor-page records
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_funding_filters_by_time_bounds() -> None:
+    """Regression: backfill_funding must skip records outside [start_ns, end_ns].
+
+    The old code yielded every record from every cursor page without checking
+    whether the record timestamp is within the requested window.
+    """
+    # start_ns = 1700000001_000_000_000 ns, end_ns = 1700000003_000_000_000 ns
+    start_ns = 1_700_000_001_000_000_000
+    end_ns = 1_700_000_003_000_000_000
+
+    # Page has three records: before, inside, after the window.
+    funding_page: dict[str, Any] = {
+        "result": {
+            "nextPageCursor": "",
+            "list": [
+                # after end_ns: 1700000004000 ms → 1_700_000_004_000_000_000 ns — must be skipped
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRate": "0.0003",
+                    "fundingRateTimestamp": "1700000004000",
+                },
+                # inside window: 1700000002000 ms → 1_700_000_002_000_000_000 ns — must be yielded
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRate": "0.0001",
+                    "fundingRateTimestamp": "1700000002000",
+                },
+                # before start_ns: 1700000000000 ms → 1_700_000_000_000_000_000 ns — must stop loop
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRate": "0.0002",
+                    "fundingRateTimestamp": "1700000000000",
+                },
+            ],
+        }
+    }
+
+    async def _fake_fetch(
+        symbol: str,
+        category: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return funding_page
+
+    bf = BybitBackfill(
+        fetch_trades=None,
+        fetch_funding=_fake_fetch,
+        fetch_open_interest=None,
+    )
+    records = []
+    async for r in bf.backfill_funding(
+        venue="bybit",
+        symbol="BTCUSDT",
+        category="linear",
+        start_ns=start_ns,
+        end_ns=end_ns,
+    ):
+        records.append(r)
+
+    # Only the record inside the window must be yielded (not all 3)
+    assert len(records) == 1, (
+        f"Expected 1 in-range record but got {len(records)} — "
+        "backfill_funding is missing client-side [start_ns, end_ns] filter"
+    )
+    assert isinstance(records[0], Funding)
+    assert records[0].funding_rate == 0.0001
+
+
+async def test_backfill_open_interest_filters_by_time_bounds() -> None:
+    """Regression: backfill_open_interest must skip records outside [start_ns, end_ns].
+
+    The old code yielded every record from every cursor page without checking
+    whether the record timestamp is within the requested window.
+    """
+    start_ns = 1_700_000_001_000_000_000
+    end_ns = 1_700_000_003_000_000_000
+
+    oi_page: dict[str, Any] = {
+        "result": {
+            "nextPageCursor": "",
+            "list": [
+                # after end_ns → must be skipped
+                {"symbol": "BTCUSDT", "openInterest": "300", "timestamp": "1700000004000"},
+                # inside window → must be yielded
+                {"symbol": "BTCUSDT", "openInterest": "100", "timestamp": "1700000002000"},
+                # before start_ns → must trigger break
+                {"symbol": "BTCUSDT", "openInterest": "200", "timestamp": "1700000000000"},
+            ],
+        }
+    }
+
+    async def _fake_fetch(
+        symbol: str,
+        category: str,
+        interval_min: int,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return oi_page
+
+    bf = BybitBackfill(
+        fetch_trades=None,
+        fetch_funding=None,
+        fetch_open_interest=_fake_fetch,
+    )
+    records = []
+    async for r in bf.backfill_open_interest(
+        venue="bybit",
+        symbol="BTCUSDT",
+        category="linear",
+        start_ns=start_ns,
+        end_ns=end_ns,
+    ):
+        records.append(r)
+
+    # Only the record inside the window must be yielded
+    assert len(records) == 1, (
+        f"Expected 1 in-range record but got {len(records)} — "
+        "backfill_open_interest is missing client-side [start_ns, end_ns] filter"
+    )
+    assert isinstance(records[0], OpenInterest)
+    assert records[0].open_interest == 100.0
+
+
 async def test_backfill_trades_mixed_page_yields_in_range_records() -> None:
     """Ascending-order assumption: in-range records before stop boundary must be yielded.
 

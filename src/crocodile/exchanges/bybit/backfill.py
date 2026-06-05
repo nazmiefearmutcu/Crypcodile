@@ -261,8 +261,19 @@ class BybitBackfill:
         while True:
             raw = await self._fetch_funding(symbol, category, start_ms, end_ms, page_size, cursor)
             records = parse_funding_page(raw, venue=venue, symbol=symbol, local_ts=local_ts)
+
+            stop = False
             for record in records:
+                if record.exchange_ts is not None:
+                    if record.exchange_ts > end_ns:
+                        continue
+                    if record.exchange_ts < start_ns:
+                        stop = True
+                        break
                 yield record
+
+            if stop:
+                break
 
             result: dict[str, Any] = raw.get("result") or {}
             next_cursor: str = result.get("nextPageCursor", "")
@@ -301,8 +312,19 @@ class BybitBackfill:
                 symbol, category, interval_min, start_ms, end_ms, page_size, cursor
             )
             records = parse_open_interest_page(raw, venue=venue, symbol=symbol, local_ts=local_ts)
+
+            stop = False
             for record in records:
+                if record.exchange_ts is not None:
+                    if record.exchange_ts > end_ns:
+                        continue
+                    if record.exchange_ts < start_ns:
+                        stop = True
+                        break
                 yield record
+
+            if stop:
+                break
 
             result: dict[str, Any] = raw.get("result") or {}
             next_cursor: str = result.get("nextPageCursor", "")
