@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
 from crocodile.exchanges.deribit.normalize import normalize_message
 from crocodile.resample.book import resample_book_snapshots
 from crocodile.schema.records import BookDelta, BookSnapshot
@@ -88,7 +90,9 @@ def _make_delta(
 
 
 def test_resample_emits_snapshot_per_interval() -> None:
-    """Given records spanning 3 seconds, a 1s interval should emit 3 snapshots."""
+    """Given a snapshot at ts=0 and deltas at ts=1s and ts=2s, a 1s interval
+    should emit exactly 2 snapshots (one per boundary crossed: 1s and 2s).
+    """
     # Three records each 1s apart (local_ts drives bucketing)
     base = 0
     records: list[BookSnapshot | BookDelta] = [
@@ -100,7 +104,7 @@ def test_resample_emits_snapshot_per_interval() -> None:
     ]
     result = list(resample_book_snapshots(records, interval_ns=_1S_NS, top_n=10))
 
-    # We should have at least 2 snapshots (one per bucket boundary crossed)
+    # The input crosses exactly 2 boundaries (1s and 2s), yielding 2 snapshots.
     assert len(result) >= 2, f"expected >=2 snapshots, got {len(result)}"
     for snap in result:
         assert isinstance(snap, BookSnapshot)
@@ -267,19 +271,15 @@ def test_resample_preserves_exchange_and_symbol() -> None:
 
 
 def test_resample_single_snapshot_only() -> None:
-    """A single BookSnapshot with no following deltas yields no emissions
-    (nothing crosses a boundary after the initial snapshot).
-    This tests that the function terminates cleanly.
+    """A single BookSnapshot at ts=0 sets next_boundary to 1s but never
+    crosses it, so the result is guaranteed to be empty.
     """
     records: list[BookSnapshot | BookDelta] = [
         _make_snapshot(local_ts=0, seq=1),
     ]
-    # A single snapshot at ts=0 with interval=1s — no boundary crossing yet
+    # A single snapshot at ts=0 with interval=1s — no boundary crossing occurs.
     result = list(resample_book_snapshots(records, interval_ns=_1S_NS, top_n=5))
-    # May or may not emit; the key assertion is: no crash and result is a list
-    assert isinstance(result, list)
-    for snap in result:
-        assert isinstance(snap, BookSnapshot)
+    assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -304,3 +304,43 @@ def test_resample_removed_level_absent_in_snapshot() -> None:
     assert 99.0 not in bid_prices, f"99.0 should have been removed; bids={snap.bids}"
     bid_map = dict(snap.bids)
     assert bid_map.get(100.0) == 8.0, f"100.0 should be 8.0; bids={snap.bids}"
+
+
+# ---------------------------------------------------------------------------
+# Test: emitted snapshot local_ts equals bucket boundary (time-keying contract)
+# ---------------------------------------------------------------------------
+
+
+def test_resample_snapshot_local_ts_equals_bucket_boundary() -> None:
+    """Each emitted snapshot's ``local_ts`` must equal the bucket boundary
+    timestamp, not the triggering record's ``local_ts``.  This is the primary
+    time-keying contract for downstream consumers.
+    """
+    base = 500_000_000  # 0.5s — sits in the first [0s, 1s) bucket
+    records: list[BookSnapshot | BookDelta] = [
+        _make_snapshot(local_ts=base, seq=1),
+        # This delta lands exactly on the 1s boundary.
+        _make_delta(local_ts=_1S_NS, seq_id=2, prev_seq_id=1,
+                    bids=[(100.0, 10.0)]),
+    ]
+    result = list(resample_book_snapshots(records, interval_ns=_1S_NS, top_n=10))
+
+    assert len(result) >= 1, "expected at least one snapshot at the 1s boundary"
+    # The snapshot triggered at the 1s boundary must carry local_ts=1s exactly.
+    snap = result[0]
+    assert snap.local_ts == _1S_NS, (
+        f"expected local_ts={_1S_NS} (bucket boundary), got {snap.local_ts}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test: ValueError is raised for non-positive interval_ns
+# ---------------------------------------------------------------------------
+
+
+def test_resample_raises_for_zero_interval() -> None:
+    """``interval_ns=0`` must raise ``ValueError``; a non-positive interval has
+    no meaningful bucket boundary.
+    """
+    with pytest.raises(ValueError):
+        list(resample_book_snapshots([], interval_ns=0))

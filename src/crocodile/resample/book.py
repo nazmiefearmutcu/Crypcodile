@@ -90,8 +90,9 @@ def resample_book_snapshots(
 
     Yields:
         ``BookSnapshot`` records at every interval boundary, capturing the
-        reconstructed book state immediately *before* the boundary-crossing
-        record is applied.
+        reconstructed book state *after* the boundary-crossing record has been
+        applied.  Each emitted snapshot's ``local_ts`` is set to the bucket
+        boundary timestamp, not the triggering record's ``local_ts``.
 
     Raises:
         crocodile.replay.orderbook.BookGap: Propagated from the underlying
