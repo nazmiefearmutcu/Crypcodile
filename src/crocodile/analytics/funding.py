@@ -53,10 +53,18 @@ def periods_per_year(interval_hours: int) -> float:
 
     Args:
         interval_hours: Length of one funding interval in hours.
+                        Must be a positive integer.
 
     Returns:
         ``8760.0 / interval_hours``  (e.g. 1095.0 for 8-hour intervals).
+
+    Raises:
+        ValueError: If *interval_hours* is zero or negative.
     """
+    if interval_hours <= 0:
+        raise ValueError(
+            f"interval_hours must be a positive integer, got {interval_hours}"
+        )
     return 8760.0 / interval_hours
 
 

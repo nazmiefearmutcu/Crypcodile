@@ -259,6 +259,29 @@ def test_funding_summary_empty_range_returns_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Guard: periods_per_year rejects non-positive interval_hours
+# ---------------------------------------------------------------------------
+
+
+def test_periods_per_year_zero_raises() -> None:
+    """interval_hours=0 must raise ValueError with a legible message."""
+    with pytest.raises(ValueError, match="interval_hours must be a positive integer"):
+        periods_per_year(0)
+
+
+def test_periods_per_year_negative_raises() -> None:
+    """Negative interval_hours must raise ValueError."""
+    with pytest.raises(ValueError, match="interval_hours must be a positive integer"):
+        periods_per_year(-1)
+
+
+def test_apr_from_rate_zero_interval_raises() -> None:
+    """apr_from_rate propagates the ValueError from periods_per_year."""
+    with pytest.raises(ValueError, match="interval_hours must be a positive integer"):
+        apr_from_rate(0.0001, 0)
+
+
+# ---------------------------------------------------------------------------
 # Missing interval_hours defaults to 8
 # ---------------------------------------------------------------------------
 
