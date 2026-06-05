@@ -53,6 +53,9 @@ log = logging.getLogger(__name__)
 
 EXCHANGE = "coinbase"
 
+# Epoch anchor for integer-only ns conversion (avoids float64 rounding)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,12 +77,20 @@ def _parse_iso_ns(time_str: str) -> int | None:
 
     Coinbase uses the format ``2023-11-14T22:13:20.000000Z``.
     Returns None if parsing fails.
+
+    Uses integer arithmetic (days/seconds/microseconds) to avoid the up-to-32ns
+    rounding error introduced by ``int(dt.timestamp() * 1e9)`` on float64.
     """
     try:
         # Replace trailing 'Z' with '+00:00' for fromisoformat compatibility
         dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-        # Convert to Unix epoch in nanoseconds
-        epoch_ns = int(dt.replace(tzinfo=UTC).timestamp() * 1e9)
+        # Integer-only arithmetic: avoids float64 rounding (up to ~32 ns error)
+        td = dt - _EPOCH
+        epoch_ns = (
+            td.days * 86_400_000_000_000
+            + td.seconds * 1_000_000_000
+            + td.microseconds * 1_000
+        )
         return epoch_ns
     except (ValueError, AttributeError):
         log.debug("coinbase: failed to parse timestamp %r", time_str)

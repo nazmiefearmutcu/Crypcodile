@@ -26,6 +26,7 @@ from crocodile.schema.records import (
     BookTicker,
     DerivativeTicker,
     Funding,
+    Liquidation,
     OptionsChain,
     Record,
     Trade,
@@ -106,6 +107,38 @@ def _normalize_trade(
             amount=float(entry["v"]),
             side=_side(entry["S"]),
         )
+
+
+def _normalize_liquidation(
+    topic: str,
+    data: dict[str, Any],
+    local_ts: int,
+    venue: str,
+    registry: InstrumentRegistry | None,
+) -> Iterable[Record]:
+    """``liquidation.{symbol}`` → Liquidation.
+
+    Bybit V5 liquidation data schema:
+    ``{symbol, side, size, price, updatedTime}``
+
+    - ``side``        : ``"Buy"``/``"Sell"`` (capitalized) → lowercase canonical
+    - ``price``       : bankruptcy price string
+    - ``size``        : quantity string
+    - ``updatedTime`` : ms → ns for exchange_ts
+    """
+    sym: str = data.get("symbol", topic.split(".", 1)[1] if "." in topic else "")
+    canonical = _canonical(venue, sym, registry)
+    updated_time_ms: int = int(data.get("updatedTime", 0))
+    yield Liquidation(
+        exchange=venue,
+        symbol=canonical,
+        symbol_raw=sym,
+        exchange_ts=ms_to_ns(updated_time_ms),
+        local_ts=local_ts,
+        price=float(data["price"]),
+        amount=float(data["size"]),
+        side=_side(data.get("side", "")),
+    )
 
 
 def _normalize_orderbook(
@@ -363,6 +396,10 @@ def normalize_message(
     elif topic.startswith("tickers."):
         if isinstance(data, dict):
             yield from _normalize_ticker(topic, data, ts_ms, local_ts, venue, registry)
+
+    elif topic.startswith("liquidation."):
+        if isinstance(data, dict):
+            yield from _normalize_liquidation(topic, data, local_ts, venue, registry)
 
     else:
         log.debug("bybit: unhandled topic %r", topic)

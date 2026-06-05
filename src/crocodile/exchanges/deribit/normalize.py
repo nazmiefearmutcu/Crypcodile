@@ -120,7 +120,7 @@ def normalize_message(
                     side=side,
                     id=str(t["trade_id"]),
                 )
-    if channel.startswith("book."):
+    elif channel.startswith("book."):
         d: dict[str, Any] = data or {}
         sym = d["instrument_name"]
         common: dict[str, Any] = dict(
@@ -146,7 +146,7 @@ def normalize_message(
                 prev_seq_id=d.get("prev_change_id"),
                 is_snapshot=False,
             )
-    if channel.startswith("ticker."):
+    elif channel.startswith("ticker."):
         td: dict[str, Any] = data or {}
         sym = td["instrument_name"]
         exchange_ts = ms_to_ns(td["timestamp"])
@@ -244,3 +244,6 @@ def normalize_message(
                     predicted_funding_rate=td.get("funding_8h"),
                     interval_hours=8,  # Deribit perpetual funding settles every 8 hours
                 )
+    else:
+        if channel:
+            log.debug("deribit: unrecognized channel %r", channel)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crocodile.exchanges.coinbase.normalize import normalize_message
+from crocodile.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
 from crocodile.schema.enums import Side
 from crocodile.schema.records import BookDelta, BookSnapshot, BookTicker, Trade
 
@@ -148,6 +148,29 @@ def test_build_channels_ticker_only() -> None:
 
     chans = build_channels(["BTC-USD"], ["book_ticker"])
     assert "ticker" in chans
+
+
+# ---------------------------------------------------------------------------
+# T3-connmisc: ns precision — float64 loses up to ~32ns on microsecond timestamps
+# ---------------------------------------------------------------------------
+
+
+def test_parse_iso_ns_exact_microsecond_precision() -> None:
+    """_parse_iso_ns must preserve microsecond precision without float64 rounding.
+
+    ``2023-11-14T22:13:20.999999Z``  →  1_700_000_000_999_999_000 ns exactly.
+    The float64 path (``int(dt.timestamp() * 1e9)``) returns 1_700_000_000_999_998_976,
+    which is off by 24 ns.
+    """
+    ts = "2023-11-14T22:13:20.999999Z"
+    # Expected: integer arithmetic only
+    # 2023-11-14T22:13:20 UTC = 1700000000 s; +999999 µs = +999999000 ns
+    expected = 1_700_000_000_999_999_000
+    result = _parse_iso_ns(ts)
+    assert result == expected, (
+        f"_parse_iso_ns({ts!r}) = {result}, want {expected} "
+        f"(error = {result - expected if result is not None else 'None'} ns)"
+    )
 
 
 def test_parse_products() -> None:

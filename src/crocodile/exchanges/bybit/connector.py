@@ -41,6 +41,7 @@ _CHANNEL_MAP: dict[str, str] = {
     "options_chain": "tickers.{sym}",
     "funding": "tickers.{sym}",    # live funding derived from ticker stream
     "book_ticker": "tickers.{sym}",
+    "liquidation": "liquidation.{sym}",
 }
 
 # Categories that require separate WS endpoints

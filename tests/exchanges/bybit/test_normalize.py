@@ -14,6 +14,7 @@ from crocodile.schema.records import (
     BookTicker,
     DerivativeTicker,
     Funding,
+    Liquidation,
     OptionsChain,
     Trade,
 )
@@ -235,3 +236,49 @@ def test_ticker_option_unparseable_symbol_uses_sentinels() -> None:
     # for a 2-part symbol (only 4-part matches), so it goes through linear_ticker path.
     # Verify no crash occurs.
     assert isinstance(out, list)  # normalizer must not raise
+
+
+# ---------------------------------------------------------------------------
+# T3-connmisc: Bybit liquidation channel (liquidation.{symbol})
+# ---------------------------------------------------------------------------
+
+
+def test_liquidation_golden_fixture() -> None:
+    """``liquidation.BTCUSDT`` message → Liquidation record with correct fields.
+
+    Bybit V5 liquidation topic: data = {symbol, side, size, price, updatedTime}.
+    side "Buy" (liquidated long) → Side.BUY; updatedTime ms → exchange_ts ns.
+    """
+    msg = json.loads((FIXTURES / "liquidation.json").read_text())
+    out = list(normalize_message(msg, local_ts=55, venue="bybit"))
+    liqs = [r for r in out if isinstance(r, Liquidation)]
+    assert len(liqs) == 1, f"expected 1 Liquidation, got {len(liqs)}"
+    liq = liqs[0]
+    assert liq.exchange == "bybit"
+    assert liq.symbol_raw == "BTCUSDT"
+    assert liq.symbol == "bybit:BTCUSDT"
+    assert liq.side == Side.BUY          # "Buy" → canonical Side.BUY
+    assert liq.price == 49500.0
+    assert liq.amount == 0.3
+    assert liq.exchange_ts == 1700000001000 * 1_000_000  # updatedTime ms → ns
+    assert liq.local_ts == 55
+
+
+def test_liquidation_sell_side() -> None:
+    """``side == "Sell"`` on a liquidation maps to Side.SELL."""
+    msg = {
+        "topic": "liquidation.ETHUSDT",
+        "ts": 1700000002000,
+        "type": "snapshot",
+        "data": {
+            "symbol": "ETHUSDT",
+            "side": "Sell",
+            "size": "1.0",
+            "price": "2000.0",
+            "updatedTime": 1700000002000,
+        },
+    }
+    out = list(normalize_message(msg, local_ts=0, venue="bybit"))
+    liqs = [r for r in out if isinstance(r, Liquidation)]
+    assert len(liqs) == 1
+    assert liqs[0].side == Side.SELL
