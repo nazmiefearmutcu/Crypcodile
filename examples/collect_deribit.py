@@ -85,10 +85,13 @@ async def main() -> None:
     collect_task = asyncio.create_task(
         collect([connector], sink, max_reconnects=-1)
     )
-    stop_task = asyncio.create_task(stop)
 
+    # asyncio.wait accepts both Tasks and Futures natively; pass ``stop``
+    # (a Future) directly rather than wrapping it in create_task, which would
+    # produce a Task whose result is the Future's result — semantically wrong
+    # and non-idiomatic.
     _done, pending = await asyncio.wait(
-        {collect_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        {collect_task, stop}, return_when=asyncio.FIRST_COMPLETED
     )
 
     for task in pending:

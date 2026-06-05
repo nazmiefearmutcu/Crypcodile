@@ -83,12 +83,15 @@ def test_collect_deribit_imports_cleanly() -> None:
 
 
 def test_examples_import_no_syntax_errors() -> None:
-    """All three example scripts are importable without syntax or import errors."""
+    """All three example scripts exec without syntax or import errors.
+
+    This test actually calls ``exec_module`` (via ``_load_example``) so that
+    syntax errors, missing imports, and top-level runtime errors are caught.
+    Merely asserting ``spec is not None`` would only check that the file exists
+    on disk — it would never execute the module body.
+    """
     for name in ("collect_deribit.py", "replay_to_csv.py", "query_ohlcv.py"):
-        path = EXAMPLES_DIR / name
-        assert path.exists(), f"Missing example: {path}"
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None
+        _load_example(name)  # raises on SyntaxError / ImportError / NameError
 
 
 @pytest.mark.parametrize("interval", ["1s", "1m", "1h", "1d"])
