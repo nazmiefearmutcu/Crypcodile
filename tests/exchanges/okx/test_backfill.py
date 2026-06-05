@@ -304,12 +304,13 @@ async def test_backfill_trades_stops_on_empty_page() -> None:
 _OI_THREE_RECORDS: dict[str, Any] = {
     "code": "0",
     "data": [
+        # OKX returns descending order: newest first.
+        # ts=1700000004000 ms → AFTER end_ns → must be skipped (continue branch)
+        {"instId": "BTC-USDT-SWAP", "oi": "300", "oiCcy": "30", "ts": "1700000004000"},
         # ts=1700000002000 ms → inside range [1700000001_000_000_000, 1700000003_000_000_000]
         {"instId": "BTC-USDT-SWAP", "oi": "100", "oiCcy": "10", "ts": "1700000002000"},
-        # ts=1700000000000 ms → BEFORE start_ns → must be excluded
+        # ts=1700000000000 ms → BEFORE start_ns → triggers break
         {"instId": "BTC-USDT-SWAP", "oi": "200", "oiCcy": "20", "ts": "1700000000000"},
-        # ts=1700000004000 ms → AFTER end_ns → must be excluded
-        {"instId": "BTC-USDT-SWAP", "oi": "300", "oiCcy": "30", "ts": "1700000004000"},
     ],
     "msg": "",
 }

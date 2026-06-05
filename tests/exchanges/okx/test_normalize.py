@@ -275,15 +275,11 @@ def test_side_helper_not_duplicated() -> None:
     After deduplication, backfill.py must import _side from normalize.py
     (or a shared location) rather than defining its own copy.
     """
-    import inspect
-
     from crocodile.exchanges.okx import backfill as bf_mod
     from crocodile.exchanges.okx import normalize as norm_mod
 
     # After deduplication, backfill._side must be the same object as normalize._side
     # OR backfill must not define _side at all (it imports from normalize or shared util).
-    bf_side_src = inspect.getsource(bf_mod._side)
-    norm_side_src = inspect.getsource(norm_mod._side)
 
     # The canonical test: they must point to the same function
     assert bf_mod._side is norm_mod._side, (
