@@ -129,6 +129,27 @@ def test_binance_markprice_does_not_carry_open_interest() -> None:
     )
 
 
+def test_binance_markprice_funding_interval_hours() -> None:
+    """Binance @markPrice Funding must set interval_hours=4.
+
+    Appendix §3.2: 'USDⓂ funding settles every 4h (00/04/08/12/16/20 UTC) as of 2025.'
+    The Funding record emitted from the @markPrice branch must document this cadence.
+    """
+    from crocodile.exchanges.binance.normalize import normalize_message
+
+    msg = json.loads((BINANCE_FIX / "usdm_markprice.json").read_text())
+    out = list(normalize_message(msg, local_ts=1, venue="binance-usdm"))
+    fn_list = [r for r in out if isinstance(r, Funding)]
+    assert len(fn_list) == 1, (
+        f"Expected exactly 1 Funding record from @markPrice, got {len(fn_list)}"
+    )
+    fn = fn_list[0]
+    assert fn.interval_hours == 4, (
+        f"Binance USDM @markPrice Funding must have interval_hours=4 (appendix §3.2),"
+        f" got {fn.interval_hours}"
+    )
+
+
 def test_binance_rest_open_interest_emits_record() -> None:
     """Binance REST open-interest snapshot must parse to OpenInterest correctly."""
     from crocodile.exchanges.binance.backfill import parse_open_interest

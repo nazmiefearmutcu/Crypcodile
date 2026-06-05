@@ -68,7 +68,7 @@ def _normalize_eapi_option_markprice(
     - ``v``   → vega
     - ``b``   → bid_iv  (buy IV, percent)
     - ``a``   → ask_iv  (ask/sell IV, percent)
-    - ``vo``  → mark_iv (volume/mark vol)
+    - ``vo``  → mark_iv (mark IV / mark volatility)
     - ``oi``  → open_interest
     - ``E``   → exchange_ts  (event time, ms)
 
@@ -97,7 +97,16 @@ def _normalize_eapi_option_markprice(
             continue
 
         canonical = inst.canonical if inst is not None else f"{venue}:{sym}"
-        exchange_ts = ms_to_ns(int(entry["E"]))
+        raw_e = entry.get("E")
+        if raw_e is None:
+            log.warning(
+                "binance: @optionMarkPrice: missing 'E' in entry for symbol %r"
+                " — using local_ts",
+                sym,
+            )
+            exchange_ts = local_ts
+        else:
+            exchange_ts = ms_to_ns(int(raw_e))
 
         mp_raw = entry.get("mp")
         d_raw = entry.get("d")
@@ -214,6 +223,7 @@ def normalize_message(
             local_ts=local_ts,
             funding_rate=float(data["r"]),
             funding_timestamp=ms_to_ns(funding_ts_raw) if funding_ts_raw is not None else None,
+            interval_hours=4,  # Binance USDⓂ perpetuals settle every 4h (appendix §3.2)
         )
 
     elif "@forceOrder" in stream:
