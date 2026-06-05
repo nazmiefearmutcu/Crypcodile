@@ -292,6 +292,76 @@ async def test_backfill_klines_yields_ohlcv() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backfill_aggtrades_respects_end_ns() -> None:
+    """backfill_aggtrades must not yield trades with exchange_ts > end_ns.
+
+    Regression for the fromId pagination end-bound gap: once pagination switches
+    to fromId mode, Binance ignores startTime/endTime on the wire. Without a
+    client-side guard, trades past end_ns leak into the result.
+
+    Setup: page1 has a=999 (T=1699999999900ms) and a=1000 (T=1700000000000ms);
+    page2 has a=1001 (T=1700000000100ms) and a=1002 (T=1700000000200ms).
+    end_ns is set to T=1700000000050ms (in ns), which is between page1's last
+    trade and page2's first trade.  Only the two page1 trades must be emitted;
+    a=1001 and a=1002 must be dropped and pagination must stop.
+    """
+    page1: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_aggtrades_page1.json").read_text()
+    )  # a=999 T=1699999999900ms, a=1000 T=1700000000000ms
+    page2: list[dict[str, Any]] = json.loads(
+        (FIXTURES / "rest_aggtrades.json").read_text()
+    )  # a=1001 T=1700000000100ms, a=1002 T=1700000000200ms
+
+    call_count = 0
+
+    async def fake_fetch_aggtrades(
+        symbol: str,
+        from_id: int | None,
+        start_time_ms: int | None,
+        end_time_ms: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        nonlocal call_count
+        call_count += 1
+        if from_id is None:
+            return page1
+        return page2
+
+    bf = BinanceBackfill(
+        fetch_aggtrades=fake_fetch_aggtrades,
+        fetch_klines=None,
+        fetch_open_interest=None,
+        fetch_open_interest_hist=None,
+    )
+
+    # end_ns sits between page1's last trade (T=1700000000000ms) and page2's
+    # first trade (T=1700000000100ms)
+    end_ns = 1700000000050 * 1_000_000  # 1700000000050ms -> ns
+
+    trades: list[Trade] = []
+    async for rec in bf.backfill_aggtrades(
+        venue="binance-spot",
+        symbol="BTCUSDT",
+        start_ns=0,
+        end_ns=end_ns,
+        page_size=2,  # page_size == len(page1) -> normally triggers second page fetch
+        local_ts=0,
+    ):
+        if isinstance(rec, Trade):
+            trades.append(rec)
+
+    # Only trades from page1 (both within end_ns) must be emitted
+    assert len(trades) == 2
+    assert trades[0].id == "999"
+    assert trades[1].id == "1000"
+    # Verify that page2 was fetched but its out-of-range trades were dropped;
+    # the paginator may or may not fetch page2 depending on when the stop fires —
+    # what matters is no trade past end_ns is yielded.
+    for t in trades:
+        assert t.exchange_ts <= end_ns, f"Trade {t.id} at {t.exchange_ts} exceeds end_ns {end_ns}"
+
+
+@pytest.mark.asyncio
 async def test_backfill_open_interest_hist_yields_records() -> None:
     """BinanceBackfill.backfill_open_interest_hist yields OpenInterest records."""
     raw: list[dict[str, Any]] = json.loads(

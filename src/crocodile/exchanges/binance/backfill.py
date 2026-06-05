@@ -248,8 +248,16 @@ class BinanceBackfill:
                 break
 
             records = parse_aggtrades_page(page, venue=venue, symbol=symbol, local_ts=local_ts)
+            stop = False
             for r in records:
+                if r.exchange_ts is not None and r.exchange_ts > end_ns:
+                    # fromId pagination ignores endTime on the wire, so enforce the
+                    # requested end bound client-side: drop this trade and stop.
+                    stop = True
+                    break
                 yield r
+            if stop:
+                break
 
             if len(page) < page_size:
                 # Partial page — no more data
