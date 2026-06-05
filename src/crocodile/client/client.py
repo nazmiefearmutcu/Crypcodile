@@ -26,6 +26,23 @@ export(channel, symbols, frm, to, fmt, dest)
     Write rows for the given channel x symbols x time range to a file in the
     specified format.  Supported formats: ``parquet``, ``csv``, ``arrow``,
     ``json``, ``jsonl``.  Parent directories are created automatically.
+
+Analytics methods (Task 6.5)
+----------------------------
+funding_apr(symbol, start_ns, end_ns)
+    Per-event annualised funding rate + cumulative funding.
+
+spot_future_basis(future_symbol, spot_symbol, start_ns, end_ns, expiry_ns=None)
+    Spot-future basis via ASOF JOIN on trade timestamps.
+
+perp_basis(perp_symbol, start_ns, end_ns)
+    Perpetual basis (mark price vs index price).
+
+iv_surface(underlying, at_ns, rate=0.0)
+    Implied-vol surface snapshot at ``at_ns``.
+
+term_structure(underlying, at_ns, rate=0.0)
+    ATM IV term structure at ``at_ns``.
 """
 
 from __future__ import annotations
@@ -194,6 +211,137 @@ class CrocodileClient:
             return iter([])
 
         return _kway_merge(streams)
+
+    # ------------------------------------------------------------------
+    # Analytics API (Task 6.5)
+    # ------------------------------------------------------------------
+
+    def funding_apr(
+        self,
+        symbol: str,
+        start_ns: int,
+        end_ns: int,
+    ) -> pl.DataFrame:
+        """Return per-event funding APR and cumulative funding.
+
+        Thin wrapper over :func:`crocodile.analytics.funding.funding_apr`.
+
+        Args:
+            symbol:   Canonical symbol string (e.g. ``"deribit:BTC-PERPETUAL"``).
+            start_ns: Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+            end_ns:   Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``funding_ts, funding_rate, interval_hours, apr, cumulative_funding``.
+            Returns an empty DataFrame when no data exists.
+        """
+        from crocodile.analytics.funding import funding_apr as _funding_apr
+
+        return _funding_apr(self._catalog, symbol, start_ns, end_ns)
+
+    def spot_future_basis(
+        self,
+        future_symbol: str,
+        spot_symbol: str,
+        start_ns: int,
+        end_ns: int,
+        expiry_ns: int | None = None,
+    ) -> pl.DataFrame:
+        """Return spot-future basis via ASOF JOIN on trade timestamps.
+
+        Thin wrapper over :func:`crocodile.analytics.basis.spot_future_basis`.
+
+        Args:
+            future_symbol: Canonical symbol for the futures leg.
+            spot_symbol:   Canonical symbol for the spot leg.
+            start_ns:      Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+            end_ns:        Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+            expiry_ns:     Optional expiry timestamp (nanoseconds UTC).  When
+                           given, an ``annualized_pct`` column is appended.
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``local_ts, future_price, spot_price, basis, basis_pct``
+            (and ``annualized_pct`` when ``expiry_ns`` is provided).
+            Returns an empty DataFrame when either leg has no data.
+        """
+        from crocodile.analytics.basis import spot_future_basis as _sfb
+
+        return _sfb(self._catalog, future_symbol, spot_symbol, start_ns, end_ns, expiry_ns)
+
+    def perp_basis(
+        self,
+        perp_symbol: str,
+        start_ns: int,
+        end_ns: int,
+    ) -> pl.DataFrame:
+        """Return perpetual basis (mark price vs index price).
+
+        Thin wrapper over :func:`crocodile.analytics.basis.perp_basis`.
+
+        Args:
+            perp_symbol: Canonical perpetual contract symbol.
+            start_ns:    Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+            end_ns:      Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``local_ts, mark_price, index_price, basis, basis_pct``.
+            Returns an empty DataFrame when no data exists.
+        """
+        from crocodile.analytics.basis import perp_basis as _perp_basis
+
+        return _perp_basis(self._catalog, perp_symbol, start_ns, end_ns)
+
+    def iv_surface(
+        self,
+        underlying: str,
+        at_ns: int,
+        rate: float = 0.0,
+    ) -> pl.DataFrame:
+        """Return the implied-vol surface snapshot at ``at_ns``.
+
+        Thin wrapper over :func:`crocodile.analytics.volsurface.iv_surface`.
+
+        Args:
+            underlying: Underlying asset identifier (e.g. ``"BTC"``).
+            at_ns:      Snapshot instant (nanoseconds UTC).
+            rate:       Continuous risk-free rate (default 0.0).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``expiry, strike, moneyness, opt_type, iv, source``.
+            Returns an empty DataFrame when no data exists.
+        """
+        from crocodile.analytics.volsurface import iv_surface as _iv_surface
+
+        return _iv_surface(self._catalog, underlying, at_ns, rate)
+
+    def term_structure(
+        self,
+        underlying: str,
+        at_ns: int,
+        rate: float = 0.0,
+    ) -> pl.DataFrame:
+        """Return the ATM IV term structure at ``at_ns``.
+
+        Thin wrapper over :func:`crocodile.analytics.volsurface.term_structure`.
+
+        Args:
+            underlying: Underlying asset identifier (e.g. ``"BTC"``).
+            at_ns:      Snapshot instant (nanoseconds UTC).
+            rate:       Continuous risk-free rate (default 0.0).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``expiry, days_to_expiry, atm_strike, atm_iv``.
+            Ordered by ``expiry`` ascending.
+            Returns an empty DataFrame when no data exists.
+        """
+        from crocodile.analytics.volsurface import term_structure as _term_structure
+
+        return _term_structure(self._catalog, underlying, at_ns, rate)
 
     def export(
         self,

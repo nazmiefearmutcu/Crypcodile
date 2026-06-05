@@ -1,12 +1,16 @@
-"""Typer CLI for Crocodile (Task 3.5).
+"""Typer CLI for Crocodile (Task 3.5 / 6.5).
 
 Commands
 --------
-query   -- Execute DuckDB SQL against the data lake; print result table.
-catalog -- List all channels present in the data lake with row counts.
-export  -- Export a channel x symbols x time range to a file.
-replay  -- Stream canonical Records from the data lake, printed to stdout.
-collect -- (stub) Run live connectors -- requires connector configuration.
+query          -- Execute DuckDB SQL against the data lake; print result table.
+catalog        -- List all channels present in the data lake with row counts.
+export         -- Export a channel x symbols x time range to a file.
+replay         -- Stream canonical Records from the data lake, printed to stdout.
+collect        -- (stub) Run live connectors -- requires connector configuration.
+funding-apr    -- Print per-event funding APR for a perpetual symbol.
+basis          -- Print spot-future or perpetual basis.
+iv-surface     -- Print the implied-vol surface snapshot.
+term-structure -- Print the ATM IV term structure.
 
 Usage examples::
 
@@ -16,6 +20,14 @@ Usage examples::
                      --fmt csv --dest out/trades.csv --data-dir /data
     crocodile replay --channels trade --symbols deribit:BTC-PERPETUAL \\
                      --from 0 --to 9e18 --data-dir /data
+    crocodile funding-apr --symbol deribit:BTC-PERPETUAL \\
+                          --start 0 --end 9999999999999999999 --data-dir /data
+    crocodile basis --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \\
+                    --start 0 --end 9999999999999999999 --data-dir /data
+    crocodile basis --perp deribit:BTC-PERPETUAL \\
+                    --start 0 --end 9999999999999999999 --data-dir /data
+    crocodile iv-surface --underlying BTC --at 1704067200000000000 --data-dir /data
+    crocodile term-structure --underlying BTC --at 1704067200000000000 --data-dir /data
 """
 
 from __future__ import annotations
@@ -204,6 +216,161 @@ def collect(
     )
     typer.echo("Live collection not yet implemented (M4). Exiting.")
     raise typer.Exit(code=0)
+
+
+# ---------------------------------------------------------------------------
+# funding-apr  (Task 6.5)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="funding-apr")
+def funding_apr_cmd(
+    symbol: Annotated[
+        str,
+        typer.Option("--symbol", help="Canonical symbol, e.g. deribit:BTC-PERPETUAL."),
+    ],
+    start: Annotated[
+        int,
+        typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
+    ],
+    end: Annotated[
+        int,
+        typer.Option("--end", help="End of time range (nanoseconds UTC)."),
+    ],
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print per-event funding APR and cumulative funding for a perpetual symbol."""
+    from crocodile.client.client import CrocodileClient
+
+    client = CrocodileClient(data_dir=data_dir)
+    df = client.funding_apr(symbol, start, end)
+    if len(df) == 0:
+        typer.echo("No funding data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# basis  (Task 6.5)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="basis")
+def basis_cmd(
+    start: Annotated[
+        int,
+        typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
+    ],
+    end: Annotated[
+        int,
+        typer.Option("--end", help="End of time range (nanoseconds UTC)."),
+    ],
+    future: Annotated[
+        str | None,
+        typer.Option("--future", help="Canonical futures symbol (spot-future mode)."),
+    ] = None,
+    spot: Annotated[
+        str | None,
+        typer.Option("--spot", help="Canonical spot symbol (spot-future mode)."),
+    ] = None,
+    perp: Annotated[
+        str | None,
+        typer.Option("--perp", help="Canonical perpetual symbol (perp mode)."),
+    ] = None,
+    expiry: Annotated[
+        int | None,
+        typer.Option("--expiry", help="Contract expiry (ns UTC; spot-future mode only)."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print spot-future or perpetual basis.
+
+    Use --future/--spot for spot-future mode, or --perp for perpetual mode.
+    """
+    from crocodile.client.client import CrocodileClient
+
+    client = CrocodileClient(data_dir=data_dir)
+
+    if perp is not None:
+        df = client.perp_basis(perp, start, end)
+    elif future is not None and spot is not None:
+        df = client.spot_future_basis(future, spot, start, end, expiry_ns=expiry)
+    else:
+        typer.echo(
+            "Error: provide either --perp <symbol> or both --future <symbol> and "
+            "--spot <symbol>.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No basis data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# iv-surface  (Task 6.5)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="iv-surface")
+def iv_surface_cmd(
+    underlying: Annotated[
+        str,
+        typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
+    ],
+    at: Annotated[
+        int,
+        typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
+    ],
+    rate: Annotated[
+        float,
+        typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
+    ] = 0.0,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print the implied-vol surface snapshot at a given instant."""
+    from crocodile.client.client import CrocodileClient
+
+    client = CrocodileClient(data_dir=data_dir)
+    df = client.iv_surface(underlying, at, rate=rate)
+    if len(df) == 0:
+        typer.echo("No options data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# term-structure  (Task 6.5)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="term-structure")
+def term_structure_cmd(
+    underlying: Annotated[
+        str,
+        typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
+    ],
+    at: Annotated[
+        int,
+        typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
+    ],
+    rate: Annotated[
+        float,
+        typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
+    ] = 0.0,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print the ATM IV term structure at a given instant."""
+    from crocodile.client.client import CrocodileClient
+
+    client = CrocodileClient(data_dir=data_dir)
+    df = client.term_structure(underlying, at, rate=rate)
+    if len(df) == 0:
+        typer.echo("No options data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
 
 
 # ---------------------------------------------------------------------------
