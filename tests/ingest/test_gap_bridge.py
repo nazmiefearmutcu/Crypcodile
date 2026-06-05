@@ -13,6 +13,8 @@ Acceptance criteria (appendix §6):
 
 from __future__ import annotations
 
+import pytest
+
 from crocodile.exchanges.binance.book import OrderBookSync, SyncResult
 from crocodile.ingest.gap_bridge import BookResyncBridge, TradeSeqGap
 from crocodile.schema.records import BookDelta, BookSnapshot
@@ -247,6 +249,69 @@ class TestBookResyncBridge:
         seq_ids = [d.seq_id for d in delta_records]
         assert 201 not in seq_ids
         assert 202 not in seq_ids
+        # The second-RESYNC-triggering delta (seq_id=600 >= snapshot 300) MUST be present.
+        assert 600 in seq_ids
+
+    async def test_complete_resync_with_none_sequence_id_keeps_all_deltas(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When fetch_snapshot returns sequence_id=None the bridge must:
+        - emit a WARNING (sync machine is not re-anchored)
+        - keep ALL buffered deltas (no seq filter possible)
+        - still clear the buffer and exit resyncing mode
+        """
+        import logging
+
+        def _make_snapshot_no_seq() -> BookSnapshot:
+            return BookSnapshot(
+                exchange="binance-spot",
+                symbol="binance-spot:BTCUSDT",
+                symbol_raw="BTCUSDT",
+                exchange_ts=None,
+                local_ts=0,
+                bids=[(50000.0, 1.0)],
+                asks=[(50001.0, 1.0)],
+                depth=2,
+                sequence_id=None,
+                is_snapshot=True,
+            )
+
+        async def fetch_snapshot_none(symbol: str) -> BookSnapshot:
+            return _make_snapshot_no_seq()
+
+        sync = OrderBookSync(venue="spot")
+        sync.set_snapshot(last_update_id=100)
+
+        bridge = BookResyncBridge(
+            sync=sync,
+            fetch_snapshot=fetch_snapshot_none,
+            symbol="BTCUSDT",
+        )
+
+        # Trigger resync and buffer a couple of deltas
+        bridge.feed_sync_result(SyncResult.RESYNC, _make_delta(200, 300))
+        bridge.buffer_delta(_make_delta(195, 195))  # would normally be stale
+        bridge.buffer_delta(_make_delta(201, 201))
+
+        with caplog.at_level(logging.WARNING, logger="crocodile.ingest.gap_bridge"):
+            applied = await bridge.complete_resync()
+
+        # Bridge exits resyncing mode
+        assert bridge.is_resyncing is False
+
+        # A warning about sequence_id=None must have been emitted
+        assert any("sequence_id=None" in rec.message for rec in caplog.records), (
+            "Expected warning about sequence_id=None; got: "
+            + str([r.message for r in caplog.records])
+        )
+
+        # All buffered deltas (including the normally-stale seq=195 one) are kept
+        delta_records = [r for r in applied if isinstance(r, BookDelta)]
+        seq_ids = [d.seq_id for d in delta_records]
+        assert 300 in seq_ids   # triggering delta
+        assert 195 in seq_ids   # kept because snap_seq is None
+        assert 201 in seq_ids
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +353,27 @@ class TestTradeSeqGap:
         detector.reset()
         # After reset, next trade is treated as the first → no gap
         assert detector.feed(trade_seq=200) is False
+
+    def test_backward_seq_still_reports_gap_and_logs_correctly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Backward sequence (reconnect without reset) is flagged as a gap.
+
+        The log message must say 'backward' rather than 'skipped -997' to avoid
+        confusing log consumers.
+        """
+        import logging
+
+        detector = TradeSeqGap()
+        detector.feed(trade_seq=1000)
+
+        with caplog.at_level(logging.WARNING, logger="crocodile.ingest.gap_bridge"):
+            result = detector.feed(trade_seq=5)
+
+        # Still a gap (sequence is not consecutive)
+        assert result is True
+        # Log must use the 'backward' branch, not the 'skipped -NNN' branch
+        assert any("backward" in rec.message for rec in caplog.records), (
+            "Expected 'backward' in log message but got: "
+            + str([r.message for r in caplog.records])
+        )

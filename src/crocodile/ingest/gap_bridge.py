@@ -26,7 +26,8 @@ Usage example (inside a connector's message loop)::
             await sink.put(record)
 
         if bridge.is_resyncing:
-            # fire resync as a background task and await it before continuing
+            # Inline-await complete_resync() in the message loop; no concurrent
+            # background Task is needed for single-coroutine asyncio use.
             applied = await bridge.complete_resync()
             for r in applied:
                 await sink.put(r)
@@ -137,8 +138,10 @@ class BookResyncBridge:
             return None
 
         if self._resyncing:
-            # While resyncing, buffer everything (even DROPs — the new sync
-            # state machine will re-classify them after the snapshot).
+            # While resyncing, buffer everything (even DROPs).  Note: these
+            # deltas are emitted as-is after seq-filtering on complete_resync();
+            # the sync machine is re-anchored to snap_seq but the kept deltas
+            # bypass it.
             self._buffer.append(delta)
             return None
 
@@ -188,6 +191,20 @@ class BookResyncBridge:
         # Update the sync state machine with the new snapshot anchor.
         if snap_seq is not None:
             self._sync.set_snapshot(last_update_id=snap_seq)
+        else:
+            # snapshot.sequence_id is None: the REST snapshot carries no usable
+            # anchor.  set_snapshot() is skipped, so the sync machine retains
+            # its previous (pre-resync) snapshot_id.  All buffered deltas pass
+            # the seq filter (snap_seq is None → keep everything), but
+            # subsequent WS deltas will be evaluated against the stale anchor.
+            # This is a best-effort recovery; callers should treat the output
+            # with caution and consider triggering a second resync.
+            log.warning(
+                "BookResyncBridge [%s]: REST snapshot has sequence_id=None; "
+                "sync state machine NOT re-anchored (stale anchor retained). "
+                "All buffered deltas will be kept and continuity may be wrong.",
+                self._symbol,
+            )
 
         # Filter buffered deltas: keep only those with seq_id >= snap_seq.
         kept_deltas: list[BookDelta] = []
@@ -256,12 +273,24 @@ class TradeSeqGap:
 
         is_gap = trade_seq != self._last_seq + 1
         if is_gap:
-            log.warning(
-                "TradeSeqGap: gap detected — expected seq=%d, got seq=%d (skipped %d).",
-                self._last_seq + 1,
-                trade_seq,
-                trade_seq - self._last_seq - 1,
-            )
+            skipped = trade_seq - self._last_seq - 1
+            if skipped < 0:
+                # Backward / reset: sequence went backwards (e.g. exchange
+                # restarted seq numbering after a reconnect).  Log clearly
+                # instead of reporting a negative "skipped" count.
+                log.warning(
+                    "TradeSeqGap: backward seq — expected seq=%d, got seq=%d "
+                    "(reset or reconnect without TradeSeqGap.reset() call?).",
+                    self._last_seq + 1,
+                    trade_seq,
+                )
+            else:
+                log.warning(
+                    "TradeSeqGap: gap detected — expected seq=%d, got seq=%d (skipped %d).",
+                    self._last_seq + 1,
+                    trade_seq,
+                    skipped,
+                )
         self._last_seq = trade_seq
         return is_gap
 
