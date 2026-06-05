@@ -147,11 +147,12 @@ FetchTradesFn = Callable[
     Coroutine[Any, Any, dict[str, Any]],
 ]
 FetchFundingFn = Callable[
-    [str, str, int, int, int],  # symbol, category, start_ms, end_ms, limit
+    [str, str, int, int, int, "str | None"],  # symbol, category, start_ms, end_ms, limit, cursor
     Coroutine[Any, Any, dict[str, Any]],
 ]
 FetchOpenInterestFn = Callable[
-    [str, str, int, int, int, int],  # symbol, category, interval_min, start_ms, end_ms, limit
+    # symbol, category, interval_min, start_ms, end_ms, limit, cursor
+    [str, str, int, int, int, int, "str | None"],
     Coroutine[Any, Any, dict[str, Any]],
 ]
 
@@ -194,7 +195,17 @@ class BybitBackfill:
         page_size: int = _DEFAULT_PAGE_SIZE,
         local_ts: int = 0,
     ) -> AsyncIterator[Record]:
-        """Yield Trade records for the given time range via cursor pagination."""
+        """Yield Trade records for the given time range via cursor pagination.
+
+        ASSUMPTION: Bybit /v5/market/recent-trade returns records in ASCENDING
+        timestamp order (oldest first within each page, and pages advance
+        forward in time as the cursor progresses).  The stop condition
+        ``exchange_ts > end_ns`` is therefore safe: once we see a record above
+        ``end_ns`` all subsequent records on the same page (and later pages)
+        will also be above the bound, so we can break immediately.  If this
+        assumption ever changes (descending order), the stop logic would need to
+        be replaced with a full-page filter rather than an early break.
+        """
         if self._fetch_trades is None:
             return
 
@@ -233,16 +244,31 @@ class BybitBackfill:
         page_size: int = _DEFAULT_PAGE_SIZE,
         local_ts: int = 0,
     ) -> AsyncIterator[Funding]:
-        """Yield Funding records for the given time range."""
+        """Yield Funding records for the given time range via cursor pagination.
+
+        Bybit /v5/market/funding/history supports cursor pagination via
+        ``nextPageCursor``; long date ranges (>200 records) require multiple
+        pages.  The first request is time-bounded via ``startTime``/``endTime``;
+        subsequent requests carry the cursor returned by the previous page.
+        """
         if self._fetch_funding is None:
             return
 
         start_ms = start_ns // 1_000_000
         end_ms = end_ns // 1_000_000
+        cursor: str | None = None
 
-        raw = await self._fetch_funding(symbol, category, start_ms, end_ms, page_size)
-        for record in parse_funding_page(raw, venue=venue, symbol=symbol, local_ts=local_ts):
-            yield record
+        while True:
+            raw = await self._fetch_funding(symbol, category, start_ms, end_ms, page_size, cursor)
+            records = parse_funding_page(raw, venue=venue, symbol=symbol, local_ts=local_ts)
+            for record in records:
+                yield record
+
+            result: dict[str, Any] = raw.get("result") or {}
+            next_cursor: str = result.get("nextPageCursor", "")
+            if not next_cursor or not records:
+                break
+            cursor = next_cursor
 
     async def backfill_open_interest(
         self,
@@ -255,18 +281,34 @@ class BybitBackfill:
         page_size: int = _DEFAULT_PAGE_SIZE,
         local_ts: int = 0,
     ) -> AsyncIterator[OpenInterest]:
-        """Yield OpenInterest records for the given time range."""
+        """Yield OpenInterest records for the given time range via cursor pagination.
+
+        Bybit /v5/market/open-interest supports cursor pagination via
+        ``nextPageCursor``; long date ranges (>1000 OI intervals) require
+        multiple pages.  The first request is time-bounded via
+        ``startTime``/``endTime``; subsequent requests carry the cursor
+        returned by the previous page.
+        """
         if self._fetch_open_interest is None:
             return
 
         start_ms = start_ns // 1_000_000
         end_ms = end_ns // 1_000_000
+        cursor: str | None = None
 
-        raw = await self._fetch_open_interest(
-            symbol, category, interval_min, start_ms, end_ms, page_size
-        )
-        for record in parse_open_interest_page(raw, venue=venue, symbol=symbol, local_ts=local_ts):
-            yield record
+        while True:
+            raw = await self._fetch_open_interest(
+                symbol, category, interval_min, start_ms, end_ms, page_size, cursor
+            )
+            records = parse_open_interest_page(raw, venue=venue, symbol=symbol, local_ts=local_ts)
+            for record in records:
+                yield record
+
+            result: dict[str, Any] = raw.get("result") or {}
+            next_cursor: str = result.get("nextPageCursor", "")
+            if not next_cursor or not records:
+                break
+            cursor = next_cursor
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +344,7 @@ async def _live_fetch_funding(
     start_time_ms: int,
     end_time_ms: int,
     limit: int,
+    cursor: str | None = None,
     *,
     rest_base: str = REST_BASE,
 ) -> dict[str, Any]:
@@ -315,6 +358,8 @@ async def _live_fetch_funding(
         "endTime": end_time_ms,
         "limit": limit,
     }
+    if cursor:
+        params["cursor"] = cursor
     async with aiohttp.ClientSession() as session:
         url = f"{rest_base}/market/funding/history"
         async with session.get(url, params=params) as resp:
@@ -330,6 +375,7 @@ async def _live_fetch_open_interest(
     start_time_ms: int,
     end_time_ms: int,
     limit: int,
+    cursor: str | None = None,
     *,
     rest_base: str = REST_BASE,
 ) -> dict[str, Any]:
@@ -358,6 +404,8 @@ async def _live_fetch_open_interest(
         "endTime": end_time_ms,
         "limit": limit,
     }
+    if cursor:
+        params["cursor"] = cursor
     async with aiohttp.ClientSession() as session:
         url = f"{rest_base}/market/open-interest"
         async with session.get(url, params=params) as resp:
