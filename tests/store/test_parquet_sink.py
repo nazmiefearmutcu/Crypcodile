@@ -179,21 +179,26 @@ async def test_parquet_sink_last_flush_updated_after_row_count_flush(
     """
     import time as _time
 
-    t_before = _time.monotonic()
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=3, flush_interval_seconds=9999)
 
-    # Third put triggers a row-count flush via _flush_channel(); _last_flush MUST
-    # be updated in that branch so it reflects "time of last flush".
     await sink.put(_trade(1.0))
     await sink.put(_trade(2.0))
+
+    # Capture the lower-bound timestamp AFTER the first two puts and BEFORE the
+    # third.  The third put triggers a row-count flush; _last_flush MUST be
+    # updated in that branch to a value >= t_after_puts.  Without the fix,
+    # _last_flush would still hold the construction-time value (set before
+    # t_after_puts), making the assertion below fail.
+    t_after_puts = _time.monotonic()
+
     await sink.put(_trade(3.0))  # row-count flush fires here
 
-    t_after = _time.monotonic()
-    assert sink._last_flush >= t_before, (
+    t_upper = _time.monotonic()
+    assert sink._last_flush >= t_after_puts, (
         "_last_flush was not updated after a row-count-triggered flush; "
         "it must be set to time.monotonic() so time-based flush logic "
         "does not fire spuriously on the very next put()."
     )
-    assert sink._last_flush <= t_after + 0.1, (
+    assert sink._last_flush <= t_upper + 0.1, (
         "_last_flush is set to an implausibly future value"
     )
