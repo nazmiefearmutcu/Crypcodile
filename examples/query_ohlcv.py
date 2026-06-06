@@ -64,9 +64,12 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
-        print(f"Error: data directory not found: {data_dir}", file=sys.stderr)
-        print("Run collect_deribit.py first to populate the data lake.", file=sys.stderr)
-        return 1
+        print(
+            f"Data lake not found: {data_dir}\n"
+            "Run collect_deribit.py first to populate the data lake.",
+            file=sys.stderr,
+        )
+        return 0
 
     catalog = Catalog(data_dir)
 

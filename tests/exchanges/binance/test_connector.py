@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import pathlib
 
-import pytest
-
 P = pathlib.Path(__file__).parent / "fixtures"
 
 

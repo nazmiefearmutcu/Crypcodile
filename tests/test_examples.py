@@ -47,10 +47,10 @@ def test_replay_to_csv_missing_data_dir(tmp_path: Path) -> None:
 
 
 def test_query_ohlcv_missing_data_dir(tmp_path: Path) -> None:
-    """query_ohlcv.py exits with code 1 when the data dir is absent."""
+    """query_ohlcv.py exits with code 0 gracefully when the data dir is absent."""
     mod = _load_example("query_ohlcv.py")
     rc = mod.main(["--data-dir", str(tmp_path / "nonexistent")])
-    assert rc == 1
+    assert rc == 0
 
 
 def test_query_ohlcv_empty_lake_exits_cleanly(tmp_path: Path) -> None:
