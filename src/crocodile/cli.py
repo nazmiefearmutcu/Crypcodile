@@ -1,4 +1,4 @@
-"""Typer CLI for Crocodile (Task 3.5 / 6.5).
+"""Typer CLI for Crocodile (Task 3.5 / 6.5 / T7b).
 
 Commands
 --------
@@ -6,7 +6,7 @@ query          -- Execute DuckDB SQL against the data lake; print result table.
 catalog        -- List all channels present in the data lake with row counts.
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
-collect        -- (stub) Run live connectors -- requires connector configuration.
+collect        -- Run live connectors and write data to the Parquet lake.
 funding-apr    -- Print per-event funding APR for a perpetual symbol.
 basis          -- Print spot-future or perpetual basis.
 iv-surface     -- Print the implied-vol surface snapshot.
@@ -20,6 +20,8 @@ Usage examples::
                      --fmt csv --dest out/trades.csv --data-dir /data
     crocodile replay --channels trade --symbols deribit:BTC-PERPETUAL \\
                      --from 0 --to 9e18 --data-dir /data
+    crocodile collect --exchange deribit --symbols BTC-PERPETUAL \\
+                      --channels trade --data-dir /data
     crocodile funding-apr --symbol deribit:BTC-PERPETUAL \\
                           --start 0 --end 9999999999999999999 --data-dir /data
     crocodile basis --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \\
@@ -32,10 +34,21 @@ Usage examples::
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
 import typer
+
+# ---------------------------------------------------------------------------
+# Top-level imports used by collect (kept at module scope so tests can patch
+# them without reloading the module).
+# ---------------------------------------------------------------------------
+from crocodile.client.collect import collect as collect_live
+from crocodile.exchanges.factory import make_connector
+from crocodile.ingest.transport import AiohttpWsTransport
+from crocodile.instruments.registry import InstrumentRegistry
+from crocodile.store.parquet_sink import ParquetSink
 
 app = typer.Typer(
     name="crocodile",
@@ -189,7 +202,7 @@ def replay(
 
 
 # ---------------------------------------------------------------------------
-# collect  (stub -- full wiring is M4)
+# collect  (T7b-collect — live connector wiring)
 # ---------------------------------------------------------------------------
 
 
@@ -206,16 +219,52 @@ def collect(
     ],
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
-    """Collect live market data from an exchange (requires connector configuration).
+    """Collect live market data from an exchange and write to the Parquet data lake.
 
-    This command is a stub in M3; full connector wiring lands in M4.
+    Press Ctrl-C (SIGINT) to stop gracefully — the sink is flushed before exit.
+
+    Valid exchange names: binance, bybit, coinbase, deribit, okx.
+
+    Example::
+
+        crocodile collect --exchange deribit --symbols BTC-PERPETUAL \\
+                          --channels trade --channels book_delta --data-dir data
     """
-    typer.echo(
-        f"collect: exchange={exchange!r} symbols={symbols} channels={channels} "
-        f"data_dir={data_dir}"
+    sink = ParquetSink(
+        data_dir=data_dir,
+        max_buffer_rows=10_000,
+        flush_interval_seconds=5.0,
     )
-    typer.echo("Live collection not yet implemented (M4). Exiting.")
-    raise typer.Exit(code=0)
+    registry = InstrumentRegistry()
+
+    try:
+        connector = make_connector(
+            exchange=exchange,
+            symbols=list(symbols),
+            channels=list(channels),
+            out=sink,
+            registry=registry,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    # Wire the live WebSocket transport (may be replaced by a FakeTransport in
+    # tests via monkeypatching make_connector).
+    if connector.transport is None:
+        connector.transport = AiohttpWsTransport(connector.ws_url)
+
+    typer.echo(
+        f"Starting collection: exchange={exchange!r} symbols={symbols} "
+        f"channels={channels} data_dir={data_dir}"
+    )
+
+    try:
+        asyncio.run(collect_live([connector], sink))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass  # sink.close() is already called inside collect_live's finally block
+
+    typer.echo("Collection stopped. Data written to: " + str(data_dir))
 
 
 # ---------------------------------------------------------------------------
