@@ -255,3 +255,49 @@ def test_resample_interval_column_value(catalog: Catalog) -> None:
         "1m",
     )
     assert df["interval"].unique().to_list() == ["1m"]
+
+
+# ---------------------------------------------------------------------------
+# T6 regression: buy_volume + sell_volume == volume when Side.UNKNOWN exists
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def data_dir_with_unknown(tmp_path: Path) -> Path:
+    """Write trades including a Side.UNKNOWN trade; volume invariant must hold."""
+    trades = [
+        _make_trade(_ts(0),                  100.0, 1.0, Side.BUY,     "tu1"),
+        _make_trade(_ts(int(0.5 * _1S_NS)),  101.0, 2.0, Side.SELL,    "tu2"),
+        _make_trade(_ts(int(0.9 * _1S_NS)),  99.0,  0.5, Side.UNKNOWN, "tu3"),
+    ]
+    asyncio.run(_write_trades(tmp_path, trades))
+    return tmp_path
+
+
+def test_buy_sell_volume_invariant_with_unknown_trades(data_dir_with_unknown: Path) -> None:
+    """buy_volume + sell_volume == volume for every bar even when Side.UNKNOWN trades exist.
+
+    The fix: sell_volume = CASE WHEN side='buy' THEN 0.0 ELSE amount END
+    so that UNKNOWN trades are counted in sell_volume, keeping the invariant.
+    """
+    cat = Catalog(data_dir_with_unknown)
+    df = resample_ohlcv(cat, "deribit:BTC-PERPETUAL", _ts(0), _ts(_1S_NS), "1m")
+
+    assert len(df) == 1, f"expected 1 bar, got {len(df)}"
+    row = df.row(0, named=True)
+
+    total_vol = 1.0 + 2.0 + 0.5
+    assert abs(row["volume"] - total_vol) < 1e-9, f"volume={row['volume']}"
+
+    # buy_volume = 1.0 (only the BUY trade)
+    assert abs(row["buy_volume"] - 1.0) < 1e-9, f"buy_volume={row['buy_volume']}"
+
+    # sell_volume = 2.0 + 0.5 = 2.5 (sell + unknown, i.e. non-buy)
+    assert abs(row["sell_volume"] - 2.5) < 1e-9, f"sell_volume={row['sell_volume']}"
+
+    # Core invariant: buy_volume + sell_volume == volume (no amount is lost)
+    delta = abs(row["buy_volume"] + row["sell_volume"] - row["volume"])
+    assert delta < 1e-9, (
+        f"buy_volume({row['buy_volume']}) + sell_volume({row['sell_volume']}) "
+        f"!= volume({row['volume']}), delta={delta}"
+    )

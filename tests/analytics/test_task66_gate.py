@@ -314,11 +314,14 @@ def test_basis_annualized_expired_branch(tmp_path: Path) -> None:
         expiry_ns=_BASE_NS,  # same as local_ts → expired
     )
     assert isinstance(df, pl.DataFrame)
-    # annualized_pct column should be present and equal to basis_pct (expired fallback)
+    # annualized_pct column should be present; for the expired/same-timestamp branch
+    # it must be None (undefined, not a garbage value like basis_pct stored raw).
+    # [Updated from old "== basis_pct" expectation: that was buggy — storing raw
+    # basis_pct for expired rows gives a misleading annualized figure.]
     if len(df) > 0 and "annualized_pct" in df.columns:
         row = df.row(0, named=True)
-        assert abs(row["annualized_pct"] - row["basis_pct"]) < 1e-9, (
-            "expired branch: annualized_pct != basis_pct"
+        assert row["annualized_pct"] is None, (
+            f"expired branch: annualized_pct must be None, got {row['annualized_pct']!r}"
         )
 
 

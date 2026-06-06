@@ -326,3 +326,60 @@ def test_bs_greeks_rho_put() -> None:
     g = bs_greeks(F, K, T, vol, PUT)
     expected_rho = -T * put_price
     assert abs(g.rho - expected_rho) < 1e-9, f"rho_put={g.rho}, expected={expected_rho}"
+
+
+# ---------------------------------------------------------------------------
+# T6 regression: vol == 0 and vol < 0 guards
+# ---------------------------------------------------------------------------
+
+
+def test_bs_price_vol_zero_call_returns_discounted_intrinsic() -> None:
+    """vol=0, ITM call: bs_price = D * max(F - K, 0) (well-defined limit).
+
+    At vol=0 the option collapses to its discounted intrinsic value.
+    No ZeroDivisionError must be raised.
+    """
+    # ITM call: F=110, K=100, T=1, vol=0, r=0
+    price = bs_price(110.0, 100.0, 1.0, 0.0, CALL)
+    expected = max(110.0 - 100.0, 0.0)  # D=1 when r=0
+    assert abs(price - expected) < 1e-9, f"bs_price(vol=0, ITM call)={price}, expected={expected}"
+
+
+def test_bs_price_vol_zero_otm_call_returns_zero() -> None:
+    """vol=0, OTM call: bs_price = 0 (discounted intrinsic is 0 for OTM)."""
+    price = bs_price(90.0, 100.0, 1.0, 0.0, CALL)
+    assert abs(price - 0.0) < 1e-9, f"bs_price(vol=0, OTM call)={price}"
+
+
+def test_bs_price_vol_zero_put_returns_discounted_intrinsic() -> None:
+    """vol=0, ITM put: bs_price = D * max(K - F, 0)."""
+    price = bs_price(90.0, 100.0, 1.0, 0.0, PUT)
+    expected = max(100.0 - 90.0, 0.0)
+    assert abs(price - expected) < 1e-9, f"bs_price(vol=0, ITM put)={price}, expected={expected}"
+
+
+def test_bs_greeks_vol_zero_returns_all_zeros() -> None:
+    """vol=0: bs_greeks returns Greeks(0,0,0,0,0) — well-defined limit."""
+    g = bs_greeks(110.0, 100.0, 1.0, 0.0, CALL)
+    assert isinstance(g, Greeks)
+    assert g.delta == 0.0, f"delta={g.delta}"
+    assert g.gamma == 0.0, f"gamma={g.gamma}"
+    assert g.vega == 0.0, f"vega={g.vega}"
+    assert g.theta == 0.0, f"theta={g.theta}"
+    assert g.rho == 0.0, f"rho={g.rho}"
+
+
+def test_bs_price_negative_vol_raises_value_error() -> None:
+    """vol < 0: bs_price must raise ValueError."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="vol"):
+        bs_price(100.0, 100.0, 1.0, -0.1, CALL)
+
+
+def test_bs_greeks_negative_vol_raises_value_error() -> None:
+    """vol < 0: bs_greeks must raise ValueError."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="vol"):
+        bs_greeks(100.0, 100.0, 1.0, -0.1, CALL)

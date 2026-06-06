@@ -83,6 +83,8 @@ def spot_future_basis(
         basis_pct        Float64    ``basis / spot_price``.
         annualized_pct   Float64    (only when ``expiry_ns`` given) Annualised
                                    basis = ``basis_pct * 365 / days_to_expiry``.
+                                   ``None`` when ``days_to_expiry <= 0``
+                                   (expired or same-timestamp).
         ===============  =========  ==========================================
 
         Returns ``pl.DataFrame()`` when either leg has no data.
@@ -118,6 +120,7 @@ def spot_future_basis(
             FROM _basis_future f
             ASOF JOIN _basis_spot s
                 ON f.local_ts >= s.local_ts
+            WHERE s.spot_price > 0
             ORDER BY f.local_ts
         """
         result = conn.execute(sql)
@@ -139,14 +142,14 @@ def spot_future_basis(
 
     # Optionally append annualized_pct.
     if expiry_ns is not None:
-        ann_values: list[float] = []
+        ann_values: list[float | None] = []
         for row in df.iter_rows(named=True):
             days_to_expiry = (expiry_ns - row["local_ts"]) / 86_400e9
             if days_to_expiry > 0.0:
                 ann_values.append(row["basis_pct"] * 365.0 / days_to_expiry)
             else:
-                # Expired or same-timestamp: cannot annualise; use basis_pct as-is.
-                ann_values.append(row["basis_pct"])
+                # Expired or same-timestamp: annualisation is undefined; emit None.
+                ann_values.append(None)
         df = df.with_columns(
             pl.Series("annualized_pct", ann_values, dtype=pl.Float64)
         )
@@ -169,7 +172,8 @@ def perp_basis(
 
     Reads the ``derivative_ticker`` channel and computes the funding basis
     between the mark price and the underlying index price.  Rows where
-    either ``mark_price`` or ``index_price`` is NULL are silently dropped.
+    either ``mark_price`` or ``index_price`` is NULL or zero are silently
+    dropped (zero index_price would produce infinite basis_pct).
 
     Args:
         catalog:      A :class:`~crocodile.store.catalog.Catalog` instance.
@@ -201,9 +205,13 @@ def perp_basis(
 
     work = raw.select(["local_ts", "mark_price", "index_price"])
 
-    # Drop rows where either price is null.
+    # Drop rows where either price is null or zero (zero index_price would produce
+    # inf in basis_pct; zero mark_price is equally invalid data).
     work = work.filter(
-        pl.col("mark_price").is_not_null() & pl.col("index_price").is_not_null()
+        pl.col("mark_price").is_not_null()
+        & pl.col("index_price").is_not_null()
+        & (pl.col("mark_price") > 0.0)
+        & (pl.col("index_price") > 0.0)
     )
 
     if len(work) == 0:

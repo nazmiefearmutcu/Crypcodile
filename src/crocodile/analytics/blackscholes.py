@@ -91,10 +91,20 @@ def bs_price(
         discounted intrinsic value ``D * max(F-K, 0)`` (call) or
         ``D * max(K-F, 0)`` (put).
     """
+    if vol < 0:
+        raise ValueError(f"vol must be >= 0, got {vol!r}")
+
     D = math.exp(-rate * t_years) if t_years > 0 else 1.0
 
     # ---- expired guard ----
     if t_years <= 0:
+        if opt_type == OptType.CALL:
+            return D * max(forward - strike, 0.0)
+        else:
+            return D * max(strike - forward, 0.0)
+
+    # ---- vol == 0: well-defined limit (discounted intrinsic) ----
+    if vol == 0.0:
         if opt_type == OptType.CALL:
             return D * max(forward - strike, 0.0)
         else:
@@ -155,8 +165,15 @@ def bs_greeks(
         A :class:`Greeks` namedtuple.  For expired options, all fields
         are 0.0.
     """
+    if vol < 0:
+        raise ValueError(f"vol must be >= 0, got {vol!r}")
+
     # ---- expired guard ----
     if t_years <= 0:
+        return Greeks(delta=0.0, gamma=0.0, vega=0.0, theta=0.0, rho=0.0)
+
+    # ---- vol == 0: well-defined limit (all Greeks are 0) ----
+    if vol == 0.0:
         return Greeks(delta=0.0, gamma=0.0, vega=0.0, theta=0.0, rho=0.0)
 
     D = math.exp(-rate * t_years)

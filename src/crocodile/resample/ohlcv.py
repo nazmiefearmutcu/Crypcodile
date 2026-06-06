@@ -56,7 +56,7 @@ Returns a Polars DataFrame (via DuckDB → ``result.pl()``).  The schema is::
     close:       Float64    price of last trade in bucket
     volume:      Float64    total traded amount (0 for empty bars)
     buy_volume:  Float64    subset where side="buy"
-    sell_volume: Float64    subset where side="sell"
+    sell_volume: Float64    non-buy volume (side='sell' + side='unknown')
     num_trades:  Int64      count of source trades
 """
 
@@ -98,7 +98,7 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str) -> str:
         "    last(price ORDER BY local_ts)           AS close,\n"
         "    sum(amount)                             AS volume,\n"
         "    sum(CASE WHEN side = 'buy'  THEN amount ELSE 0.0 END) AS buy_volume,\n"
-        "    sum(CASE WHEN side = 'sell' THEN amount ELSE 0.0 END) AS sell_volume,\n"
+        "    sum(CASE WHEN side = 'buy'  THEN 0.0   ELSE amount END) AS sell_volume,\n"
         "    count(*)::BIGINT                        AS num_trades\n"
         "FROM trade\n"
         "WHERE symbol = ?\n"
@@ -133,7 +133,7 @@ def _build_fill_sql(
         "        last(price ORDER BY local_ts)           AS close,\n"
         "        sum(amount)                             AS volume,\n"
         "        sum(CASE WHEN side = 'buy'  THEN amount ELSE 0.0 END) AS buy_volume,\n"
-        "        sum(CASE WHEN side = 'sell' THEN amount ELSE 0.0 END) AS sell_volume,\n"
+        "        sum(CASE WHEN side = 'buy'  THEN 0.0   ELSE amount END) AS sell_volume,\n"
         "        count(*)::BIGINT                        AS num_trades\n"
         "    FROM trade\n"
         "    WHERE symbol = ?\n"
@@ -212,8 +212,8 @@ def resample_ohlcv(
             low         Float64
             close       Float64
             volume      Float64 (0.0 for empty fill bars)
-            buy_volume  Float64
-            sell_volume Float64
+            buy_volume  Float64 (side='buy' trades only)
+            sell_volume Float64 (non-buy volume: side='sell' + side='unknown')
             num_trades  Int64   (0 for empty fill bars)
 
         Ordered by ``bar`` ascending.  Returns an empty DataFrame (0 rows,

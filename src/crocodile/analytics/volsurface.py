@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 
+import duckdb
 import polars as pl
 
 from crocodile.analytics.blackscholes import bs_greeks, implied_vol
@@ -192,7 +193,7 @@ def iv_surface(
             [underlying],
         )
         raw: pl.DataFrame = result.pl()
-    except Exception:
+    except (duckdb.CatalogException, duckdb.IOException):
         return pl.DataFrame()
 
     if len(raw) == 0:
@@ -327,7 +328,7 @@ def vol_skew(
         rows = res.fetchall()
         if rows and rows[0][0] is not None:
             underlying_price = float(rows[0][0])
-    except Exception:
+    except (duckdb.CatalogException, duckdb.IOException):
         pass
 
     t_years = (expiry_ns - at_ns) / _NS_PER_YEAR
@@ -549,7 +550,7 @@ def term_structure(
         row = res.fetchone()
         if row and row[0] is not None:
             underlying_price = float(row[0])
-    except Exception:
+    except (duckdb.CatalogException, duckdb.IOException):
         pass
 
     if underlying_price is None:

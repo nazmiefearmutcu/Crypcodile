@@ -346,3 +346,121 @@ def test_perp_basis_symbol_isolation(perp_lake: Path) -> None:
     catalog = Catalog(perp_lake)
     df = perp_basis(catalog, "deribit:ETH-PERPETUAL", _T1, _T4)
     assert len(df) == 0
+
+
+# ---------------------------------------------------------------------------
+# T6 regression: perp_basis must not emit inf when index_price==0
+# ---------------------------------------------------------------------------
+
+
+def test_perp_basis_zero_index_price_does_not_emit_inf(tmp_path: Path) -> None:
+    """Rows with index_price==0 must be filtered out (not produce inf basis_pct).
+
+    The fix: filter to mark_price > 0 AND index_price > 0 before computing
+    basis_pct, so division-by-zero never reaches the output.
+    """
+    records: list[object] = [
+        # Good row
+        _make_derivative_ticker(_T1, 100.5, 100.0),
+        # Pathological row: index_price = 0 would create inf if not filtered
+        DerivativeTicker(
+            exchange=_EXCHANGE,
+            symbol=_PERP_SYMBOL,
+            symbol_raw="BTC-PERPETUAL",
+            exchange_ts=_T2,
+            local_ts=_T2,
+            mark_price=100.5,
+            index_price=0.0,
+        ),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+    catalog = Catalog(tmp_path)
+    df = perp_basis(catalog, _PERP_SYMBOL, _T1, _T4)
+
+    # Only the row with index_price=100.0 should appear
+    assert len(df) == 1, f"expected 1 row (zero index_price filtered), got {len(df)}"
+    assert all(
+        v is not None and v != float("inf") and v != float("-inf")
+        for v in df["basis_pct"].to_list()
+    ), f"basis_pct contains inf: {df['basis_pct'].to_list()}"
+
+
+def test_perp_basis_zero_mark_price_does_not_appear(tmp_path: Path) -> None:
+    """Rows with mark_price==0 must be filtered out."""
+    records: list[object] = [
+        _make_derivative_ticker(_T1, 100.5, 100.0),
+        DerivativeTicker(
+            exchange=_EXCHANGE,
+            symbol=_PERP_SYMBOL,
+            symbol_raw="BTC-PERPETUAL",
+            exchange_ts=_T2,
+            local_ts=_T2,
+            mark_price=0.0,
+            index_price=100.0,
+        ),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+    catalog = Catalog(tmp_path)
+    df = perp_basis(catalog, _PERP_SYMBOL, _T1, _T4)
+    assert len(df) == 1, f"expected 1 row (zero mark_price filtered), got {len(df)}"
+
+
+# ---------------------------------------------------------------------------
+# T6 regression: spot_future_basis — no division by zero when spot_price==0
+# ---------------------------------------------------------------------------
+
+
+def test_spot_future_basis_zero_spot_price_does_not_crash(tmp_path: Path) -> None:
+    """A spot trade with price=0.0 must be excluded from the ASOF join result
+    (or at minimum not produce inf/nan in basis_pct).
+
+    The fix: add WHERE spot_price > 0 in the SQL so zero-price spot rows
+    do not participate in the basis calculation.
+    """
+    records: list[object] = [
+        # Zero-price spot trade (bad data)
+        _make_trade(_T1, _SPOT_SYMBOL, 0.0),
+        # Good spot trade
+        _make_trade(_T3, _SPOT_SYMBOL, 100.0),
+        # Future trades
+        _make_trade(_T2, _FUTURE_SYMBOL, 101.0),
+        _make_trade(_T4, _FUTURE_SYMBOL, 104.0),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+    catalog = Catalog(tmp_path)
+    df = spot_future_basis(catalog, _FUTURE_SYMBOL, _SPOT_SYMBOL, _T1, _T4)
+
+    # Check that no inf or nan appear in the result
+    if len(df) > 0:
+        for col in ("basis_pct",):
+            vals = df[col].to_list()
+            for v in vals:
+                assert v is None or (
+                    not (v == float("inf") or v == float("-inf") or v != v)
+                ), f"column {col!r} contains bad value: {v} in {vals}"
+
+
+# ---------------------------------------------------------------------------
+# T6 regression: spot_future_basis annualized_pct with expired/same-timestamp
+# ---------------------------------------------------------------------------
+
+
+def test_spot_future_basis_expired_annualized_returns_none_or_zero(
+    basis_catalog: Catalog,
+) -> None:
+    """When days_to_expiry <= 0 (expired or same-timestamp), annualized_pct
+    must be None or 0.0 rather than a raw/garbage value.
+    """
+    # expiry_ns set to _T2 itself — same timestamp as the first future trade.
+    # days_to_expiry = 0 → cannot annualise.
+    expiry_ns = _T2
+    df = spot_future_basis(
+        basis_catalog, _FUTURE_SYMBOL, _SPOT_SYMBOL, _T1, _T4, expiry_ns=expiry_ns
+    )
+    assert "annualized_pct" in df.columns, "annualized_pct column missing"
+    for row in df.iter_rows(named=True):
+        v = row["annualized_pct"]
+        # Must be None or 0.0, not garbage (inf/nan or raw basis_pct stored blindly)
+        assert v is None or v == 0.0, (
+            f"annualized_pct={v!r} for expired/same-ts row — expected None or 0.0"
+        )
