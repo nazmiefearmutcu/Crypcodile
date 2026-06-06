@@ -110,7 +110,9 @@ class Catalog:
 
         # Build a multi-path read_parquet expression.
         # DuckDB accepts a list literal:  ['path1', 'path2', ...]
-        paths_literal = ", ".join(f"'{p}'" for p in unique_globs)
+        # Single quotes in paths must be escaped as '' (SQL string literal rule).
+        # DuckDB does not support ? parameters for read_parquet() path arguments.
+        paths_literal = ", ".join(f"'{p.replace(chr(39), chr(39) * 2)}'" for p in unique_globs)
 
         # Use parameterized query to avoid SQL injection on the symbol value.
         # start_ns and end_ns are ints (no injection risk) but kept as parameters
@@ -127,7 +129,7 @@ class Catalog:
               AND local_ts <= ?
             ORDER BY local_ts
         """
-        result = self._conn.execute(sql, [symbol, start_ns, end_ns])
+        result = self._conn.execute(sql, [symbol, start_ns, end_ns])  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
         df = result.pl()
         # Normalise: return a bare schemaless DataFrame when no rows match so
         # both empty-result paths have the same shape (consistent contract).
@@ -178,15 +180,21 @@ class Catalog:
             / "bucket=*"
             / "part-*.parquet"
         )
+        # Escape embedded single quotes in the path so the SQL string literal
+        # is valid even when data_dir or channel contains a single quote.
+        # DuckDB does not support ? parameters for structural/path arguments
+        # like read_parquet() paths, so quote-escaping is the correct fix.
+        escaped_glob = glob_pattern.replace("'", "''")
+        escaped_channel = channel.replace("'", "''")
         sql = f"""
-            CREATE OR REPLACE VIEW "{channel}" AS
+            CREATE OR REPLACE VIEW "{escaped_channel}" AS
             SELECT * FROM read_parquet(
-                '{glob_pattern}',
+                '{escaped_glob}',
                 hive_partitioning => true,
                 union_by_name => true
             )
         """
-        self._conn.execute(sql)
+        self._conn.execute(sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
         self._registered_channels.add(channel)
 
     def _build_date_globs(

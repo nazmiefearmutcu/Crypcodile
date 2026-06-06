@@ -202,3 +202,28 @@ async def test_catalog_scan_multiday_partition_pruning(tmp_path: pathlib.Path) -
     day2_dirs = _glob_mod.glob(str(tmp_path / "exchange=*" / "channel=trade" / "date=2023-11-15"))
     assert day1_dirs, "Expected a date=2023-11-14 partition directory"
     assert day2_dirs, "Expected a date=2023-11-15 partition directory"
+
+
+# ---------------------------------------------------------------------------
+# Regression: SQL quote-escaping (bug 1)
+# ---------------------------------------------------------------------------
+
+
+async def test_catalog_single_quote_in_data_dir(tmp_path: pathlib.Path) -> None:
+    """Catalog must not crash when data_dir contains a single quote.
+
+    DuckDB path arguments are interpolated as SQL string literals; an unescaped
+    quote would terminate the literal prematurely and raise a syntax error.
+    """
+    # Create a subdirectory whose name contains a single quote.
+    quoted_dir = tmp_path / "data's_dir"
+    quoted_dir.mkdir()
+
+    sink = ParquetSink(data_dir=quoted_dir, max_buffer_rows=10, flush_interval_seconds=9999)
+    await sink.put(_trade())
+    await sink.flush()
+
+    # Constructing the Catalog must succeed (no DuckDB SQL syntax error).
+    cat = Catalog(quoted_dir)
+    df = cat.scan("trade", "deribit:BTC-PERPETUAL", _BASE_TS, _BASE_TS + 9_999_999_999)
+    assert len(df) == 1

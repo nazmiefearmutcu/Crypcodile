@@ -202,6 +202,7 @@ class ParquetSink(Sink):
         # Flush on row-count threshold
         if len(self._buffers[channel]) >= self._max_buffer_rows:
             await self._flush_channel(channel)
+            self._last_flush = time.monotonic()
             return
 
         # Flush on time threshold (checked lazily on the next put)

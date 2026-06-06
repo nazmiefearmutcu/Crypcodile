@@ -155,3 +155,45 @@ async def test_parquet_sink_never_appends_new_part_files(tmp_path: pathlib.Path)
 
     new_files = files_after_second - files_after_first
     assert len(new_files) >= 1, "Second flush should write a new part file, not append"
+
+
+# ---------------------------------------------------------------------------
+# Regression: _last_flush updated after row-count-triggered flush (bug 3)
+# ---------------------------------------------------------------------------
+
+
+async def test_parquet_sink_last_flush_updated_after_row_count_flush(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A row-count-triggered flush must update _last_flush.
+
+    If _last_flush is NOT updated after _flush_channel(), it retains the
+    value set at construction time.  A subsequent put() that checks
+    ``time.monotonic() - self._last_flush >= self._flush_interval`` would
+    then see a large elapsed value and fire a spurious full flush().
+
+    We verify the fix directly: immediately after the row-count flush fires
+    (on the 3rd put), ``_last_flush`` must be recent (< 1 second old).
+    Before the fix it would still reflect the construction-time value,
+    making elapsed grow unboundedly.
+    """
+    import time as _time
+
+    t_before = _time.monotonic()
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=3, flush_interval_seconds=9999)
+
+    # Third put triggers a row-count flush via _flush_channel(); _last_flush MUST
+    # be updated in that branch so it reflects "time of last flush".
+    await sink.put(_trade(1.0))
+    await sink.put(_trade(2.0))
+    await sink.put(_trade(3.0))  # row-count flush fires here
+
+    t_after = _time.monotonic()
+    assert sink._last_flush >= t_before, (
+        "_last_flush was not updated after a row-count-triggered flush; "
+        "it must be set to time.monotonic() so time-based flush logic "
+        "does not fire spuriously on the very next put()."
+    )
+    assert sink._last_flush <= t_after + 0.1, (
+        "_last_flush is set to an implausibly future value"
+    )
