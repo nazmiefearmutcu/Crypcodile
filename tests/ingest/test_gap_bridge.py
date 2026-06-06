@@ -377,3 +377,84 @@ class TestTradeSeqGap:
             "Expected 'backward' in log message but got: "
             + str([r.message for r in caplog.records])
         )
+
+
+# ---------------------------------------------------------------------------
+# T5a regression: venue-aware boundary delta filtering
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteResyncBoundaryVenueAware:
+    """Regression tests for the off-by-one boundary delta handling.
+
+    Binance SPOT rule:  drop deltas with seq_id <= snap_seq  (boundary in snapshot)
+    Binance FUTURES rule: drop deltas with seq_id < snap_seq  (boundary is first valid)
+    """
+
+    async def test_spot_boundary_delta_is_dropped(self) -> None:
+        """For SPOT, a buffered delta exactly at snap_seq must be DROPPED.
+
+        snap_seq = 200; delta.seq_id = 200 -> stale boundary, belongs to snapshot.
+        """
+        async def fetch_snapshot(symbol: str) -> BookSnapshot:
+            return _make_snapshot(200)
+
+        sync = OrderBookSync(venue="spot")
+        sync.set_snapshot(last_update_id=100)
+
+        bridge = BookResyncBridge(
+            sync=sync,
+            fetch_snapshot=fetch_snapshot,
+            symbol="BTCUSDT",
+        )
+
+        bridge.feed_sync_result(SyncResult.RESYNC, _make_delta(200, 300))
+        # Buffer a delta exactly at snap_seq=200 (boundary - must be dropped for spot)
+        boundary_delta = _make_delta(200, 200)
+        bridge.buffer_delta(boundary_delta)
+        # Also buffer a delta strictly above snap_seq (must be kept)
+        kept_delta = _make_delta(201, 201)
+        bridge.buffer_delta(kept_delta)
+
+        applied = await bridge.complete_resync()
+        seq_ids = [r.seq_id for r in applied if isinstance(r, BookDelta)]
+        # boundary delta (seq=200) must NOT appear in the output
+        assert 200 not in seq_ids, (
+            f"SPOT: boundary delta at snap_seq should be dropped, but seq_ids={seq_ids}"
+        )
+        # delta above snap_seq must be kept
+        assert 201 in seq_ids
+
+    async def test_futures_boundary_delta_is_kept(self) -> None:
+        """For FUTURES, a buffered delta exactly at snap_seq must be KEPT.
+
+        snap_seq = 200; delta.seq_id = 200 -> this is the first valid futures event.
+        """
+        async def fetch_snapshot(symbol: str) -> BookSnapshot:
+            return _make_snapshot(200)
+
+        sync = OrderBookSync(venue="futures")
+        sync.set_snapshot(last_update_id=100)
+
+        bridge = BookResyncBridge(
+            sync=sync,
+            fetch_snapshot=fetch_snapshot,
+            symbol="BTCUSDT",
+        )
+
+        bridge.feed_sync_result(SyncResult.RESYNC, _make_delta(200, 300))
+        # Buffer a delta exactly at snap_seq=200 (boundary - must be KEPT for futures)
+        boundary_delta = _make_delta(200, 200)
+        bridge.buffer_delta(boundary_delta)
+        # Also buffer a stale delta below snap_seq (must be dropped)
+        stale_delta = _make_delta(199, 199)
+        bridge.buffer_delta(stale_delta)
+
+        applied = await bridge.complete_resync()
+        seq_ids = [r.seq_id for r in applied if isinstance(r, BookDelta)]
+        # boundary delta (seq=200) MUST appear in the output for futures
+        assert 200 in seq_ids, (
+            f"FUTURES: boundary delta at snap_seq should be kept, but seq_ids={seq_ids}"
+        )
+        # stale delta (seq=199 < 200) must be dropped
+        assert 199 not in seq_ids

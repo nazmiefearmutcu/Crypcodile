@@ -206,18 +206,37 @@ class BookResyncBridge:
                 self._symbol,
             )
 
-        # Filter buffered deltas: keep only those with seq_id >= snap_seq.
+        # Filter buffered deltas using the venue-aware threshold:
+        #   Binance SPOT:    drop seq_id <= snap_seq (boundary already in snapshot)
+        #   Binance FUTURES: drop seq_id <  snap_seq (boundary is the first valid event)
+        # Access venue from the injected OrderBookSync._venue attribute.
+        venue = getattr(self._sync, "_venue", "spot")
         kept_deltas: list[BookDelta] = []
         for delta in self._buffer:
-            if snap_seq is None or delta.seq_id is None or delta.seq_id >= snap_seq:
+            if snap_seq is None or delta.seq_id is None:
                 kept_deltas.append(delta)
+            elif venue == "futures":
+                # Keep when seq_id >= snap_seq (boundary inclusive)
+                if delta.seq_id >= snap_seq:
+                    kept_deltas.append(delta)
+                else:
+                    log.debug(
+                        "BookResyncBridge [%s]: dropping buffered delta seq=%s (< snapshot %s).",
+                        self._symbol,
+                        delta.seq_id,
+                        snap_seq,
+                    )
             else:
-                log.debug(
-                    "BookResyncBridge [%s]: dropping buffered delta seq=%s (< snapshot %s).",
-                    self._symbol,
-                    delta.seq_id,
-                    snap_seq,
-                )
+                # spot (default): keep when seq_id > snap_seq (boundary exclusive)
+                if delta.seq_id > snap_seq:
+                    kept_deltas.append(delta)
+                else:
+                    log.debug(
+                        "BookResyncBridge [%s]: dropping buffered delta seq=%s (<= snapshot %s).",
+                        self._symbol,
+                        delta.seq_id,
+                        snap_seq,
+                    )
 
         # Clear state
         self._buffer = []

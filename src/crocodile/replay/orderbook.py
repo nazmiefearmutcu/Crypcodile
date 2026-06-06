@@ -160,7 +160,15 @@ class OrderBook:
         """
         if delta.prev_seq_id is not None:
             # Futures/Deribit shape: explicit prev pointer
-            if self._last_seq_id is not None and delta.prev_seq_id != self._last_seq_id:
+            if self._last_seq_id is None:
+                # Snapshot had sequence_id=None — no anchor to validate against.
+                # Continuity cannot be established; treat as a gap so the caller
+                # can trigger a resync rather than silently accepting the delta.
+                raise BookGap(
+                    f"Sequence gap: delta.prev_seq_id={delta.prev_seq_id!r} "
+                    f"but last_seq_id is None (snapshot had no sequence_id)"
+                )
+            if delta.prev_seq_id != self._last_seq_id:
                 raise BookGap(
                     f"Sequence gap: delta.prev_seq_id={delta.prev_seq_id!r} "
                     f"!= last_seq_id={self._last_seq_id!r}"

@@ -254,3 +254,28 @@ def test_best_bid_ask_after_snapshot() -> None:
     )
     assert book.best_bid() == 101.0   # highest bid
     assert book.best_ask() == 102.0   # lowest ask
+
+
+# ---------------------------------------------------------------------------
+# T5a regression: _check_gap guard when _last_seq_id is None after None-seq snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_none_seq_snapshot_futures_shape_delta_does_not_silently_pass() -> None:
+    """After a snapshot with sequence_id=None, a futures-shape delta (prev_seq_id
+    is not None) must NOT silently pass the gap check.
+
+    The guard must signal that continuity cannot be established and raise BookGap
+    (or skip the delta), rather than treating the stream as in-sync.
+    """
+    book = OrderBook()
+    # Apply a snapshot with sequence_id=None -> _last_seq_id stays None
+    book.apply(_make_snapshot(seq=None))
+    assert book._last_seq_id is None  # pre-condition
+
+    # A futures-shape delta: prev_seq_id is not None but last_seq_id is None.
+    # With the old code this silently passes because
+    #   `self._last_seq_id is not None` is False.
+    # With the fix it must raise BookGap (cannot validate continuity).
+    with pytest.raises(BookGap):
+        book.apply(_make_delta(seq_id=101, prev_seq_id=100))
