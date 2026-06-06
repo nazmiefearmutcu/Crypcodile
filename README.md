@@ -1,4 +1,4 @@
-# Crocodile
+# Crypcodile
 
 > Open-source crypto market-data engine — ingest, normalize, store, and retrieve
 > financial data **anywhere, at any resolution**. Aiming for data coverage as good as
