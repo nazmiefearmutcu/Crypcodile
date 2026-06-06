@@ -1,9 +1,10 @@
-"""Acceptance tests for DuckDB Catalog (Task 2.3)."""
+"""Acceptance tests for DuckDB Catalog (Task 2.3 / T8-docs)."""
 
 from __future__ import annotations
 
 import pathlib
 
+import duckdb
 import polars as pl
 
 from crocodile.schema.enums import Side
@@ -227,3 +228,34 @@ async def test_catalog_single_quote_in_data_dir(tmp_path: pathlib.Path) -> None:
     cat = Catalog(quoted_dir)
     df = cat.scan("trade", "deribit:BTC-PERPETUAL", _BASE_TS, _BASE_TS + 9_999_999_999)
     assert len(df) == 1
+
+
+# ---------------------------------------------------------------------------
+# T8-docs: Catalog.connection property
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_connection_property_returns_duckdb_connection(tmp_path: pathlib.Path) -> None:
+    """Catalog.connection must return the DuckDB connection (regression: T8-docs).
+
+    Regression: the connection was only accessible via the private ``._conn``
+    attribute.  After T8-docs a public ``connection`` property exposes it.
+    """
+    cat = Catalog(tmp_path)
+    conn = cat.connection
+    # Must be the DuckDB connection object (not None, not some wrapper).
+    assert isinstance(conn, duckdb.DuckDBPyConnection)
+
+
+def test_catalog_connection_is_functional(tmp_path: pathlib.Path) -> None:
+    """catalog.connection must be able to execute SQL queries."""
+    cat = Catalog(tmp_path)
+    conn = cat.connection
+    result = conn.execute("SELECT 42 AS answer").pl()
+    assert result["answer"][0] == 42
+
+
+def test_catalog_connection_same_object_as_internal(tmp_path: pathlib.Path) -> None:
+    """catalog.connection must return the same object as the internal _conn attribute."""
+    cat = Catalog(tmp_path)
+    assert cat.connection is cat._conn

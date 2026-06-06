@@ -184,7 +184,7 @@ def iv_surface(
     # The catalog.scan requires a specific symbol; we use catalog.query instead
     # to filter by underlying (which is a data column, not a partition key).
     catalog.refresh_views()
-    conn = catalog._conn
+    conn = catalog.connection
 
     try:
         # underlying is a column value — use a parameterized query to avoid injection.
@@ -315,7 +315,7 @@ def vol_skew(
     # We also need underlying_price to compute delta.  Re-fetch it from the
     # catalog snapshot so we don't re-query the surface again.
     catalog.refresh_views()
-    conn = catalog._conn
+    conn = catalog.connection
 
     underlying_price: float | None = None
     try:
@@ -537,7 +537,7 @@ def term_structure(
 
     # We need underlying_price to identify ATM. Re-read it from the catalog.
     catalog.refresh_views()
-    conn = catalog._conn
+    conn = catalog.connection
 
     underlying_price: float | None = None
     try:

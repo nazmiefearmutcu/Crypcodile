@@ -428,3 +428,90 @@ def test_cli_term_structure_empty_exits_0(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+
+
+# ---------------------------------------------------------------------------
+# CrocodileClient — vol_skew (T8-docs regression)
+# ---------------------------------------------------------------------------
+
+
+def test_client_vol_skew_returns_dataframe(options_lake: Path) -> None:
+    """CrocodileClient.vol_skew must return a pl.DataFrame (T8-docs regression).
+
+    Regression: the method was documented in README but not present on the client.
+    """
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    client = CrocodileClient(options_lake)
+    df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
+    assert isinstance(df, pl.DataFrame)
+
+
+def test_client_vol_skew_columns(options_lake: Path) -> None:
+    """vol_skew output must contain the expected columns."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    client = CrocodileClient(options_lake)
+    df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
+    required = {"strike", "moneyness", "opt_type", "iv", "delta"}
+    assert required.issubset(set(df.columns)), f"missing: {required - set(df.columns)}"
+
+
+def test_client_vol_skew_empty_lake(tmp_path: Path) -> None:
+    """vol_skew on an empty lake must return an empty DataFrame."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    client = CrocodileClient(tmp_path)
+    df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 0
+
+
+def test_client_vol_skew_matches_analytics(options_lake: Path) -> None:
+    """Client vol_skew output must match the direct analytics function."""
+    from crocodile.analytics.volsurface import vol_skew as analytics_vol_skew
+
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    client = CrocodileClient(options_lake)
+    catalog = Catalog(options_lake)
+
+    client_df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
+    analytics_df = analytics_vol_skew(catalog, _UNDERLYING, e1_ns, _BASE_NS)
+
+    assert len(client_df) == len(analytics_df), (
+        f"row count mismatch: client={len(client_df)} analytics={len(analytics_df)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CrocodileClient — risk_reversal_butterfly (T8-docs regression)
+# ---------------------------------------------------------------------------
+
+
+def test_client_risk_reversal_butterfly_returns_tuple(options_lake: Path) -> None:
+    """CrocodileClient.risk_reversal_butterfly must return a tuple (T8-docs regression).
+
+    Regression: the method was documented in README (via volsurface) but not
+    present on the client as a convenience wrapper.
+    """
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    client = CrocodileClient(options_lake)
+    skew_df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
+    result = client.risk_reversal_butterfly(skew_df)
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+
+
+def test_client_risk_reversal_butterfly_empty_skew(tmp_path: Path) -> None:
+    """risk_reversal_butterfly with an empty skew_df must return (None, None)."""
+    client = CrocodileClient(tmp_path)
+    rr, bf = client.risk_reversal_butterfly(pl.DataFrame())
+    assert rr is None
+    assert bf is None
+
+
+def test_client_risk_reversal_butterfly_types(options_lake: Path) -> None:
+    """RR and BF must be float or None."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    client = CrocodileClient(options_lake)
+    skew_df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
+    rr, bf = client.risk_reversal_butterfly(skew_df)
+    assert rr is None or isinstance(rr, float)
+    assert bf is None or isinstance(bf, float)

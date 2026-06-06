@@ -148,7 +148,7 @@ def resample_metrics(
 
     # Refresh catalog views so newly written files are visible.
     catalog.refresh_views()
-    conn = catalog._conn
+    conn = catalog.connection
 
     sql = _build_metrics_sql(interval_sql, interval_label)
     params: list[object] = [symbol, start_ns, end_ns]

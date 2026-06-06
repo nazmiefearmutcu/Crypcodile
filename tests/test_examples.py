@@ -103,3 +103,155 @@ def test_query_ohlcv_interval_validation(tmp_path: Path, interval: str) -> None:
     # Empty lake returns 0 regardless of interval.
     rc = mod.main(["--data-dir", str(data_dir), "--interval", interval])
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# analytics_funding.py — T8-docs coverage gate
+# ---------------------------------------------------------------------------
+
+
+def test_analytics_funding_imports_cleanly() -> None:
+    """analytics_funding.py imports without syntax or import errors (T8-docs)."""
+    mod = _load_example("analytics_funding.py")
+    assert callable(mod.main)
+
+
+def test_analytics_funding_missing_data_dir(tmp_path: Path) -> None:
+    """analytics_funding.py exits 0 with a helpful message when data dir is absent."""
+    mod = _load_example("analytics_funding.py")
+    rc = mod.main(["--data-dir", str(tmp_path / "nonexistent")])
+    # Script prints a message and returns 0 (not a crash) when the dir doesn't exist.
+    assert rc == 0
+
+
+def test_analytics_funding_empty_lake_exits_cleanly(tmp_path: Path) -> None:
+    """analytics_funding.py exits 0 gracefully when the lake is empty."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    mod = _load_example("analytics_funding.py")
+    rc = mod.main(["--data-dir", str(data_dir)])
+    assert rc == 0
+
+
+def test_analytics_funding_with_data(tmp_path: Path) -> None:
+    """analytics_funding.py exits 0 and prints a table when funding data is present."""
+    import asyncio
+
+    from crocodile.schema.records import Funding
+    from crocodile.store.parquet_sink import ParquetSink
+
+    _BASE_NS = 1_704_067_200_000_000_000
+    _8H_NS = 8 * 3600 * 1_000_000_000
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    async def _write() -> None:
+        sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for i, rate in enumerate([0.0001, -0.0002, 0.0003]):
+            rec = Funding(
+                exchange="deribit",
+                symbol="deribit:BTC-PERPETUAL",
+                symbol_raw="BTC-PERPETUAL",
+                exchange_ts=_BASE_NS + i * _8H_NS,
+                local_ts=_BASE_NS + i * _8H_NS,
+                funding_rate=rate,
+                funding_timestamp=_BASE_NS + i * _8H_NS,
+                interval_hours=8,
+            )
+            await sink.put(rec)
+        await sink.flush()
+
+    asyncio.run(_write())
+
+    mod = _load_example("analytics_funding.py")
+    rc = mod.main([
+        "--data-dir", str(data_dir),
+        "--symbol", "deribit:BTC-PERPETUAL",
+        "--from-ns", str(_BASE_NS),
+        "--to-ns", str(_BASE_NS + 3 * _8H_NS),
+    ])
+    assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# analytics_iv_surface.py — T8-docs coverage gate
+# ---------------------------------------------------------------------------
+
+
+def test_analytics_iv_surface_imports_cleanly() -> None:
+    """analytics_iv_surface.py imports without syntax or import errors (T8-docs)."""
+    mod = _load_example("analytics_iv_surface.py")
+    assert callable(mod.main)
+
+
+def test_analytics_iv_surface_missing_data_dir(tmp_path: Path) -> None:
+    """analytics_iv_surface.py exits 0 with a helpful message when data dir is absent."""
+    mod = _load_example("analytics_iv_surface.py")
+    rc = mod.main(["--data-dir", str(tmp_path / "nonexistent")])
+    assert rc == 0
+
+
+def test_analytics_iv_surface_empty_lake_exits_cleanly(tmp_path: Path) -> None:
+    """analytics_iv_surface.py exits 0 gracefully when the lake is empty."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    mod = _load_example("analytics_iv_surface.py")
+    rc = mod.main(["--data-dir", str(data_dir)])
+    assert rc == 0
+
+
+def test_analytics_iv_surface_with_data(tmp_path: Path) -> None:
+    """analytics_iv_surface.py exits 0 and prints a surface table when options data is present."""
+    import asyncio
+
+    from crocodile.schema.enums import OptType
+    from crocodile.schema.records import OptionsChain
+    from crocodile.store.parquet_sink import ParquetSink
+
+    _BASE_NS = 1_704_067_200_000_000_000
+    _ONE_YEAR_NS = 365 * 24 * 3600 * 1_000_000_000
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    async def _write() -> None:
+        sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for strike, mark_iv in [(90.0, 0.5), (100.0, 0.4), (110.0, 0.55)]:
+            rec = OptionsChain(
+                exchange="deribit",
+                symbol=f"deribit:BTC-{int(strike)}-C",
+                symbol_raw=f"BTC-{int(strike)}-C",
+                exchange_ts=_BASE_NS,
+                local_ts=_BASE_NS,
+                underlying="BTC",
+                underlying_price=100.0,
+                strike=strike,
+                expiry=e1_ns,
+                opt_type=OptType.CALL,
+                mark_price=15.0,
+                mark_iv=mark_iv,
+            )
+            await sink.put(rec)
+        await sink.flush()
+
+    asyncio.run(_write())
+
+    mod = _load_example("analytics_iv_surface.py")
+    rc = mod.main([
+        "--data-dir", str(data_dir),
+        "--underlying", "BTC",
+        "--at-ns", str(_BASE_NS),
+    ])
+    assert rc == 0
+
+
+def test_analytics_examples_all_import_no_syntax_errors() -> None:
+    """All four analytics example scripts exec without syntax or import errors."""
+    for name in (
+        "analytics_funding.py",
+        "analytics_iv_surface.py",
+        "collect_deribit.py",
+        "replay_to_csv.py",
+        "query_ohlcv.py",
+    ):
+        _load_example(name)  # raises on SyntaxError / ImportError / NameError

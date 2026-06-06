@@ -4,7 +4,7 @@
 > financial data **anywhere, at any resolution**. Aiming for data coverage as good as
 > Laevitas, Amberdata, and Tardis.dev.
 
-**Status:** core complete (M5). See the design spec:
+**Status:** core + analytics complete (M6). See the design spec:
 [`docs/superpowers/specs/2026-06-04-crocodile-core-design.md`](docs/superpowers/specs/2026-06-04-crocodile-core-design.md).
 
 ## What it does (core, v1)
@@ -21,8 +21,8 @@
 
 ## Roadmap
 
-- **Core** (this spec — done): ingestion → normalization → storage → client/export/replay/resample.
-- **Analytics** (next): IV surface, greeks, skew, term structure, basis, funding APR.
+- **Core** (done — M5): ingestion → normalization → storage → client/export/replay/resample.
+- **Analytics** (done — M6): IV surface, greeks, skew, term structure, basis, funding APR.
 - **Server API** (next): self-hosted REST + WebSocket.
 - **Dashboard** (later): visual exploration.
 
@@ -368,6 +368,9 @@ Via the `CrocodileClient` (all analytics are also available as client methods):
 ```python
 from crocodile.client.client import CrocodileClient
 
+AT_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
+EXPIRY_NS = 1_735_689_600_000_000_000
+
 client = CrocodileClient("data")
 
 funding_df   = client.funding_apr("deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
@@ -375,11 +378,23 @@ basis_df     = client.spot_future_basis("deribit:BTC-FUTURE", "binance-spot:BTCU
 perp_df      = client.perp_basis("deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
 surface_df   = client.iv_surface("BTC", AT_NS)
 ts_df        = client.term_structure("BTC", AT_NS)
+
+# Vol skew for a single expiry (strike × delta × IV)
+skew_df      = client.vol_skew("BTC", EXPIRY_NS, AT_NS)
+# columns: strike, moneyness, opt_type, iv, delta
+
+# 25-delta risk reversal and butterfly from the skew
+rr, bf       = client.risk_reversal_butterfly(skew_df)
+# rr = iv(25d call) - iv(25d put)
+# bf = mean(iv_call_25d, iv_put_25d) - atm_iv
 ```
 
 ---
 
 ## Supported exchanges and channels
+
+All exchanges below have a real live connector wired to the `collect` command
+(WebSocket ingest + historical backfill where supported).
 
 | Exchange | Venue key | Trades | L2 book | Tickers | Funding | OI | Liq | Options |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|

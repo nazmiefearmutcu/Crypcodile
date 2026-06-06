@@ -103,7 +103,7 @@ def spot_future_basis(
     # Run the ASOF JOIN in DuckDB.
     # We register the DataFrames as DuckDB relation objects so we don't need
     # to write them to disk or use the Catalog's global connection.
-    conn = catalog._conn
+    conn = catalog.connection
 
     try:
         conn.register("_basis_future", future_df)

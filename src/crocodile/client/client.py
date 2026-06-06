@@ -43,6 +43,12 @@ iv_surface(underlying, at_ns, rate=0.0)
 
 term_structure(underlying, at_ns, rate=0.0)
     ATM IV term structure at ``at_ns``.
+
+vol_skew(underlying, expiry_ns, at_ns, rate=0.0)
+    Per-strike IV and delta for a single expiry, ordered by strike.
+
+risk_reversal_butterfly(skew_df, target_delta=0.25)
+    25-delta risk reversal and butterfly from a vol_skew DataFrame.
 """
 
 from __future__ import annotations
@@ -342,6 +348,64 @@ class CrocodileClient:
         from crocodile.analytics.volsurface import term_structure as _term_structure
 
         return _term_structure(self._catalog, underlying, at_ns, rate)
+
+    def vol_skew(
+        self,
+        underlying: str,
+        expiry_ns: int,
+        at_ns: int,
+        rate: float = 0.0,
+    ) -> pl.DataFrame:
+        """Return per-strike IV and delta for a single expiry, ordered by strike.
+
+        Thin wrapper over :func:`crocodile.analytics.volsurface.vol_skew`.
+
+        Args:
+            underlying: Underlying asset identifier (e.g. ``"BTC"``).
+            expiry_ns:  Expiry filter (nanoseconds UTC).
+            at_ns:      Snapshot instant (nanoseconds UTC).
+            rate:       Continuous risk-free rate (default 0.0).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``strike, moneyness, opt_type, iv, delta``.
+            Ordered by ``strike`` ascending.
+            Returns an empty DataFrame when no data exists.
+        """
+        from crocodile.analytics.volsurface import vol_skew as _vol_skew
+
+        return _vol_skew(self._catalog, underlying, expiry_ns, at_ns, rate)
+
+    def risk_reversal_butterfly(
+        self,
+        skew_df: pl.DataFrame,
+        target_delta: float = 0.25,
+    ) -> tuple[float | None, float | None]:
+        """Compute the 25-delta risk reversal and butterfly from a skew DataFrame.
+
+        Thin wrapper over
+        :func:`crocodile.analytics.volsurface.risk_reversal_butterfly`.
+
+        Uses the call with delta nearest to ``+target_delta`` and the put with
+        delta nearest to ``-target_delta``.
+
+        Formulas:
+        - ``rr = iv(call @ +target_delta) - iv(put @ -target_delta)``
+        - ``bf = mean(iv_call_target, iv_put_target) - atm_iv``
+
+        Args:
+            skew_df:      Output of :meth:`vol_skew` for a single expiry.
+            target_delta: Target absolute delta for RR/BF (default 0.25).
+
+        Returns:
+            ``(rr, bf)`` where each element is a float or ``None`` if the
+            required options cannot be found.
+        """
+        from crocodile.analytics.volsurface import (
+            risk_reversal_butterfly as _risk_reversal_butterfly,
+        )
+
+        return _risk_reversal_butterfly(skew_df, target_delta)
 
     def export(
         self,

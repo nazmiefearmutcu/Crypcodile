@@ -232,7 +232,7 @@ def resample_ohlcv(
 
     # Refresh views so newly written files are visible.
     catalog.refresh_views()
-    conn = catalog._conn
+    conn = catalog.connection
 
     if fill_empty:
         sql = _build_fill_sql(interval_sql, interval_label, start_ns, end_ns)

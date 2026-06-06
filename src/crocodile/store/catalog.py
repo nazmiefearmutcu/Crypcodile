@@ -137,6 +137,19 @@ class Catalog:
             return pl.DataFrame()
         return df
 
+    @property
+    def connection(self) -> duckdb.DuckDBPyConnection:
+        """The underlying DuckDB connection (read-only accessor).
+
+        Provides direct access to the in-memory DuckDB connection for callers
+        that need to execute custom SQL or register temporary relations against
+        the same connection that holds the channel views.
+
+        Returns:
+            The :class:`duckdb.DuckDBPyConnection` instance backing this catalog.
+        """
+        return self._conn
+
     def refresh_views(self) -> None:
         """Re-scan the data directory and re-register channel views.
 
