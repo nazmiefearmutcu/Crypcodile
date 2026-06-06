@@ -7,7 +7,7 @@
 **Status:** core + analytics complete (M6). See the design spec:
 [`docs/superpowers/specs/2026-06-04-crocodile-core-design.md`](docs/superpowers/specs/2026-06-04-crocodile-core-design.md).
 
-## What it does (core, v1)
+## What it does 
 
 - **Ingest** live (WebSocket) + historical (REST) data from many crypto exchanges
   (Deribit, Binance spot/USD-M, Bybit, OKX, Coinbase).
