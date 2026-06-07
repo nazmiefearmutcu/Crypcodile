@@ -36,9 +36,9 @@ class _MemSink(Sink):
 
 def test_build_channels():
     chans = build_channels(["BTC-PERPETUAL"], ["trade", "book_delta", "derivative_ticker"])
-    assert "trades.BTC-PERPETUAL.raw" in chans
-    assert "book.BTC-PERPETUAL.raw" in chans
-    assert "ticker.BTC-PERPETUAL" in chans
+    assert "trades.BTC-PERPETUAL.100ms" in chans
+    assert "book.BTC-PERPETUAL.100ms" in chans
+    assert "ticker.BTC-PERPETUAL.100ms" in chans
 
 
 def test_build_channels_deduplicates_book():
@@ -50,8 +50,8 @@ def test_build_channels_deduplicates_book():
 
 def test_build_channels_multiple_symbols():
     chans = build_channels(["BTC-PERPETUAL", "ETH-PERPETUAL"], ["trade"])
-    assert "trades.BTC-PERPETUAL.raw" in chans
-    assert "trades.ETH-PERPETUAL.raw" in chans
+    assert "trades.BTC-PERPETUAL.100ms" in chans
+    assert "trades.ETH-PERPETUAL.100ms" in chans
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +168,8 @@ def test_connector_subscribe_channels_wired():
         registry=registry,
     )
     chans = conn.subscribe_channels()
-    assert "trades.BTC-PERPETUAL.raw" in chans
-    assert "book.BTC-PERPETUAL.raw" in chans
+    assert "trades.BTC-PERPETUAL.100ms" in chans
+    assert "book.BTC-PERPETUAL.100ms" in chans
 
 
 def test_connector_subscribe_channels_returns_list():

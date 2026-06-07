@@ -23,14 +23,18 @@ log = logging.getLogger(__name__)
 EXCHANGE = "deribit"
 REST_BASE = "https://www.deribit.com/api/v2"
 
+# Unauthorized-safe throttled interval; .raw channels require authentication and
+# ticker.{sym} without an interval is silently accepted but streams nothing.
+_WS_INTERVAL = "100ms"
+
 # Mapping from canonical channel names used by callers to Deribit WS channel patterns.
 _CHANNEL_MAP: dict[str, str] = {
-    "trade": "trades.{sym}.raw",
-    "book_delta": "book.{sym}.raw",
-    "book_snapshot": "book.{sym}.raw",
-    "derivative_ticker": "ticker.{sym}",
-    "options_chain": "ticker.{sym}",
-    "funding": "ticker.{sym}",
+    "trade": "trades.{sym}." + _WS_INTERVAL,
+    "book_delta": "book.{sym}." + _WS_INTERVAL,
+    "book_snapshot": "book.{sym}." + _WS_INTERVAL,
+    "derivative_ticker": "ticker.{sym}." + _WS_INTERVAL,
+    "options_chain": "ticker.{sym}." + _WS_INTERVAL,
+    "funding": "ticker.{sym}." + _WS_INTERVAL,
 }
 
 

@@ -222,6 +222,30 @@ class _FailOnceThenSucceedTransport:
 
 
 @pytest.mark.asyncio
+async def test_run_exchange_error_reply_logs_warning_and_continues(caplog) -> None:
+    """A JSON-RPC error reply logs a WARNING and does NOT put any record in the sink."""
+    import logging
+
+    out = MemorySink()
+    conn = _FakeConnector(out=out)
+    error_frame = b'{"jsonrpc":"2.0","error":{"code":11050,"message":"bad_request"}}'
+    conn.transport = FakeTransport([error_frame])
+    with caplog.at_level(logging.WARNING):
+        await conn.run(max_reconnects=0)
+
+    # A WARNING containing the error info must have been emitted
+    assert any(
+        "bad_request" in r.message or "11050" in r.message
+        for r in caplog.records
+        if r.levelno >= logging.WARNING
+    ), f"Expected WARNING with bad_request; got: {[r.message for r in caplog.records]}"
+    # No records should be in the sink
+    assert out.records == []
+    # DLQ should be empty (error frames are not DLQ'd)
+    assert conn._dlq.drain() == []
+
+
+@pytest.mark.asyncio
 async def test_run_reconnects_on_error(monkeypatch) -> None:
     """run() retries after a connection error when max_reconnects>0."""
     import crypcodile.exchanges.base as base_mod
