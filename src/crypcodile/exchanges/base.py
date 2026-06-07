@@ -121,7 +121,7 @@ class Connector(ABC):
                         log.debug("DLQ: unparseable frame: %s", exc)
                         continue
 
-                    if isinstance(msg, dict) and msg.get("error"):
+                    if isinstance(msg, dict) and msg.get("error") is not None:
                         log.warning(
                             "%s: exchange rejected request: %s", self.name, msg["error"]
                         )

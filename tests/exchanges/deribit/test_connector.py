@@ -200,7 +200,7 @@ def test_connector_normalize_delegates_to_normalize_message():
     msg = {
         "method": "subscription",
         "params": {
-            "channel": "trades.BTC-PERPETUAL.raw",
+            "channel": "trades.BTC-PERPETUAL.100ms",
             "data": [
                 {
                     "trade_id": "abc123",
