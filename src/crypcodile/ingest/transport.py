@@ -89,7 +89,8 @@ class AiohttpWsTransport:
 
     async def send(self, data: bytes) -> None:
         if self._ws is not None:
-            await self._ws.send_bytes(data)
+            text = data.decode() if isinstance(data, (bytes, bytearray)) else data
+            await self._ws.send_str(text)
 
     async def close(self) -> None:
         if self._ws is not None:
