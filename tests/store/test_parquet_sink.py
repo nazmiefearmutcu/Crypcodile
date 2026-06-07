@@ -6,9 +6,9 @@ import pathlib
 
 import polars as pl
 
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookSnapshot, Trade
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookSnapshot, Trade
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Helpers

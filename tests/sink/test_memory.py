@@ -1,6 +1,6 @@
-from crocodile.schema.enums import Side
-from crocodile.schema.records import Trade
-from crocodile.sink.memory import MemorySink
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import Trade
+from crypcodile.sink.memory import MemorySink
 
 
 async def test_memory_sink_collects():

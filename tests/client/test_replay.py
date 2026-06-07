@@ -1,4 +1,4 @@
-"""Acceptance tests for CrocodileClient.replay (Task 3.2).
+"""Acceptance tests for CrypcodileClient.replay (Task 3.2).
 
 .replay(channels, symbols, frm, to) -> Iterator[Record]
 
@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pathlib
 
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookDelta, Trade
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookDelta, Trade
+from crypcodile.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -64,10 +64,10 @@ async def _write_two_symbol_fixtures(data_dir: pathlib.Path) -> None:
 
 async def test_replay_returns_iterator_of_records(tmp_path: pathlib.Path) -> None:
     """replay() returns an Iterator[Record]."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     result = client.replay(
         channels=["trade"],
         symbols=["deribit:BTC-PERPETUAL", "deribit:ETH-PERPETUAL"],
@@ -81,10 +81,10 @@ async def test_replay_returns_iterator_of_records(tmp_path: pathlib.Path) -> Non
 
 async def test_replay_records_are_time_ordered(tmp_path: pathlib.Path) -> None:
     """Records yielded by replay() are non-decreasing in local_ts."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade"],
@@ -99,10 +99,10 @@ async def test_replay_records_are_time_ordered(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_across_two_symbols(tmp_path: pathlib.Path) -> None:
     """Records from two symbols are interleaved in time order."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade"],
@@ -122,10 +122,10 @@ async def test_replay_across_two_symbols(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_single_symbol(tmp_path: pathlib.Path) -> None:
     """replay() on a single symbol returns only that symbol's records."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade"],
@@ -142,10 +142,10 @@ async def test_replay_single_symbol(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_empty_range_returns_empty(tmp_path: pathlib.Path) -> None:
     """replay() with out-of-range time yields nothing."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade"],
@@ -159,10 +159,10 @@ async def test_replay_empty_range_returns_empty(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_empty_symbols_returns_empty(tmp_path: pathlib.Path) -> None:
     """replay() with empty symbols list yields nothing."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade"],
@@ -176,10 +176,10 @@ async def test_replay_empty_symbols_returns_empty(tmp_path: pathlib.Path) -> Non
 
 async def test_replay_record_types_are_correct(tmp_path: pathlib.Path) -> None:
     """replay() yields actual Record objects (Trade, not dicts)."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade"],
@@ -195,10 +195,10 @@ async def test_replay_record_types_are_correct(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_empty_channels_returns_empty(tmp_path: pathlib.Path) -> None:
     """replay() with empty channels list yields nothing (early-return guard)."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=[],
@@ -212,7 +212,7 @@ async def test_replay_empty_channels_returns_empty(tmp_path: pathlib.Path) -> No
 
 async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
     """replay() across trade + book_delta channels yields all records globally sorted."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     # Write Trade records at even offsets and BookDelta records at odd offsets
     # so they interleave strictly when merged by local_ts.
@@ -257,7 +257,7 @@ async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
 
     await sink.flush()
 
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     records = list(
         client.replay(
             channels=["trade", "book_delta"],

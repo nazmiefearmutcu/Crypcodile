@@ -1,5 +1,5 @@
 [project]
-name = "crocodile"
+name = "crypcodile"
 version = "0.0.1"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-crocodile = "crocodile.cli:app"
+crypcodile = "crypcodile.cli:app"
 
 [dependency-groups]
 dev = [
@@ -35,7 +35,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/crocodile"]
+packages = ["src/crypcodile"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -52,6 +52,6 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 
 [tool.mypy]
 python_version = "3.12"
-packages = ["crocodile"]
+packages = ["crypcodile"]
 strict = true
 ignore_missing_imports = true

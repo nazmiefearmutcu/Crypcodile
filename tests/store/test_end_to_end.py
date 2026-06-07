@@ -22,12 +22,12 @@ from collections.abc import Iterator
 
 import pytest
 
-from crocodile.exchanges.deribit.normalize import normalize_message
-from crocodile.replay.merge import replay
-from crocodile.replay.orderbook import BookGap, OrderBook
-from crocodile.schema.records import BookDelta, BookSnapshot, Record, Trade
-from crocodile.store.catalog import Catalog
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.exchanges.deribit.normalize import normalize_message
+from crypcodile.replay.merge import replay
+from crypcodile.replay.orderbook import BookGap, OrderBook
+from crypcodile.schema.records import BookDelta, BookSnapshot, Record, Trade
+from crypcodile.store.catalog import Catalog
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Fixture paths

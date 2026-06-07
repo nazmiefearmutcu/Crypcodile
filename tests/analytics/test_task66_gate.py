@@ -9,7 +9,7 @@ Acceptance criteria:
   - README.md contains an "Analytics" section with key snippet markers.
   - uv run pytest all green; ruff + mypy clean; coverage ≥ 90%.
 
-Additional coverage tests added here to push crocodile.analytics above 90%:
+Additional coverage tests added here to push crypcodile.analytics above 90%:
   - basis.py: expired annualized_pct branch (days_to_expiry <= 0).
   - basis.py: perp_basis with missing columns → empty DataFrame.
   - volsurface._atm_iv: fallback moneyness path when some deltas are None.
@@ -54,8 +54,8 @@ def _examples_dir() -> Path:
 
 
 async def _write_funding_fixture(data_dir: Path) -> None:
-    from crocodile.schema.records import Funding
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.schema.records import Funding
+    from crypcodile.store.parquet_sink import ParquetSink
 
     sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
     for i, rate in enumerate([0.0001, -0.0002, 0.0003]):
@@ -74,9 +74,9 @@ async def _write_funding_fixture(data_dir: Path) -> None:
 
 
 async def _write_options_fixture(data_dir: Path) -> None:
-    from crocodile.schema.enums import OptType
-    from crocodile.schema.records import OptionsChain
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.schema.enums import OptType
+    from crypcodile.schema.records import OptionsChain
+    from crypcodile.store.parquet_sink import ParquetSink
 
     sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
     for strike, mark_iv, mark_price in [
@@ -279,11 +279,11 @@ def test_readme_analytics_has_iv_surface_snippet() -> None:
 
 def test_basis_annualized_expired_branch(tmp_path: Path) -> None:
     """When expiry_ns <= local_ts, annualized_pct falls back to basis_pct."""
-    from crocodile.analytics.basis import spot_future_basis
-    from crocodile.schema.enums import Side
-    from crocodile.schema.records import Trade
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.analytics.basis import spot_future_basis
+    from crypcodile.schema.enums import Side
+    from crypcodile.schema.records import Trade
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -332,10 +332,10 @@ def test_basis_annualized_expired_branch(tmp_path: Path) -> None:
 
 def test_perp_basis_missing_columns(tmp_path: Path) -> None:
     """perp_basis with missing mark_price/index_price columns → empty DF."""
-    from crocodile.analytics.basis import perp_basis
-    from crocodile.schema.records import Funding
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.analytics.basis import perp_basis
+    from crypcodile.schema.records import Funding
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     # Write a funding record (not a derivative_ticker) — perp_basis will find nothing
     async def _write() -> None:
@@ -368,7 +368,7 @@ def test_perp_basis_missing_columns(tmp_path: Path) -> None:
 
 def test_risk_reversal_butterfly_missing_required_cols() -> None:
     """risk_reversal_butterfly with missing required cols → (None, None)."""
-    from crocodile.analytics.volsurface import risk_reversal_butterfly
+    from crypcodile.analytics.volsurface import risk_reversal_butterfly
 
     # DataFrame missing the 'delta' column entirely
     df_no_delta = pl.DataFrame(
@@ -385,7 +385,7 @@ def test_risk_reversal_butterfly_missing_required_cols() -> None:
 
 def test_atm_iv_moneyness_fallback() -> None:
     """_atm_iv falls back to moneyness when some rows have None delta."""
-    from crocodile.analytics.volsurface import _atm_iv
+    from crypcodile.analytics.volsurface import _atm_iv
 
     # Simulate a skew_df where one row has delta=None
     skew_df = pl.DataFrame(
@@ -410,7 +410,7 @@ def test_atm_iv_moneyness_fallback() -> None:
 
 def test_atm_iv_empty_rows() -> None:
     """_atm_iv with empty all_rows → None."""
-    from crocodile.analytics.volsurface import _atm_iv
+    from crypcodile.analytics.volsurface import _atm_iv
 
     skew_df = pl.DataFrame()
     result = _atm_iv(skew_df, [])
@@ -424,10 +424,10 @@ def test_atm_iv_empty_rows() -> None:
 
 def test_snapshot_empty_after_filter(tmp_path: Path) -> None:
     """iv_surface with at_ns before all row timestamps → empty result."""
-    from crocodile.schema.enums import OptType
-    from crocodile.schema.records import OptionsChain
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.schema.enums import OptType
+    from crypcodile.schema.records import OptionsChain
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -451,7 +451,7 @@ def test_snapshot_empty_after_filter(tmp_path: Path) -> None:
     asyncio.run(_write())
     catalog = Catalog(tmp_path)
     # at_ns is BEFORE the row's local_ts → snapshot filter excludes it
-    df = __import__("crocodile.analytics.volsurface", fromlist=["iv_surface"]).iv_surface(
+    df = __import__("crypcodile.analytics.volsurface", fromlist=["iv_surface"]).iv_surface(
         catalog, _UNDERLYING, _BASE_NS  # _BASE_NS < _BASE_NS + 5000
     )
     assert isinstance(df, pl.DataFrame)
@@ -465,7 +465,7 @@ def test_snapshot_empty_after_filter(tmp_path: Path) -> None:
 
 def test_risk_reversal_butterfly_with_calls_and_puts() -> None:
     """risk_reversal_butterfly computes rr and bf when both call and put present."""
-    from crocodile.analytics.volsurface import risk_reversal_butterfly
+    from crypcodile.analytics.volsurface import risk_reversal_butterfly
 
     # Minimal skew_df with one call (delta≈0.25) and one put (delta≈-0.25) + ATM
     skew_df = pl.DataFrame(
@@ -493,7 +493,7 @@ def test_risk_reversal_butterfly_with_calls_and_puts() -> None:
 
 def test_atm_iv_primary_delta_path() -> None:
     """_atm_iv uses |delta| nearest 0.5 path when all deltas are non-None."""
-    from crocodile.analytics.volsurface import _atm_iv
+    from crypcodile.analytics.volsurface import _atm_iv
 
     skew_df = pl.DataFrame(
         {
@@ -522,10 +522,10 @@ def test_atm_iv_primary_delta_path() -> None:
 
 def test_perp_basis_all_null_prices(tmp_path: Path) -> None:
     """perp_basis with all-null mark_price/index_price → empty DF."""
-    from crocodile.analytics.basis import perp_basis
-    from crocodile.schema.records import DerivativeTicker
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.analytics.basis import perp_basis
+    from crypcodile.schema.records import DerivativeTicker
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -556,7 +556,7 @@ def test_perp_basis_all_null_prices(tmp_path: Path) -> None:
 
 def test_resolve_iv_put_computed_path(tmp_path: Path) -> None:
     """_resolve_iv takes the PUT branch when opt_type is P."""
-    from crocodile.analytics.volsurface import _resolve_iv
+    from crypcodile.analytics.volsurface import _resolve_iv
 
     # Put option with t_years > 0 and no mark_iv → should use computed path
     iv, source = _resolve_iv(
@@ -578,7 +578,7 @@ def test_resolve_iv_put_computed_path(tmp_path: Path) -> None:
 
 def test_resolve_iv_unavailable_zero_time() -> None:
     """_resolve_iv returns unavailable when t_years <= 0."""
-    from crocodile.analytics.volsurface import _resolve_iv
+    from crypcodile.analytics.volsurface import _resolve_iv
 
     iv, source = _resolve_iv(
         underlying_price=100.0,
@@ -601,7 +601,7 @@ def test_resolve_iv_unavailable_zero_time() -> None:
 
 def test_atm_iv_no_moneyness_column() -> None:
     """_atm_iv returns None when all deltas are None and moneyness col absent."""
-    from crocodile.analytics.volsurface import _atm_iv
+    from crypcodile.analytics.volsurface import _atm_iv
 
     # DataFrame without 'moneyness' column + all deltas None → return None
     skew_df = pl.DataFrame(
@@ -622,7 +622,7 @@ def test_atm_iv_no_moneyness_column() -> None:
 
 def test_risk_reversal_butterfly_atm_none() -> None:
     """risk_reversal_butterfly returns (None, None) when _atm_iv returns None."""
-    from crocodile.analytics.volsurface import risk_reversal_butterfly
+    from crypcodile.analytics.volsurface import risk_reversal_butterfly
 
     # DF where call and put exist but no ATM can be determined (no delta, no moneyness)
     skew_df = pl.DataFrame(
@@ -644,10 +644,10 @@ def test_term_structure_moneyness_fallback(tmp_path: Path) -> None:
     # This test exercises the path by querying against empty underlying_price,
     # but since the fixture populates underlying_price, we test it differently:
     # by verifying term_structure still works when all rows have the same underlying_price.
-    from crocodile.schema.enums import OptType
-    from crocodile.schema.records import OptionsChain
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.schema.enums import OptType
+    from crypcodile.schema.records import OptionsChain
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -673,7 +673,7 @@ def test_term_structure_moneyness_fallback(tmp_path: Path) -> None:
     asyncio.run(_write())
     catalog = Catalog(tmp_path)
 
-    from crocodile.analytics.volsurface import term_structure
+    from crypcodile.analytics.volsurface import term_structure
 
     df = term_structure(catalog, "ETH", _BASE_NS)
     assert isinstance(df, pl.DataFrame)
@@ -700,11 +700,11 @@ def test_spot_future_basis_duckdb_exception_returns_empty(tmp_path: Path) -> Non
     """
     import duckdb
 
-    from crocodile.analytics.basis import spot_future_basis
-    from crocodile.schema.enums import Side
-    from crocodile.schema.records import Trade
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.analytics.basis import spot_future_basis
+    from crypcodile.schema.enums import Side
+    from crypcodile.schema.records import Trade
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -769,11 +769,11 @@ def test_spot_future_basis_unregister_exception_suppressed(tmp_path: Path) -> No
     Same proxy technique: swap ``catalog._conn`` with a proxy whose
     ``unregister`` always raises.
     """
-    from crocodile.analytics.basis import spot_future_basis
-    from crocodile.schema.enums import Side
-    from crocodile.schema.records import Trade
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.analytics.basis import spot_future_basis
+    from crypcodile.schema.enums import Side
+    from crypcodile.schema.records import Trade
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -829,11 +829,11 @@ def test_spot_future_basis_asof_join_empty_result(tmp_path: Path) -> None:
     timestamps are later than the future timestamp.  This covers line 138
     (the ``if len(df) == 0: return pl.DataFrame()`` guard after the JOIN).
     """
-    from crocodile.analytics.basis import spot_future_basis
-    from crocodile.schema.enums import Side
-    from crocodile.schema.records import Trade
-    from crocodile.store.catalog import Catalog
-    from crocodile.store.parquet_sink import ParquetSink
+    from crypcodile.analytics.basis import spot_future_basis
+    from crypcodile.schema.enums import Side
+    from crypcodile.schema.records import Trade
+    from crypcodile.store.catalog import Catalog
+    from crypcodile.store.parquet_sink import ParquetSink
 
     # Future trade at T1; spot trade at T2 (AFTER the future) — no prior spot exists.
     async def _write() -> None:
@@ -879,8 +879,8 @@ def test_perp_basis_raw_missing_price_columns(tmp_path: Path) -> None:
     """
     from unittest.mock import patch
 
-    from crocodile.analytics.basis import perp_basis
-    from crocodile.store.catalog import Catalog
+    from crypcodile.analytics.basis import perp_basis
+    from crypcodile.store.catalog import Catalog
 
     catalog = Catalog(tmp_path)
 

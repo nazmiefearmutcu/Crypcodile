@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-from crocodile.exchanges.binance.book import OrderBookSync, SyncResult
-from crocodile.ingest.gap_bridge import BookResyncBridge, TradeSeqGap
-from crocodile.schema.records import BookDelta, BookSnapshot
+from crypcodile.exchanges.binance.book import OrderBookSync, SyncResult
+from crypcodile.ingest.gap_bridge import BookResyncBridge, TradeSeqGap
+from crypcodile.schema.records import BookDelta, BookSnapshot
 
 # ---------------------------------------------------------------------------
 # Helpers: fake REST-snapshot fetchers (no network)
@@ -294,7 +294,7 @@ class TestBookResyncBridge:
         bridge.buffer_delta(_make_delta(195, 195))  # would normally be stale
         bridge.buffer_delta(_make_delta(201, 201))
 
-        with caplog.at_level(logging.WARNING, logger="crocodile.ingest.gap_bridge"):
+        with caplog.at_level(logging.WARNING, logger="crypcodile.ingest.gap_bridge"):
             applied = await bridge.complete_resync()
 
         # Bridge exits resyncing mode
@@ -367,7 +367,7 @@ class TestTradeSeqGap:
         detector = TradeSeqGap()
         detector.feed(trade_seq=1000)
 
-        with caplog.at_level(logging.WARNING, logger="crocodile.ingest.gap_bridge"):
+        with caplog.at_level(logging.WARNING, logger="crypcodile.ingest.gap_bridge"):
             result = detector.feed(trade_seq=5)
 
         # Still a gap (sequence is not consecutive)

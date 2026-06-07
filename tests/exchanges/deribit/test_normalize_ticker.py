@@ -4,10 +4,10 @@ import time
 
 import pytest
 
-from crocodile.exchanges.deribit.normalize import normalize_message
-from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.schema.enums import OptType
-from crocodile.schema.records import DerivativeTicker, Funding, OptionsChain
+from crypcodile.exchanges.deribit.normalize import normalize_message
+from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crypcodile.schema.enums import OptType
+from crypcodile.schema.records import DerivativeTicker, Funding, OptionsChain
 
 P = pathlib.Path(__file__).parent / "fixtures"
 

@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from crocodile.exchanges.deribit.backfill import (
+from crypcodile.exchanges.deribit.backfill import (
     DeribitBackfill,
     parse_funding_page,
     parse_trades_page,
 )
-from crocodile.schema.enums import Side
-from crocodile.schema.records import Funding, Liquidation, Trade
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import Funding, Liquidation, Trade
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -110,7 +110,7 @@ def test_parse_funding_page_populates_funding_timestamp() -> None:
 async def test_backfill_trades_paginates_until_has_more_false():
     """DeribitBackfill.backfill_trades paginates: calls page fetcher walking end_timestamp
     until has_more is False, yielding records from each page."""
-    from crocodile.exchanges.deribit.backfill import DeribitBackfill
+    from crypcodile.exchanges.deribit.backfill import DeribitBackfill
 
     page1_raw = json.loads((FIXTURES / "rest_trades_page1.json").read_text())
     page2_raw = json.loads((FIXTURES / "rest_trades.json").read_text())
@@ -149,7 +149,7 @@ async def test_backfill_trades_paginates_until_has_more_false():
 @pytest.mark.asyncio
 async def test_backfill_funding_yields_funding_records():
     """DeribitBackfill.backfill_funding returns Funding records from REST fixture."""
-    from crocodile.exchanges.deribit.backfill import DeribitBackfill
+    from crypcodile.exchanges.deribit.backfill import DeribitBackfill
 
     funding_raw = json.loads((FIXTURES / "rest_funding.json").read_text())
 
@@ -180,7 +180,7 @@ async def test_backfill_trades_stops_on_no_progress() -> None:
     """When all trades on a page share the same ms as current_end_ms (e.g. a
     liquidation cascade with 1000+ trades in one millisecond), the loop must
     break rather than re-fetching the same page indefinitely."""
-    from crocodile.exchanges.deribit.backfill import DeribitBackfill
+    from crypcodile.exchanges.deribit.backfill import DeribitBackfill
 
     # All trades share timestamp=1700000002000ms == end_ms → no progress possible
     same_ms_page = {

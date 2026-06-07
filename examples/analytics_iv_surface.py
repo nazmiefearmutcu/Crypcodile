@@ -16,7 +16,7 @@ Usage::
 
 Prerequisites: collect options data first, e.g.::
 
-    uv run crocodile collect \\
+    uv run crypcodile collect \\
       --exchange deribit \\
       --symbols BTC-PERPETUAL \\
       --channels options_chain \\
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         Exit code: 0 on success (including "no data" — exit 0 with a message).
     """
     parser = argparse.ArgumentParser(
-        description="Print IV surface and term structure from a Crocodile data lake."
+        description="Print IV surface and term structure from a Crypcodile data lake."
     )
     parser.add_argument(
         "--data-dir",
@@ -87,13 +87,13 @@ def main(argv: list[str] | None = None) -> int:
     if not data_dir.exists():
         print(
             f"Data lake not found: {data_dir}\n"
-            "Run 'crocodile collect' first to populate it.",
+            "Run 'crypcodile collect' first to populate it.",
             file=sys.stderr,
         )
         return 0
 
-    from crocodile.analytics.volsurface import iv_surface, term_structure
-    from crocodile.store.catalog import Catalog
+    from crypcodile.analytics.volsurface import iv_surface, term_structure
+    from crypcodile.store.catalog import Catalog
 
     catalog = Catalog(data_dir)
 
@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"\nNo options data found for underlying {args.underlying!r}.\n"
             "Collect options_chain data first:\n"
-            "  uv run crocodile collect --exchange deribit "
+            "  uv run crypcodile collect --exchange deribit "
             "--channels options_chain --data-dir data"
         )
         return 0

@@ -1,8 +1,8 @@
 import json
 import pathlib
 
-from crocodile.exchanges.deribit.normalize import normalize_message
-from crocodile.schema.records import BookDelta, BookSnapshot
+from crypcodile.exchanges.deribit.normalize import normalize_message
+from crypcodile.schema.records import BookDelta, BookSnapshot
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "book.json"
 

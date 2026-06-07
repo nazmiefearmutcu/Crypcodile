@@ -15,8 +15,8 @@ import pathlib
 
 import pytest
 
-from crocodile.replay.orderbook import BookGap, OrderBook
-from crocodile.schema.records import BookDelta, BookSnapshot
+from crypcodile.replay.orderbook import BookGap, OrderBook
+from crypcodile.schema.records import BookDelta, BookSnapshot
 
 BOOK_FIX = pathlib.Path(__file__).parent.parent / "exchanges" / "deribit" / "fixtures" / "book.json"
 
@@ -71,7 +71,7 @@ def test_deribit_fixture_snapshot_then_delta_with_delete() -> None:
     """Applying the Deribit book.json fixture must yield the exact final state."""
     msgs = json.loads(BOOK_FIX.read_text())
 
-    from crocodile.exchanges.deribit.normalize import normalize_message
+    from crypcodile.exchanges.deribit.normalize import normalize_message
 
     snap = next(iter(normalize_message(msgs[0], local_ts=1)))
     delta = next(iter(normalize_message(msgs[1], local_ts=2)))

@@ -21,11 +21,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crocodile.analytics.basis import perp_basis, spot_future_basis
-from crocodile.schema.enums import Side
-from crocodile.schema.records import DerivativeTicker, Trade
-from crocodile.store.catalog import Catalog
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.analytics.basis import perp_basis, spot_future_basis
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import DerivativeTicker, Trade
+from crypcodile.store.catalog import Catalog
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants

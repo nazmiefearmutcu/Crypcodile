@@ -1,5 +1,5 @@
-from crocodile.schema.enums import OptType, Side
-from crocodile.schema.records import (
+from crypcodile.schema.enums import OptType, Side
+from crypcodile.schema.records import (
     OHLCV,
     BookDelta,
     BookSnapshot,
@@ -11,7 +11,7 @@ from crocodile.schema.records import (
     OptionsChain,
     Trade,
 )
-from crocodile.store.rows import from_row, to_row
+from crypcodile.store.rows import from_row, to_row
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 

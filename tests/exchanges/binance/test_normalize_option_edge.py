@@ -1,4 +1,4 @@
-"""Targeted tests for uncovered branches in crocodile.exchanges.binance.normalize.
+"""Targeted tests for uncovered branches in crypcodile.exchanges.binance.normalize.
 
 Covers:
 - _parse_eapi_option_symbol: wrong dash-part count, non-numeric strike,
@@ -15,14 +15,14 @@ import pathlib
 
 import pytest
 
-from crocodile.exchanges.binance.normalize import (
+from crypcodile.exchanges.binance.normalize import (
     _normalize_eapi_option_markprice,
     _parse_eapi_option_symbol,
     normalize_message,
 )
-from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.schema.enums import OptType
-from crocodile.schema.records import BookDelta, OptionsChain
+from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crypcodile.schema.enums import OptType
+from crypcodile.schema.records import BookDelta, OptionsChain
 
 P = pathlib.Path(__file__).parent / "fixtures"
 
@@ -177,7 +177,7 @@ def test_unparseable_symbol_with_none_registry_logs_warning(
     }
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="crocodile.exchanges.binance.normalize"):
+    with caplog.at_level(logging.WARNING, logger="crypcodile.exchanges.binance.normalize"):
         out = list(
             _normalize_eapi_option_markprice(
                 "BTC@optionMarkPrice", [entry], LOCAL_TS, "binance-eapi", None
@@ -211,7 +211,7 @@ def test_missing_exchange_ts_falls_back_to_local_ts(
     }
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="crocodile.exchanges.binance.normalize"):
+    with caplog.at_level(logging.WARNING, logger="crypcodile.exchanges.binance.normalize"):
         out = list(
             _normalize_eapi_option_markprice(
                 "BTC@optionMarkPrice", [entry], LOCAL_TS, "binance-eapi", None

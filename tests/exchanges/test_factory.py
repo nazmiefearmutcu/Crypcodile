@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from crocodile.instruments.registry import InstrumentRegistry
-from crocodile.sink.memory import MemorySink
+from crypcodile.instruments.registry import InstrumentRegistry
+from crypcodile.sink.memory import MemorySink
 
 
 def _make(exchange: str, **kw):  # type: ignore[no-untyped-def]
-    from crocodile.exchanges.factory import make_connector
+    from crypcodile.exchanges.factory import make_connector
 
     return make_connector(
         exchange=exchange,
@@ -32,35 +32,35 @@ def _make(exchange: str, **kw):  # type: ignore[no-untyped-def]
 
 
 def test_make_connector_binance() -> None:
-    from crocodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.exchanges.binance.connector import BinanceConnector
 
     conn = _make("binance")
     assert isinstance(conn, BinanceConnector)
 
 
 def test_make_connector_bybit() -> None:
-    from crocodile.exchanges.bybit.connector import BybitConnector
+    from crypcodile.exchanges.bybit.connector import BybitConnector
 
     conn = _make("bybit")
     assert isinstance(conn, BybitConnector)
 
 
 def test_make_connector_okx() -> None:
-    from crocodile.exchanges.okx.connector import OKXConnector
+    from crypcodile.exchanges.okx.connector import OKXConnector
 
     conn = _make("okx")
     assert isinstance(conn, OKXConnector)
 
 
 def test_make_connector_coinbase() -> None:
-    from crocodile.exchanges.coinbase.connector import CoinbaseConnector
+    from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
 
     conn = _make("coinbase")
     assert isinstance(conn, CoinbaseConnector)
 
 
 def test_make_connector_deribit() -> None:
-    from crocodile.exchanges.deribit.connector import DeribitConnector
+    from crypcodile.exchanges.deribit.connector import DeribitConnector
 
     conn = _make("deribit")
     assert isinstance(conn, DeribitConnector)
@@ -93,7 +93,7 @@ def test_make_connector_case_sensitive() -> None:
 
 def test_make_connector_binance_market_kwarg() -> None:
     """market='usdm' kwarg is forwarded to BinanceConnector."""
-    from crocodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.exchanges.binance.connector import BinanceConnector
 
     conn = _make("binance", market="usdm")
     assert isinstance(conn, BinanceConnector)
@@ -102,7 +102,7 @@ def test_make_connector_binance_market_kwarg() -> None:
 
 def test_make_connector_bybit_category_kwarg() -> None:
     """category='spot' kwarg is forwarded to BybitConnector."""
-    from crocodile.exchanges.bybit.connector import BybitConnector
+    from crypcodile.exchanges.bybit.connector import BybitConnector
 
     conn = _make("bybit", category="spot")
     assert isinstance(conn, BybitConnector)

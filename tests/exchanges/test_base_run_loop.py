@@ -17,11 +17,11 @@ from collections.abc import Iterable
 
 import pytest
 
-from crocodile.exchanges.base import Connector
-from crocodile.ingest.transport import FakeTransport
-from crocodile.instruments.registry import Instrument, InstrumentRegistry
-from crocodile.schema.records import Record
-from crocodile.sink.memory import MemorySink
+from crypcodile.exchanges.base import Connector
+from crypcodile.ingest.transport import FakeTransport
+from crypcodile.instruments.registry import Instrument, InstrumentRegistry
+from crypcodile.schema.records import Record
+from crypcodile.sink.memory import MemorySink
 
 # ---------------------------------------------------------------------------
 # Minimal concrete connector for testing — doesn't touch the network
@@ -224,7 +224,7 @@ class _FailOnceThenSucceedTransport:
 @pytest.mark.asyncio
 async def test_run_reconnects_on_error(monkeypatch) -> None:
     """run() retries after a connection error when max_reconnects>0."""
-    import crocodile.exchanges.base as base_mod
+    import crypcodile.exchanges.base as base_mod
 
     # Patch asyncio.sleep to avoid actual delay in tests
     sleeps: list[float] = []

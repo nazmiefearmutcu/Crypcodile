@@ -1,7 +1,7 @@
 import msgspec
 
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookDelta, Trade
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookDelta, Trade
 
 
 def test_trade_encodes_with_channel_tag():

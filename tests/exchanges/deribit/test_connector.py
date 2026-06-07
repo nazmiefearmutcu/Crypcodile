@@ -4,14 +4,14 @@ import pathlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from crocodile.exchanges.deribit.connector import (
+from crypcodile.exchanges.deribit.connector import (
     DeribitConnector,
     build_channels,
     parse_instruments,
 )
-from crocodile.instruments.registry import InstrumentRegistry
-from crocodile.schema.records import Record, Trade
-from crocodile.sink.base import Sink
+from crypcodile.instruments.registry import InstrumentRegistry
+from crypcodile.schema.records import Record, Trade
+from crypcodile.sink.base import Sink
 
 _FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 
@@ -117,7 +117,7 @@ def test_parse_instruments_unknown_option_type_skipped(caplog):
             }
         ]
     }
-    with caplog.at_level(logging.WARNING, logger="crocodile.exchanges.deribit.connector"):
+    with caplog.at_level(logging.WARNING, logger="crypcodile.exchanges.deribit.connector"):
         insts = parse_instruments(raw)
     assert len(insts) == 0
     assert "exotic" in caplog.text
@@ -275,7 +275,7 @@ async def test_list_instruments_calls_full_cartesian_product() -> None:
         registry=registry,
     )
 
-    with patch("crocodile.exchanges.deribit.connector.aiohttp.ClientSession") as mock_cls:
+    with patch("crypcodile.exchanges.deribit.connector.aiohttp.ClientSession") as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         instruments = await conn.list_instruments()

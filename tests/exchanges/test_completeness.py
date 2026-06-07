@@ -15,8 +15,8 @@ import pathlib
 
 import pytest
 
-from crocodile.schema.enums import OptType
-from crocodile.schema.records import (
+from crypcodile.schema.enums import OptType
+from crypcodile.schema.records import (
     DerivativeTicker,
     Funding,
     Liquidation,
@@ -37,7 +37,7 @@ OKX_FIX = pathlib.Path(__file__).parent / "okx/fixtures"
 
 def test_deribit_ticker_perp_emits_open_interest() -> None:
     """Deribit perpetual ticker → DerivativeTicker must carry open_interest."""
-    from crocodile.exchanges.deribit.normalize import normalize_message
+    from crypcodile.exchanges.deribit.normalize import normalize_message
 
     msg = json.loads((DERIBIT_FIX / "ticker_perp.json").read_text())
     out = list(normalize_message(msg, local_ts=7))
@@ -57,7 +57,7 @@ def test_deribit_ticker_perp_funding_has_interval_hours() -> None:
     cadence' is Binance-specific; Deribit is 8h).  The live Funding record derived
     from current_funding/funding_8h must document this cadence.
     """
-    from crocodile.exchanges.deribit.normalize import normalize_message
+    from crypcodile.exchanges.deribit.normalize import normalize_message
 
     msg = json.loads((DERIBIT_FIX / "ticker_perp.json").read_text())
     out = list(normalize_message(msg, local_ts=7))
@@ -72,7 +72,7 @@ def test_deribit_ticker_perp_funding_has_interval_hours() -> None:
 
 def test_deribit_options_chain_all_greeks() -> None:
     """Deribit option ticker → OptionsChain must include all BS greeks incl. rho."""
-    from crocodile.exchanges.deribit.normalize import normalize_message
+    from crypcodile.exchanges.deribit.normalize import normalize_message
 
     msg = json.loads((DERIBIT_FIX / "ticker_option.json").read_text())
     out = list(normalize_message(msg, local_ts=7))
@@ -91,7 +91,7 @@ def test_deribit_options_chain_all_greeks() -> None:
 
 def test_deribit_rest_funding_has_interval_hours() -> None:
     """Deribit REST funding backfill (interest_8h path) must set interval_hours=8."""
-    from crocodile.exchanges.deribit.backfill import parse_funding_page
+    from crypcodile.exchanges.deribit.backfill import parse_funding_page
 
     raw = json.loads((DERIBIT_FIX / "rest_funding.json").read_text())
     records = list(parse_funding_page(raw, symbol="BTC-PERPETUAL", local_ts=0))
@@ -116,7 +116,7 @@ def test_binance_markprice_does_not_carry_open_interest() -> None:
     emitted from @markPrice must have open_interest=None; callers must use the
     backfill path.
     """
-    from crocodile.exchanges.binance.normalize import normalize_message
+    from crypcodile.exchanges.binance.normalize import normalize_message
 
     msg = json.loads((BINANCE_FIX / "usdm_markprice.json").read_text())
     out = list(normalize_message(msg, local_ts=1, venue="binance-usdm"))
@@ -135,7 +135,7 @@ def test_binance_markprice_funding_interval_hours() -> None:
     Appendix §3.2: 'USDⓂ funding settles every 4h (00/04/08/12/16/20 UTC) as of 2025.'
     The Funding record emitted from the @markPrice branch must document this cadence.
     """
-    from crocodile.exchanges.binance.normalize import normalize_message
+    from crypcodile.exchanges.binance.normalize import normalize_message
 
     msg = json.loads((BINANCE_FIX / "usdm_markprice.json").read_text())
     out = list(normalize_message(msg, local_ts=1, venue="binance-usdm"))
@@ -152,7 +152,7 @@ def test_binance_markprice_funding_interval_hours() -> None:
 
 def test_binance_rest_open_interest_emits_record() -> None:
     """Binance REST open-interest snapshot must parse to OpenInterest correctly."""
-    from crocodile.exchanges.binance.backfill import parse_open_interest
+    from crypcodile.exchanges.binance.backfill import parse_open_interest
 
     raw = json.loads((BINANCE_FIX / "rest_open_interest.json").read_text())
     oi = parse_open_interest(raw, venue="binance-usdm", local_ts=0)
@@ -180,7 +180,7 @@ def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
     - oi → open_interest
     - E  → exchange_ts (event time, ms)
     """
-    from crocodile.exchanges.binance.normalize import normalize_message
+    from crypcodile.exchanges.binance.normalize import normalize_message
 
     msg = json.loads((BINANCE_FIX / "eapi_option_markprice.json").read_text())
     out = list(normalize_message(msg, local_ts=42, venue="binance-eapi"))
@@ -210,7 +210,7 @@ def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
 
 def test_binance_eapi_optionmarkprice_put() -> None:
     """Binance EAPI @optionMarkPrice for a PUT option parses opt_type=PUT."""
-    from crocodile.exchanges.binance.normalize import normalize_message
+    from crypcodile.exchanges.binance.normalize import normalize_message
 
     msg = {
         "stream": "BTC@optionMarkPrice",
@@ -248,7 +248,7 @@ def test_binance_eapi_optionmarkprice_put() -> None:
 
 def test_bybit_ticker_linear_open_interest() -> None:
     """Bybit linear perpetual ticker → DerivativeTicker must carry open_interest."""
-    from crocodile.exchanges.bybit.normalize import normalize_message
+    from crypcodile.exchanges.bybit.normalize import normalize_message
 
     msg = json.loads((BYBIT_FIX / "ticker_linear.json").read_text())
     out = list(normalize_message(msg, local_ts=9, venue="bybit"))
@@ -262,7 +262,7 @@ def test_bybit_ticker_linear_open_interest() -> None:
 
 def test_bybit_funding_interval_hours() -> None:
     """Bybit Funding records from ticker must have interval_hours=8 (8h default cadence)."""
-    from crocodile.exchanges.bybit.normalize import normalize_message
+    from crypcodile.exchanges.bybit.normalize import normalize_message
 
     msg = json.loads((BYBIT_FIX / "ticker_linear.json").read_text())
     out = list(normalize_message(msg, local_ts=9, venue="bybit"))
@@ -276,8 +276,8 @@ def test_bybit_funding_interval_hours() -> None:
 
 def test_bybit_options_all_greeks() -> None:
     """Bybit option ticker → OptionsChain must include all available greeks."""
-    from crocodile.exchanges.bybit.normalize import normalize_message
-    from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
+    from crypcodile.exchanges.bybit.normalize import normalize_message
+    from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
 
     reg = InstrumentRegistry()
     reg.add(
@@ -312,7 +312,7 @@ def test_bybit_options_all_greeks() -> None:
 
 def test_okx_open_interest_channel_emits_oi_value() -> None:
     """OKX open-interest channel → OpenInterest must include open_interest_value (oiCcy)."""
-    from crocodile.exchanges.okx.normalize import normalize_message
+    from crypcodile.exchanges.okx.normalize import normalize_message
 
     msg = json.loads((OKX_FIX / "open_interest.json").read_text())
     out = list(normalize_message(msg, local_ts=11, venue="okx"))
@@ -328,7 +328,7 @@ def test_okx_open_interest_channel_emits_oi_value() -> None:
 
 def test_okx_funding_rate_channel_interval_hours() -> None:
     """OKX funding-rate channel → Funding must have interval_hours=8."""
-    from crocodile.exchanges.okx.normalize import normalize_message
+    from crypcodile.exchanges.okx.normalize import normalize_message
 
     msg = json.loads((OKX_FIX / "funding_rate.json").read_text())
     out = list(normalize_message(msg, local_ts=10, venue="okx"))
@@ -342,7 +342,7 @@ def test_okx_funding_rate_channel_interval_hours() -> None:
 
 def test_okx_options_chain_all_greeks() -> None:
     """OKX option-summary → OptionsChain must include all available greeks (no rho in OKX)."""
-    from crocodile.exchanges.okx.normalize import normalize_message
+    from crypcodile.exchanges.okx.normalize import normalize_message
 
     msg = json.loads((OKX_FIX / "option_summary.json").read_text())
     out = list(normalize_message(msg, local_ts=13, venue="okx"))
@@ -370,7 +370,7 @@ def test_coinbase_no_funding_emitted() -> None:
     This validates the documented 'no funding/OI/liquidation' constraint
     (appendix §7: 'n/a (spot only)' for funding/OI/liquidation).
     """
-    from crocodile.exchanges.coinbase.normalize import normalize_message
+    from crypcodile.exchanges.coinbase.normalize import normalize_message
 
     # A ticker message is the richest message type Coinbase WS provides
     ticker_msg = {

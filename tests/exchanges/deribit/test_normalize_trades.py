@@ -4,9 +4,9 @@ import pathlib
 
 import pytest
 
-from crocodile.exchanges.deribit.normalize import normalize_message
-from crocodile.schema.enums import Side
-from crocodile.schema.records import Liquidation, Trade
+from crypcodile.exchanges.deribit.normalize import normalize_message
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import Liquidation, Trade
 
 FIX = pathlib.Path(__file__).parent / "fixtures" / "trades.json"
 
@@ -28,7 +28,7 @@ def test_unrecognized_channel_emits_debug_log(caplog: pytest.LogCaptureFixture) 
             "data": {},
         }
     }
-    with caplog.at_level(logging.DEBUG, logger="crocodile.exchanges.deribit.normalize"):
+    with caplog.at_level(logging.DEBUG, logger="crypcodile.exchanges.deribit.normalize"):
         out = list(normalize_message(msg, local_ts=0))
     assert out == [], "unrecognized channel must yield no records"
     assert any(

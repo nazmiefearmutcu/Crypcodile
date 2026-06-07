@@ -22,7 +22,7 @@ P = pathlib.Path(__file__).parent / "fixtures"
 
 def test_build_channels_spot_trade() -> None:
     """Spot aggTrade topic for a symbol."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT"], ["trade"], market="spot")
     assert "btcusdt@aggTrade" in topics
@@ -30,14 +30,14 @@ def test_build_channels_spot_trade() -> None:
 
 def test_build_channels_usdm_trade() -> None:
     """USD-M futures aggTrade topic for a symbol."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT"], ["trade"], market="usdm")
     assert "btcusdt@aggTrade" in topics
 
 
 def test_build_channels_spot_book_ticker() -> None:
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["ETHUSDT"], ["book_ticker"], market="spot")
     assert "ethusdt@bookTicker" in topics
@@ -45,7 +45,7 @@ def test_build_channels_spot_book_ticker() -> None:
 
 def test_build_channels_usdm_mark_price() -> None:
     """USD-M futures markPrice topic."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT"], ["derivative_ticker"], market="usdm")
     assert "btcusdt@markPrice" in topics
@@ -53,7 +53,7 @@ def test_build_channels_usdm_mark_price() -> None:
 
 def test_build_channels_book_delta() -> None:
     """@depth topic is returned for book_delta channel."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT"], ["book_delta"], market="usdm")
     assert any("btcusdt@depth" in t for t in topics)
@@ -61,7 +61,7 @@ def test_build_channels_book_delta() -> None:
 
 def test_build_channels_deduplicates() -> None:
     """derivative_ticker + funding both map to @markPrice — only one entry per symbol."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT"], ["derivative_ticker", "funding"], market="usdm")
     markprice_topics = [t for t in topics if "markPrice" in t]
@@ -70,7 +70,7 @@ def test_build_channels_deduplicates() -> None:
 
 def test_build_channels_multi_symbol() -> None:
     """Topics are built for every symbol in the list."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT", "ETHUSDT"], ["trade"], market="spot")
     assert "btcusdt@aggTrade" in topics
@@ -79,7 +79,7 @@ def test_build_channels_multi_symbol() -> None:
 
 def test_build_channels_unknown_channel_ignored() -> None:
     """Unrecognised canonical channel names produce no topics (no crash)."""
-    from crocodile.exchanges.binance.connector import build_channels
+    from crypcodile.exchanges.binance.connector import build_channels
 
     topics = build_channels(["BTCUSDT"], ["some_unknown_channel"], market="spot")
     assert topics == []
@@ -91,9 +91,9 @@ def test_build_channels_unknown_channel_ignored() -> None:
 
 
 def test_connector_subscribe_channels_spot() -> None:
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -108,9 +108,9 @@ def test_connector_subscribe_channels_spot() -> None:
 
 
 def test_connector_subscribe_channels_usdm() -> None:
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -130,10 +130,10 @@ def test_connector_subscribe_channels_usdm() -> None:
 
 def test_connector_normalize_spot_aggtrade() -> None:
     """normalize() dispatches an aggTrade fixture to a Trade record."""
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.schema.records import Trade
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.schema.records import Trade
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -151,10 +151,10 @@ def test_connector_normalize_spot_aggtrade() -> None:
 
 def test_connector_normalize_spot_bookticker() -> None:
     """normalize() dispatches a bookTicker fixture to a BookTicker record."""
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.schema.records import BookTicker
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.schema.records import BookTicker
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -171,9 +171,9 @@ def test_connector_normalize_spot_bookticker() -> None:
 
 def test_connector_normalize_non_dict_ignored() -> None:
     """Non-dict messages must produce no records (no crash)."""
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -188,9 +188,9 @@ def test_connector_normalize_non_dict_ignored() -> None:
 
 def test_connector_normalize_unknown_stream_ignored() -> None:
     """Dict message with unknown stream → empty output (no crash)."""
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -209,9 +209,9 @@ def test_connector_normalize_unknown_stream_ignored() -> None:
 
 
 def test_connector_spot_ws_url() -> None:
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],
@@ -224,9 +224,9 @@ def test_connector_spot_ws_url() -> None:
 
 
 def test_connector_usdm_ws_url() -> None:
-    from crocodile.exchanges.binance.connector import BinanceConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     conn = BinanceConnector(
         symbols=["BTCUSDT"],

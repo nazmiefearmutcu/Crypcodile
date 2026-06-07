@@ -1,4 +1,4 @@
-"""Acceptance tests for CrocodileClient.export (Task 3.3).
+"""Acceptance tests for CrypcodileClient.export (Task 3.3).
 
 .export(channel, symbols, frm, to, fmt, dest) for fmt ∈ {parquet, csv, arrow, json, jsonl}.
 
@@ -15,9 +15,9 @@ import polars as pl
 import pyarrow.ipc as pa_ipc
 import pytest
 
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookSnapshot, Trade
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookSnapshot, Trade
+from crypcodile.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 _SYMBOL = "deribit:BTC-PERPETUAL"
@@ -73,10 +73,10 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
 
 async def test_export_parquet(tmp_path: pathlib.Path) -> None:
     """Parquet export writes a non-empty .parquet file that re-reads to same row count."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out" / "trades.parquet"
     client.export("trade", [_SYMBOL], _FRM, _TO, fmt="parquet", dest=dest)
@@ -95,10 +95,10 @@ async def test_export_parquet(tmp_path: pathlib.Path) -> None:
 
 async def test_export_csv(tmp_path: pathlib.Path) -> None:
     """CSV export writes a non-empty .csv file that re-reads to same row count."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out" / "trades.csv"
     client.export("trade", [_SYMBOL], _FRM, _TO, fmt="csv", dest=dest)
@@ -117,10 +117,10 @@ async def test_export_csv(tmp_path: pathlib.Path) -> None:
 
 async def test_export_arrow(tmp_path: pathlib.Path) -> None:
     """Arrow IPC export writes a non-empty .arrow file that re-reads to same row count."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out" / "trades.arrow"
     client.export("trade", [_SYMBOL], _FRM, _TO, fmt="arrow", dest=dest)
@@ -141,10 +141,10 @@ async def test_export_arrow(tmp_path: pathlib.Path) -> None:
 
 async def test_export_json(tmp_path: pathlib.Path) -> None:
     """JSON export writes a non-empty JSON array that parses to the same row count."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out" / "trades.json"
     client.export("trade", [_SYMBOL], _FRM, _TO, fmt="json", dest=dest)
@@ -164,10 +164,10 @@ async def test_export_json(tmp_path: pathlib.Path) -> None:
 
 async def test_export_jsonl(tmp_path: pathlib.Path) -> None:
     """JSONL export writes one record per line; line count matches row count."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out" / "trades.jsonl"
     client.export("trade", [_SYMBOL], _FRM, _TO, fmt="jsonl", dest=dest)
@@ -191,10 +191,10 @@ async def test_export_jsonl(tmp_path: pathlib.Path) -> None:
 
 async def test_export_creates_parent_dirs(tmp_path: pathlib.Path) -> None:
     """export() creates intermediate directories if they don't exist."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "deep" / "nested" / "dir" / "trades.parquet"
     client.export("trade", [_SYMBOL], _FRM, _TO, fmt="parquet", dest=dest)
@@ -221,10 +221,10 @@ async def test_export_empty_result_creates_empty_file(
     are zero matching rows (regression guard against the empty-file bug fixed in
     the 3.3 commit).  CSV and JSON formats are also verified for completeness.
     """
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out" / f"empty.{extension}"
     # Far-future range — no data
@@ -261,10 +261,10 @@ async def test_export_empty_result_creates_empty_file(
 
 async def test_export_invalid_fmt_raises(tmp_path: pathlib.Path) -> None:
     """export() raises ValueError for an unsupported format string."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
 
     dest = tmp_path / "out.xyz"
     with pytest.raises(ValueError, match="fmt"):
@@ -288,7 +288,7 @@ async def test_export_multi_symbol_sorted_and_no_null_leakage(
     concat must NOT introduce null columns.  The output must be globally non-decreasing
     in ``local_ts``.
     """
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     # Write trades for _SYMBOL and _SYMBOL_B with interleaved timestamps.
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
@@ -311,7 +311,7 @@ async def test_export_multi_symbol_sorted_and_no_null_leakage(
         await sink.put(trade)
     await sink.flush()
 
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     dest = tmp_path / "out" / "multi.parquet"
     client.export("trade", [_SYMBOL, _SYMBOL_B], _FRM, _TO, fmt="parquet", dest=dest)
 

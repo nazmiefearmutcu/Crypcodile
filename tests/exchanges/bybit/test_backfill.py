@@ -7,14 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from crocodile.exchanges.bybit.backfill import (
+from crypcodile.exchanges.bybit.backfill import (
     BybitBackfill,
     parse_funding_page,
     parse_open_interest_page,
     parse_trades_page,
 )
-from crocodile.schema.enums import Side
-from crocodile.schema.records import Funding, OpenInterest, Trade
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import Funding, OpenInterest, Trade
 
 # ---------------------------------------------------------------------------
 # parse_trades_page

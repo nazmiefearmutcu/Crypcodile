@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crocodile.exchanges.bybit.normalize import normalize_message
-from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.schema.enums import OptType, Side
-from crocodile.schema.records import (
+from crypcodile.exchanges.bybit.normalize import normalize_message
+from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crypcodile.schema.enums import OptType, Side
+from crypcodile.schema.records import (
     BookDelta,
     BookSnapshot,
     BookTicker,

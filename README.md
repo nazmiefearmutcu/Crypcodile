@@ -5,7 +5,7 @@
 > Laevitas, Amberdata, and Tardis.dev.
 
 **Status:** core + analytics complete (M6). See the design spec:
-[`docs/superpowers/specs/2026-06-04-crocodile-core-design.md`](docs/superpowers/specs/2026-06-04-crocodile-core-design.md).
+[`docs/superpowers/specs/2026-06-04-crypcodile-core-design.md`](docs/superpowers/specs/2026-06-04-crypcodile-core-design.md).
 
 ## What it does 
 
@@ -39,14 +39,14 @@ Typer · Apache-2.0.
 
 ```bash
 # Clone and enter the repo
-git clone https://github.com/your-org/crocodile.git
-cd crocodile
+git clone https://github.com/your-org/crypcodile.git
+cd crypcodile
 
 # Install all dependencies (Python 3.12 pinned)
 uv sync
 
 # Verify the CLI is available
-uv run crocodile --help
+uv run crypcodile --help
 ```
 
 ### 2. Collect live data
@@ -62,7 +62,7 @@ uv run python examples/collect_deribit.py
 Or use the CLI:
 
 ```bash
-uv run crocodile collect \
+uv run crypcodile collect \
   --exchange deribit \
   --symbols BTC-PERPETUAL \
   --channels trade book_delta derivative_ticker \
@@ -88,10 +88,10 @@ After collecting data, run arbitrary SQL against the lake:
 
 ```bash
 # Count trades collected
-uv run crocodile query "SELECT count(*) FROM trade" --data-dir data
+uv run crypcodile query "SELECT count(*) FROM trade" --data-dir data
 
 # Top 5 most-traded symbols by volume
-uv run crocodile query \
+uv run crypcodile query \
   "SELECT symbol, sum(amount) AS volume FROM trade GROUP BY symbol ORDER BY volume DESC LIMIT 5" \
   --data-dir data
 ```
@@ -99,9 +99,9 @@ uv run crocodile query \
 Or from Python:
 
 ```python
-from crocodile.client.client import CrocodileClient
+from crypcodile.client.client import CrypcodileClient
 
-client = CrocodileClient(data_dir="data")
+client = CrypcodileClient(data_dir="data")
 df = client.query("SELECT count(*) FROM trade")
 print(df)
 ```
@@ -113,7 +113,7 @@ and symbols without loading everything into memory at once.
 
 ```bash
 # Print the first 20 BTC-PERPETUAL trade records
-uv run crocodile replay \
+uv run crypcodile replay \
   --channels trade \
   --symbols deribit:BTC-PERPETUAL \
   --from 0 --to 9223372036854775807 \
@@ -124,9 +124,9 @@ uv run crocodile replay \
 From Python:
 
 ```python
-from crocodile.client.client import CrocodileClient
+from crypcodile.client.client import CrypcodileClient
 
-client = CrocodileClient(data_dir="data")
+client = CrypcodileClient(data_dir="data")
 for record in client.replay(
     channels=["trade"],
     symbols=["deribit:BTC-PERPETUAL"],
@@ -141,7 +141,7 @@ for record in client.replay(
 Export a time range to CSV, Parquet, Arrow IPC, JSON, or JSONL:
 
 ```bash
-uv run crocodile export \
+uv run crypcodile export \
   --channel trade \
   --symbols deribit:BTC-PERPETUAL \
   --from 0 --to 9223372036854775807 \
@@ -187,9 +187,9 @@ uv run python examples/query_ohlcv.py \
 From Python:
 
 ```python
-from crocodile.store.catalog import Catalog
-from crocodile.resample.ohlcv import resample_ohlcv
-from crocodile.resample.metrics import resample_metrics
+from crypcodile.store.catalog import Catalog
+from crypcodile.resample.ohlcv import resample_ohlcv
+from crypcodile.resample.metrics import resample_metrics
 
 catalog = Catalog("data")
 
@@ -211,11 +211,11 @@ Use the M2 book reconstruction engine to replay book snapshots at fixed
 intervals:
 
 ```python
-from crocodile.client.client import CrocodileClient
-from crocodile.resample.book import resample_book_snapshots
-from crocodile.schema.records import BookSnapshot, BookDelta
+from crypcodile.client.client import CrypcodileClient
+from crypcodile.resample.book import resample_book_snapshots
+from crypcodile.schema.records import BookSnapshot, BookDelta
 
-client = CrocodileClient(data_dir="data")
+client = CrypcodileClient(data_dir="data")
 book_records = list(client.replay(
     channels=["book_snapshot", "book_delta"],
     symbols=["deribit:BTC-PERPETUAL"],
@@ -236,7 +236,7 @@ for snap in resample_book_snapshots(
 
 ## Analytics
 
-The `crocodile.analytics` package computes derived metrics — funding APR, basis,
+The `crypcodile.analytics` package computes derived metrics — funding APR, basis,
 implied-vol surface, and term structure — directly from the stored Parquet lake.
 No new exchange calls; all computation is offline.
 
@@ -245,8 +245,8 @@ No new exchange calls; all computation is offline.
 Annualise per-event perpetual funding rates and track cumulative funding:
 
 ```python
-from crocodile.store.catalog import Catalog
-from crocodile.analytics.funding import funding_apr, funding_summary
+from crypcodile.store.catalog import Catalog
+from crypcodile.analytics.funding import funding_apr, funding_summary
 
 catalog = Catalog("data")
 
@@ -264,7 +264,7 @@ print(summary)
 Via the CLI:
 
 ```bash
-uv run crocodile funding-apr \
+uv run crypcodile funding-apr \
   --symbol deribit:BTC-PERPETUAL \
   --start 0 --end 9223372036854775807 \
   --data-dir data
@@ -284,7 +284,7 @@ Spot-future basis uses a DuckDB ASOF JOIN to align future trades with the neares
 prior spot trade:
 
 ```python
-from crocodile.analytics.basis import spot_future_basis, perp_basis
+from crypcodile.analytics.basis import spot_future_basis, perp_basis
 
 # Spot-future basis (annualised when expiry_ns is given)
 ONE_YEAR_NS = 365 * 24 * 3600 * 1_000_000_000
@@ -307,12 +307,12 @@ Via the CLI:
 
 ```bash
 # Spot-future mode
-uv run crocodile basis \
+uv run crypcodile basis \
   --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \
   --start 0 --end 9223372036854775807 --data-dir data
 
 # Perpetual mode
-uv run crocodile basis \
+uv run crypcodile basis \
   --perp deribit:BTC-PERPETUAL \
   --start 0 --end 9223372036854775807 --data-dir data
 ```
@@ -324,7 +324,7 @@ taken from `mark_iv` (exchange-provided) when available; otherwise solved via
 Black-76 using `mark_price + underlying_price`:
 
 ```python
-from crocodile.analytics.volsurface import iv_surface, vol_skew, term_structure
+from crypcodile.analytics.volsurface import iv_surface, vol_skew, term_structure
 
 AT_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
 
@@ -348,10 +348,10 @@ print(ts_df)
 Via the CLI:
 
 ```bash
-uv run crocodile iv-surface \
+uv run crypcodile iv-surface \
   --underlying BTC --at 1704067200000000000 --data-dir data
 
-uv run crocodile term-structure \
+uv run crypcodile term-structure \
   --underlying BTC --at 1704067200000000000 --data-dir data
 ```
 
@@ -363,15 +363,15 @@ uv run python examples/analytics_iv_surface.py \
   --data-dir data
 ```
 
-Via the `CrocodileClient` (all analytics are also available as client methods):
+Via the `CrypcodileClient` (all analytics are also available as client methods):
 
 ```python
-from crocodile.client.client import CrocodileClient
+from crypcodile.client.client import CrypcodileClient
 
 AT_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
 EXPIRY_NS = 1_735_689_600_000_000_000
 
-client = CrocodileClient("data")
+client = CrypcodileClient("data")
 
 funding_df   = client.funding_apr("deribit:BTC-PERPETUAL", 0, 9_223_372_036_854_775_807)
 basis_df     = client.spot_future_basis("deribit:BTC-FUTURE", "binance-spot:BTCUSDT", 0, 9_223_372_036_854_775_807)
@@ -423,7 +423,7 @@ uv run ruff check .
 uv run mypy
 
 # Coverage report
-uv run pytest --cov=crocodile --cov-report=term-missing
+uv run pytest --cov=crypcodile --cov-report=term-missing
 ```
 
 ---

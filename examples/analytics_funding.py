@@ -12,7 +12,7 @@ Usage::
 
 Prerequisites: collect funding data first, e.g.::
 
-    uv run crocodile collect \\
+    uv run crypcodile collect \\
       --exchange deribit \\
       --symbols BTC-PERPETUAL \\
       --channels funding \\
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         Exit code: 0 on success (including "no data" — exit 0 with a message).
     """
     parser = argparse.ArgumentParser(
-        description="Print funding APR time series from a Crocodile data lake."
+        description="Print funding APR time series from a Crypcodile data lake."
     )
     parser.add_argument(
         "--data-dir",
@@ -88,13 +88,13 @@ def main(argv: list[str] | None = None) -> int:
     if not data_dir.exists():
         print(
             f"Data lake not found: {data_dir}\n"
-            "Run 'crocodile collect' first to populate it.",
+            "Run 'crypcodile collect' first to populate it.",
             file=sys.stderr,
         )
         return 0
 
-    from crocodile.analytics.funding import funding_apr, funding_summary
-    from crocodile.store.catalog import Catalog
+    from crypcodile.analytics.funding import funding_apr, funding_summary
+    from crypcodile.store.catalog import Catalog
 
     catalog = Catalog(data_dir)
 
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"\nNo funding data found for {args.symbol!r} in the requested range.\n"
             "Collect funding data first:\n"
-            "  uv run crocodile collect --exchange deribit "
+            "  uv run crypcodile collect --exchange deribit "
             "--symbols BTC-PERPETUAL --channels funding --data-dir data"
         )
         return 0

@@ -1,4 +1,4 @@
-"""Acceptance tests for CrocodileClient.query / scan (Task 3.1)."""
+"""Acceptance tests for CrypcodileClient.query / scan (Task 3.1)."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import pathlib
 
 import polars as pl
 
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookSnapshot, Trade
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookSnapshot, Trade
+from crypcodile.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -58,10 +58,10 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
 
 async def test_client_query_returns_polars_dataframe(tmp_path: pathlib.Path) -> None:
     """client.query(sql) delegates to Catalog and returns a Polars DataFrame."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     df = client.query("SELECT count(*) AS n FROM trade")
     assert isinstance(df, pl.DataFrame)
     assert df["n"][0] == 3
@@ -69,10 +69,10 @@ async def test_client_query_returns_polars_dataframe(tmp_path: pathlib.Path) -> 
 
 async def test_client_scan_single_symbol_returns_rows(tmp_path: pathlib.Path) -> None:
     """client.scan with one symbol returns rows matching catalog.scan output."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     df = client.scan(
         "trade",
         ["deribit:BTC-PERPETUAL"],
@@ -88,7 +88,7 @@ async def test_client_scan_single_symbol_returns_rows(tmp_path: pathlib.Path) ->
 
 async def test_client_scan_multi_symbol_unions_results(tmp_path: pathlib.Path) -> None:
     """client.scan with multiple symbols concatenates results ordered by local_ts."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
     # Two different symbols
@@ -108,7 +108,7 @@ async def test_client_scan_multi_symbol_unions_results(tmp_path: pathlib.Path) -
     )
     await sink.flush()
 
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     df = client.scan(
         "trade",
         ["deribit:BTC-PERPETUAL", "deribit:ETH-PERPETUAL"],
@@ -123,10 +123,10 @@ async def test_client_scan_multi_symbol_unions_results(tmp_path: pathlib.Path) -
 
 async def test_client_scan_empty_symbols_returns_empty(tmp_path: pathlib.Path) -> None:
     """client.scan with empty symbols list returns an empty DataFrame."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     df = client.scan("trade", [], _BASE_TS, _BASE_TS + 3_000_000_000)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
@@ -134,10 +134,10 @@ async def test_client_scan_empty_symbols_returns_empty(tmp_path: pathlib.Path) -
 
 async def test_client_scan_no_matching_rows_returns_empty(tmp_path: pathlib.Path) -> None:
     """client.scan with out-of-range time returns empty DataFrame."""
-    from crocodile.client.client import CrocodileClient
+    from crypcodile.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
-    client = CrocodileClient(data_dir=tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
     # Far future
     df = client.scan(
         "trade",

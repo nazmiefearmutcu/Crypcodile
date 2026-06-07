@@ -26,11 +26,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crocodile.resample.ohlcv import resample_ohlcv
-from crocodile.schema.enums import Side
-from crocodile.schema.records import Trade
-from crocodile.store.catalog import Catalog
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.resample.ohlcv import resample_ohlcv
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import Trade
+from crypcodile.store.catalog import Catalog
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Helpers

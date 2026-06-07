@@ -7,9 +7,9 @@ The plan specifies:
   - Outputs are globally non-decreasing in local_ts
 """
 
-from crocodile.replay.merge import replay
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookDelta, Trade
+from crypcodile.replay.merge import replay
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookDelta, Trade
 
 
 def _trade(local_ts: int, exchange_ts: int | None, price: float = 1.0) -> Trade:

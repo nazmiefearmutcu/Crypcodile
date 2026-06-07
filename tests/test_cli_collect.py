@@ -3,9 +3,9 @@
 Strategy
 --------
 - We cannot touch the network in unit tests.
-- We monkeypatch ``crocodile.cli.make_connector`` to return a pre-configured
+- We monkeypatch ``crypcodile.cli.make_connector`` to return a pre-configured
   ``DeribitConnector`` with a ``FakeTransport`` carrying one scripted trade frame.
-- We also monkeypatch ``crocodile.cli.AiohttpWsTransport`` so the CLI doesn't
+- We also monkeypatch ``crypcodile.cli.AiohttpWsTransport`` so the CLI doesn't
   try to open a real WebSocket (the connector's transport is pre-set by the
   make_connector stub before cli.collect wires it).
 - The CLI's ``collect`` command calls ``asyncio.run()`` internally; Typer's
@@ -34,11 +34,11 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from crocodile.cli import app
-from crocodile.exchanges.deribit.connector import DeribitConnector
-from crocodile.ingest.transport import FakeTransport
-from crocodile.instruments.registry import InstrumentRegistry
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.cli import app
+from crypcodile.exchanges.deribit.connector import DeribitConnector
+from crypcodile.ingest.transport import FakeTransport
+from crypcodile.instruments.registry import InstrumentRegistry
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ─── shared fixtures ─────────────────────────────────────────────────────────
 
@@ -101,9 +101,9 @@ def test_collect_cli_constructs_connector_and_sink(tmp_path: pathlib.Path) -> No
         return conn
 
     with (
-        patch("crocodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crocodile.cli.ParquetSink", _CaptureSink),
-        patch("crocodile.cli.AiohttpWsTransport", MagicMock()),  # never used (transport pre-set)
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.ParquetSink", _CaptureSink),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),  # never used (transport pre-set)
     ):
         result = _RUNNER.invoke(
             app,
@@ -165,9 +165,9 @@ def test_collect_cli_keyboard_interrupt_exits_zero(tmp_path: pathlib.Path) -> No
         return conn
 
     with (
-        patch("crocodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crocodile.cli.collect_live", _cancelled_collect),
-        patch("crocodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.collect_live", _cancelled_collect),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
     ):
         result = _RUNNER.invoke(
             app,

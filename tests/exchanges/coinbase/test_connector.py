@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pathlib
 
-from crocodile.exchanges.coinbase.connector import (
+from crypcodile.exchanges.coinbase.connector import (
     CoinbaseConnector,
     build_channels,
     parse_products,
 )
-from crocodile.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
-from crocodile.instruments.registry import InstrumentRegistry, Kind
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookTicker, Trade
-from crocodile.sink.memory import MemorySink
+from crypcodile.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
+from crypcodile.instruments.registry import InstrumentRegistry, Kind
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookTicker, Trade
+from crypcodile.sink.memory import MemorySink
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -225,7 +225,7 @@ def test_unhandled_message_type_emits_nothing() -> None:
 
 def test_snapshot_no_time_exchange_ts_is_none() -> None:
     """Coinbase snapshots have no timestamp → exchange_ts=None."""
-    from crocodile.schema.records import BookSnapshot
+    from crypcodile.schema.records import BookSnapshot
 
     msg = {
         "type": "snapshot",
@@ -241,7 +241,7 @@ def test_snapshot_no_time_exchange_ts_is_none() -> None:
 
 def test_normalize_with_registry() -> None:
     """Registry-based canonical symbol resolution."""
-    from crocodile.instruments.registry import Instrument
+    from crypcodile.instruments.registry import Instrument
 
     reg = InstrumentRegistry()
     reg.add(

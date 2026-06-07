@@ -21,7 +21,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from crocodile.client.client import CrocodileClient
+from crypcodile.client.client import CrypcodileClient
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -31,7 +31,7 @@ _NS_MAX = 9_223_372_036_854_775_807  # max int64 — covers all stored history
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Replay trade records from the Crocodile data lake and write to CSV."
+        description="Replay trade records from the Crypcodile data lake and write to CSV."
     )
     parser.add_argument("--data-dir", default="data", help="Root of the data lake (default: data)")
     parser.add_argument("--out", default="trades.csv", help="Output CSV path (default: trades.csv)")
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Run collect_deribit.py first to populate the data lake.", file=sys.stderr)
         return 1
 
-    client = CrocodileClient(data_dir=data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
 
     print(f"Replaying trades for {args.symbols}  [{args.from_ns} .. {args.to_ns}]")
     print(f"Writing to {out_path} ...")

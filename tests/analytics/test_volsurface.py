@@ -23,16 +23,16 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crocodile.analytics.volsurface import (
+from crypcodile.analytics.volsurface import (
     iv_surface,
     risk_reversal_butterfly,
     term_structure,
     vol_skew,
 )
-from crocodile.schema.enums import OptType
-from crocodile.schema.records import OptionsChain
-from crocodile.store.catalog import Catalog
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.schema.enums import OptType
+from crypcodile.schema.records import OptionsChain
+from crypcodile.store.catalog import Catalog
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants

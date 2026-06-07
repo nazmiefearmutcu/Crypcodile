@@ -21,8 +21,8 @@ The data lake layout after collection::
 
 Query the data afterwards with::
 
-    crocodile catalog --data-dir data
-    crocodile query "SELECT count(*) FROM trade" --data-dir data
+    crypcodile catalog --data-dir data
+    crypcodile query "SELECT count(*) FROM trade" --data-dir data
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ import logging
 import signal
 from pathlib import Path
 
-from crocodile.client.collect import collect
-from crocodile.exchanges.deribit.connector import DeribitConnector
-from crocodile.instruments.registry import InstrumentRegistry
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.client.collect import collect
+from crypcodile.exchanges.deribit.connector import DeribitConnector
+from crypcodile.instruments.registry import InstrumentRegistry
+from crypcodile.store.parquet_sink import ParquetSink
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s  %(message)s")
 log = logging.getLogger("collect_deribit")

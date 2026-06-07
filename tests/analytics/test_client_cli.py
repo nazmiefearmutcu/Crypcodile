@@ -1,7 +1,7 @@
-"""Tests for Task 6.5 — CrocodileClient analytics methods + CLI subcommands.
+"""Tests for Task 6.5 — CrypcodileClient analytics methods + CLI subcommands.
 
 Acceptance criteria (from the plan, verbatim):
-  - populate a tmp lake; CrocodileClient(tmp).funding_apr(...) equals
+  - populate a tmp lake; CrypcodileClient(tmp).funding_apr(...) equals
     analytics.funding.funding_apr(catalog, ...).
   - Invoke the CLI via Typer's CliRunner: `funding-apr --symbol ... --data-dir tmp`
     exits 0 and prints a table containing the APR.
@@ -18,14 +18,14 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.analytics.funding import funding_apr as analytics_funding_apr
-from crocodile.analytics.volsurface import iv_surface as analytics_iv_surface
-from crocodile.cli import app
-from crocodile.client.client import CrocodileClient
-from crocodile.schema.enums import OptType
-from crocodile.schema.records import Funding, OptionsChain
-from crocodile.store.catalog import Catalog
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.analytics.funding import funding_apr as analytics_funding_apr
+from crypcodile.analytics.volsurface import iv_surface as analytics_iv_surface
+from crypcodile.cli import app
+from crypcodile.client.client import CrypcodileClient
+from crypcodile.schema.enums import OptType
+from crypcodile.schema.records import Funding, OptionsChain
+from crypcodile.store.catalog import Catalog
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -135,20 +135,20 @@ def options_lake(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — funding_apr
+# CrypcodileClient — funding_apr
 # ---------------------------------------------------------------------------
 
 
 def test_client_funding_apr_returns_dataframe(funding_lake: Path) -> None:
-    """CrocodileClient.funding_apr must return a pl.DataFrame."""
-    client = CrocodileClient(funding_lake)
+    """CrypcodileClient.funding_apr must return a pl.DataFrame."""
+    client = CrypcodileClient(funding_lake)
     df = client.funding_apr(_SYMBOL, _BASE_NS, _BASE_NS + 3 * _8H_NS)
     assert isinstance(df, pl.DataFrame)
 
 
 def test_client_funding_apr_matches_analytics(funding_lake: Path) -> None:
     """Client method output must equal the direct analytics function output."""
-    client = CrocodileClient(funding_lake)
+    client = CrypcodileClient(funding_lake)
     catalog = Catalog(funding_lake)
 
     client_df = client.funding_apr(_SYMBOL, _BASE_NS, _BASE_NS + 3 * _8H_NS)
@@ -170,67 +170,67 @@ def test_client_funding_apr_matches_analytics(funding_lake: Path) -> None:
 
 def test_client_funding_apr_row_count(funding_lake: Path) -> None:
     """3 records → 3 rows."""
-    client = CrocodileClient(funding_lake)
+    client = CrypcodileClient(funding_lake)
     df = client.funding_apr(_SYMBOL, _BASE_NS, _BASE_NS + 3 * _8H_NS)
     assert len(df) == 3, f"expected 3 rows, got {len(df)}"
 
 
 def test_client_funding_apr_apr_golden(funding_lake: Path) -> None:
     """Row-0 APR ≈ 0.0001 * 1095 = 0.10950 (tol 1e-6)."""
-    client = CrocodileClient(funding_lake)
+    client = CrypcodileClient(funding_lake)
     df = client.funding_apr(_SYMBOL, _BASE_NS, _BASE_NS + 3 * _8H_NS)
     assert abs(df["apr"][0] - 0.0001 * 1095.0) < 1e-6
 
 
 def test_client_funding_apr_empty(tmp_path: Path) -> None:
     """Empty lake → empty DataFrame."""
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     df = client.funding_apr(_SYMBOL, _BASE_NS, _BASE_NS + _8H_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — perp_basis
+# CrypcodileClient — perp_basis
 # ---------------------------------------------------------------------------
 
 
 def test_client_perp_basis_returns_dataframe(tmp_path: Path) -> None:
     """perp_basis on an empty lake must return an empty pl.DataFrame (not error)."""
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     df = client.perp_basis(_PERP_SYMBOL, _BASE_NS, _BASE_NS + _8H_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — spot_future_basis
+# CrypcodileClient — spot_future_basis
 # ---------------------------------------------------------------------------
 
 
 def test_client_spot_future_basis_returns_dataframe(tmp_path: Path) -> None:
     """spot_future_basis on an empty lake must return empty pl.DataFrame."""
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     df = client.spot_future_basis(_FUTURE_SYMBOL, _SPOT_SYMBOL, _BASE_NS, _BASE_NS + _8H_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — iv_surface
+# CrypcodileClient — iv_surface
 # ---------------------------------------------------------------------------
 
 
 def test_client_iv_surface_returns_dataframe(options_lake: Path) -> None:
-    """CrocodileClient.iv_surface must return a pl.DataFrame."""
-    client = CrocodileClient(options_lake)
+    """CrypcodileClient.iv_surface must return a pl.DataFrame."""
+    client = CrypcodileClient(options_lake)
     df = client.iv_surface(_UNDERLYING, _BASE_NS)
     assert isinstance(df, pl.DataFrame)
 
 
 def test_client_iv_surface_matches_analytics(options_lake: Path) -> None:
     """Client iv_surface output must match the direct analytics function."""
-    client = CrocodileClient(options_lake)
+    client = CrypcodileClient(options_lake)
     catalog = Catalog(options_lake)
 
     client_df = client.iv_surface(_UNDERLYING, _BASE_NS)
@@ -243,27 +243,27 @@ def test_client_iv_surface_matches_analytics(options_lake: Path) -> None:
 
 def test_client_iv_surface_empty(tmp_path: Path) -> None:
     """Empty lake → empty DataFrame."""
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     df = client.iv_surface(_UNDERLYING, _BASE_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — term_structure
+# CrypcodileClient — term_structure
 # ---------------------------------------------------------------------------
 
 
 def test_client_term_structure_returns_dataframe(options_lake: Path) -> None:
-    """CrocodileClient.term_structure must return a pl.DataFrame."""
-    client = CrocodileClient(options_lake)
+    """CrypcodileClient.term_structure must return a pl.DataFrame."""
+    client = CrypcodileClient(options_lake)
     df = client.term_structure(_UNDERLYING, _BASE_NS)
     assert isinstance(df, pl.DataFrame)
 
 
 def test_client_term_structure_empty(tmp_path: Path) -> None:
     """Empty lake → empty DataFrame."""
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     df = client.term_structure(_UNDERLYING, _BASE_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
@@ -431,17 +431,17 @@ def test_cli_term_structure_empty_exits_0(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — vol_skew (T8-docs regression)
+# CrypcodileClient — vol_skew (T8-docs regression)
 # ---------------------------------------------------------------------------
 
 
 def test_client_vol_skew_returns_dataframe(options_lake: Path) -> None:
-    """CrocodileClient.vol_skew must return a pl.DataFrame (T8-docs regression).
+    """CrypcodileClient.vol_skew must return a pl.DataFrame (T8-docs regression).
 
     Regression: the method was documented in README but not present on the client.
     """
     e1_ns = _BASE_NS + _ONE_YEAR_NS
-    client = CrocodileClient(options_lake)
+    client = CrypcodileClient(options_lake)
     df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
     assert isinstance(df, pl.DataFrame)
 
@@ -449,7 +449,7 @@ def test_client_vol_skew_returns_dataframe(options_lake: Path) -> None:
 def test_client_vol_skew_columns(options_lake: Path) -> None:
     """vol_skew output must contain the expected columns."""
     e1_ns = _BASE_NS + _ONE_YEAR_NS
-    client = CrocodileClient(options_lake)
+    client = CrypcodileClient(options_lake)
     df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
     required = {"strike", "moneyness", "opt_type", "iv", "delta"}
     assert required.issubset(set(df.columns)), f"missing: {required - set(df.columns)}"
@@ -458,7 +458,7 @@ def test_client_vol_skew_columns(options_lake: Path) -> None:
 def test_client_vol_skew_empty_lake(tmp_path: Path) -> None:
     """vol_skew on an empty lake must return an empty DataFrame."""
     e1_ns = _BASE_NS + _ONE_YEAR_NS
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
@@ -466,10 +466,10 @@ def test_client_vol_skew_empty_lake(tmp_path: Path) -> None:
 
 def test_client_vol_skew_matches_analytics(options_lake: Path) -> None:
     """Client vol_skew output must match the direct analytics function."""
-    from crocodile.analytics.volsurface import vol_skew as analytics_vol_skew
+    from crypcodile.analytics.volsurface import vol_skew as analytics_vol_skew
 
     e1_ns = _BASE_NS + _ONE_YEAR_NS
-    client = CrocodileClient(options_lake)
+    client = CrypcodileClient(options_lake)
     catalog = Catalog(options_lake)
 
     client_df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
@@ -481,18 +481,18 @@ def test_client_vol_skew_matches_analytics(options_lake: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CrocodileClient — risk_reversal_butterfly (T8-docs regression)
+# CrypcodileClient — risk_reversal_butterfly (T8-docs regression)
 # ---------------------------------------------------------------------------
 
 
 def test_client_risk_reversal_butterfly_returns_tuple(options_lake: Path) -> None:
-    """CrocodileClient.risk_reversal_butterfly must return a tuple (T8-docs regression).
+    """CrypcodileClient.risk_reversal_butterfly must return a tuple (T8-docs regression).
 
     Regression: the method was documented in README (via volsurface) but not
     present on the client as a convenience wrapper.
     """
     e1_ns = _BASE_NS + _ONE_YEAR_NS
-    client = CrocodileClient(options_lake)
+    client = CrypcodileClient(options_lake)
     skew_df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
     result = client.risk_reversal_butterfly(skew_df)
     assert isinstance(result, tuple)
@@ -501,7 +501,7 @@ def test_client_risk_reversal_butterfly_returns_tuple(options_lake: Path) -> Non
 
 def test_client_risk_reversal_butterfly_empty_skew(tmp_path: Path) -> None:
     """risk_reversal_butterfly with an empty skew_df must return (None, None)."""
-    client = CrocodileClient(tmp_path)
+    client = CrypcodileClient(tmp_path)
     rr, bf = client.risk_reversal_butterfly(pl.DataFrame())
     assert rr is None
     assert bf is None
@@ -510,7 +510,7 @@ def test_client_risk_reversal_butterfly_empty_skew(tmp_path: Path) -> None:
 def test_client_risk_reversal_butterfly_types(options_lake: Path) -> None:
     """RR and BF must be float or None."""
     e1_ns = _BASE_NS + _ONE_YEAR_NS
-    client = CrocodileClient(options_lake)
+    client = CrypcodileClient(options_lake)
     skew_df = client.vol_skew(_UNDERLYING, e1_ns, _BASE_NS)
     rr, bf = client.risk_reversal_butterfly(skew_df)
     assert rr is None or isinstance(rr, float)

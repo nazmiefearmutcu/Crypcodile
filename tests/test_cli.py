@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pathlib
 
-from crocodile.schema.enums import Side
-from crocodile.schema.records import BookSnapshot, Trade
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import BookSnapshot, Trade
+from crypcodile.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -58,7 +58,7 @@ async def test_cli_query_exits_zero_with_output(tmp_path: pathlib.Path) -> None:
     """``query`` against a fixture data dir returns exit code 0 and count=3."""
     from typer.testing import CliRunner
 
-    from crocodile.cli import app
+    from crypcodile.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -80,7 +80,7 @@ async def test_cli_catalog_exits_zero_lists_channels(tmp_path: pathlib.Path) -> 
     """``catalog`` lists available channels and their row counts, exit code 0."""
     from typer.testing import CliRunner
 
-    from crocodile.cli import app
+    from crypcodile.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -100,7 +100,7 @@ async def test_cli_export_csv_creates_file(tmp_path: pathlib.Path) -> None:
     """``export`` with fmt=csv writes a non-empty file, exit code 0."""
     from typer.testing import CliRunner
 
-    from crocodile.cli import app
+    from crypcodile.cli import app
 
     await _write_fixtures(tmp_path)
     dest = tmp_path / "out" / "trades.csv"
@@ -139,7 +139,7 @@ async def test_cli_replay_exits_zero(tmp_path: pathlib.Path) -> None:
     """``replay`` lists records from the fixture data lake, exit code 0."""
     from typer.testing import CliRunner
 
-    from crocodile.cli import app
+    from crypcodile.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()

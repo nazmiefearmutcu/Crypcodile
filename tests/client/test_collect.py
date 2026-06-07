@@ -13,12 +13,12 @@ import pathlib
 
 import pytest
 
-from crocodile.exchanges.deribit.connector import DeribitConnector
-from crocodile.ingest.transport import FakeTransport
-from crocodile.instruments.registry import InstrumentRegistry
-from crocodile.schema.records import Trade
-from crocodile.sink.base import Sink
-from crocodile.store.parquet_sink import ParquetSink
+from crypcodile.exchanges.deribit.connector import DeribitConnector
+from crypcodile.ingest.transport import FakeTransport
+from crypcodile.instruments.registry import InstrumentRegistry
+from crypcodile.schema.records import Trade
+from crypcodile.sink.base import Sink
+from crypcodile.store.parquet_sink import ParquetSink
 
 # ─── fixture helpers ────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ def _find_parquets(base: pathlib.Path, pattern: str = "*.parquet") -> list[pathl
 
 async def test_collect_two_connectors_write_parquet_files(tmp_path: pathlib.Path) -> None:
     """Two fake connectors draining into one ParquetSink → files appear on disk."""
-    from crocodile.client.collect import collect
+    from crypcodile.client.collect import collect
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=1, flush_interval_seconds=9999)
     conn1 = _make_connector(sink, frames=[_TRADES_FRAME], symbol="BTC-PERPETUAL")
@@ -102,8 +102,8 @@ async def test_collect_two_connectors_write_parquet_files(tmp_path: pathlib.Path
 
 async def test_collect_records_reach_sink(tmp_path: pathlib.Path) -> None:
     """Records emitted by connectors actually land in the sink."""
-    from crocodile.client.collect import collect
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.client.collect import collect
+    from crypcodile.sink.memory import MemorySink
 
     sink = MemorySink()
     # Two connectors, different symbols, each emitting one Trade
@@ -124,8 +124,8 @@ async def test_collect_one_connector_raises_does_not_crash(tmp_path: pathlib.Pat
     collect() must not propagate the exception — each connector is supervised
     in isolation, matching the plan's "isolated" requirement.
     """
-    from crocodile.client.collect import collect
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.client.collect import collect
+    from crypcodile.sink.memory import MemorySink
 
     class _BrokenTransport(FakeTransport):
         async def connect(self) -> None:
@@ -151,8 +151,8 @@ async def test_collect_one_connector_raises_does_not_crash(tmp_path: pathlib.Pat
 
 async def test_collect_empty_connectors_is_noop(tmp_path: pathlib.Path) -> None:
     """collect([]) with an empty list returns immediately without error."""
-    from crocodile.client.collect import collect
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.client.collect import collect
+    from crypcodile.sink.memory import MemorySink
 
     sink = MemorySink()
     await collect([], sink, max_reconnects=0)
@@ -167,7 +167,7 @@ async def test_collect_sigint_closes_sink(tmp_path: pathlib.Path) -> None:
     """
     import asyncio
 
-    from crocodile.client.collect import collect
+    from crypcodile.client.collect import collect
 
     closed: list[bool] = []
 

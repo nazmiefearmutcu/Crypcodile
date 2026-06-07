@@ -11,17 +11,17 @@ import pathlib
 
 import pytest
 
-from crocodile.exchanges.binance.normalize import normalize_message as binance_normalize
-from crocodile.exchanges.bybit.normalize import normalize_message as bybit_normalize
-from crocodile.exchanges.deribit.normalize import (
+from crypcodile.exchanges.binance.normalize import normalize_message as binance_normalize
+from crypcodile.exchanges.bybit.normalize import normalize_message as bybit_normalize
+from crypcodile.exchanges.deribit.normalize import (
     _parse_option_symbol,
 )
-from crocodile.exchanges.deribit.normalize import (
+from crypcodile.exchanges.deribit.normalize import (
     normalize_message as deribit_normalize,
 )
-from crocodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.schema.enums import OptType
-from crocodile.schema.records import OptionsChain
+from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crypcodile.schema.enums import OptType
+from crypcodile.schema.records import OptionsChain
 
 # ---------------------------------------------------------------------------
 # Fixture paths

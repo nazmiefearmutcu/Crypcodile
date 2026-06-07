@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pathlib
 
-from crocodile.exchanges.bybit.connector import build_channels, parse_instruments
-from crocodile.instruments.registry import Kind
+from crypcodile.exchanges.bybit.connector import build_channels, parse_instruments
+from crypcodile.instruments.registry import Kind
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -105,7 +105,7 @@ def test_parse_instruments_future_kind() -> None:
     }
     insts = parse_instruments(raw, category="linear")
     assert len(insts) == 1
-    from crocodile.instruments.registry import Kind
+    from crypcodile.instruments.registry import Kind
     assert insts[0].kind == Kind.FUTURE
 
 
@@ -128,7 +128,7 @@ def test_parse_instruments_spot_kind() -> None:
     }
     insts = parse_instruments(raw, category="spot")
     assert len(insts) == 1
-    from crocodile.instruments.registry import Kind
+    from crypcodile.instruments.registry import Kind
     assert insts[0].kind == Kind.SPOT
 
 
@@ -232,9 +232,9 @@ def test_build_channels_spot_category() -> None:
 
 def test_bybit_connector_normalize_delegates() -> None:
     """BybitConnector.normalize dispatches dict messages to normalize_message."""
-    from crocodile.exchanges.bybit.connector import BybitConnector
-    from crocodile.instruments.registry import InstrumentRegistry
-    from crocodile.sink.memory import MemorySink
+    from crypcodile.exchanges.bybit.connector import BybitConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
 
     sink = MemorySink()
     conn = BybitConnector(
