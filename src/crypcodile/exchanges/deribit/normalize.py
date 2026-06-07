@@ -1,5 +1,6 @@
 import calendar
 import logging
+import re
 import time as _time
 from collections.abc import Iterable
 from typing import Any
@@ -38,6 +39,10 @@ _MONTH_MAP = {
     "DEC": "12",
 }
 
+# Real Deribit option date token: D{1,2}MMMYY (1-or-2-digit day + 3-char month +
+# 2-digit year), e.g. "8JUN26", "28JUN26", "30JUN25".
+_OPT_DATE_RE = re.compile(r"^(\d{1,2})([A-Z]{3})(\d{2})$")
+
 
 def _levels(rows: list[list[Any]]) -> list[tuple[float, float]]:
     out = []
@@ -66,6 +71,18 @@ def _parse_option_symbol(sym: str) -> tuple[str, float, int, OptType]:
     strike = float(parts[2])
     opt_type = OptType.CALL if parts[3] == "C" else OptType.PUT
 
+    # Preferred: the real Deribit token D{1,2}MMMYY with an EXPLICIT 2-digit year
+    # (e.g. "8JUN26", "28JUN26"). The legacy slice below mis-reads single-digit
+    # days ("8JUN26" -> "8J") and ignores the year, so try the exact form first.
+    m = _OPT_DATE_RE.match(date_str.upper())
+    if m:
+        day_i = int(m.group(1))
+        month_x = _MONTH_MAP.get(m.group(2), "01")
+        year_x = 2000 + int(m.group(3))
+        struct_x = _time.strptime(f"{day_i:02d} {month_x} {year_x}", "%d %m %Y")
+        return underlying, strike, int(calendar.timegm(struct_x)) * 1_000_000_000, opt_type
+
+    # Legacy fall-through (DDMMM without a year, or numeric forms): best-effort guess.
     # Parse date: DD + MMM (3-char month abbreviation)
     day = date_str[:2]
     mon_abbr = date_str[2:5].upper()
