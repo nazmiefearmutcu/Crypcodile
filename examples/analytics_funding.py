@@ -26,6 +26,14 @@ import datetime
 import sys
 from pathlib import Path
 
+# Make this example runnable from a source checkout even without an editable
+# install (e.g. plain `python examples/analytics_funding.py`, or whenever the
+# editable `.pth` is not honored): put the repo's ``src/`` on sys.path so that
+# ``import crypcodile`` resolves in this and any spawned subprocess.
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------

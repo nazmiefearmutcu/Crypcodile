@@ -26,7 +26,10 @@ def backoff_delays(
     rand: float = 0.0,
 ) -> float:
     raw = min(cap, base * float(2**attempt))
-    return raw * (1.0 + jitter * rand)
+    # Apply the cap AFTER jitter too: jitter can otherwise push a capped delay
+    # above `cap` (e.g. raw=30, jitter=0.25, rand→1.0 → 37.5s), defeating the
+    # documented ceiling during sustained reconnect failures.
+    return min(cap, raw * (1.0 + jitter * rand))
 
 
 class Connector(ABC):

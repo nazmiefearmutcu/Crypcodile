@@ -69,7 +69,14 @@ def _parse_option_symbol(sym: str) -> tuple[str, float, int, OptType]:
     # Parse date: DD + MMM (3-char month abbreviation)
     day = date_str[:2]
     mon_abbr = date_str[2:5].upper()
-    month = _MONTH_MAP.get(mon_abbr, "01")
+    month = _MONTH_MAP.get(mon_abbr)
+    if month is None:
+        # Fail loud rather than silently defaulting to January (which would emit
+        # an OptionsChain with a wrong expiry). Callers catch ValueError and skip
+        # the malformed symbol with a warning — consistent with the < 4-parts guard.
+        raise ValueError(
+            f"deribit: invalid month abbreviation {mon_abbr!r} in option symbol {sym!r}"
+        )
     # Use current year as best guess; advance by 1 if the resolved date is already in the past
     # (Deribit options are always future-expiring at subscription time).
     # Registry values are preferred and will override this.

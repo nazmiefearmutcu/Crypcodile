@@ -248,7 +248,9 @@ class Catalog:
 
 def _ns_to_date(ns: int) -> str:
     """Convert nanosecond UTC epoch to a ``YYYY-MM-DD`` string."""
-    dt = datetime.datetime.fromtimestamp(ns / 1_000_000_000, tz=datetime.UTC)
+    # Integer division: float `ns / 1e9` loses precision near 2e18 (ULP ≈ 256 ns)
+    # and rounds sub-second values up across a day boundary, yielding the wrong date.
+    dt = datetime.datetime.fromtimestamp(ns // 1_000_000_000, tz=datetime.UTC)
     return dt.strftime("%Y-%m-%d")
 
 
@@ -257,8 +259,10 @@ def _ns_range_to_dates(start_ns: int, end_ns: int) -> list[str]:
 
     Includes the start date, end date, and all dates in between.
     """
-    start_dt = datetime.datetime.fromtimestamp(start_ns / 1_000_000_000, tz=datetime.UTC).date()
-    end_dt = datetime.datetime.fromtimestamp(end_ns / 1_000_000_000, tz=datetime.UTC).date()
+    # Integer division (see _ns_to_date): float division can round a timestamp in
+    # the last sub-second of a day up to the next day, over-including a partition.
+    start_dt = datetime.datetime.fromtimestamp(start_ns // 1_000_000_000, tz=datetime.UTC).date()
+    end_dt = datetime.datetime.fromtimestamp(end_ns // 1_000_000_000, tz=datetime.UTC).date()
 
     dates: list[str] = []
     current = start_dt

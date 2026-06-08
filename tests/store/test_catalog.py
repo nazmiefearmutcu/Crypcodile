@@ -9,7 +9,7 @@ import polars as pl
 
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import BookSnapshot, Trade
-from crypcodile.store.catalog import Catalog
+from crypcodile.store.catalog import Catalog, _ns_range_to_dates, _ns_to_date
 from crypcodile.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
@@ -203,6 +203,29 @@ async def test_catalog_scan_multiday_partition_pruning(tmp_path: pathlib.Path) -
     day2_dirs = _glob_mod.glob(str(tmp_path / "exchange=*" / "channel=trade" / "date=2023-11-15"))
     assert day1_dirs, "Expected a date=2023-11-14 partition directory"
     assert day2_dirs, "Expected a date=2023-11-15 partition directory"
+
+
+def test_ns_to_date_uses_integer_division() -> None:
+    """Regression: ns→date must use integer division.
+
+    Float ``ns / 1e9`` loses precision near 1.7e18 (ULP ≈ 256 ns) and rounds a
+    timestamp in the last sub-second of a day UP across the midnight boundary,
+    producing the wrong date. ``_DAY2_TS - 1`` is one ns before 2023-11-15 00:00
+    UTC and must therefore still resolve to 2023-11-14.
+    """
+    assert _ns_to_date(_DAY2_TS - 1) == "2023-11-14"
+    assert _ns_to_date(_DAY2_TS) == "2023-11-15"
+
+
+def test_ns_range_to_dates_does_not_overinclude() -> None:
+    """Regression: a range ending one ns before midnight must not pull in the next day.
+
+    With float division this returned ['2023-11-14', '2023-11-15'], over-including
+    (and unnecessarily scanning) the next day's partition. Integer division keeps it
+    to exactly the days the range covers.
+    """
+    assert _ns_range_to_dates(_BASE_TS, _DAY2_TS - 1) == ["2023-11-14"]
+    assert _ns_range_to_dates(_BASE_TS, _DAY2_TS) == ["2023-11-14", "2023-11-15"]
 
 
 # ---------------------------------------------------------------------------

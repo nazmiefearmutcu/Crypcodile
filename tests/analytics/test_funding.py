@@ -308,3 +308,27 @@ def test_funding_apr_default_interval_hours(tmp_path: Path) -> None:
     )
     # APR should be computed using the default 8h interval
     assert abs(df["apr"][0] - 0.0001 * 1095.0) < 1e-6
+
+
+def test_funding_apr_rejects_nonpositive_interval(tmp_path: Path) -> None:
+    """Regression: a stored interval_hours <= 0 must raise the validated ValueError.
+
+    ``fill_null`` only replaces NULLs, so a corrupt 0 reaches the APR computation.
+    The per-row APR routes through ``apr_from_rate`` → ``periods_per_year``, which
+    rejects non-positive intervals — turning what was a ZeroDivisionError (for 0) or
+    a silently negated APR (for negatives) into a legible ValueError.
+    """
+    rec = Funding(
+        exchange=_EXCHANGE,
+        symbol=_SYMBOL,
+        symbol_raw="BTC-PERPETUAL",
+        exchange_ts=_BASE_NS,
+        local_ts=_BASE_NS,
+        funding_rate=0.0001,
+        funding_timestamp=_BASE_NS,
+        interval_hours=0,  # corrupt / non-positive — must be rejected, not divided by
+    )
+    asyncio.run(_write_funding(tmp_path, [rec]))
+    catalog = Catalog(tmp_path)
+    with pytest.raises(ValueError, match="interval_hours must be a positive integer"):
+        funding_apr(catalog, _SYMBOL, _BASE_NS, _BASE_NS + _8H_NS)

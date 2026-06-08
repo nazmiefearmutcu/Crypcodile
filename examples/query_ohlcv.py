@@ -19,8 +19,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from crypcodile.resample.ohlcv import resample_ohlcv
-from crypcodile.store.catalog import Catalog
+# Make this example runnable from a source checkout even without an editable
+# install: put the repo's ``src/`` on sys.path so ``import crypcodile`` resolves.
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from crypcodile.resample.ohlcv import resample_ohlcv  # noqa: E402
+from crypcodile.store.catalog import Catalog  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Configuration

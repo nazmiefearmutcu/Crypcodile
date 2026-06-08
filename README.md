@@ -11,7 +11,7 @@ One canonical schema across six venues, a local Parquet lake you own, and option
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-14B8A6?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-22C55E)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-581%20passing-22C55E)](tests/)
+[![Tests](https://img.shields.io/badge/tests-597%20passing-22C55E)](tests/)
 [![Typed](https://img.shields.io/badge/mypy-strict-14B8A6)](pyproject.toml)
 [![Lint](https://img.shields.io/badge/lint-ruff-14B8A6?logo=ruff&logoColor=white)](pyproject.toml)
 [![Built with](https://img.shields.io/badge/built%20with-DuckDB%20·%20Polars%20·%20msgspec-0B3B36)](#-stack)
@@ -264,8 +264,14 @@ for snap in resample_book_snapshots(
 
 </details>
 
+## Analytics 📈
+
+Derive options & funding metrics straight from your Parquet lake — **IV surface, greeks, skew,
+term structure, basis, and funding APR** — all computation **offline**, with no new exchange calls.
+Everything is also exposed as `CrypcodileClient` methods.
+
 <details>
-<summary><b>📈 Analytics — funding, basis, IV surface</b></summary>
+<summary><b>Funding, basis & IV surface — full examples</b></summary>
 
 <br/>
 
@@ -361,7 +367,7 @@ src/crypcodile/
 
 ```bash
 uv sync                                              # install dev deps into .venv
-uv run pytest                                        # 581 tests
+uv run pytest                                        # 597 tests
 uv run ruff check .                                  # lint
 uv run mypy                                          # strict type-check
 uv run pytest --cov=crypcodile --cov-report=term-missing

@@ -150,9 +150,12 @@ def funding_apr(
         }
     ).sort("funding_ts")
 
-    # Compute APR per row using Python-level map (pure math, no numpy/scipy).
+    # Compute APR per row via the validated helper (pure math, no numpy/scipy).
+    # Routing through apr_from_rate -> periods_per_year enforces the interval_hours>0
+    # invariant, turning a corrupt 0 (ZeroDivisionError) or negative (silently wrong,
+    # negated APR) into a legible ValueError instead.
     apr_values = [
-        rate * (8760.0 / ih)
+        apr_from_rate(rate, ih)
         for rate, ih in zip(
             work["funding_rate"].to_list(), work["interval_hours"].to_list(), strict=True
         )

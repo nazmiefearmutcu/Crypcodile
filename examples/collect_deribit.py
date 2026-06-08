@@ -30,12 +30,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import sys
 from pathlib import Path
 
-from crypcodile.client.collect import collect
-from crypcodile.exchanges.deribit.connector import DeribitConnector
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.store.parquet_sink import ParquetSink
+# Make this example runnable from a source checkout even without an editable
+# install: put the repo's ``src/`` on sys.path so ``import crypcodile`` resolves.
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from crypcodile.client.collect import collect  # noqa: E402
+from crypcodile.exchanges.deribit.connector import DeribitConnector  # noqa: E402
+from crypcodile.instruments.registry import InstrumentRegistry  # noqa: E402
+from crypcodile.store.parquet_sink import ParquetSink  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s  %(message)s")
 log = logging.getLogger("collect_deribit")

@@ -40,6 +40,7 @@ packages = ["src/crypcodile"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-q"
 timeout = 120
 timeout_method = "thread"
@@ -52,6 +53,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 
 [tool.mypy]
 python_version = "3.12"
+mypy_path = "src"
 packages = ["crypcodile"]
 strict = true
 ignore_missing_imports = true

@@ -213,6 +213,17 @@ def test_deribit_parse_option_symbol_raises_on_short_symbol():
         _parse_option_symbol("BTC-30JUN")  # only 2 parts
 
 
+def test_deribit_parse_option_symbol_raises_on_invalid_month():
+    """Regression: an invalid month abbreviation must raise ValueError, not silently
+    default to January (which would emit an OptionsChain with a wrong expiry).
+
+    'JY' is not a real month; previously `_MONTH_MAP.get(mon_abbr, "01")` swallowed it
+    and parsed the expiry as 30 January. Now it fails loud so the caller skips+warns.
+    """
+    with pytest.raises(ValueError, match="invalid month abbreviation"):
+        _parse_option_symbol("BTC-30JY-50000-C")  # 'JY' is not a valid month abbreviation
+
+
 def test_deribit_malformed_option_symbol_in_ticker_is_skipped():
     """Malformed Deribit option ticker must be skipped (log.warning + return), not crash."""
     msg = {
