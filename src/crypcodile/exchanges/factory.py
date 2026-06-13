@@ -28,6 +28,7 @@ from crypcodile.exchanges.bybit.connector import BybitConnector
 from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
 from crypcodile.exchanges.deribit.connector import DeribitConnector
 from crypcodile.exchanges.okx.connector import OKXConnector
+from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.sink.base import Sink
 
@@ -37,7 +38,9 @@ _REGISTRY: dict[str, type[Connector]] = {
     "coinbase": CoinbaseConnector,
     "deribit": DeribitConnector,
     "okx": OKXConnector,
+    "base_onchain": BaseOnchainConnector,
 }
+
 
 _VALID_NAMES = sorted(_REGISTRY)
 

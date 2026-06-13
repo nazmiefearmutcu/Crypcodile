@@ -66,6 +66,13 @@ def test_make_connector_deribit() -> None:
     assert isinstance(conn, DeribitConnector)
 
 
+def test_make_connector_base_onchain() -> None:
+    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
+
+    conn = _make("base_onchain")
+    assert isinstance(conn, BaseOnchainConnector)
+
+
 # ---------------------------------------------------------------------------
 # Unknown exchange raises a clear ValueError
 # ---------------------------------------------------------------------------
@@ -76,8 +83,9 @@ def test_make_connector_unknown_raises() -> None:
         _make("unknownexchange")
     # Error message must list all valid names
     msg = str(exc_info.value)
-    for name in ("binance", "bybit", "okx", "coinbase", "deribit"):
+    for name in ("binance", "bybit", "okx", "coinbase", "deribit", "base_onchain"):
         assert name in msg, f"Expected {name!r} in error message: {msg!r}"
+
 
 
 def test_make_connector_case_sensitive() -> None:

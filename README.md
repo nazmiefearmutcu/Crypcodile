@@ -261,7 +261,6 @@ for snap in resample_book_snapshots(
 ):
     print(snap)
 ```
-
 </details>
 
 ## Analytics 📈
@@ -269,6 +268,7 @@ for snap in resample_book_snapshots(
 Derive options & funding metrics straight from your Parquet lake — **IV surface, greeks, skew,
 term structure, basis, and funding APR** — all computation **offline**, with no new exchange calls.
 Everything is also exposed as `CrypcodileClient` methods.
+
 
 <details>
 <summary><b>Funding, basis & IV surface — full examples</b></summary>
@@ -343,6 +343,8 @@ backfill where the exchange supports it).
 | Bybit | `bybit` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | OKX | `okx` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Coinbase | `coinbase` | ✅ | ✅ | ✅ | — | — | — | — |
+| Base On-Chain | `base_onchain` | ✅ | ✅ | ✅ | — | — | — | — |
+
 
 ## 🧱 Stack
 
@@ -373,6 +375,34 @@ uv run mypy                                          # strict type-check
 uv run pytest --cov=crypcodile --cov-report=term-missing
 uv run python benchmarks/bench.py                    # reproduce the performance table
 ```
+
+## 🤖 AI Agent & On-Chain Tools (MCP & x402)
+
+Crypcodile supports direct AI agent integrations and agentic monetization standards out-of-the-box.
+
+### 1. Model Context Protocol (MCP) Server
+AI agents (e.g. Claude Code, Google Antigravity) can connect to Crypcodile as a standard MCP server to execute queries and retrieve real-time and historical market data.
+*   **Start the MCP Server:**
+    ```bash
+    uv run crypcodile mcp --data-dir data
+    ```
+*   **Available Tools:**
+    *   `get_onchain_price(symbol)`: Query live Base mainnet DEX pool state (AERO-USDC, cbBTC-USDC, DEGEN-WETH, WELL-WETH).
+    *   `query_market_data(sql)`: Run arbitrary DuckDB SQL queries against the local Parquet data lake.
+    *   `get_funding_apr(symbol, start, end)`: Calculate perpetual funding rates.
+
+### 2. x402 Micropayments Gated API
+A demo FastAPI web server that gates Base DEX data requests behind the **x402 Micropayment Protocol** (HTTP `402 Payment Required` standard for autonomous agents).
+*   **Start the API Server:**
+    ```bash
+    uv run crypcodile api --port 8000
+    ```
+*   **Client Flow:**
+    1.  Call `GET /api/v1/market-data?symbol=AERO-USDC`.
+    2.  Receive `HTTP 402` and the `Payment-Required` header details.
+    3.  Submit payment and resubmit the request with the on-chain `Payment-Signature` header.
+    4.  Verify and receive `HTTP 200` with the live DEX dataset.
+
 
 ## 🗺️ Roadmap
 

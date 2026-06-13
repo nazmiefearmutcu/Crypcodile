@@ -423,8 +423,47 @@ def term_structure_cmd(
 
 
 # ---------------------------------------------------------------------------
+# mcp (Model Context Protocol Server)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def mcp(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Start the Model Context Protocol (MCP) server over stdin/stdout."""
+    import asyncio
+    from crypcodile.mcp_server import serve_stdio
+    
+    typer.echo("Starting Crypcodile MCP Server on stdio...", err=True)
+    try:
+        asyncio.run(serve_stdio(data_dir=data_dir))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    typer.echo("Crypcodile MCP Server stopped.", err=True)
+
+
+# ---------------------------------------------------------------------------
+# api (FastAPI Web Server for x402 Micropayments Gated API)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def api(
+    port: Annotated[int, typer.Option("--port", help="Port to bind the API server to.")] = 8000,
+    host: Annotated[str, typer.Option("--host", help="Host address to bind to.")] = "127.0.0.1",
+) -> None:
+    """Start the x402 Micropayment Gated API server."""
+    import uvicorn
+    
+    typer.echo(f"Starting Crypcodile x402 API server on http://{host}:{port}...", err=True)
+    uvicorn.run("crypcodile.api_server:app", host=host, port=port, log_level="info")
+
+
+# ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
+
 
 
 def main() -> None:
@@ -434,3 +473,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
