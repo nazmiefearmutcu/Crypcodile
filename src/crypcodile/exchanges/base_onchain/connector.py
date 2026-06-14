@@ -58,35 +58,52 @@ def _write_ipc_to_file(name: str, data_dict: dict[str, Any]) -> None:
         pass
 
 def _load_ipc_sync() -> None:
-    try:
-        ipc_file = _get_ipc_file()
-        if os.path.exists(ipc_file):
-            with open(ipc_file, "r") as f:
-                content = f.read().strip()
-                if not content:
-                    return
-                data = json.loads(content)
-            
-            if "POOL_SPECS" in data:
-                dict.update(POOL_SPECS, data["POOL_SPECS"])
-            if "TOKENS" in data:
-                dict.update(TOKENS, data["TOKENS"])
-    except Exception:
-        pass
+    pass
 
 class IPCDict(dict[str, Any]):
-    def __init__(self, name: str, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, name: str, default_data: dict[str, Any] | None = None) -> None:
+        if default_data is None:
+            default_data = {}
+        super().__init__(default_data)
         self._name = name
-        
+        self._default = default_data
+        self._last_ipc_file = ""
+
+    def _sync(self) -> None:
+        current_file = _get_ipc_file()
+        if current_file != self._last_ipc_file:
+            dict.clear(self)
+            dict.update(self, self._default)
+            try:
+                if os.path.exists(current_file):
+                    with open(current_file, "r") as f:
+                        content = f.read().strip()
+                        if content:
+                            file_data = json.loads(content)
+                            if self._name in file_data:
+                                dict.update(self, file_data[self._name])
+            except Exception:
+                pass
+            self._last_ipc_file = current_file
+
+    def __contains__(self, key: object) -> bool:
+        self._sync()
+        return super().__contains__(key)
+
+    def __getitem__(self, key: str) -> Any:
+        self._sync()
+        return super().__getitem__(key)
+
     def __setitem__(self, key: str, value: Any) -> None:
+        self._sync()
         super().__setitem__(key, value)
         self._write_ipc()
-        
+
     def update(self, *args: Any, **kwargs: Any) -> None:
+        self._sync()
         super().update(*args, **kwargs)
         self._write_ipc()
-        
+
     def _write_ipc(self) -> None:
         data_copy = dict(self)
         try:
@@ -94,6 +111,34 @@ class IPCDict(dict[str, Any]):
             loop.create_task(asyncio.to_thread(_write_ipc_to_file, self._name, data_copy))
         except RuntimeError:
             _ipc_executor.submit(_write_ipc_to_file, self._name, data_copy)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self._sync()
+        return super().get(key, default)
+
+    def keys(self) -> Any:
+        self._sync()
+        return super().keys()
+
+    def values(self) -> Any:
+        self._sync()
+        return super().values()
+
+    def items(self) -> Any:
+        self._sync()
+        return super().items()
+
+    def __len__(self) -> int:
+        self._sync()
+        return super().__len__()
+
+    def __iter__(self) -> Any:
+        self._sync()
+        return super().__iter__()
+
+    def __repr__(self) -> str:
+        self._sync()
+        return super().__repr__()
 
 async def _load_ipc() -> None:
     await asyncio.to_thread(_load_ipc_sync)

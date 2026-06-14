@@ -249,12 +249,85 @@ def _save_db_file(data: dict[str, dict[str, Any]]) -> None:
                 pass
 
 class PersistentDict(dict[str, Any]):
+    def __init__(self, default_data: dict[str, Any] | None = None) -> None:
+        if default_data is None:
+            default_data = {}
+        super().__init__(default_data)
+        self._default = default_data
+        self._last_payments_file = ""
+
+    def _sync(self) -> None:
+        current_file = get_payments_file()
+        if current_file != self._last_payments_file:
+            dict.clear(self)
+            dict.update(self, self._default)
+            try:
+                if os.path.exists(current_file):
+                    with open(current_file, "r") as f:
+                        content = f.read().strip()
+                        if content:
+                            dict.update(self, json.loads(content))
+            except Exception:
+                pass
+            self._last_payments_file = current_file
+
     def clear(self) -> None:
+        self._sync()
         dict.clear(self)
         _save_db_file({})
 
+    def __contains__(self, key: object) -> bool:
+        self._sync()
+        return super().__contains__(key)
+
+    def __getitem__(self, key: str) -> Any:
+        self._sync()
+        return super().__getitem__(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._sync()
+        super().__setitem__(key, value)
+        _save_db_file(dict(self))
+
+    def __delitem__(self, key: str) -> None:
+        self._sync()
+        super().__delitem__(key)
+        _save_db_file(dict(self))
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self._sync()
+        return super().get(key, default)
+
+    def keys(self) -> Any:
+        self._sync()
+        return super().keys()
+
+    def values(self) -> Any:
+        return self._load().values() if hasattr(self, '_load') else super().values()
+
+    def items(self) -> Any:
+        self._sync()
+        return super().items()
+
+    def __len__(self) -> int:
+        self._sync()
+        return super().__len__()
+
+    def __iter__(self) -> Any:
+        self._sync()
+        return super().__iter__()
+
+    def __repr__(self) -> str:
+        self._sync()
+        return super().__repr__()
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        self._sync()
+        super().update(*args, **kwargs)
+        _save_db_file(dict(self))
+
 # Initial load for import-time queries
-PAYMENTS_DB: dict[str, dict[str, Any]] = PersistentDict(_load_db_file())
+PAYMENTS_DB: dict[str, dict[str, Any]] = PersistentDict()
 
 # Demo recipient wallet address (e.g. Nazmi's developer wallet)
 RECIPIENT_WALLET = os.getenv("RECIPIENT_WALLET", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
