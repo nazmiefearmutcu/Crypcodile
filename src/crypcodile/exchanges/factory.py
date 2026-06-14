@@ -23,12 +23,12 @@ from __future__ import annotations
 from typing import Any
 
 from crypcodile.exchanges.base import Connector
+from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
 from crypcodile.exchanges.binance.connector import BinanceConnector
 from crypcodile.exchanges.bybit.connector import BybitConnector
 from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
 from crypcodile.exchanges.deribit.connector import DeribitConnector
 from crypcodile.exchanges.okx.connector import OKXConnector
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.sink.base import Sink
 

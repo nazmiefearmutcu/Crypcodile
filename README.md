@@ -11,7 +11,7 @@ One canonical schema across six venues, a local Parquet lake you own, and option
 
 [![Python](https://img.shields.io/badge/python-3.12%2B-14B8A6?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-22C55E)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-597%20passing-22C55E)](tests/)
+[![Tests](https://img.shields.io/badge/tests-765%20passing-22C55E)](tests/)
 [![Typed](https://img.shields.io/badge/mypy-strict-14B8A6)](pyproject.toml)
 [![Lint](https://img.shields.io/badge/lint-ruff-14B8A6?logo=ruff&logoColor=white)](pyproject.toml)
 [![Built with](https://img.shields.io/badge/built%20with-DuckDB%20·%20Polars%20·%20msgspec-0B3B36)](#-stack)
@@ -176,6 +176,18 @@ from crypcodile.client.client import CrypcodileClient
 
 client = CrypcodileClient(data_dir="data")
 print(client.query("SELECT count(*) FROM trade"))
+```
+
+### 4. Base On-Chain DEX Collection
+
+You can stream live Base on-chain DEX (Uniswap V3 and Aerodrome V2) updates directly. Configure the RPC URLs via the `BASE_RPC_URL` (single endpoint) or `BASE_RPC_URLS` (comma-separated list for automatic failover) environment variable:
+
+```bash
+# Run the showcase script with RPC failover support
+BASE_RPC_URLS="https://base-rpc.publicnode.com,https://developer-access-mainnet.base.org" uv run python examples/collect_base_onchain.py --symbol cbBTC-USDC
+
+# Or run a quick offline dry-run to test end-to-end wiring:
+uv run python examples/collect_base_onchain.py --dry-run
 ```
 
 <details>
@@ -369,7 +381,7 @@ src/crypcodile/
 
 ```bash
 uv sync                                              # install dev deps into .venv
-uv run pytest                                        # 597 tests
+uv run pytest                                        # 765 tests
 uv run ruff check .                                  # lint
 uv run mypy                                          # strict type-check
 uv run pytest --cov=crypcodile --cov-report=term-missing

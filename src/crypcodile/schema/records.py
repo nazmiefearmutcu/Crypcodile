@@ -56,6 +56,11 @@ class BookTicker(msgspec.Struct, frozen=True, tag="book_ticker", tag_field="chan
     ask_sz: float
     update_id: int | None = None
 
+    @property
+    def price(self) -> float:
+        import math
+        return round(math.sqrt(self.bid_px * self.ask_px), 6)
+
 
 class DerivativeTicker(msgspec.Struct, frozen=True, tag="derivative_ticker", tag_field="channel"):
     exchange: str

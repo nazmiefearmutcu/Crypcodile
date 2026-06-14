@@ -433,6 +433,7 @@ def mcp(
 ) -> None:
     """Start the Model Context Protocol (MCP) server over stdin/stdout."""
     import asyncio
+
     from crypcodile.mcp_server import serve_stdio
     
     typer.echo("Starting Crypcodile MCP Server on stdio...", err=True)
