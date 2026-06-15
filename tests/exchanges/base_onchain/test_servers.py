@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Response, HTTPException
 
-from crypcodile.mcp_server import get_onchain_price, serve_stdio
+from crypcodile.mcp_server import get_onchain_price, serve_stdio, get_base_market_data
 from crypcodile.api_server import get_market_data, simulate_payment, PaymentSignature, PAYMENTS_DB
 
 
@@ -122,6 +122,58 @@ async def test_get_onchain_price_rpc_error_handling() -> None:
         res = await get_onchain_price("cbBTC-USDC")
         assert "error" in res
         assert "Failed fetching pool state" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_base_market_data_success() -> None:
+    """Verify get_base_market_data successfully queries Uniswap V3 WETH/USDC pool and calculates 1h volume."""
+    with patch("crypcodile.mcp_server.AsyncWeb3") as mock_web3_class:
+        mock_w3 = MagicMock()
+        mock_w3.__aenter__ = AsyncMock(return_value=mock_w3)
+        mock_w3.__aexit__ = AsyncMock(return_value=None)
+        mock_web3_class.return_value = mock_w3
+        mock_web3_class.to_checksum_address = lambda x: x
+
+        mock_w3.eth.block_number = AwaitableValue(12345)
+        
+        # Factory mock
+        mock_factory = MagicMock()
+        mock_factory.functions.getPool.return_value.call = AsyncMock(
+            return_value="0xMockWethUsdcPoolAddress"
+        )
+        
+        # Pool mock
+        mock_pool = MagicMock()
+        mock_pool.functions.slot0.return_value.call = AsyncMock(
+            return_value=[int(2**96 * 40.0), 0, 0, 0, 0, 0, True]
+        )
+        mock_pool.functions.liquidity.return_value.call = AsyncMock(
+            return_value=100 * 10**18
+        )
+        
+        def contract_side_effect(address, abi):
+            if address == "0x33128a8fC17869897dcE68Ed026d694621f6FDfD":
+                return mock_factory
+            return mock_pool
+
+        mock_w3.eth.contract.side_effect = contract_side_effect
+
+        # Mock swap logs return 1 mock swap log (is_flipped = False, WETH/USDC)
+        mock_log = {
+            "data": ((-2 * 10**18).to_bytes(32, byteorder='big', signed=True) +
+                     (3200 * 10**6).to_bytes(32, byteorder='big', signed=True)),
+            "transactionHash": MagicMock(hex=lambda: "0xhash"),
+            "logIndex": 1,
+            "blockNumber": 12345
+        }
+        mock_w3.eth.get_logs = AsyncMock(return_value=[mock_log])
+
+        res = await get_base_market_data("WETH/USDC")
+        assert res["symbol"] == "WETH-USDC"
+        assert res["pool_address"] == "0xMockWethUsdcPoolAddress"
+        assert res["volume_1h_base"] == 2.0
+        assert res["volume_1h_quote"] == 3200.0
+        assert res["num_swaps_1h"] == 1
 
 
 @pytest.mark.asyncio

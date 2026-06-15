@@ -90,7 +90,14 @@ def test_examples_import_no_syntax_errors() -> None:
     Merely asserting ``spec is not None`` would only check that the file exists
     on disk — it would never execute the module body.
     """
-    for name in ("collect_deribit.py", "replay_to_csv.py", "query_ohlcv.py"):
+    for name in (
+        "collect_deribit.py",
+        "replay_to_csv.py",
+        "query_ohlcv.py",
+        "collect_base_onchain.py",
+        "monitor_base_volume.py",
+        "base_dashboard.py",
+    ):
         _load_example(name)  # raises on SyntaxError / ImportError / NameError
 
 

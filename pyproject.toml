@@ -18,6 +18,7 @@ dependencies = [
     "web3>=6.0.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
+    "streamlit>=1.58.0",
 ]
 
 

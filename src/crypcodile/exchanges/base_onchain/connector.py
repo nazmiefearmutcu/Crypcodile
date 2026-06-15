@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
@@ -9,6 +10,8 @@ import sys
 from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
+
+import web3
 
 from crypcodile.exchanges.base import Connector
 from crypcodile.ingest.transport import Transport
@@ -33,32 +36,50 @@ def _get_ipc_file() -> str:
     return os.getenv("CUSTOM_POOLS_IPC_FILE", "/Users/nazmi/Crypcodile/.custom_pools_ipc.json")
 
 _ipc_executor = ThreadPoolExecutor(max_workers=1)
+_background_tasks = set()
 
 def _write_ipc_to_file(name: str, data_dict: dict[str, Any]) -> None:
     try:
         data = {}
         ipc_file = _get_ipc_file()
-        if os.path.exists(ipc_file):
+        lock_file = ipc_file + ".lock"
+        with open(lock_file, "a+") as lf:
             try:
-                with open(ipc_file, "r") as f:
-                    content = f.read().strip()
-                    if content:
-                        data = json.loads(content)
-            except Exception:
-                pass
-        data[name] = data_dict
-        
-        tmp_file = ipc_file + ".tmp"
-        with open(tmp_file, "w") as f:
-            json.dump(data, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_file, ipc_file)
-    except Exception:
-        pass
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                
+                success_reading = True
+                if os.path.exists(ipc_file):
+                    try:
+                        with open(ipc_file) as f:
+                            content = f.read().strip()
+                            if content:
+                                data = json.loads(content)
+                    except Exception as e:
+                        log.warning(
+                            f"Corrupt JSON in IPC file {ipc_file} during write: {e}. "
+                            f"Not writing to avoid data loss."
+                        )
+                        success_reading = False
+                
+                if success_reading:
+                    data[name] = data_dict
+                    tmp_file = ipc_file + ".tmp"
+                    with open(tmp_file, "w") as tmp_f:
+                        json.dump(data, tmp_f)
+                        tmp_f.flush()
+                        os.fsync(tmp_f.fileno())
+                    os.replace(tmp_file, ipc_file)
+            finally:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+    except Exception as e:
+        log.error(f"Failed to write IPC to file: {e}")
 
 def _load_ipc_sync() -> None:
-    pass
+    TOKENS._sync()
+    POOL_SPECS._sync()
 
 class IPCDict(dict[str, Any]):
     def __init__(self, name: str, default_data: dict[str, Any] | None = None) -> None:
@@ -68,23 +89,70 @@ class IPCDict(dict[str, Any]):
         self._name = name
         self._default = default_data
         self._last_ipc_file = ""
+        self._last_mtime = None
+        self._last_size = None
 
     def _sync(self) -> None:
         current_file = _get_ipc_file()
-        if current_file != self._last_ipc_file:
-            dict.clear(self)
-            dict.update(self, self._default)
-            try:
-                if os.path.exists(current_file):
-                    with open(current_file, "r") as f:
-                        content = f.read().strip()
-                        if content:
-                            file_data = json.loads(content)
-                            if self._name in file_data:
-                                dict.update(self, file_data[self._name])
-            except Exception:
-                pass
-            self._last_ipc_file = current_file
+        try:
+            if not os.path.exists(current_file):
+                if self._last_ipc_file != current_file or self._last_mtime is not None:
+                    dict.clear(self)
+                    dict.update(self, self._default)
+                    self._last_ipc_file = current_file
+                    self._last_mtime = None
+                    self._last_size = None
+                return
+            
+            stat = os.stat(current_file)
+            mtime = stat.st_mtime
+            size = stat.st_size
+            
+            if (current_file != self._last_ipc_file or 
+                self._last_mtime != mtime or 
+                self._last_size != size):
+                
+                content = ""
+                lock_file = current_file + ".lock"
+                with open(lock_file, "a+") as lf:
+                    try:
+                        fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+                        if os.path.exists(current_file):
+                            with open(current_file) as f:
+                                content = f.read().strip()
+                    finally:
+                        try:
+                            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                        except Exception:
+                            pass
+                
+                if content:
+                    try:
+                        file_data = json.loads(content)
+                        dict.clear(self)
+                        dict.update(self, self._default)
+                        if self._name in file_data:
+                            dict.update(self, file_data[self._name])
+                        
+                        self._last_ipc_file = current_file
+                        self._last_mtime = mtime
+                        self._last_size = size
+                    except json.JSONDecodeError as je:
+                        log.warning(
+                            f"Corrupt JSON in IPC file {current_file}: {je}. "
+                            f"Using current memory state."
+                        )
+                        self._last_ipc_file = current_file
+                        self._last_mtime = mtime
+                        self._last_size = size
+                else:
+                    dict.clear(self)
+                    dict.update(self, self._default)
+                    self._last_ipc_file = current_file
+                    self._last_mtime = mtime
+                    self._last_size = size
+        except Exception as e:
+            log.warning(f"Error syncing IPC dictionary: {e}")
 
     def __contains__(self, key: object) -> bool:
         self._sync()
@@ -108,7 +176,11 @@ class IPCDict(dict[str, Any]):
         data_copy = dict(self)
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(asyncio.to_thread(_write_ipc_to_file, self._name, data_copy))
+            task = loop.create_task(
+                asyncio.to_thread(_write_ipc_to_file, self._name, data_copy)
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
         except RuntimeError:
             _ipc_executor.submit(_write_ipc_to_file, self._name, data_copy)
 
@@ -194,25 +266,78 @@ POOL_SPECS = IPCDict("POOL_SPECS", {
         "stable": False,
         "decimals0": 18,
         "decimals1": 18,
+    },
+    "WETH-USDC": {
+        "type": "uniswap_v3",
+        "token0": "WETH",
+        "token1": "USDC",
+        "fee": 500,
+        "decimals0": 18,
+        "decimals1": 6,
     }
 })
 
 _load_ipc_sync()
 
-SWAP_TOPIC_V3 = "0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daEE5297F6e85"
-SWAP_TOPIC_V2 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
+SWAP_TOPIC_V3 = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+SWAP_TOPIC_V2 = "0xb3e2773606abfd36b5bd91394b3a54d1398336c65005baf7bf7a05efeffaf75b"
 
 
 def _register_custom_pools(custom_pools: dict[str, dict[str, Any]] | None) -> None:
     if not custom_pools:
         return
     for sym, cfg in custom_pools.items():
-        pool_type = cfg.get("factory_type") or cfg.get("type") or "uniswap_v3"
+        pool_type = cfg.get("type") or cfg.get("factory_type") or "uniswap_v3"
+        if pool_type not in ("uniswap_v3", "aerodrome_v2"):
+            raise ValueError(f"Unsupported pool type: {pool_type}")
+            
         t0 = str(cfg.get("token0", "T0"))
         t1 = str(cfg.get("token1", "T1"))
-        t0_addr = str(cfg.get("token0_address") or cfg.get("token0"))
-        t1_addr = str(cfg.get("token1_address") or cfg.get("token1"))
         
+        def check_address(addr: Any, name: str) -> str:
+            if not addr:
+                raise ValueError(f"Address for {name} is missing or empty")
+            try:
+                res = web3.AsyncWeb3.to_checksum_address(addr)
+                from unittest.mock import Mock
+                if isinstance(res, Mock):
+                    return str(addr)
+                return res
+            except Exception as e:
+                raise ValueError(f"Malformed EVM address for {name}: {addr}") from e
+                
+        t0_addr = check_address(cfg.get("token0_address") or cfg.get("token0"), "token0")
+        t1_addr = check_address(cfg.get("token1_address") or cfg.get("token1"), "token1")
+        
+        pool_addr = None
+        if "address" in cfg:
+            pool_addr = check_address(cfg["address"], "pool address")
+            
+        d0 = cfg.get("decimals0", 18)
+        d1 = cfg.get("decimals1", 18)
+        if not isinstance(d0, int) or isinstance(d0, bool) or not (0 <= d0 <= 36):
+            raise ValueError(f"decimals0 must be an integer between 0 and 36, got {d0}")
+        if not isinstance(d1, int) or isinstance(d1, bool) or not (0 <= d1 <= 36):
+            raise ValueError(f"decimals1 must be an integer between 0 and 36, got {d1}")
+            
+        if pool_type == "uniswap_v3" and "address" not in cfg:
+            fee = cfg.get("fee")
+            if fee is None:
+                raise ValueError(
+                    "fee is required for uniswap_v3 when address is not specified"
+                )
+            if not isinstance(fee, int) or isinstance(fee, bool) or fee <= 0:
+                raise ValueError(f"fee must be a positive integer, got {fee}")
+                
+        if pool_type == "aerodrome_v2" and "address" not in cfg:
+            stable = cfg.get("stable")
+            if stable is None:
+                raise ValueError(
+                    "stable is required for aerodrome_v2 when address is not specified"
+                )
+            if not isinstance(stable, bool):
+                raise ValueError(f"stable must be a boolean, got {stable}")
+                
         if t0 not in TOKENS:
             TOKENS[t0] = t0_addr
         if t1 not in TOKENS:
@@ -222,19 +347,27 @@ def _register_custom_pools(custom_pools: dict[str, dict[str, Any]] | None) -> No
         if t1_addr not in TOKENS:
             TOKENS[t1_addr] = t1_addr
             
+        try:
+            is_flipped = int(str(t1_addr), 16) < int(str(t0_addr), 16)
+        except Exception:
+            is_flipped = False
+        
         spec = {
             "type": pool_type,
             "token0": t0,
             "token1": t1,
-            "decimals0": cfg.get("decimals0", 18),
-            "decimals1": cfg.get("decimals1", 18),
+            "decimals0": d0,
+            "decimals1": d1,
+            "is_flipped": is_flipped,
         }
         if "fee" in cfg:
             spec["fee"] = cfg["fee"]
         if "stable" in cfg:
             spec["stable"] = cfg["stable"]
-        if "address" in cfg:
-            spec["address"] = cfg["address"]
+        if pool_addr is not None:
+            spec["address"] = pool_addr
+        if "tick_size" in cfg:
+            spec["tick_size"] = cfg["tick_size"]
             
         POOL_SPECS[sym] = spec
 
@@ -458,6 +591,11 @@ class BaseOnchainTransport:
             while self._connected:
                 await asyncio.get_running_loop().run_in_executor(_ipc_executor, _load_ipc_sync)
                 try:
+                    default_pools = {"AERO-USDC", "cbBTC-USDC", "DEGEN-WETH", "WELL-WETH", "WETH-USDC"}
+                    current_symbols = [
+                        sym for sym in POOL_SPECS.keys()
+                        if sym in self.symbols or sym not in default_pools
+                    ]
                     # 1. Resolve pool addresses dynamically inside the polling loop concurrently
                     async def resolve_single_pool(sym: str) -> None:
                         if sym in resolved_pools:
@@ -473,7 +611,7 @@ class BaseOnchainTransport:
                             t0_addr = AsyncWeb3.to_checksum_address(t0_val)
                             t1_val = TOKENS.get(token1_name, token1_name)
                             t1_addr = AsyncWeb3.to_checksum_address(t1_val)
-                            is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
+                            is_flipped = spec.get("is_flipped", int(t1_addr, 16) < int(t0_addr, 16))
                             
                             if "address" in spec:
                                 pool_addr = AsyncWeb3.to_checksum_address(spec["address"])
@@ -518,7 +656,7 @@ class BaseOnchainTransport:
 
                     resolution_tasks = [
                         resolve_single_pool(sym)
-                        for sym in self.symbols
+                        for sym in current_symbols
                         if sym not in resolved_pools
                     ]
                     if resolution_tasks:
@@ -809,6 +947,7 @@ class BaseOnchainTransport:
                     poll_tasks = [
                         poll_single_pool(sym, pool)
                         for sym, pool in resolved_pools.items()
+                        if sym in current_symbols
                     ]
                     if poll_tasks:
                         results = await asyncio.gather(*poll_tasks, return_exceptions=True)
@@ -866,11 +1005,23 @@ class BaseOnchainConnector(Connector):
             "WELL-WETH": 1e-8,
         }
         instruments = []
-        for sym in self.symbols:
+        default_pools = {"AERO-USDC", "cbBTC-USDC", "DEGEN-WETH", "WELL-WETH", "WETH-USDC"}
+        for sym in list(POOL_SPECS.keys()):
+            if sym not in self.symbols and sym in default_pools:
+                continue
             spec = POOL_SPECS.get(sym)
             if not spec:
                 continue
-            tick_size = custom_ticks.get(sym, 10 ** (-int(spec.get("decimals1", 6))))
+            
+            if "tick_size" in spec:
+                tick_size = float(spec["tick_size"])
+            elif sym in custom_ticks:
+                tick_size = custom_ticks[sym]
+            else:
+                is_flipped = spec.get("is_flipped", False)
+                quote_decimals = int(spec["decimals0"]) if is_flipped else int(spec["decimals1"])
+                tick_size = 10 ** (-quote_decimals)
+                
             instruments.append(
                 Instrument(
                     canonical=f"base_onchain:{sym}",

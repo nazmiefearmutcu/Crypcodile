@@ -187,14 +187,107 @@ async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict
     except Exception as e:
         return {"error": f"Failed fetching pool state: {e}"}
 
+async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) -> dict[str, Any]:
+    """Fetch real-time price, reserves, and 1-hour volume for a token pair on Base mainnet."""
+    symbol = token_pair.replace("/", "-").upper()
+    
+    state_res = await get_onchain_price(symbol, rpc_url)
+    if "error" in state_res:
+        return state_res
+        
+    spec = cast(dict[str, Any], POOL_SPECS.get(symbol))
+    if not spec:
+        return {"error": f"Symbol {symbol} not supported."}
+        
+    try:
+        async with AsyncWeb3(AsyncHTTPProvider(rpc_url)) as w3:
+            t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
+            t1_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token1"])])
+            pool_addr = state_res["pool_address"]
+            is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
+            
+            latest_block = await w3.eth.block_number
+            from_block = max(0, latest_block - 1800) # ~1h of blocks
+            
+            swap_topic = (
+                "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+                if spec["type"] == "uniswap_v3"
+                else "0xb3e2773606abfd36b5bd91394b3a54d1398336c65005baf7bf7a05efeffaf75b"
+            )
+            
+            logs = await w3.eth.get_logs({
+                "address": pool_addr,
+                "topics": [swap_topic],
+                "fromBlock": from_block,
+                "toBlock": latest_block
+            })
+            
+            volume_1h_base = 0.0
+            volume_1h_quote = 0.0
+            
+            for lg in logs:
+                data = lg["data"]
+                if spec["type"] == "uniswap_v3":
+                    amount0 = int.from_bytes(data[0:32], byteorder='big', signed=True)
+                    amount1 = int.from_bytes(data[32:64], byteorder='big', signed=True)
+                    
+                    if not is_flipped:
+                        abs_base = abs(amount0) / (10 ** int(spec["decimals0"]))
+                        abs_quote = abs(amount1) / (10 ** int(spec["decimals1"]))
+                    else:
+                        abs_base = abs(amount1) / (10 ** int(spec["decimals0"]))
+                        abs_quote = abs(amount0) / (10 ** int(spec["decimals1"]))
+                else: # aerodrome_v2
+                    amt0_in = int.from_bytes(data[0:32], byteorder='big', signed=False)
+                    amt1_in = int.from_bytes(data[32:64], byteorder='big', signed=False)
+                    amt0_out = int.from_bytes(data[64:96], byteorder='big', signed=False)
+                    amt1_out = int.from_bytes(data[96:128], byteorder='big', signed=False)
+                    
+                    if not is_flipped:
+                        abs_base = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** int(spec["decimals0"]))
+                        abs_quote = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** int(spec["decimals1"]))
+                    else:
+                        abs_base = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** int(spec["decimals0"]))
+                        abs_quote = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** int(spec["decimals1"]))
+                
+                volume_1h_base += abs_base
+                volume_1h_quote += abs_quote
+                
+            state_res["volume_1h_base"] = volume_1h_base
+            state_res["volume_1h_quote"] = volume_1h_quote
+            state_res["volume_1h_timeframe_blocks"] = latest_block - from_block
+            state_res["num_swaps_1h"] = len(logs)
+            
+            return state_res
+    except Exception as e:
+        return {"error": f"Failed fetching 1h volume: {e}"}
+
 # List of tools exposed by the MCP server
 TOOLS = [
+    {
+        "name": "get_base_market_data",
+        "description": (
+            "Fetch real-time market data (price, reserves, and 1-hour volume) for a "
+            "token pair on Base mainnet. Supported pairs: AERO/USDC, WETH/USDC, "
+            "cbBTC/USDC, DEGEN/WETH, WELL/WETH."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "token_pair": {
+                    "type": "string",
+                    "description": "The token pair symbol (e.g. 'WETH/USDC', 'AERO/USDC')."
+                }
+            },
+            "required": ["token_pair"]
+        }
+    },
     {
         "name": "get_onchain_price",
         "description": (
             "Fetch real-time price, reserves, and pool stats from Base mainnet "
             "DEX (Uniswap V3 or Aerodrome). Supported symbols: AERO-USDC, "
-            "cbBTC-USDC, DEGEN-WETH, WELL-WETH."
+            "cbBTC-USDC, DEGEN-WETH, WELL-WETH, WETH-USDC."
         ),
         "inputSchema": {
             "type": "object",
@@ -203,7 +296,7 @@ TOOLS = [
                     "type": "string",
                     "description": (
                         "Symbol name (e.g. 'AERO-USDC', 'cbBTC-USDC', "
-                        "'DEGEN-WETH', 'WELL-WETH')."
+                        "'DEGEN-WETH', 'WELL-WETH', 'WETH-USDC')."
                     )
                 }
             },
@@ -308,7 +401,10 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                 arguments = params.get("arguments", {})
                 
                 tool_result: Any = None
-                if tool_name == "get_onchain_price":
+                if tool_name == "get_base_market_data":
+                    pair = arguments.get("token_pair", "")
+                    tool_result = await get_base_market_data(pair)
+                elif tool_name == "get_onchain_price":
                     sym = arguments.get("symbol", "")
                     tool_result = await get_onchain_price(sym)
                 elif tool_name == "query_market_data":

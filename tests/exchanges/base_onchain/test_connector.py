@@ -674,3 +674,383 @@ async def test_custom_pool_configuration_and_dynamic_listing() -> None:
         assert inst.base == "TESTCUSTOM"
         assert inst.quote == "WETH"
         assert inst.tick_size == 1e-18
+
+
+def test_custom_pool_parameter_validation() -> None:
+    from crypcodile.exchanges.base_onchain.connector import _register_custom_pools
+    
+    # 1. Unsupported type
+    with pytest.raises(ValueError, match="Unsupported pool type"):
+        _register_custom_pools({
+            "BAD-POOL": {
+                "type": "balancer",
+                "token0": "AERO",
+                "token0_address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+            }
+        })
+        
+    # 2. Malformed EVM address
+    with pytest.raises(ValueError, match="Malformed EVM address"):
+        _register_custom_pools({
+            "BAD-ADDR": {
+                "type": "uniswap_v3",
+                "token0": "AERO",
+                "token0_address": "0xinvalidaddress",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+                "fee": 500,
+            }
+        })
+
+    # 3. Invalid decimals
+    with pytest.raises(ValueError, match="decimals0 must be an integer between 0 and 36"):
+        _register_custom_pools({
+            "BAD-DEC": {
+                "type": "uniswap_v3",
+                "token0": "AERO",
+                "token0_address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+                "fee": 500,
+                "decimals0": 37,
+            }
+        })
+        
+    with pytest.raises(ValueError, match="decimals1 must be an integer between 0 and 36"):
+        _register_custom_pools({
+            "BAD-DEC2": {
+                "type": "uniswap_v3",
+                "token0": "AERO",
+                "token0_address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+                "fee": 500,
+                "decimals1": -1,
+            }
+        })
+
+    with pytest.raises(ValueError, match="decimals0 must be an integer between 0 and 36"):
+        _register_custom_pools({
+            "BAD-DEC3": {
+                "type": "uniswap_v3",
+                "token0": "AERO",
+                "token0_address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+                "fee": 500,
+                "decimals0": "18",
+            }
+        })
+
+    # 4. Uniswap V3 missing fee when no address is specified
+    msg = "fee is required for uniswap_v3 when address is not specified"
+    with pytest.raises(ValueError, match=msg):
+        _register_custom_pools({
+            "MISSING-FEE": {
+                "type": "uniswap_v3",
+                "token0": "AERO",
+                "token0_address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+            }
+        })
+
+    # 5. Aerodrome V2 missing stable when no address is specified
+    msg = "stable is required for aerodrome_v2 when address is not specified"
+    with pytest.raises(ValueError, match=msg):
+        _register_custom_pools({
+            "MISSING-STABLE": {
+                "type": "aerodrome_v2",
+                "token0": "AERO",
+                "token0_address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+                "token1": "USDC",
+                "token1_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+            }
+        })
+
+
+def test_ipc_dict_reload_on_modification(tmp_path) -> None:
+    import time
+
+    from crypcodile.exchanges.base_onchain.connector import IPCDict
+    
+    ipc_file = tmp_path / "test_ipc.json"
+    
+    # Write initial state
+    initial_data = {
+        "MY_DICT": {
+            "key1": "val1"
+        }
+    }
+    with open(ipc_file, "w") as f:
+        json.dump(initial_data, f)
+        
+    ipc_file_patch = "crypcodile.exchanges.base_onchain.connector._get_ipc_file"
+    with patch(ipc_file_patch, return_value=str(ipc_file)):
+        my_dict = IPCDict("MY_DICT", {"default_key": "default_val"})
+        
+        # Initial sync
+        assert my_dict["key1"] == "val1"
+        assert my_dict.get("default_key") == "default_val"
+        
+        # Modify the file, update st_mtime and size
+        updated_data = {
+            "MY_DICT": {
+                "key1": "val_updated",
+                "key2": "val2"
+            }
+        }
+        
+        # Sleep briefly to ensure mtime changes
+        time.sleep(0.01)
+        with open(ipc_file, "w") as f:
+            json.dump(updated_data, f)
+            
+        # The dictionary should detect mtime change and reload
+        assert my_dict["key1"] == "val_updated"
+        assert my_dict["key2"] == "val2"
+
+
+@pytest.mark.asyncio
+async def test_flipped_pool_tick_size_and_custom_tick_size() -> None:
+    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.sink.memory import MemorySink
+
+    sink = MemorySink()
+    registry = InstrumentRegistry()
+
+    # Clear POOL_SPECS to avoid conflicts in this test
+    with patch.dict("crypcodile.exchanges.base_onchain.connector.POOL_SPECS", {}, clear=True):
+        custom_pools = {
+            # Standard pool: token0_address (0x1111...) < token1_address (0x2222...)
+            "STANDARD-POOL": {
+                "type": "uniswap_v3",
+                "token0": "T0",
+                "token0_address": "0x1111111111111111111111111111111111111111",
+                "token1": "T1",
+                "token1_address": "0x2222222222222222222222222222222222222222",
+                "fee": 500,
+                "decimals0": 18,
+                "decimals1": 6,
+            },
+            # Flipped pool: token1_address (0x1111...) < token0_address (0x2222...)
+            "FLIPPED-POOL": {
+                "type": "uniswap_v3",
+                "token0": "T0_FLIP",
+                "token0_address": "0x2222222222222222222222222222222222222222",
+                "token1": "T1_FLIP",
+                "token1_address": "0x1111111111111111111111111111111111111111",
+                "fee": 500,
+                "decimals0": 8,
+                "decimals1": 18,
+            },
+            # Custom tick size pool
+            "CUSTOM-TICK-POOL": {
+                "type": "uniswap_v3",
+                "token0": "T0_CUST",
+                "token0_address": "0x1111111111111111111111111111111111111111",
+                "token1": "T1_CUST",
+                "token1_address": "0x2222222222222222222222222222222222222222",
+                "fee": 500,
+                "decimals0": 18,
+                "decimals1": 18,
+                "tick_size": 0.05,
+            }
+        }
+
+        connector = BaseOnchainConnector(
+            symbols=["STANDARD-POOL", "FLIPPED-POOL", "CUSTOM-TICK-POOL"],
+            channels=["book_delta"],
+            out=sink,
+            registry=registry,
+            custom_pools=custom_pools
+        )
+
+        instruments = {inst.symbol_raw: inst for inst in await connector.list_instruments()}
+        
+        # 1. Standard pool: uses decimals1 (6 decimals) -> 1e-6
+        assert instruments["STANDARD-POOL"].tick_size == 1e-6
+
+        # 2. Flipped pool: uses decimals0 (8 decimals) -> 1e-8
+        assert instruments["FLIPPED-POOL"].tick_size == 1e-8
+
+        # 3. Custom tick size pool: uses config value -> 0.05
+        assert instruments["CUSTOM-TICK-POOL"].tick_size == 0.05
+
+
+@pytest.mark.asyncio
+async def test_dynamic_listing_and_polling_validation() -> None:
+    from crypcodile.exchanges.base_onchain.connector import POOL_SPECS, BaseOnchainTransport
+    
+    transport = BaseOnchainTransport("mock_rpc", ["cbBTC-USDC"], poll_interval=0.1)
+    
+    assert "cbBTC-USDC" in POOL_SPECS
+    
+    with patch("web3.AsyncWeb3") as mock_web3_class:
+        mock_w3 = MagicMock()
+        mock_web3_class.return_value = mock_w3
+        mock_web3_class.to_checksum_address = lambda x: x
+        
+        mock_w3.eth.block_number = AwaitableValue(1000)
+        mock_w3.eth.get_block = AsyncMock(return_value={"timestamp": 1234567890})
+        
+        mock_pool = MagicMock()
+        mock_pool.functions.slot0.return_value.call = AsyncMock(return_value=[
+            (2**96), 0, 0, 0, 0, 0, True
+        ])
+        mock_pool.functions.liquidity.return_value.call = AsyncMock(return_value=100)
+        
+        mock_factory = MagicMock()
+        mock_factory.functions.getPool.return_value.call = AsyncMock(
+            return_value="0xResolvedAddress"
+        )
+        
+        def contract_side_effect(address: Any, abi: Any) -> Any:
+            if address == "0x33128a8fC17869897dcE68Ed026d694621f6FDfD":
+                return mock_factory
+            return mock_pool
+
+        mock_w3.eth.contract.side_effect = contract_side_effect
+        mock_w3.eth.get_logs = AsyncMock(return_value=[])
+
+        original_sleep = asyncio.sleep
+        first_run = True
+        
+        async def mock_sleep(delay: Any) -> None:
+            nonlocal first_run
+            if first_run:
+                from crypcodile.exchanges.base_onchain.connector import _register_custom_pools
+                _register_custom_pools({
+                    "DYN-POOL": {
+                        "type": "uniswap_v3",
+                        "token0": "DYN0",
+                        "token0_address": "0x1111111111111111111111111111111111111111",
+                        "token1": "DYN1",
+                        "token1_address": "0x2222222222222222222222222222222222222222",
+                        "fee": 500,
+                        "decimals0": 18,
+                        "decimals1": 18,
+                    }
+                })
+                first_run = False
+                await original_sleep(0.01)
+            else:
+                transport._connected = False
+                await original_sleep(0)
+
+        with patch("asyncio.sleep", mock_sleep):
+            await transport.connect()
+            await transport._poll_task
+
+        assert "DYN-POOL" in POOL_SPECS
+
+
+@pytest.mark.asyncio
+async def test_aerodrome_real_fixture_normalization() -> None:
+    import os
+    import json
+    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
+    from crypcodile.sink.memory import MemorySink
+    from crypcodile.instruments.registry import InstrumentRegistry
+
+    fixture_path = os.path.join(
+        os.path.dirname(__file__), "fixtures", "aerodrome_swap.json"
+    )
+    with open(fixture_path) as f:
+        fixture = json.load(f)
+
+    swap_log = fixture["swap_log"]
+    pool_address = fixture["pool_address"]
+
+    # Mock the Web3 calls using the real data in the fixture
+    with patch("web3.AsyncWeb3") as mock_web3_class:
+        mock_w3 = MagicMock()
+        mock_web3_class.return_value = mock_w3
+        mock_web3_class.to_checksum_address = lambda x: x
+
+        mock_w3.eth.block_number = AwaitableValue(swap_log["blockNumber"])
+        mock_w3.eth.get_block = AsyncMock(return_value={"timestamp": swap_log["block_timestamp"]})
+
+        mock_factory = MagicMock()
+        mock_factory.functions.getPool.return_value.call = AsyncMock(
+            return_value=pool_address
+        )
+
+        mock_pool = MagicMock()
+        # Mock getReserves to return reserves from fixture
+        res = swap_log["reserves"]
+        mock_pool.functions.getReserves.return_value.call = AsyncMock(
+            return_value=[res["reserve0"], res["reserve1"], res["blockTimestampLast"]]
+        )
+
+        def contract_side_effect(address: Any, abi: Any) -> Any:
+            if address == "0x420DD381b31aEf6683db6B902084cB0FFECe40Da":
+                return mock_factory
+            return mock_pool
+
+        mock_w3.eth.contract.side_effect = contract_side_effect
+
+        # Convert data hex string back to bytes for mock log
+        mock_log = {
+            "address": swap_log["address"],
+            "blockHash": swap_log["blockHash"],
+            "blockNumber": swap_log["blockNumber"],
+            "data": bytes.fromhex(swap_log["data"]),
+            "logIndex": swap_log["logIndex"],
+            "removed": swap_log["removed"],
+            "topics": [bytes.fromhex(t) for t in swap_log["topics"]],
+            "transactionHash": MagicMock(hex=lambda: swap_log["transactionHash"]),
+            "transactionIndex": swap_log["transactionIndex"]
+        }
+        mock_w3.eth.get_logs = AsyncMock(return_value=[mock_log])
+
+        # We will poll only AERO-USDC
+        transport = BaseOnchainTransport("mock_rpc", ["AERO-USDC"], poll_interval=0.1)
+
+        original_sleep = asyncio.sleep
+        async def mock_sleep(delay: Any) -> None:
+            transport._connected = False
+            await original_sleep(0)
+
+        with patch("asyncio.sleep", mock_sleep):
+            await transport.connect()
+            await transport._poll_task
+
+        assert transport._queue.qsize() == 1
+        msg_bytes = await transport._queue.get()
+        assert msg_bytes is not None
+        msg = json.loads(msg_bytes.decode())
+
+        assert msg["type"] == "onchain_update"
+        assert msg["pool"] == "AERO-USDC"
+        
+        # Verify normalization yields Trade, BookSnapshot, BookTicker without raising errors
+        sink = MemorySink()
+        registry = InstrumentRegistry()
+        connector = BaseOnchainConnector(
+            symbols=["AERO-USDC"],
+            channels=["trades", "book_snapshot", "book_ticker"],
+            out=sink,
+            registry=registry
+        )
+        
+        records = list(connector.normalize(msg, local_ts=1234567890))
+        assert len(records) > 0
+        
+        trades = [r for r in records if r.__class__.__name__ == "Trade"]
+        snapshots = [r for r in records if r.__class__.__name__ == "BookSnapshot"]
+        tickers = [r for r in records if r.__class__.__name__ == "BookTicker"]
+        
+        assert len(trades) == 1
+        assert len(snapshots) == 1
+        assert len(tickers) == 1
+        
+        trade = trades[0]
+        assert trade.symbol == "base_onchain:AERO-USDC"
+        assert trade.id == f"{swap_log['transactionHash']}-{swap_log['logIndex']}"
+        assert trade.price > 0
+        assert trade.amount > 0
+
