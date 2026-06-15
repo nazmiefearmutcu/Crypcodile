@@ -71,15 +71,13 @@ To run the MCP server:
 uv run crypcodile mcp
 ```
 
-### 🖥️ Live Streamlit Dashboard (Proof of Work)
-We have built a premium, real-time analytics dashboard under `examples/base_dashboard.py` showing live pool statistics, 1-hour volume metrics, and order book details.
-
-To run it locally:
-```bash
-uv run streamlit run examples/base_dashboard.py
-```
-
-*Grant Reviewers:* You can view the live deployed demo of this dashboard here: **[Live Crypcodile Base Dashboard](https://crypcodile-base-dashboard.streamlit.app/)**
+### 🖥️ Live Streamlit Dashboard & Farcaster Frame (Proof of Work)
+We have built premium, real-time analytics demos:
+1. **Live Streamlit Dashboard** (`examples/base_dashboard.py`): Displays live pool statistics, 1-hour volume metrics, and order book charts.
+   - Run locally: `uv run streamlit run examples/base_dashboard.py`
+   - **[Live Deployed Dashboard Link](https://crypcodile-base-dashboard.streamlit.app/)**
+2. **Interactive Farcaster Frame** (`examples/farcaster_frame.py`): Serves dynamic frame metadata and renders live SVG cards, enabling direct interaction in client feeds (like Warpcast).
+   - Run locally: `uv run python examples/farcaster_frame.py`
 
 ---
 

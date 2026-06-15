@@ -1,6 +1,6 @@
 # Crypcodile Analytics — Implementation Plan (M6, tasks 6.1–6.6)
 
-Source-of-truth design: `docs/superpowers/specs/2026-06-05-crypcodile-analytics-design.md`.
+Source-of-truth design: `docs/superpowers/specs/2026-03-05-crypcodile-analytics-design.md`.
 This plan is **self-contained** (formulas + acceptance tests inline — there is no
 research appendix for analytics). All work is on branch `feat/core`, package
 `src/crypcodile/analytics/`, tests under `tests/analytics/`. Reuse existing types

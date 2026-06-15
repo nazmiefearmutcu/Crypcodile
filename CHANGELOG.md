@@ -1,0 +1,52 @@
+# Changelog
+
+All notable changes to the **Crypcodile** project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
+
+---
+
+## [0.1.0] - 2026-06-15
+### Added
+- **Base L2 On-Chain Integration**: Fully integrated live polling and swap event decoding for **Aerodrome Finance** (Base's largest DEX) and **Uniswap V3 on Base**.
+- **Model Context Protocol (MCP) Server**: Exposes standard AI-agent tools including `get_base_market_data` to fetch live price, reserves, and 1-hour volume.
+- **Interactive Farcaster Frame**: Added an example Farcaster Frame server at `examples/farcaster_frame.py` for direct, interactive analytics inside Farcaster client feeds.
+- **Streamlit Live Dashboard**: Added a premium frontend dashboard at `examples/base_dashboard.py` showcasing real-time pool metrics and price charts.
+- **x402 Micropayment Protocol**: Added FastAPI endpoints gated by USDC transaction log verification on Base mainnet.
+
+### Fixed
+- Fixed critical race conditions in custom pools IPC disk IO using `asyncio.to_thread` for non-blocking file locking.
+- Resolved head-of-line blocking in the polling loop by making RPC queries run concurrently.
+- Fixed Streamlit `unsafe_allow_html` keyword argument naming.
+
+---
+
+## [0.0.9] - 2026-05-28
+### Added
+- **DuckDB Optimization**: Fine-tuned query engine for sub-millisecond execution times over historical Parquet files.
+- **Multi-threaded IPC Dict**: Moved heavy file I/O operations out of the main asyncio event loop.
+- **Ecosystem Integration**: Early beta integration with custom Telegram bots and Discord tickers.
+
+### Changed
+- Refactored options IV surface calculations for improved numerical stability under high volatility conditions.
+
+---
+
+## [0.0.5] - 2026-05-04
+### Added
+- **Centralized Exchanges (CEX)**: Added live WebSocket support and REST backfill connectors for **Bybit**, **OKX**, and **Coinbase**.
+- **Schema Expansion**: Added standardized structs for `Liquidation` and `OpenInterest` channels.
+- Comprehensive integration test suites checking exchange normalizer coverage.
+
+---
+
+## [0.0.2] - 2026-04-18
+### Added
+- **Parquet Storage Engine**: Implemented hive-partitioned zstd compression storage layer.
+- **K-Way Merge Replay**: Reconstruct orderbook states deterministically from combined snapshot and delta files.
+
+---
+
+## [0.0.1] - 2026-04-04
+### Added
+- Initial prototype release.
+- Core async WebSocket connector skeleton and standard `Record` schemas (`Trade`, `BookSnapshot`, `BookDelta`, `BookTicker`).
+- Base connector for Deribit options and Binance spot/futures.

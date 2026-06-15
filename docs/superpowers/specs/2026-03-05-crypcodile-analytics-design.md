@@ -1,4 +1,4 @@
-# Crypcodile Analytics — Design Spec (2026-06-05)
+# Crypcodile Analytics — Design Spec (2026-03-05)
 
 ## Context
 

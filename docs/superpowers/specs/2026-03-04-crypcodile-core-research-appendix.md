@@ -181,7 +181,7 @@ CREATE VIEW trades AS
 
 -- Pushdown-friendly query (narrow the glob, then filter)
 SELECT * FROM read_parquet(
-  'data/exchange=deribit/channel=trade/date=2026-06-04/bucket=*/part-*.parquet',
+  'data/exchange=deribit/channel=trade/date=2026-03-04/bucket=*/part-*.parquet',
   hive_partitioning => true)
 WHERE symbol = 'BTC-PERPETUAL'
   AND local_ts BETWEEN 1749000000000000000 AND 1749003600000000000
@@ -197,7 +197,7 @@ SELECT symbol,
        sum(CASE WHEN side='buy'  THEN amount ELSE 0 END) AS buy_volume,
        sum(CASE WHEN side='sell' THEN amount ELSE 0 END) AS sell_volume
 FROM trades
-WHERE symbol='BTC-PERPETUAL' AND date='2026-06-04'
+WHERE symbol='BTC-PERPETUAL' AND date='2026-03-04'
 GROUP BY 1,2 ORDER BY 2;
 ```
 

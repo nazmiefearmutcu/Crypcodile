@@ -1,6 +1,6 @@
 # Crypcodile — Core Design (v1)
 
-**Date:** 2026-06-04
+**Date:** 2026-03-04
 **Status:** Approved (architecture). Implementation plan to follow via `writing-plans`.
 **Scope:** This spec covers the **normalized market-data core** only — the foundation
 shared by Tardis.dev (normalized replay), Laevitas (derivatives analytics), and
@@ -8,7 +8,7 @@ Amberdata (data API). Analytics, the server API, and the dashboard are **separat
 future specs** that build on top of this core.
 
 **Companion (authoritative implementation detail):**
-[`2026-06-04-crypcodile-core-research-appendix.md`](2026-06-04-crypcodile-core-research-appendix.md)
+[`2026-03-04-crypcodile-core-research-appendix.md`](2026-03-04-crypcodile-core-research-appendix.md)
 — exchange-verified field mappings, order-book diff-sync algorithms (Binance spot ≠ futures,
 Deribit `action=delete`), the Connector ABC, storage/replay/ingestion patterns, and a
 consolidated gotchas list. Where this design and the appendix differ on a low-level detail,

@@ -3,8 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **Authoritative references (read before each task):**
-> - Design: `docs/superpowers/specs/2026-06-04-crypcodile-core-design.md`
-> - **Technical appendix (field mappings, sync algorithms, gotchas):** `docs/superpowers/specs/2026-06-04-crypcodile-core-research-appendix.md` — when a low-level detail is ambiguous, the appendix is authoritative.
+> - Design: `docs/superpowers/specs/2026-03-04-crypcodile-core-design.md`
+> - **Technical appendix (field mappings, sync algorithms, gotchas):** `docs/superpowers/specs/2026-03-04-crypcodile-core-research-appendix.md` — when a low-level detail is ambiguous, the appendix is authoritative.
 
 **Goal:** Build a Python-first engine that ingests live + historical crypto market data from multiple exchanges, normalizes it to one canonical schema, stores it as hive-partitioned Parquet queryable via DuckDB, and serves it anywhere via a client/CLI with time-ordered replay and multi-format export.
 

@@ -97,6 +97,7 @@ def test_examples_import_no_syntax_errors() -> None:
         "collect_base_onchain.py",
         "monitor_base_volume.py",
         "base_dashboard.py",
+        "farcaster_frame.py",
     ):
         _load_example(name)  # raises on SyntaxError / ImportError / NameError
 
