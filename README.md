@@ -55,6 +55,24 @@ Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing opt
 
 Crypcodile requires Python 3.12+. We recommend using `uv` for high-performance dependency management.
 
+### Quick Script Installation (Recommended)
+
+You can install the Crypcodile CLI globally inside an isolated virtual environment with a single copy-pasteable command:
+
+**macOS and Linux:**
+```bash
+curl -sSL https://raw.githubusercontent.com/nazmiefearmutcu/Crypcodile/main/install.sh | bash
+```
+
+**Windows:**
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/nazmiefearmutcu/Crypcodile/main/install.ps1 | iex"
+```
+
+*Note: The installer automatically creates an isolated virtual environment, installs all dependencies, and configures the `crypcodile` command in your PATH.*
+
+### Standard Package Installation
+
 ```bash
 pip install crypcodile
 # or via uv
