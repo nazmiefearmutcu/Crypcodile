@@ -139,9 +139,9 @@ else:
                     
                     # We query the last 5000 blocks for historical logs to show a chart and table
                     swap_topic = (
-                        "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+                        "0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daee5297f6e85"
                         if spec["type"] == "uniswap_v3"
-                        else "0xb3e2773606abfd36b5bd91394b3a54d1398336c65005baf7bf7a05efeffaf75b"
+                        else "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
                     )
                     
                     t0_addr = w3.to_checksum_address(TOKENS[str(spec["token0"])])

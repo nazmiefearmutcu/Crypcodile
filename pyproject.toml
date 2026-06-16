@@ -1,6 +1,6 @@
 [project]
 name = "crypcodile"
-version = "0.1.009"
+version = "0.1.010"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
 requires-python = ">=3.12"

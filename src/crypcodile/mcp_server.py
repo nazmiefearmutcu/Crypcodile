@@ -211,9 +211,9 @@ async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) 
             from_block = max(0, latest_block - 1800) # ~1h of blocks
             
             swap_topic = (
-                "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+                "0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daEE5297F6e85"
                 if spec["type"] == "uniswap_v3"
-                else "0xb3e2773606abfd36b5bd91394b3a54d1398336c65005baf7bf7a05efeffaf75b"
+                else "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
             )
             
             logs = await w3.eth.get_logs({
