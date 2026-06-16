@@ -246,6 +246,122 @@ def resolve_data_dir(data_dir: Path) -> Path:
     return data_dir
 
 
+def normalize_user_symbol(exchange: str, symbol: str) -> str:
+    """Normalize user input symbol to the exchange's standard raw symbol format."""
+    s = symbol.strip()
+    if not s:
+        return ""
+        
+    s_upper = s.upper()
+    
+    if exchange == "base_onchain":
+        if s_upper.startswith("CBBTC"):
+            return "cbBTC-USDC"
+        if s_upper == "AERO":
+            return "AERO-USDC"
+        if s_upper == "WETH":
+            return "WETH-USDC"
+        if s_upper == "DEGEN":
+            return "DEGEN-WETH"
+        if s_upper == "WELL":
+            return "WELL-WETH"
+        if s_upper == "CBBTC-USDC":
+            return "cbBTC-USDC"
+        return s
+        
+    if exchange == "deribit":
+        if s_upper in ("BTC", "ETH", "SOL"):
+            return f"{s_upper}-PERPETUAL"
+        if s_upper.endswith("-PERP"):
+            return s_upper.replace("-PERP", "-PERPETUAL")
+        return s_upper
+        
+    if exchange in ("binance", "bybit"):
+        if s_upper in ("BTC", "ETH", "SOL"):
+            return f"{s_upper}USDT"
+        return s_upper
+        
+    if exchange == "okx":
+        if s_upper in ("BTC", "ETH", "SOL"):
+            return f"{s_upper}-USDT"
+        return s_upper
+        
+    if exchange == "coinbase":
+        if s_upper in ("BTC", "ETH", "SOL"):
+            return f"{s_upper}-USD"
+        return s_upper
+        
+    return s_upper
+
+
+def resolve_input_symbols(data_dir: Path, symbols_input: list[str]) -> list[str]:
+    """Resolve user entered symbols to matching catalog symbols if possible."""
+    from crypcodile.store.catalog import Catalog
+    try:
+        cat = Catalog(data_dir)
+        all_registered = set()
+        for ch in cat._registered_channels:
+            try:
+                df = cat.query(f'SELECT DISTINCT symbol FROM "{ch}"')
+                for s in df["symbol"].to_list():
+                    if s:
+                        all_registered.add(str(s))
+            except Exception:
+                pass
+    except Exception:
+        all_registered = set()
+
+    resolved = []
+    for sym in symbols_input:
+        sym_clean = sym.strip()
+        if not sym_clean:
+            continue
+        
+        # 1. Exact match in registered symbols
+        if sym_clean in all_registered:
+            resolved.append(sym_clean)
+            continue
+            
+        # 2. Case-insensitive exact match
+        lower_sym = sym_clean.lower()
+        matched = False
+        for reg in all_registered:
+            if reg.lower() == lower_sym:
+                resolved.append(reg)
+                matched = True
+                break
+        if matched:
+            continue
+            
+        # 3. Prefix-less match (e.g., "BTC-PERPETUAL" matching "deribit:BTC-PERPETUAL")
+        for reg in all_registered:
+            if ":" in reg:
+                parts = reg.split(":", 1)
+                if parts[1].lower() == lower_sym:
+                    resolved.append(reg)
+                    matched = True
+                    break
+        if matched:
+            continue
+
+        # 4. Fuzzy substring match (e.g., "btc" matching "deribit:BTC-PERPETUAL")
+        matches = []
+        for reg in all_registered:
+            if lower_sym in reg.lower():
+                matches.append(reg)
+        if len(matches) == 1:
+            resolved.append(matches[0])
+            continue
+        elif len(matches) > 1:
+            resolved.append(matches[0])
+            continue
+
+        # 5. Fallback to original
+        resolved.append(sym_clean)
+        
+    return resolved
+
+
 def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> tuple[str, list[str]]:
     """Select channel and symbol(s) interactively using a search/selection wizard."""
     import sys
@@ -466,6 +582,8 @@ def export(
     if not symbols:
         sym_input = typer.prompt("Enter canonical symbol(s) (comma-separated, e.g. deribit:BTC-PERPETUAL)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+    if symbols:
+        symbols = resolve_input_symbols(data_dir, symbols)
     if frm is None:
         frm = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
     if to is None:
@@ -529,6 +647,8 @@ def replay(
     if not symbols:
         sym_input = typer.prompt("Enter canonical symbol(s) (comma-separated, e.g. deribit:BTC-PERPETUAL)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+    if symbols:
+        symbols = resolve_input_symbols(data_dir, symbols)
     if frm is None:
         frm = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
     if to is None:
@@ -629,7 +749,7 @@ def select_collect_params_interactively(
                 custom_input = typer.prompt("Enter custom symbol(s) (comma-separated, e.g. BTC-PERPETUAL)")
                 custom_symbols = [s.strip() for s in custom_input.split(",") if s.strip()]
                 if custom_symbols:
-                    symbols = custom_symbols
+                    symbols = [normalize_user_symbol(exchange, s) for s in custom_symbols]
                     break
             elif "," in choice or (choice.isdigit() and int(choice) > 0):
                 parts = [p.strip() for p in choice.split(",")]
@@ -648,7 +768,7 @@ def select_collect_params_interactively(
                     symbols = selected
                     break
             if choice and not choice.isdigit():
-                symbols = [s.strip() for s in choice.split(",") if s.strip()]
+                symbols = [normalize_user_symbol(exchange, s.strip()) for s in choice.split(",") if s.strip()]
                 break
             typer.echo("Invalid selection. Try again.", err=True)
 
@@ -691,6 +811,8 @@ def collect(
     if not symbols:
         sym_input = typer.prompt("Enter symbol(s) to collect (comma-separated, e.g. BTC-PERPETUAL)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+    if symbols and exchange:
+        symbols = [normalize_user_symbol(exchange, s) for s in symbols]
     if not channels:
         ch_input = typer.prompt("Enter channel(s) to subscribe (comma-separated, e.g. trade)")
         channels = [c.strip() for c in ch_input.split(",") if c.strip()]
