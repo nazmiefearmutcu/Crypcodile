@@ -4,6 +4,16 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.001] - 2026-06-16
+### Added
+- **`update` command**: Added the `crypcodile update` command to upgrade the CLI globally inside its virtual environment directly from GitHub.
+
+### Changed
+- **CLI Behavior**: Changed default behavior to show the help menu instead of printing "Missing command" when no subcommand is provided.
+- **Dynamic Versioning**: Centralized versioning around package `__version__` across CLI, MCP, and API servers.
+
+---
+
 ## [0.1.0] - 2026-06-15
 ### Added
 - **Base L2 On-Chain Integration**: Fully integrated live polling and swap event decoding for **Aerodrome Finance** (Base's largest DEX) and **Uniswap V3 on Base**.

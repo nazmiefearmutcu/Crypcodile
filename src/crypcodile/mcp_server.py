@@ -25,6 +25,7 @@ class AsyncWeb3(web3.AsyncWeb3):
                 pass
 
 
+from crypcodile import __version__
 from crypcodile.client.client import CrypcodileClient
 from crypcodile.exchanges.base_onchain.connector import FACTORIES, POOL_SPECS, TOKENS
 import os
@@ -383,7 +384,7 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         },
                         "serverInfo": {
                             "name": "crypcodile-mcp",
-                            "version": "0.1.0"
+                            "version": __version__
                         }
                     }
                 }

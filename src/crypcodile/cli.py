@@ -463,6 +463,39 @@ def api(
 
 
 # ---------------------------------------------------------------------------
+# update
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def update() -> None:
+    """Upgrade Crypcodile to the latest version from GitHub."""
+    import sys
+    import subprocess
+
+    typer.echo("Checking for updates and upgrading Crypcodile...", err=True)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "git+https://github.com/nazmiefearmutcu/Crypcodile.git",
+    ]
+    try:
+        result = subprocess.run(cmd, check=True)
+        if result.returncode == 0:
+            typer.echo("Crypcodile upgraded successfully to the latest version.", err=True)
+        else:
+            typer.echo("Failed to upgrade Crypcodile.", err=True)
+            raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"Error upgrading Crypcodile: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
 

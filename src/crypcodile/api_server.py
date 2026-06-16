@@ -47,13 +47,15 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+from crypcodile import __version__
+
 app = FastAPI(
     title="Crypcodile x402 Gated Market Data API",
     description=(
         "A demo API gating Base mainnet market data behind the x402 AI Agent "
         "payment protocol."
     ),
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan
 )
 
