@@ -231,7 +231,7 @@ def resolve_data_dir(data_dir: Path) -> Path:
             return fallback_candidate
 
     while True:
-        alt_path = typer.prompt("No data found. Enter data directory path", default=str(data_dir))
+        alt_path = typer.prompt("Enter data directory", default=str(data_dir))
         alt_dir = Path(alt_path)
         if has_data(alt_dir):
             return alt_dir
@@ -380,7 +380,7 @@ def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> 
             typer.echo(f"  [{idx}] {ch}")
         
         while True:
-            choice = typer.prompt("Select channel by number or enter custom channel name", default="1").strip()
+            choice = typer.prompt("Select channel", default="1").strip()
             if choice.isdigit():
                 idx = int(choice) - 1
                 if 0 <= idx < len(available_channels):
@@ -405,7 +405,7 @@ def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> 
 
     if not all_symbols:
         typer.echo(f"No registered symbols found in channel '{channel}' on disk.", err=True)
-        sym_input = typer.prompt("Enter canonical symbol(s) manually (comma-separated)")
+        sym_input = typer.prompt("Symbol (e.g. BTC)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
         return channel, symbols
 
@@ -491,7 +491,7 @@ def query(
     data_dir = resolve_data_dir(data_dir)
 
     if not sql:
-        sql = typer.prompt("Enter DuckDB SQL query")
+        sql = typer.prompt("SQL query")
     if not sql:
         typer.echo("Error: SQL query cannot be empty.", err=True)
         raise typer.Exit(code=1)
@@ -578,16 +578,16 @@ def export(
             symbols = selected_symbols
 
     if not channel:
-        channel = typer.prompt("Enter channel name (e.g. trade)")
+        channel = typer.prompt("Channel (e.g. trade)")
     if not symbols:
-        sym_input = typer.prompt("Enter canonical symbol(s) (comma-separated, e.g. deribit:BTC-PERPETUAL)")
+        sym_input = typer.prompt("Symbol (e.g. BTC)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
     if frm is None:
-        frm = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+        frm = typer.prompt("Start time", type=int, default=0)
     if to is None:
-        to = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+        to = typer.prompt("End time", type=int, default=9999999999999999999)
 
     if not channel or not symbols:
         typer.echo("Error: Channel and symbols are required.", err=True)
@@ -642,17 +642,17 @@ def replay(
             symbols = selected_symbols
 
     if not channels:
-        ch_input = typer.prompt("Enter channel name(s) (comma-separated, e.g. trade)")
+        ch_input = typer.prompt("Channel (e.g. trade)")
         channels = [c.strip() for c in ch_input.split(",") if c.strip()]
     if not symbols:
-        sym_input = typer.prompt("Enter canonical symbol(s) (comma-separated, e.g. deribit:BTC-PERPETUAL)")
+        sym_input = typer.prompt("Symbol (e.g. BTC)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
     if frm is None:
-        frm = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+        frm = typer.prompt("Start time", type=int, default=0)
     if to is None:
-        to = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+        to = typer.prompt("End time", type=int, default=9999999999999999999)
 
     if not channels or not symbols:
         typer.echo("Error: Channels and symbols are required.", err=True)
@@ -694,7 +694,7 @@ def select_collect_params_interactively(
         for idx, ex in enumerate(valid_exchanges, 1):
             typer.echo(f"  [{idx}] {ex}")
         while True:
-            choice = typer.prompt("Select exchange by number or enter name", default="1").strip()
+            choice = typer.prompt("Select exchange", default="1").strip()
             if choice.isdigit():
                 i = int(choice) - 1
                 if 0 <= i < len(valid_exchanges):
@@ -711,7 +711,7 @@ def select_collect_params_interactively(
         for idx, ch in enumerate(valid_channels, 1):
             typer.echo(f"  [{idx}] {ch}")
         while True:
-            choice = typer.prompt("Select channels by numbers (comma-separated, e.g. 1 or 1,2) or enter custom channel(s)", default="1").strip()
+            choice = typer.prompt("Select channel(s)", default="1").strip()
             if "," in choice or (choice.isdigit() and int(choice) > 0):
                 parts = [p.strip() for p in choice.split(",")]
                 selected = []
@@ -744,9 +744,9 @@ def select_collect_params_interactively(
         typer.echo("  [C] Enter custom symbol(s)")
         
         while True:
-            choice = typer.prompt("Select symbol(s) by number (comma-separated, e.g. 1 or 1,2) or enter C for custom", default="1").strip()
+            choice = typer.prompt("Select symbol(s)", default="1").strip()
             if choice.lower() == "c":
-                custom_input = typer.prompt("Enter custom symbol(s) (comma-separated, e.g. BTC-PERPETUAL)")
+                custom_input = typer.prompt("Enter symbol (e.g. BTC)")
                 custom_symbols = [s.strip() for s in custom_input.split(",") if s.strip()]
                 if custom_symbols:
                     symbols = [normalize_user_symbol(exchange, s) for s in custom_symbols]
@@ -807,14 +807,14 @@ def collect(
         exchange, symbols, channels = select_collect_params_interactively(exchange, symbols, channels)
 
     if not exchange:
-        exchange = typer.prompt("Enter exchange name (e.g. deribit)")
+        exchange = typer.prompt("Exchange (e.g. deribit)")
     if not symbols:
-        sym_input = typer.prompt("Enter symbol(s) to collect (comma-separated, e.g. BTC-PERPETUAL)")
+        sym_input = typer.prompt("Symbol (e.g. BTC)")
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols and exchange:
         symbols = [normalize_user_symbol(exchange, s) for s in symbols]
     if not channels:
-        ch_input = typer.prompt("Enter channel(s) to subscribe (comma-separated, e.g. trade)")
+        ch_input = typer.prompt("Channel (e.g. trade)")
         channels = [c.strip() for c in ch_input.split(",") if c.strip()]
 
     if not exchange or not symbols or not channels:
@@ -891,11 +891,15 @@ def funding_apr_cmd(
             symbol = selected_symbols[0]
 
     if not symbol:
-        symbol = typer.prompt("Enter canonical symbol (e.g. deribit:BTC-PERPETUAL)")
+        symbol = typer.prompt("Symbol (e.g. BTC)")
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol])
+        if resolved_syms:
+            symbol = resolved_syms[0]
     if start is None:
-        start = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+        start = typer.prompt("Start time", type=int, default=0)
     if end is None:
-        end = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+        end = typer.prompt("End time", type=int, default=9999999999999999999)
 
     if not symbol:
         typer.echo("Error: Symbol is required.", err=True)
@@ -951,22 +955,22 @@ def basis_cmd(
     data_dir = resolve_data_dir(data_dir)
 
     if start is None:
-        start = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+        start = typer.prompt("Start time", type=int, default=0)
     if end is None:
-        end = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+        end = typer.prompt("End time", type=int, default=9999999999999999999)
 
     is_interactive = is_interactive_stdin()
 
     # If neither perp nor future/spot is specified, ask user what mode they want
     if perp is None and (future is None or spot is None):
-        mode = typer.prompt("Select basis mode (perp or spot-future)", default="perp")
+        mode = typer.prompt("Basis mode", default="perp")
         if mode == "perp":
             if is_interactive:
                 _, selected_symbols = select_symbols_interactively(data_dir)
                 if selected_symbols:
                     perp = selected_symbols[0]
             if not perp:
-                perp = typer.prompt("Enter canonical perpetual symbol (e.g. deribit:BTC-PERPETUAL)")
+                perp = typer.prompt("Perpetual symbol (e.g. BTC)")
         else:
             if is_interactive:
                 typer.echo("\nSelect futures symbol:")
@@ -979,9 +983,22 @@ def basis_cmd(
                     spot = selected_spots[0]
             
             if not future:
-                future = typer.prompt("Enter canonical futures symbol (e.g. deribit:BTC-FUTURE)")
+                future = typer.prompt("Futures symbol (e.g. BTC)")
             if not spot:
-                spot = typer.prompt("Enter canonical spot symbol (e.g. binance-spot:BTCUSDT)")
+                spot = typer.prompt("Spot symbol (e.g. BTC)")
+
+    if perp:
+        resolved = resolve_input_symbols(data_dir, [perp])
+        if resolved:
+            perp = resolved[0]
+    if future:
+        resolved = resolve_input_symbols(data_dir, [future])
+        if resolved:
+            future = resolved[0]
+    if spot:
+        resolved = resolve_input_symbols(data_dir, [spot])
+        if resolved:
+            spot = resolved[0]
 
     client = CrypcodileClient(data_dir=data_dir)
 
@@ -1030,9 +1047,9 @@ def iv_surface_cmd(
     data_dir = resolve_data_dir(data_dir)
 
     if not underlying:
-        underlying = typer.prompt("Enter underlying asset identifier (e.g. BTC)")
+        underlying = typer.prompt("Underlying asset (e.g. BTC)")
     if at is None:
-        at = typer.prompt("Enter snapshot instant (nanoseconds UTC)", type=int)
+        at = typer.prompt("Snapshot time", type=int)
 
     if not underlying or at is None:
         typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
@@ -1073,9 +1090,9 @@ def term_structure_cmd(
     data_dir = resolve_data_dir(data_dir)
 
     if not underlying:
-        underlying = typer.prompt("Enter underlying asset identifier (e.g. BTC)")
+        underlying = typer.prompt("Underlying asset (e.g. BTC)")
     if at is None:
-        at = typer.prompt("Enter snapshot instant (nanoseconds UTC)", type=int)
+        at = typer.prompt("Snapshot time", type=int)
 
     if not underlying or at is None:
         typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
