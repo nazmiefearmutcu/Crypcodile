@@ -184,6 +184,7 @@ def resolve_data_dir(data_dir: Path) -> Path:
     cwd_test_data = Path("test_data")
     repo_root = Path(__file__).resolve().parents[2]
     repo_test_data = repo_root / "test_data"
+    home_test_data = Path.home() / "Crypcodile" / "test_data"
 
     def has_data(d: Path) -> bool:
         if not d.exists() or not d.is_dir():
@@ -204,6 +205,8 @@ def resolve_data_dir(data_dir: Path) -> Path:
         fallback_candidate = cwd_test_data
     elif has_data(repo_test_data):
         fallback_candidate = repo_test_data
+    elif has_data(home_test_data):
+        fallback_candidate = home_test_data
 
     # 3. If running in pytest:
     if "pytest" in sys.modules:
