@@ -162,3 +162,20 @@ async def test_cli_replay_exits_zero(tmp_path: pathlib.Path) -> None:
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     # Should print at least one record representation
     assert "trade" in result.output or "deribit" in result.output
+
+
+# ---------------------------------------------------------------------------
+# shell command
+# ---------------------------------------------------------------------------
+
+
+async def test_cli_shell_exits_zero() -> None:
+    """``shell`` runs interactively and exits on 'exit' input."""
+    from typer.testing import CliRunner
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["shell"], input="help\nexit\n")
+    assert result.exit_code == 0
+    assert "Welcome to Crypcodile Interactive Shell!" in result.output
+    assert "query" in result.output

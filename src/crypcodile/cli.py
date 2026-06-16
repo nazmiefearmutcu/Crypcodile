@@ -558,6 +558,50 @@ def update(
 
 
 # ---------------------------------------------------------------------------
+# shell
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def shell() -> None:
+    """Start an interactive Crypcodile shell."""
+    import shlex
+    import click
+    
+    typer.echo("Welcome to Crypcodile Interactive Shell!")
+    typer.echo("Type 'help' to list commands. Type 'exit' or 'quit' to exit.")
+    
+    click_group = typer.main.get_group(app)
+    
+    while True:
+        try:
+            line = input("crypcodile> ").strip()
+            if not line:
+                continue
+            if line.lower() in ("exit", "quit"):
+                break
+            if line.lower() == "shell":
+                typer.echo("You are already in the Crypcodile shell.")
+                continue
+            
+            if line.lower() in ("help", "?", "-h"):
+                args = ["--help"]
+            else:
+                args = shlex.split(line)
+            try:
+                click_group(args, standalone_mode=False)
+            except click.exceptions.ClickException as e:
+                e.show()
+            except SystemExit:
+                pass
+            except Exception as e:
+                typer.echo(f"Error executing command: {e}", err=True)
+        except (KeyboardInterrupt, EOFError):
+            typer.echo("\nGoodbye!")
+            break
+
+
+# ---------------------------------------------------------------------------
 # Entry-point
 # ---------------------------------------------------------------------------
 
