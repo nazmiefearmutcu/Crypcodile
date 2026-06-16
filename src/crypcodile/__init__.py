@@ -1,3 +1,3 @@
 """Crypcodile — open-source crypto market-data engine."""
 
-__version__ = "0.1.005"
+__version__ = "0.1.006"

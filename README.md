@@ -2,7 +2,7 @@
 
 **Deterministic Market Data Infrastructure for Quantitative Research and Autonomous Agents**
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.005-blue.svg)](https://pypi.org/project/crypcodile/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.006-blue.svg)](https://pypi.org/project/crypcodile/)
 [![Python Supported](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -26,7 +26,7 @@ Crypcodile is built around a robust, modular pipeline designed to handle degrade
 
 ## 2. Base Ecosystem & L2 Integration
 
-With the `v0.1.005` release, Crypcodile serves as critical public-goods infrastructure for the **Base L2 network**. 
+With the `v0.1.006` release, Crypcodile serves as critical public-goods infrastructure for the **Base L2 network**. 
 
 Historically, comparing CeFi order book states with DeFi on-chain states required maintaining disparate codebases. Crypcodile unifies this paradigm. The `BaseOnchainConnector` directly queries Base RPC nodes, extracts DEX swap and liquidity events (e.g., from Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
 
