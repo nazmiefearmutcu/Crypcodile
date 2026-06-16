@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.008] - 2026-06-16
+### Changed
+- **Logo Mascot Refinement**: Updated the installer logo to use a premium, custom-shaded ASCII art representation of a crocodile as provided.
+
+---
+
 ## [0.1.007] - 2026-06-16
 ### Changed
 - **Mascot Styling**: Redesigned the crocodile logo to be a friendly, cute, cartoon-like chubby crocodile, removing all aggressive features and completely eliminating any resemblance to a weapon.
