@@ -775,6 +775,260 @@ def select_collect_params_interactively(
     return exchange, symbols, channels
 
 
+# Helper to extract a price from a record
+def get_record_price(rec: Any) -> float | None:
+    if hasattr(rec, "price"):
+        try:
+            return float(rec.price)
+        except Exception:
+            pass
+    if hasattr(rec, "last_price") and rec.last_price is not None:
+        try:
+            return float(rec.last_price)
+        except Exception:
+            pass
+    if hasattr(rec, "close"):
+        try:
+            return float(rec.close)
+        except Exception:
+            pass
+    if hasattr(rec, "mark_price") and rec.mark_price is not None:
+        try:
+            return float(rec.mark_price)
+        except Exception:
+            pass
+    if hasattr(rec, "bid_px") and hasattr(rec, "ask_px"):
+        import math
+        try:
+            return round(math.sqrt(float(rec.bid_px) * float(rec.ask_px)), 6)
+        except Exception:
+            pass
+    return None
+
+
+def make_sparkline(prices: list[float]) -> str:
+    if not prices or len(prices) < 2:
+        return ""
+    min_p = min(prices)
+    max_p = max(prices)
+    diff = max_p - min_p
+    if diff == 0:
+        return "█" * len(prices)
+    ticks = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    res = []
+    for p in prices:
+        ratio = (p - min_p) / diff
+        idx = int(ratio * (len(ticks) - 1))
+        idx = max(0, min(len(ticks) - 1, idx))
+        res.append(ticks[idx])
+    return "".join(res)
+
+
+import time
+from collections import deque
+from crypcodile.sink.base import Sink
+
+class MonitoringSink(Sink):
+    def __init__(self, target: Sink):
+        self.target = target
+        self.total_records = 0
+        self.records_by_key = {}  # (symbol, channel) -> count
+        self.prices_by_symbol = {}  # symbol -> deque of last prices
+        self.start_time = time.time()
+        self.last_ts_by_key = {}  # (symbol, channel) -> float
+        self.last_rec_by_key = {}  # (symbol, channel) -> record
+        self.rates_deque = deque(maxlen=10)
+        self.last_rate_calc_time = time.time()
+        self.records_since_last_calc = 0
+        self.current_rate = 0.0
+
+    async def put(self, record: Any) -> None:
+        self.total_records += 1
+        self.records_since_last_calc += 1
+        
+        now = time.time()
+        if now - self.last_rate_calc_time >= 1.0:
+            elapsed = now - self.last_rate_calc_time
+            self.current_rate = self.records_since_last_calc / elapsed
+            self.rates_deque.append(self.current_rate)
+            self.records_since_last_calc = 0
+            self.last_rate_calc_time = now
+
+        channel = getattr(type(record).__struct_config__, "tag", None) or getattr(record, "channel", "unknown")
+        key = (record.symbol, channel)
+        self.records_by_key[key] = self.records_by_key.get(key, 0) + 1
+        self.last_ts_by_key[key] = now
+        self.last_rec_by_key[key] = record
+
+        price = get_record_price(record)
+        if price is not None:
+            if record.symbol not in self.prices_by_symbol:
+                self.prices_by_symbol[record.symbol] = deque(maxlen=30)
+            self.prices_by_symbol[record.symbol].append(price)
+
+        await self.target.put(record)
+
+    async def flush(self) -> None:
+        await self.target.flush()
+
+    async def close(self) -> None:
+        await self.target.close()
+
+
+def print_startup_banner(exchange: str, symbols: list[str], channels: list[str], data_dir: Path):
+    from rich.console import Console, Group
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    
+    console = Console()
+    
+    title = Text("\n🐊 CRYPCODILE LIVE DATA STREAMER 🐊\n", style="bold green")
+    
+    info_table = Table.grid(padding=(0, 2))
+    info_table.add_column("Key", style="bold cyan")
+    info_table.add_column("Value", style="green")
+    
+    info_table.add_row("Exchange", f"⚡ {exchange.upper()}")
+    info_table.add_row("Channels", f"📺 {', '.join(channels)}")
+    info_table.add_row("Symbols", f"💱 {', '.join(symbols)}")
+    info_table.add_row("Data Directory", f"📁 {data_dir.resolve()}")
+    info_table.add_row("Status", "● Connecting to WebSocket...", style="bold yellow")
+    
+    cmds_table = Table.grid(padding=(0, 2))
+    cmds_table.add_column("Command", style="bold magenta")
+    cmds_table.add_column("Description", style="white")
+    cmds_table.add_row("crypcodile query", "Run SQL queries against data lake")
+    cmds_table.add_row("crypcodile catalog", "Check channel sizes and row counts")
+    cmds_table.add_row("crypcodile basis", "Analyze spot-futures or perp basis")
+    cmds_table.add_row("crypcodile funding-apr", "Calculate perpetual funding rates")
+    
+    panel_content = Group(
+        title,
+        Panel(info_table, title="[bold white]Connection details[/]", border_style="cyan"),
+        Panel(cmds_table, title="[bold white]💡 How to query collected data (Historical/Charts)[/]", border_style="magenta"),
+        Text("\nPress Ctrl-C to gracefully stop streaming and save buffered data.\n", style="bold red")
+    )
+    
+    console.print(Panel(panel_content, border_style="green", expand=False))
+
+
+async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols: list[str], channels: list[str], data_dir: Path):
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich.align import Align
+    
+    console = Console()
+    
+    def generate_layout() -> Panel:
+        now = time.time()
+        elapsed = int(now - monitoring_sink.start_time)
+        
+        title_text = Text()
+        title_text.append("🐊 CRYPCODILE LIVE DATA STREAMER 🐊\n", style="bold green")
+        
+        conn_table = Table.grid(padding=(0, 2))
+        conn_table.add_column("Key", style="bold cyan")
+        conn_table.add_column("Val", style="white")
+        conn_table.add_row("Exchange", f"[bold magenta]{exchange.upper()}[/]")
+        conn_table.add_row("Channels", f"[bold yellow]{', '.join(channels)}[/]")
+        conn_table.add_row("Data Dir", f"[bold blue]{data_dir}[/]")
+        conn_table.add_row("Elapsed Time", f"{elapsed} seconds")
+        
+        rate = monitoring_sink.current_rate
+        if not monitoring_sink.rates_deque and elapsed > 0:
+            rate = monitoring_sink.total_records / elapsed
+            
+        time_since_last_msg = 999.0
+        if monitoring_sink.last_ts_by_key:
+            time_since_last_msg = now - max(monitoring_sink.last_ts_by_key.values())
+            
+        if time_since_last_msg > 10.0:
+            status_text = "[bold yellow]● STALE (Waiting for data)[/]"
+        else:
+            status_text = "[bold green]● STREAMING[/]"
+            
+        rate_table = Table.grid(padding=(0, 2))
+        rate_table.add_column("Key", style="bold cyan")
+        rate_table.add_column("Val", style="white")
+        rate_table.add_row("Status", status_text)
+        rate_table.add_row("Total Records", f"[bold green]{monitoring_sink.total_records:,}[/]")
+        rate_table.add_row("Message Rate", f"[bold green]{rate:.1f} rec/sec[/]")
+        
+        buffered_count = 0
+        if hasattr(monitoring_sink.target, "_buffers"):
+            buffered_count = sum(len(buf) for buf in monitoring_sink.target._buffers.values())
+        rate_table.add_row("Buffered Rows", f"[bold red]{buffered_count:,}[/]")
+        
+        header_cols = Table.grid(padding=(0, 4))
+        header_cols.add_column()
+        header_cols.add_column()
+        header_cols.add_row(conn_table, rate_table)
+        
+        stats_table = Table(title="[bold white]📊 Stream Statistics[/]", border_style="cyan")
+        stats_table.add_column("Symbol", style="bold cyan")
+        stats_table.add_column("Channel", style="bold yellow")
+        stats_table.add_column("Count", justify="right", style="green")
+        stats_table.add_column("Last Price", justify="right", style="magenta")
+        stats_table.add_column("Trend", justify="center")
+        stats_table.add_column("Price History (Sparkline)", width=32)
+        
+        for (sym, ch), count in sorted(monitoring_sink.records_by_key.items()):
+            last_price_str = "-"
+            trend_str = "-"
+            sparkline = ""
+            
+            prices_deque = monitoring_sink.prices_by_symbol.get(sym)
+            if prices_deque and len(prices_deque) > 0:
+                last_price = prices_deque[-1]
+                last_price_str = f"{last_price:,.4f}"
+                
+                if len(prices_deque) >= 2:
+                    prev_price = prices_deque[-2]
+                    first_price = prices_deque[0]
+                    pct_change = ((last_price - first_price) / first_price) * 100.0 if first_price else 0.0
+                    
+                    if last_price > prev_price:
+                        trend_str = f"[bold green]▲ (+{pct_change:.2f}%)[/]"
+                    elif last_price < prev_price:
+                        trend_str = f"[bold red]▼ ({pct_change:.2f}%)[/]"
+                    else:
+                        trend_str = f"[bold grey]▶ ({pct_change:.2f}%)[/]"
+                else:
+                    trend_str = "[bold grey]▶ (0.00%)[/]"
+                
+                sparkline = make_sparkline(list(prices_deque))
+                
+            stats_table.add_row(sym, ch, f"{count:,}", last_price_str, trend_str, sparkline)
+            
+        footer_text = Text("\n💡 To view historical data and charts, run: ", style="dim")
+        footer_text.append("crypcodile query \"SELECT * FROM trade\" --data-dir " + str(data_dir), style="bold yellow")
+        footer_text.append("\nPress ", style="dim")
+        footer_text.append("Ctrl-C", style="bold red")
+        footer_text.append(" to stop streaming.", style="dim")
+        
+        group = Group(
+            Align.center(title_text),
+            Panel(header_cols, border_style="green"),
+            stats_table,
+            footer_text
+        )
+        return Panel(group, border_style="green", expand=False)
+
+    with Live(generate_layout(), console=console, refresh_per_second=2) as live:
+        while True:
+            try:
+                await asyncio.sleep(0.5)
+                live.update(generate_layout())
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # collect  (T7b-collect — live connector wiring)
 # ---------------------------------------------------------------------------
@@ -850,10 +1104,34 @@ def collect(
         f"channels={channels} data_dir={data_dir}"
     )
 
-    try:
-        asyncio.run(collect_live([connector], sink))
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass  # sink.close() is already called inside collect_live's finally block
+    monitoring_sink = MonitoringSink(sink)
+    connector.out = monitoring_sink
+
+    if is_interactive:
+        print_startup_banner(exchange, symbols, channels, data_dir)
+
+        async def collect_with_dashboard():
+            dashboard_task = asyncio.create_task(
+                run_dashboard(monitoring_sink, exchange, symbols, channels, data_dir)
+            )
+            try:
+                await collect_live([connector], monitoring_sink)
+            finally:
+                dashboard_task.cancel()
+                try:
+                    await dashboard_task
+                except asyncio.CancelledError:
+                    pass
+
+        try:
+            asyncio.run(collect_with_dashboard())
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+    else:
+        try:
+            asyncio.run(collect_live([connector], monitoring_sink))
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     typer.echo("Collection stopped. Data written to: " + str(data_dir))
 
