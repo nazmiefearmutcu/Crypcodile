@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.002] - 2026-06-16
+### Added
+- **Smart Update Verification**: The `crypcodile update` command now performs a remote version check against GitHub tags before downloading, warning users if they are already on the latest version. Included a `--force` flag to force reinstallation.
+
+---
+
 ## [0.1.001] - 2026-06-16
 ### Added
 - **`update` command**: Added the `crypcodile update` command to upgrade the CLI globally inside its virtual environment directly from GitHub.

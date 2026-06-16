@@ -468,13 +468,77 @@ def api(
 
 
 @app.command()
-def update() -> None:
-    """Upgrade Crypcodile to the latest version from GitHub."""
+def update(
+    force: Annotated[bool, typer.Option("--force", help="Force upgrade even if up-to-date.")] = False,
+) -> None:
+    """Check for updates and upgrade Crypcodile to the latest version from GitHub."""
     import sys
     import subprocess
+    import re
+    from crypcodile import __version__
 
-    typer.echo("Checking for updates and upgrading Crypcodile...", err=True)
+    typer.echo("Checking remote repository for the latest version...", err=True)
 
+    # 1. Fetch latest version from remote tags
+    latest_version = None
+    try:
+        git_cmd = ["git", "ls-remote", "--tags", "https://github.com/nazmiefearmutcu/Crypcodile.git"]
+        output = subprocess.check_output(git_cmd, stderr=subprocess.DEVNULL).decode()
+        tags = []
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            ref = parts[1]
+            if ref.startswith("refs/tags/"):
+                tag = ref.replace("refs/tags/", "")
+                if tag.endswith("^{}"):
+                    continue
+                tags.append(tag)
+        if tags:
+            def version_key(v: str):
+                clean_v = v.lstrip("v")
+                parts = []
+                for part in re.split(r"(\d+)", clean_v):
+                    if part.isdigit():
+                        parts.append(int(part))
+                    else:
+                        parts.append(part)
+                return parts
+            tags.sort(key=version_key)
+            latest_version = tags[-1]
+    except Exception:
+        pass
+
+    current_version = __version__
+    typer.echo(f"Current local version: {current_version}", err=True)
+
+    if latest_version:
+        typer.echo(f"Latest remote version: {latest_version}", err=True)
+        # Compare versions
+        clean_current = current_version.lstrip("v")
+        clean_latest = latest_version.lstrip("v")
+        
+        def parse_version(v: str) -> list[int]:
+            return [int(x) for x in re.findall(r"\d+", v)]
+            
+        is_newer = False
+        try:
+            is_newer = parse_version(clean_latest) > parse_version(clean_current)
+        except Exception:
+            is_newer = clean_latest != clean_current
+
+        if not is_newer and not force:
+            typer.echo("Crypcodile is already up-to-date.", err=True)
+            return
+        elif force:
+            typer.echo("Force option enabled. Re-installing...", err=True)
+        else:
+            typer.echo(f"A new update is available ({current_version} -> {latest_version})!", err=True)
+    else:
+        typer.echo("Could not determine the latest version from GitHub. Proceeding with update anyway...", err=True)
+
+    typer.echo("Upgrading Crypcodile...", err=True)
     cmd = [
         sys.executable,
         "-m",
