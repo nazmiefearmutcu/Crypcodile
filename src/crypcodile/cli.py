@@ -910,43 +910,6 @@ class MonitoringSink(Sink):
         await self.target.close()
 
 
-def print_startup_banner(exchange: str, symbols: list[str], channels: list[str], data_dir: Path):
-    from rich.console import Console, Group
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.text import Text
-    
-    console = Console()
-    
-    title = Text("\n🐊 CRYPCODILE LIVE DATA STREAMER 🐊\n", style="bold green")
-    
-    info_table = Table.grid(padding=(0, 2))
-    info_table.add_column("Key", style="bold cyan")
-    info_table.add_column("Value", style="green")
-    
-    info_table.add_row("Exchange", f"⚡ {exchange.upper()}")
-    info_table.add_row("Channels", f"📺 {', '.join(channels)}")
-    info_table.add_row("Symbols", f"💱 {', '.join(symbols)}")
-    info_table.add_row("Data Directory", f"📁 {data_dir.resolve()}")
-    info_table.add_row("Status", "● Connecting to WebSocket...", style="bold yellow")
-    
-    cmds_table = Table.grid(padding=(0, 2))
-    cmds_table.add_column("Command", style="bold magenta")
-    cmds_table.add_column("Description", style="white")
-    cmds_table.add_row("crypcodile query", "Run SQL queries against data lake")
-    cmds_table.add_row("crypcodile catalog", "Check channel sizes and row counts")
-    cmds_table.add_row("crypcodile basis", "Analyze spot-futures or perp basis")
-    cmds_table.add_row("crypcodile funding-apr", "Calculate perpetual funding rates")
-    
-    panel_content = Group(
-        title,
-        Panel(info_table, title="[bold white]Connection details[/]", border_style="cyan"),
-        Panel(cmds_table, title="[bold white]💡 How to query collected data (Historical/Charts)[/]", border_style="magenta"),
-        Text("\nPress Ctrl-C to gracefully stop streaming and save buffered data.\n", style="bold red")
-    )
-    
-    console.print(Panel(panel_content, border_style="green", expand=False))
-
 
 async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols: list[str], channels: list[str], data_dir: Path):
     from rich.console import Console, Group
@@ -1144,7 +1107,6 @@ def collect(
     connector.out = monitoring_sink
 
     if is_interactive:
-        print_startup_banner(exchange, symbols, channels, data_dir)
 
         async def collect_with_dashboard():
             dashboard_task = asyncio.create_task(
