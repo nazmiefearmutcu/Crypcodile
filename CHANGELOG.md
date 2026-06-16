@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.004] - 2026-06-16
+### Changed
+- **Clean Installer Output**: Refactored `install.sh` and `install.ps1` to adopt a clean, minimal layout with a progress status checklist. All verbose terminal installation logs are redirected to a temporary file and only shown in case of a step failure.
+
+---
+
 ## [0.1.003] - 2026-06-16
 ### Changed
 - **CLI Update Presentation**: Cleaned up the `update` command output to show a minimal, premium status progress indicator and hide verbose pip installation logs from the user.

@@ -15,8 +15,52 @@ Write-Host "      Crypcodile CLI Framework Installer         " -ForegroundColor 
 Write-Host "=================================================" -ForegroundColor Cyan
 Write-Host ""
 
+$tempDir = if ($env:TEMP) { $env:TEMP } else { $env:USERPROFILE }
+$LogFile = Join-Path $tempDir "crypcodile_install.log"
+Remove-Item -Path $LogFile -ErrorAction SilentlyContinue
+
+# Helper function to run steps and handle failures
+function Run-Step {
+    param (
+        [string]$Message,
+        [scriptblock]$ScriptBlock
+    )
+    
+    Write-Host "  ⟳  " -NoNewline
+    Write-Host ("{0,-45}" -f $Message) -NoNewline
+    
+    $oldErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Stop"
+    try {
+        $global:LASTEXITCODE = 0
+        & $ScriptBlock >> $LogFile 2>&1
+        if ($global:LASTEXITCODE -ne 0 -and $null -ne $global:LASTEXITCODE) {
+            throw "Command exited with non-zero exit code: $global:LASTEXITCODE"
+        }
+        Write-Host "✓ Done" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Error: Installation failed at step: $Message" -ForegroundColor Red
+        Write-Host "Error details (from $LogFile):" -ForegroundColor Red
+        Write-Host "------------------------------------------------------------------------" -ForegroundColor Yellow
+        if (Test-Path $LogFile) {
+            Get-Content $LogFile
+        } else {
+            Write-Host $_.Exception.Message
+        }
+        Write-Host "------------------------------------------------------------------------" -ForegroundColor Yellow
+        exit 1
+    }
+    finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
+}
+
 # 1. Verify python is installed and checks that the version is >= 3.12
-Write-Host "Verifying Python installation..."
+Write-Host "  ⟳  " -NoNewline
+Write-Host ("{0,-45}" -f "Verifying Python 3 version...") -NoNewline
 
 $pythonCmd = $null
 
@@ -44,6 +88,8 @@ if (-not $pythonCmd -and (Get-Command "python3" -ErrorAction SilentlyContinue)) 
 }
 
 if (-not $pythonCmd) {
+    Write-Host "✗ Failed" -ForegroundColor Red
+    Write-Host ""
     # Check if python exists but is an older version
     $foundPython = $null
     if (Get-Command "python" -ErrorAction SilentlyContinue) { $foundPython = "python" }
@@ -72,81 +118,78 @@ if (-not $pythonCmd) {
 }
 
 $currentVer = & $pythonCmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
-Write-Host "Python version verified: $currentVer ($pythonCmd)" -ForegroundColor Green
+Write-Host "✓ Verified ($currentVer)" -ForegroundColor Green
 
-# Verify Git is installed
+# 2. Verify Git is installed
+Write-Host "  ⟳  " -NoNewline
+Write-Host ("{0,-45}" -f "Verifying Git installation...") -NoNewline
+
 if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
+    Write-Host "✗ Failed" -ForegroundColor Red
+    Write-Host ""
     Write-Host "Error: 'git' is not installed, which is required to download the package from GitHub." -ForegroundColor Red
     Write-Host "Please install git first. For example, using winget:" -ForegroundColor Yellow
     Write-Host "  winget install Git.Git"
     exit 1
 }
 $gitVersion = (git --version) | Select-Object -First 1
-Write-Host "Git version verified: $gitVersion" -ForegroundColor Green
+Write-Host "✓ Verified ($gitVersion)" -ForegroundColor Green
 
-# 2. Creates directory $env:USERPROFILE\.crypcodile
+# 3. Creates directory $env:USERPROFILE\.crypcodile
 $crypcodileDir = Join-Path $env:USERPROFILE ".crypcodile"
-Write-Host "Creating directory $crypcodileDir..."
-if (-not (Test-Path $crypcodileDir)) {
-    New-Item -ItemType Directory -Path $crypcodileDir | Out-Null
+Run-Step "Creating directory ~/.crypcodile..." {
+    if (-not (Test-Path $crypcodileDir)) {
+        New-Item -ItemType Directory -Path $crypcodileDir | Out-Null
+    }
 }
 
-# 3. Creates virtual environment $env:USERPROFILE\.crypcodile\venv
+# 4. Creates virtual environment $env:USERPROFILE\.crypcodile\venv
 $venvDir = Join-Path $crypcodileDir "venv"
-Write-Host "Creating virtual environment at $venvDir..."
-& $pythonCmd -m venv $venvDir
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Failed to create virtual environment." -ForegroundColor Red
-    exit 1
+Run-Step "Creating virtual environment..." {
+    & $pythonCmd -m venv $venvDir
 }
 
-# 4. Upgrades pip and installs the CLI package
+# 5. Upgrades pip
 $pipExe = Join-Path $venvDir "Scripts\pip.exe"
-Write-Host "Upgrading pip inside virtual environment..."
-& $pipExe install --upgrade pip | Out-Null
-
-Write-Host "Installing Crypcodile from Git repository..."
-& $pipExe install "git+https://github.com/nazmiefearmutcu/Crypcodile.git"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Error: Package installation failed." -ForegroundColor Red
-    exit 1
+Run-Step "Upgrading pip..." {
+    & $pipExe install --upgrade pip
 }
 
-# 5. Adds $env:USERPROFILE\.crypcodile\venv\Scripts to the User PATH environment variable
-Write-Host "Updating User PATH environment variable..."
-$userPathTarget = [System.EnvironmentVariableTarget]::User
-$currentPath = [System.Environment]::GetEnvironmentVariable("Path", $userPathTarget)
-$targetScriptsPath = Join-Path $venvDir "Scripts"
+# 6. Installs the CLI package
+Run-Step "Installing Crypcodile..." {
+    & $pipExe install "git+https://github.com/nazmiefearmutcu/Crypcodile.git"
+}
 
-$alreadyExists = $false
-if ($currentPath) {
-    $paths = $currentPath -split ';'
-    foreach ($p in $paths) {
-        if ($p.Trim().TrimEnd('\') -eq $targetScriptsPath.Trim().TrimEnd('\')) {
-            $alreadyExists = $true
-            break
+# 7. Adds $env:USERPROFILE\.crypcodile\venv\Scripts to the User PATH environment variable
+Run-Step "Updating PATH configuration..." {
+    $userPathTarget = [System.EnvironmentVariableTarget]::User
+    $currentPath = [System.Environment]::GetEnvironmentVariable("Path", $userPathTarget)
+    $targetScriptsPath = Join-Path $venvDir "Scripts"
+
+    $alreadyExists = $false
+    if ($currentPath) {
+        $paths = $currentPath -split ';'
+        foreach ($p in $paths) {
+            if ($p.Trim().TrimEnd('\') -eq $targetScriptsPath.Trim().TrimEnd('\')) {
+                $alreadyExists = $true
+                break
+            }
+        }
+    }
+
+    if (-not $alreadyExists) {
+        if ($currentPath -notlike "*\.crypcodile\venv\Scripts*") {
+            $newPath = $currentPath
+            if ($currentPath -and -not $currentPath.EndsWith(';')) {
+                $newPath += ";"
+            }
+            $newPath += $targetScriptsPath
+            [System.Environment]::SetEnvironmentVariable("Path", $newPath, $userPathTarget)
         }
     }
 }
 
-if (-not $alreadyExists) {
-    # Extra safety check to avoid partial match false negatives/positives
-    if ($currentPath -notlike "*\.crypcodile\venv\Scripts*") {
-        $newPath = $currentPath
-        if ($currentPath -and -not $currentPath.EndsWith(';')) {
-            $newPath += ";"
-        }
-        $newPath += $targetScriptsPath
-        [System.Environment]::SetEnvironmentVariable("Path", $newPath, $userPathTarget)
-        Write-Host "Added $targetScriptsPath to the User PATH environment variable." -ForegroundColor Green
-    } else {
-        Write-Host "$targetScriptsPath is already present in User PATH." -ForegroundColor Yellow
-    }
-} else {
-    Write-Host "$targetScriptsPath is already present in User PATH." -ForegroundColor Yellow
-}
-
-# 6. Displays prominent notification message
+# 8. Displays prominent notification message
 Write-Host ""
 Write-Host "========================================================================" -ForegroundColor Green
 Write-Host "Crypcodile has successfully downloaded!" -ForegroundColor Green

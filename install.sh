@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-# Exit immediately if a command exits with a non-zero status
-set -e
-
 # ANSI Color Codes
 GREEN='\033[0;32m'
 TEAL='\033[0;36m'
@@ -28,8 +25,33 @@ echo -e "${TEAL}      Crypcodile CLI Framework Installer         ${NC}"
 echo -e "${TEAL}=================================================${NC}"
 echo
 
+LOG_FILE="${TMPDIR:-/tmp}/crypcodile_install.log"
+rm -f "$LOG_FILE"
+touch "$LOG_FILE"
+
+# Helper function to run steps and handle failures
+run_step() {
+    local message="$1"
+    local cmd="$2"
+    printf "  ⟳  %-45s" "$message"
+    
+    # Run command and redirect all output to log file
+    if eval "$cmd" >> "$LOG_FILE" 2>&1; then
+        echo -e "${GREEN}✓ Done${NC}"
+    else
+        echo -e "${RED}✗ Failed${NC}"
+        echo
+        echo -e "${RED}Error: Installation failed at step: $message${NC}"
+        echo -e "${RED}Error details (from $LOG_FILE):${NC}"
+        echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
+        cat "$LOG_FILE"
+        echo -e "${YELLOW}------------------------------------------------------------------------${NC}"
+        exit 1
+    fi
+}
+
 # 1. Verify python3 is installed and checks that the version is >= 3.12
-echo -e "Verifying Python 3 version..."
+printf "  ⟳  %-45s" "Verifying Python 3 version..."
 
 PYTHON_CMD=""
 if command -v python3 >/dev/null 2>&1; then
@@ -51,6 +73,8 @@ if [ -n "$PYTHON_CMD" ]; then
 fi
 
 if [ "$PYTHON_OK" = false ]; then
+    echo -e "${RED}✗ Failed${NC}"
+    echo
     echo -e "${RED}Error: Python 3.12+ was not found on your system.${NC}"
     if [ -n "$PYTHON_CMD" ]; then
         CURRENT_VER=$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
@@ -78,66 +102,64 @@ if [ "$PYTHON_OK" = false ]; then
 fi
 
 CURRENT_VER=$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
-echo -e "Python version verified: ${GREEN}${CURRENT_VER}${NC}"
+echo -e "${GREEN}✓ Verified${NC} ($CURRENT_VER)"
 
-# Check for git
+# 2. Check for git
+printf "  ⟳  %-45s" "Verifying Git installation..."
 if ! command -v git >/dev/null 2>&1; then
+    echo -e "${RED}✗ Failed${NC}"
+    echo
     echo -e "${RED}Error: 'git' is not installed, which is required to download the package from GitHub.${NC}"
     echo -e "Please install git first. For example:"
     echo -e "  macOS:  brew install git"
     echo -e "  Ubuntu: sudo apt install git"
     exit 1
 fi
-echo -e "Git version verified: ${GREEN}$(git --version | head -n 1)${NC}"
+GIT_VER=$(git --version | head -n 1)
+echo -e "${GREEN}✓ Verified${NC} ($GIT_VER)"
 
-# 2. Creates the directory ~/.crypcodile
-echo -e "Creating directory ~/.crypcodile..."
-mkdir -p "$HOME/.crypcodile"
+# 3. Creates the directory ~/.crypcodile
+run_step "Creating directory ~/.crypcodile..." "mkdir -p \"\$HOME/.crypcodile\""
 
-# 3. Creates a virtual environment ~/.crypcodile/venv
-echo -e "Creating virtual environment at ~/.crypcodile/venv..."
-if ! "$PYTHON_CMD" -m venv "$HOME/.crypcodile/venv"; then
-    echo -e "${RED}Error: Failed to create virtual environment.${NC}"
-    echo -e "This is often because the python3-venv package is not installed."
-    echo -e "If you are on Ubuntu/Debian, please run:"
-    echo -e "  sudo apt install -y python3-venv"
-    exit 1
-fi
+# 4. Creates a virtual environment ~/.crypcodile/venv
+create_venv() {
+    "$PYTHON_CMD" -m venv "$HOME/.crypcodile/venv"
+}
+run_step "Creating virtual environment..." "create_venv"
 
-# 4. Upgrades pip and installs the CLI package
-echo -e "Upgrading pip inside virtual environment..."
-"$HOME/.crypcodile/venv/bin/pip" install --upgrade pip
+# 5. Upgrades pip
+run_step "Upgrading pip..." "\"\$HOME/.crypcodile/venv/bin/pip\" install --upgrade pip"
 
-echo -e "Installing Crypcodile from Git repository..."
-if ! "$HOME/.crypcodile/venv/bin/pip" install "git+https://github.com/nazmiefearmutcu/Crypcodile.git"; then
-    echo -e "${RED}Error: Package installation failed.${NC}"
-    exit 1
-fi
+# 6. Installs the CLI package
+run_step "Installing Crypcodile..." "\"\$HOME/.crypcodile/venv/bin/pip\" install \"git+https://github.com/nazmiefearmutcu/Crypcodile.git\""
 
-# 5. Configures a wrapper script at ~/.local/bin/crypcodile
-echo -e "Configuring wrapper script at ~/.local/bin/crypcodile..."
-mkdir -p "$HOME/.local/bin"
-cat << 'EOF' > "$HOME/.local/bin/crypcodile"
+# 7. Configures a wrapper script at ~/.local/bin/crypcodile
+configure_wrapper() {
+    mkdir -p "$HOME/.local/bin" && \
+    cat << 'EOF' > "$HOME/.local/bin/crypcodile"
 #!/bin/sh
 exec "$HOME/.crypcodile/venv/bin/crypcodile" "$@"
 EOF
-chmod +x "$HOME/.local/bin/crypcodile"
+    chmod +x "$HOME/.local/bin/crypcodile"
+}
+run_step "Configuring wrapper script..." "configure_wrapper"
 
-# 6. Safely updates ~/.bashrc and ~/.zshrc
-echo -e "Updating shell PATH configuration..."
+# 8. Safely updates ~/.bashrc and ~/.zshrc
 UPDATED_PROFILES=()
+update_path_config() {
+    for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        # Even if they don't exist, we can touch them
+        touch "$profile"
+        if ! grep -q '\.local/bin' "$profile"; then
+            echo -e "\n# Crypcodile CLI PATH configuration" >> "$profile"
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
+            UPDATED_PROFILES+=("$profile")
+        fi
+    done
+}
+run_step "Updating PATH configuration..." "update_path_config"
 
-for profile in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    # Even if they don't exist, we can touch them
-    touch "$profile"
-    if ! grep -q '\.local/bin' "$profile"; then
-        echo -e "\n# Crypcodile CLI PATH configuration" >> "$profile"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
-        UPDATED_PROFILES+=("$profile")
-    fi
-done
-
-# 7. Displays prominent notification message
+# 9. Displays prominent notification message
 echo
 echo -e "${GREEN}${BOLD}========================================================================${NC}"
 echo -e "${GREEN}${BOLD}Crypcodile has successfully downloaded!${NC}"
