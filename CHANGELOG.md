@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.005] - 2026-06-16
+### Changed
+- **Visual Theme & Logo**: Redesigned the installer branding to use a premium dark green theme. Integrated a crocodile ASCII art mascot above the text logo in the installation scripts.
+
+---
+
 ## [0.1.004] - 2026-06-16
 ### Changed
 - **Clean Installer Output**: Refactored `install.sh` and `install.ps1` to adopt a clean, minimal layout with a progress status checklist. All verbose terminal installation logs are redirected to a temporary file and only shown in case of a step failure.

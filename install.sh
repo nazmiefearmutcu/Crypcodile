@@ -2,15 +2,18 @@
 
 # ANSI Color Codes
 GREEN='\033[0;32m'
-TEAL='\033[0;36m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Display ASCII banner
-echo -ne "${TEAL}${BOLD}"
+echo -ne "${GREEN}${BOLD}"
 cat << 'EOF'
+           .-._   _ _ _ _ _ _ _ _
+    .-''-.__.-'O_ )               )
+   (_____      _/        _ _ _ _ /
+         `-...-'`------'`
   ____                               _ _ _ 
  / ___|_ __ _   _ _ __   ___ ___  __| (_) | ___ 
 | |   | '__| | | | '_ \ / __/ _ \/ _` | | |/ _ \
@@ -20,9 +23,9 @@ cat << 'EOF'
 EOF
 echo -ne "${NC}"
 
-echo -e "${TEAL}=================================================${NC}"
-echo -e "${TEAL}      Crypcodile CLI Framework Installer         ${NC}"
-echo -e "${TEAL}=================================================${NC}"
+echo -e "${GREEN}=================================================${NC}"
+echo -e "${GREEN}      Crypcodile CLI Framework Installer         ${NC}"
+echo -e "${GREEN}=================================================${NC}"
 echo
 
 LOG_FILE="${TMPDIR:-/tmp}/crypcodile_install.log"

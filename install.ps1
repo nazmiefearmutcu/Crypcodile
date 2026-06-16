@@ -1,5 +1,9 @@
 # Display ASCII banner
 $banner = @'
+           .-._   _ _ _ _ _ _ _ _
+    .-''-.__.-'O_ )               )
+   (_____      _/        _ _ _ _ /
+         `-...-'`------'`
   ____                               _ _ _ 
  / ___|_ __ _   _ _ __   ___ ___  __| (_) | ___ 
 | |   | '__| | | | '_ \ / __/ _ \/ _` | | |/ _ \
@@ -8,11 +12,11 @@ $banner = @'
             |___/|_|                            
 '@
 
-Write-Host $banner -ForegroundColor Cyan
+Write-Host $banner -ForegroundColor Green
 
-Write-Host "=================================================" -ForegroundColor Cyan
-Write-Host "      Crypcodile CLI Framework Installer         " -ForegroundColor Cyan
-Write-Host "=================================================" -ForegroundColor Cyan
+Write-Host "=================================================" -ForegroundColor Green
+Write-Host "      Crypcodile CLI Framework Installer         " -ForegroundColor Green
+Write-Host "=================================================" -ForegroundColor Green
 Write-Host ""
 
 $tempDir = if ($env:TEMP) { $env:TEMP } else { $env:USERPROFILE }
