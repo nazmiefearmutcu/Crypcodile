@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.009] - 2026-06-16
+### Added
+- **CLI Logo Display**: Configured the shaded crocodile logo to always be displayed when running the CLI interactively in TTY terminal environments. The logo output is routed to `sys.stderr` to keep command pipelining and data redirection of `stdout` clean and unpolluted.
+
+---
+
 ## [0.1.008] - 2026-06-16
 ### Changed
 - **Logo Mascot Refinement**: Updated the installer logo to use a premium, custom-shaded ASCII art representation of a crocodile as provided.

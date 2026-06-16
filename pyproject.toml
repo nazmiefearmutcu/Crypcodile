@@ -23,7 +23,7 @@ dependencies = [
 
 
 [project.scripts]
-crypcodile = "crypcodile.cli:app"
+crypcodile = "crypcodile.cli:main"
 
 [dependency-groups]
 dev = [

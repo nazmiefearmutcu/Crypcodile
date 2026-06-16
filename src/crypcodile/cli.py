@@ -78,11 +78,17 @@ _DataDirOpt = Annotated[
 
 @app.command()
 def query(
-    sql: Annotated[str, typer.Argument(help="DuckDB SQL query to execute.")],
+    sql: Annotated[str, typer.Argument(help="DuckDB SQL query to execute.")] = "",
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Execute a DuckDB SQL query against the data lake and print the result."""
     from crypcodile.client.client import CrypcodileClient
+
+    if not sql:
+        sql = typer.prompt("Enter DuckDB SQL query")
+    if not sql:
+        typer.echo("Error: SQL query cannot be empty.", err=True)
+        raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
     df = client.query(sql)
@@ -129,19 +135,19 @@ def catalog(
 
 @app.command()
 def export(
-    channel: Annotated[str, typer.Option("--channel", help="Channel name, e.g. trade.")],
+    channel: Annotated[str | None, typer.Option("--channel", help="Channel name, e.g. trade.")] = None,
     symbols: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option("--symbols", help="Canonical symbol(s). Repeat for multiple."),
-    ],
+    ] = None,
     frm: Annotated[
-        int,
+        int | None,
         typer.Option("--from", help="Start of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     to: Annotated[
-        int,
+        int | None,
         typer.Option("--to", help="End of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     fmt: Annotated[
         str,
         typer.Option("--fmt", help="Output format: parquet|csv|arrow|json|jsonl."),
@@ -154,6 +160,20 @@ def export(
 ) -> None:
     """Export channel x symbols x time range to a file."""
     from crypcodile.client.client import CrypcodileClient
+
+    if not channel:
+        channel = typer.prompt("Enter channel name (e.g. trade)")
+    if not symbols:
+        sym_input = typer.prompt("Enter canonical symbol(s) (comma-separated, e.g. deribit:BTC-PERPETUAL)")
+        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+    if frm is None:
+        frm = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+    if to is None:
+        to = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+
+    if not channel or not symbols:
+        typer.echo("Error: Channel and symbols are required.", err=True)
+        raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
     client.export(channel, symbols, frm, to, fmt=fmt, dest=dest)  # type: ignore[arg-type]
@@ -168,21 +188,21 @@ def export(
 @app.command()
 def replay(
     channels: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option("--channels", help="Channel name(s). Repeat for multiple."),
-    ],
+    ] = None,
     symbols: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option("--symbols", help="Canonical symbol(s). Repeat for multiple."),
-    ],
+    ] = None,
     frm: Annotated[
-        int,
+        int | None,
         typer.Option("--from", help="Start of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     to: Annotated[
-        int,
+        int | None,
         typer.Option("--to", help="End of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     data_dir: _DataDirOpt = Path("data"),
     limit: Annotated[
         int | None,
@@ -191,6 +211,21 @@ def replay(
 ) -> None:
     """Stream canonical Records from the data lake, printed to stdout."""
     from crypcodile.client.client import CrypcodileClient
+
+    if not channels:
+        ch_input = typer.prompt("Enter channel name(s) (comma-separated, e.g. trade)")
+        channels = [c.strip() for c in ch_input.split(",") if c.strip()]
+    if not symbols:
+        sym_input = typer.prompt("Enter canonical symbol(s) (comma-separated, e.g. deribit:BTC-PERPETUAL)")
+        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+    if frm is None:
+        frm = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+    if to is None:
+        to = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+
+    if not channels or not symbols:
+        typer.echo("Error: Channels and symbols are required.", err=True)
+        raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
     count = 0
@@ -205,19 +240,17 @@ def replay(
 # ---------------------------------------------------------------------------
 # collect  (T7b-collect — live connector wiring)
 # ---------------------------------------------------------------------------
-
-
 @app.command()
 def collect(
-    exchange: Annotated[str, typer.Option("--exchange", help="Exchange name, e.g. deribit.")],
+    exchange: Annotated[str | None, typer.Option("--exchange", help="Exchange name, e.g. deribit.")] = None,
     symbols: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option("--symbols", help="Symbol(s) to collect. Repeat for multiple."),
-    ],
+    ] = None,
     channels: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option("--channels", help="Channel(s) to subscribe. Repeat for multiple."),
-    ],
+    ] = None,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Collect live market data from an exchange and write to the Parquet data lake.
@@ -228,9 +261,22 @@ def collect(
 
     Example::
 
-        crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \\
+        crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
                           --channels trade --channels book_delta --data-dir data
     """
+    if not exchange:
+        exchange = typer.prompt("Enter exchange name (e.g. deribit)")
+    if not symbols:
+        sym_input = typer.prompt("Enter symbol(s) to collect (comma-separated, e.g. BTC-PERPETUAL)")
+        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+    if not channels:
+        ch_input = typer.prompt("Enter channel(s) to subscribe (comma-separated, e.g. trade)")
+        channels = [c.strip() for c in ch_input.split(",") if c.strip()]
+
+    if not exchange or not symbols or not channels:
+        typer.echo("Error: Exchange, symbols, and channels are required.", err=True)
+        raise typer.Exit(code=1)
+
     sink = ParquetSink(
         data_dir=data_dir,
         max_buffer_rows=10_000,
@@ -276,21 +322,32 @@ def collect(
 @app.command(name="funding-apr")
 def funding_apr_cmd(
     symbol: Annotated[
-        str,
+        str | None,
         typer.Option("--symbol", help="Canonical symbol, e.g. deribit:BTC-PERPETUAL."),
-    ],
+    ] = None,
     start: Annotated[
-        int,
+        int | None,
         typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     end: Annotated[
-        int,
+        int | None,
         typer.Option("--end", help="End of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Print per-event funding APR and cumulative funding for a perpetual symbol."""
     from crypcodile.client.client import CrypcodileClient
+
+    if not symbol:
+        symbol = typer.prompt("Enter canonical symbol (e.g. deribit:BTC-PERPETUAL)")
+    if start is None:
+        start = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+    if end is None:
+        end = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
     df = client.funding_apr(symbol, start, end)
@@ -308,13 +365,13 @@ def funding_apr_cmd(
 @app.command(name="basis")
 def basis_cmd(
     start: Annotated[
-        int,
+        int | None,
         typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     end: Annotated[
-        int,
+        int | None,
         typer.Option("--end", help="End of time range (nanoseconds UTC)."),
-    ],
+    ] = None,
     future: Annotated[
         str | None,
         typer.Option("--future", help="Canonical futures symbol (spot-future mode)."),
@@ -338,6 +395,20 @@ def basis_cmd(
     Use --future/--spot for spot-future mode, or --perp for perpetual mode.
     """
     from crypcodile.client.client import CrypcodileClient
+
+    if start is None:
+        start = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
+    if end is None:
+        end = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
+
+    # If neither perp nor future/spot is specified, ask user what mode they want
+    if perp is None and (future is None or spot is None):
+        mode = typer.prompt("Select basis mode (perp or spot-future)", default="perp")
+        if mode == "perp":
+            perp = typer.prompt("Enter canonical perpetual symbol (e.g. deribit:BTC-PERPETUAL)")
+        else:
+            future = typer.prompt("Enter canonical futures symbol (e.g. deribit:BTC-FUTURE)")
+            spot = typer.prompt("Enter canonical spot symbol (e.g. binance-spot:BTCUSDT)")
 
     client = CrypcodileClient(data_dir=data_dir)
 
@@ -367,13 +438,13 @@ def basis_cmd(
 @app.command(name="iv-surface")
 def iv_surface_cmd(
     underlying: Annotated[
-        str,
+        str | None,
         typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
-    ],
+    ] = None,
     at: Annotated[
-        int,
+        int | None,
         typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
-    ],
+    ] = None,
     rate: Annotated[
         float,
         typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
@@ -382,6 +453,15 @@ def iv_surface_cmd(
 ) -> None:
     """Print the implied-vol surface snapshot at a given instant."""
     from crypcodile.client.client import CrypcodileClient
+
+    if not underlying:
+        underlying = typer.prompt("Enter underlying asset identifier (e.g. BTC)")
+    if at is None:
+        at = typer.prompt("Enter snapshot instant (nanoseconds UTC)", type=int)
+
+    if not underlying or at is None:
+        typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
+        raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
     df = client.iv_surface(underlying, at, rate=rate)
@@ -399,13 +479,13 @@ def iv_surface_cmd(
 @app.command(name="term-structure")
 def term_structure_cmd(
     underlying: Annotated[
-        str,
+        str | None,
         typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
-    ],
+    ] = None,
     at: Annotated[
-        int,
+        int | None,
         typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
-    ],
+    ] = None,
     rate: Annotated[
         float,
         typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
@@ -414,6 +494,15 @@ def term_structure_cmd(
 ) -> None:
     """Print the ATM IV term structure at a given instant."""
     from crypcodile.client.client import CrypcodileClient
+
+    if not underlying:
+        underlying = typer.prompt("Enter underlying asset identifier (e.g. BTC)")
+    if at is None:
+        at = typer.prompt("Enter snapshot instant (nanoseconds UTC)", type=int)
+
+    if not underlying or at is None:
+        typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
+        raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
     df = client.term_structure(underlying, at, rate=rate)
@@ -605,10 +694,53 @@ def shell() -> None:
 # Entry-point
 # ---------------------------------------------------------------------------
 
+LOGO_ART = r"""                                                                                           ░  ▒▒░▒▓░ ▒    
+                                                                                        ░▒▒▒▒▒▒░░░░░░▒▒   
+                             ░░░░  ░▒▒▒▒▒▒                                            ░▒▒░░░░░░░░░░░░▒▒▒  
+  ▒░▒░░░░▒                 ░▒▒░░░▒▒░░░▒▒░░▒░               ░▒    ░                  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░▓░▒ 
+ ▒▒░░░▒▓░░▒░           ░░░▒▒▓▒░░░░░▒░▒░▓▓░░▓▒▒▒░     ░▓▒ ░▓▓▓▓░▒▓▓▓ ░▒▓░                         ▒▒▒▒░▓░▒░
+▒░░░░░▒░░░░░░▒▒▒░▒▒▒▒░▒▒░░░░░░░░░░░▒░▓▓▓▓░░░░░░░▒▒░░▒▓▒▒▒░░░░░░░░░▒▒▒▒▒▒▒▓▓                      ▓▓▒▒▒░░▓
+▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▒░▓▓▓▒░░░░░▒▒░░▒░░░░▒▓▓▒░▒▓▓▓░▒▓▓░░▒▓░░▒▒▒▒▓▓                ░░▓▒▒▒░░░▓
+ ░░░▒▒▓░░▒▒░░░░░▒▒▒▒▒▒▒░░░░░░░░░░░░░▒░░░░░░░░░▒░░░░▒░░▒▒▒▒▒░░▒░░░▒▒░░░▒▒▒░▒▓▓▒▒▒▒▒▓▒        ░ ▒▓▓▒▒▒▒░░░░▓
+  ░   ░ ░░▒▒▒▒▓▒▒▒░░▓▓▓▓▒▒▒░░░░░░░░░▒▓▒░░░░░░░░░▒░░░░░░▒▒▓▓▓░░▒▒▓▓▓░▒▒▓▓▒░░▒▒░░▒▓▓░▒▒▓▓▒▓▓▒▓▓▒▒▒▒░▒░░░░░░▓
+       ░░   ░░       ░▓▓░▓▓▓▒▒▒▒▒▓▓▓▓▓░       ░░░░░░▒░░▒░░░▒░░░░░░░░▒░░░░░▒▒▓░░▒▓▒░▓▓▒░░░░▒░▒▓▒▒▒░░░░░▒░▒░
+                      ▓▓▓▓▓▓▒▒▓▓▓▓▓▓▓▒        ░░░░░░░░░░▒░░▒░░░▒░░░░░▒░░░▒░░░░▒░░░░▒▒░▒▒░▒▒▒░░▒░░░░░░▒░░▓ 
+                    ░▓▓▓▓▓▓▓▓▒▒▒▓▓▓▓░         ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▒▒▒▒▒▒░░░░░░░░░░▒░ ░▓  
+      ░░   ░░ ░░▒▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░          ░▒░░░░░░░░░░░░░░░░▒░░░░░░░░░░░░░░░░░▒▒░░░░░░▒▒░░░░░▒░ ░▒▓   
+      ▒░▒▒░░ ▒▓▓▒▒▒▒░▒▒▒▒░▒▒▒▒░░            ░▒░░░░░░░░░▒░░░░░░░░▒▒▒░░░░░░░░░░░░░▓░░░▒░░░░░░▓▒▒▒▒░ ░░▒▒    
+     ▒░░░▒▒░░░░░▒░▒░░░                     ░▒▒▒▒▒░░░░░░▒░░░░░░░░░░░▒▒░░░░░░░░░░░▓░░░▒░░░░░▒▒▓░ ░ ░▒▒      
+      ░▒▒░░░░                          ░░    ░   ░░░░▒▒▒▒░░░░░░▒░▒▒░░▒▒▒░░░▒░░▒▒▓▒░░░▒░░░▒▒▒▓░░▒▒▒        
+           ░░░░░░░░▒▒▒▒▒▒▒▒░░░░░░░░░░░░░  ░░░   ░   ░  ▒▒▒░▒░░░░░░▒▒░░▓▒▒▒▒▒▒░▒░░▓░░░░░░░░▒▓▓▒▒           
+                             ░░░▒▒▒▒▒▒░░░░░  ░░░░ ░░  ░░░▒▒▒░░░░░░░░░░░▓░ ░   ░  ▒▓▒░░░░░░░▒▒             
+                                   ░▒▒▒▓▓▒▒▒▒░░ ░░░  ░░   ░▒▓▒▒░░░░░░░▒▒▒░░  ░░▒▒▒▒▓▒▒▒▒▒░░░▒▒            
+                               ░▒▒▓▒░▒▒▒░░░▒▒▓▒▒▒▒▒▒▒▒▒░░▒▒▒░░░▒▒▒░░░░▒▓▓▒▒▒▒░░  ░▒▒░▒░░░░▒░░░▒           
+                             ░▒▒▓▒▒▒▒▒▒▒▒▒▒░         ░▒▒▒▒▒▒░░░░░░░░░▒▒         ░▒░░▒▒▒░▒▒▒░░░▒▒          
+                               ░░░ ▒▒░             ░▓▒▒▒▒░░░░░░░░▒▒▒▒░              ░░    ░               
+                                                      ▒▒▒▒▒▒░▒▒░░░                                        
+                                                      ░   ░▒░     
+  ____                               _ _ _ 
+ / ___|_ __ _   _ _ __   ___ ___  __| (_) | ___ 
+| |   | '__| | | | '_ \ / __/ _ \/ _` | | |/ _ \
+| |___| |  | |_| | |_) | (_| (_) | (_| | | |  __/
+ \____|_|   \__, | .__/ \___\___/\__,_|_|_|\___|
+            |___/|_|                            """
+
+LOGO = f"\033[32m{LOGO_ART}\033[0m"
 
 
 def main() -> None:
     """Entry-point called by the ``crypcodile`` script."""
+    import sys
+
+    # Print the logo always to stderr, unless running the mcp command or tests
+    if "mcp" not in sys.argv and "pytest" not in sys.modules:
+        if sys.stderr.isatty():
+            sys.stderr.write(LOGO + "\n")
+            sys.stderr.flush()
+
+    if len(sys.argv) == 1:
+        sys.argv.append("shell")
+
     app()
 
 
