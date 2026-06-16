@@ -548,6 +548,113 @@ def replay(
     typer.echo(f"-- {count} record(s) replayed.")
 
 
+def select_collect_params_interactively(
+    exchange: str | None,
+    symbols: list[str] | None,
+    channels: list[str] | None
+) -> tuple[str, list[str], list[str]]:
+    """Select exchange, channels, and symbols interactively for live data collection."""
+    import sys
+    
+    valid_exchanges = ["binance", "bybit", "coinbase", "deribit", "okx", "base_onchain"]
+    valid_channels = ["trade", "book_ticker", "book_snapshot", "book_delta"]
+    
+    suggested_symbols = {
+        "binance": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+        "bybit": ["BTCUSDT", "ETHUSDT"],
+        "coinbase": ["BTC-USD", "ETH-USD"],
+        "deribit": ["BTC-PERPETUAL", "ETH-PERPETUAL", "SOL-PERPETUAL"],
+        "okx": ["BTC-USDT", "ETH-USDT"],
+        "base_onchain": ["cbBTC-USDC", "AERO-USDC", "WETH-USDC", "DEGEN-WETH", "WELL-WETH"]
+    }
+
+    # 1. Select Exchange
+    if not exchange:
+        typer.echo("\n--- Supported Exchanges ---")
+        for idx, ex in enumerate(valid_exchanges, 1):
+            typer.echo(f"  [{idx}] {ex}")
+        while True:
+            choice = typer.prompt("Select exchange by number or enter name", default="1").strip()
+            if choice.isdigit():
+                i = int(choice) - 1
+                if 0 <= i < len(valid_exchanges):
+                    exchange = valid_exchanges[i]
+                    break
+            elif choice in valid_exchanges:
+                exchange = choice
+                break
+            typer.echo("Invalid selection. Try again.", err=True)
+
+    # 2. Select Channels
+    if not channels:
+        typer.echo("\n--- Select Channels ---")
+        for idx, ch in enumerate(valid_channels, 1):
+            typer.echo(f"  [{idx}] {ch}")
+        while True:
+            choice = typer.prompt("Select channels by numbers (comma-separated, e.g. 1 or 1,2) or enter custom channel(s)", default="1").strip()
+            if "," in choice or (choice.isdigit() and int(choice) > 0):
+                parts = [p.strip() for p in choice.split(",")]
+                selected = []
+                valid = True
+                for p in parts:
+                    if p.isdigit():
+                        idx = int(p) - 1
+                        if 0 <= idx < len(valid_channels):
+                            selected.append(valid_channels[idx])
+                        else:
+                            valid = False
+                    else:
+                        valid = False
+                if valid and selected:
+                    channels = selected
+                    break
+            # Fallback to custom input
+            custom_channels = [c.strip() for c in choice.split(",") if c.strip()]
+            if custom_channels:
+                channels = custom_channels
+                break
+            typer.echo("Invalid selection. Try again.", err=True)
+
+    # 3. Select Symbols
+    if not symbols:
+        suggestions = suggested_symbols.get(exchange, ["BTC-PERPETUAL"])
+        typer.echo(f"\n--- Suggested Symbols for {exchange} ---")
+        for idx, sym in enumerate(suggestions, 1):
+            typer.echo(f"  [{idx}] {sym}")
+        typer.echo("  [C] Enter custom symbol(s)")
+        
+        while True:
+            choice = typer.prompt("Select symbol(s) by number (comma-separated, e.g. 1 or 1,2) or enter C for custom", default="1").strip()
+            if choice.lower() == "c":
+                custom_input = typer.prompt("Enter custom symbol(s) (comma-separated, e.g. BTC-PERPETUAL)")
+                custom_symbols = [s.strip() for s in custom_input.split(",") if s.strip()]
+                if custom_symbols:
+                    symbols = custom_symbols
+                    break
+            elif "," in choice or (choice.isdigit() and int(choice) > 0):
+                parts = [p.strip() for p in choice.split(",")]
+                selected = []
+                valid = True
+                for p in parts:
+                    if p.isdigit():
+                        idx = int(p) - 1
+                        if 0 <= idx < len(suggestions):
+                            selected.append(suggestions[idx])
+                        else:
+                            valid = False
+                    else:
+                        valid = False
+                if valid and selected:
+                    symbols = selected
+                    break
+            if choice and not choice.isdigit():
+                symbols = [s.strip() for s in choice.split(",") if s.strip()]
+                break
+            typer.echo("Invalid selection. Try again.", err=True)
+
+    return exchange, symbols, channels
+
+
 # ---------------------------------------------------------------------------
 # collect  (T7b-collect — live connector wiring)
 # ---------------------------------------------------------------------------
@@ -575,6 +682,10 @@ def collect(
         crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
                           --channels trade --channels book_delta --data-dir data
     """
+    is_interactive = is_interactive_stdin()
+    if is_interactive and (not exchange or not symbols or not channels):
+        exchange, symbols, channels = select_collect_params_interactively(exchange, symbols, channels)
+
     if not exchange:
         exchange = typer.prompt("Enter exchange name (e.g. deribit)")
     if not symbols:

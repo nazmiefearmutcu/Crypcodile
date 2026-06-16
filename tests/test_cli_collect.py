@@ -183,3 +183,40 @@ def test_collect_cli_keyboard_interrupt_exits_zero(tmp_path: pathlib.Path) -> No
     assert result.exit_code == 0, (
         f"Expected exit 0 on KeyboardInterrupt, got {result.exit_code}.\n{result.output}"
     )
+
+
+def test_collect_cli_wizard(tmp_path: pathlib.Path) -> None:
+    """Test that select_collect_params_interactively runs when parameters are missing and interactive."""
+    def _fake_make_connector(exchange, symbols, channels, out, registry, **kw):
+        conn = DeribitConnector(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        conn.transport = FakeTransport(frames=[_TRADE_FRAME])
+        return conn
+
+    with (
+        patch("crypcodile.cli.is_interactive_stdin", return_value=True),
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+    ):
+        result = _RUNNER.invoke(
+            app,
+            [
+                "collect",
+                "--data-dir", str(tmp_path),
+            ],
+            # Inputs:
+            # 1. Select exchange: '4' for deribit.
+            # 2. Select channels: '1' for trade.
+            # 3. Select symbol: '1' for BTC-PERPETUAL.
+            input="4\n1\n1\n",
+        )
+
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    # Verify the selected exchange and symbols appear in output
+    assert "exchange='deribit'" in result.output
+    assert "['BTC-PERPETUAL']" in result.output
+    assert "['trade']" in result.output
