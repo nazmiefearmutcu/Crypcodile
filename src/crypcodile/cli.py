@@ -477,7 +477,8 @@ def update(
     import re
     from crypcodile import __version__
 
-    typer.echo("Checking remote repository for the latest version...", err=True)
+    current_version = __version__
+    typer.echo(f"⟳ Checking for updates... (current version {current_version})", err=True)
 
     # 1. Fetch latest version from remote tags
     latest_version = None
@@ -510,11 +511,7 @@ def update(
     except Exception:
         pass
 
-    current_version = __version__
-    typer.echo(f"Current local version: {current_version}", err=True)
-
     if latest_version:
-        typer.echo(f"Latest remote version: {latest_version}", err=True)
         # Compare versions
         clean_current = current_version.lstrip("v")
         clean_latest = latest_version.lstrip("v")
@@ -529,16 +526,16 @@ def update(
             is_newer = clean_latest != clean_current
 
         if not is_newer and not force:
-            typer.echo("Crypcodile is already up-to-date.", err=True)
+            typer.echo("✓ You are already on the latest version.", err=True)
             return
-        elif force:
-            typer.echo("Force option enabled. Re-installing...", err=True)
+        
+        if force:
+            typer.echo(f"⟳ Force upgrading to {latest_version}...", err=True)
         else:
-            typer.echo(f"A new update is available ({current_version} -> {latest_version})!", err=True)
+            typer.echo(f"⟳ Upgrading to {latest_version}...", err=True)
     else:
-        typer.echo("Could not determine the latest version from GitHub. Proceeding with update anyway...", err=True)
+        typer.echo("⟳ Could not check version. Proceeding with upgrade...", err=True)
 
-    typer.echo("Upgrading Crypcodile...", err=True)
     cmd = [
         sys.executable,
         "-m",
@@ -548,14 +545,15 @@ def update(
         "git+https://github.com/nazmiefearmutcu/Crypcodile.git",
     ]
     try:
-        result = subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if result.returncode == 0:
-            typer.echo("Crypcodile upgraded successfully to the latest version.", err=True)
+            target_v = latest_version if latest_version else "latest"
+            typer.echo(f"✓ Successfully upgraded to {target_v}!", err=True)
         else:
-            typer.echo("Failed to upgrade Crypcodile.", err=True)
+            typer.echo("✗ Failed to upgrade Crypcodile.", err=True)
             raise typer.Exit(code=1)
     except Exception as e:
-        typer.echo(f"Error upgrading Crypcodile: {e}", err=True)
+        typer.echo(f"✗ Error upgrading Crypcodile: {e}", err=True)
         raise typer.Exit(code=1)
 
 
