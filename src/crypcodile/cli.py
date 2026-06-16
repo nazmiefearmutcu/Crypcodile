@@ -775,35 +775,70 @@ def select_collect_params_interactively(
     return exchange, symbols, channels
 
 
-# Helper to extract a price from a record
-def get_record_price(rec: Any) -> float | None:
-    if hasattr(rec, "price"):
-        try:
+# Helper to extract a representative value from any Record type
+def get_record_value(rec: Any) -> float | None:
+    tag = getattr(type(rec).__struct_config__, "tag", None)
+    if not tag:
+        # Fallback to duck typing
+        if hasattr(rec, "price"):
+            try:
+                return float(rec.price)
+            except Exception:
+                pass
+        if hasattr(rec, "close"):
+            try:
+                return float(rec.close)
+            except Exception:
+                pass
+        return None
+
+    try:
+        if tag == "trade":
             return float(rec.price)
-        except Exception:
-            pass
-    if hasattr(rec, "last_price") and rec.last_price is not None:
-        try:
-            return float(rec.last_price)
-        except Exception:
-            pass
-    if hasattr(rec, "close"):
-        try:
+        elif tag == "book_ticker":
+            return (float(rec.bid_px) + float(rec.ask_px)) / 2.0
+        elif tag in ("book_snapshot", "book_delta"):
+            if rec.bids and rec.asks:
+                best_bid = rec.bids[0]
+                best_ask = rec.asks[0]
+                bid_px = best_bid["price"] if isinstance(best_bid, dict) else best_bid[0]
+                ask_px = best_ask["price"] if isinstance(best_ask, dict) else best_ask[0]
+                return (float(bid_px) + float(ask_px)) / 2.0
+        elif tag == "derivative_ticker":
+            if rec.last_price is not None:
+                return float(rec.last_price)
+            if rec.mark_price is not None:
+                return float(rec.mark_price)
+        elif tag == "options_chain":
+            if rec.mark_iv is not None:
+                return float(rec.mark_iv)
+            if rec.mark_price is not None:
+                return float(rec.mark_price)
+        elif tag == "funding":
+            return float(rec.funding_rate)
+        elif tag == "open_interest":
+            return float(rec.open_interest)
+        elif tag == "liquidation":
+            return float(rec.price)
+        elif tag == "ohlcv":
             return float(rec.close)
-        except Exception:
-            pass
-    if hasattr(rec, "mark_price") and rec.mark_price is not None:
-        try:
-            return float(rec.mark_price)
-        except Exception:
-            pass
-    if hasattr(rec, "bid_px") and hasattr(rec, "ask_px"):
-        import math
-        try:
-            return round(math.sqrt(float(rec.bid_px) * float(rec.ask_px)), 6)
-        except Exception:
-            pass
+    except Exception:
+        pass
     return None
+
+
+# Helper to format a record value based on its channel tag
+def format_record_value(channel: str, val: float) -> str:
+    if channel == "funding":
+        return f"{val * 100.0:.6f}%"
+    if channel == "options_chain":
+        # Options implied vol (IV) is typically a decimal fraction, e.g. 0.65 -> 65.0%
+        if val <= 5.0:
+            return f"{val * 100.0:.2f}%"
+        return f"{val:.2f}"
+    if val < 0.01:
+        return f"{val:.6f}"
+    return f"{val:,.4f}"
 
 
 def make_sparkline(prices: list[float]) -> str:
@@ -833,7 +868,7 @@ class MonitoringSink(Sink):
         self.target = target
         self.total_records = 0
         self.records_by_key = {}  # (symbol, channel) -> count
-        self.prices_by_symbol = {}  # symbol -> deque of last prices
+        self.values_by_key = {}  # (symbol, channel) -> deque of last values
         self.start_time = time.time()
         self.last_ts_by_key = {}  # (symbol, channel) -> float
         self.last_rec_by_key = {}  # (symbol, channel) -> record
@@ -860,11 +895,11 @@ class MonitoringSink(Sink):
         self.last_ts_by_key[key] = now
         self.last_rec_by_key[key] = record
 
-        price = get_record_price(record)
-        if price is not None:
-            if record.symbol not in self.prices_by_symbol:
-                self.prices_by_symbol[record.symbol] = deque(maxlen=30)
-            self.prices_by_symbol[record.symbol].append(price)
+        val = get_record_value(record)
+        if val is not None:
+            if key not in self.values_by_key:
+                self.values_by_key[key] = deque(maxlen=30)
+            self.values_by_key[key].append(val)
 
         await self.target.put(record)
 
@@ -972,37 +1007,38 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
         stats_table.add_column("Symbol", style="bold cyan")
         stats_table.add_column("Channel", style="bold yellow")
         stats_table.add_column("Count", justify="right", style="green")
-        stats_table.add_column("Last Price", justify="right", style="magenta")
+        stats_table.add_column("Last Value", justify="right", style="magenta")
         stats_table.add_column("Trend", justify="center")
-        stats_table.add_column("Price History (Sparkline)", width=32)
+        stats_table.add_column("Value History (Sparkline)", width=32)
         
         for (sym, ch), count in sorted(monitoring_sink.records_by_key.items()):
-            last_price_str = "-"
+            key = (sym, ch)
+            last_val_str = "-"
             trend_str = "-"
             sparkline = ""
             
-            prices_deque = monitoring_sink.prices_by_symbol.get(sym)
-            if prices_deque and len(prices_deque) > 0:
-                last_price = prices_deque[-1]
-                last_price_str = f"{last_price:,.4f}"
+            values_deque = monitoring_sink.values_by_key.get(key)
+            if values_deque and len(values_deque) > 0:
+                last_val = values_deque[-1]
+                last_val_str = format_record_value(ch, last_val)
                 
-                if len(prices_deque) >= 2:
-                    prev_price = prices_deque[-2]
-                    first_price = prices_deque[0]
-                    pct_change = ((last_price - first_price) / first_price) * 100.0 if first_price else 0.0
+                if len(values_deque) >= 2:
+                    prev_val = values_deque[-2]
+                    first_val = values_deque[0]
+                    pct_change = ((last_val - first_val) / first_val) * 100.0 if first_val else 0.0
                     
-                    if last_price > prev_price:
+                    if last_val > prev_val:
                         trend_str = f"[bold green]▲ (+{pct_change:.2f}%)[/]"
-                    elif last_price < prev_price:
+                    elif last_val < prev_val:
                         trend_str = f"[bold red]▼ ({pct_change:.2f}%)[/]"
                     else:
                         trend_str = f"[bold grey]▶ ({pct_change:.2f}%)[/]"
                 else:
                     trend_str = "[bold grey]▶ (0.00%)[/]"
                 
-                sparkline = make_sparkline(list(prices_deque))
+                sparkline = make_sparkline(list(values_deque))
                 
-            stats_table.add_row(sym, ch, f"{count:,}", last_price_str, trend_str, sparkline)
+            stats_table.add_row(sym, ch, f"{count:,}", last_val_str, trend_str, sparkline)
             
         footer_text = Text("\n💡 To view historical data and charts, run: ", style="dim")
         footer_text.append("crypcodile query \"SELECT * FROM trade\" --data-dir " + str(data_dir), style="bold yellow")
