@@ -189,7 +189,7 @@ def iv_surface(
     try:
         # underlying is a column value — use a parameterized query to avoid injection.
         result = conn.execute(
-            "SELECT * FROM options_chain WHERE underlying = ? ORDER BY local_ts",
+            "SELECT * FROM options_chain WHERE UPPER(underlying) = UPPER(?) ORDER BY local_ts",
             [underlying],
         )
         raw: pl.DataFrame = result.pl()
@@ -321,7 +321,7 @@ def vol_skew(
     try:
         res = conn.execute(
             "SELECT underlying_price FROM options_chain "
-            "WHERE underlying = ? AND expiry = ? AND local_ts <= ? "
+            "WHERE UPPER(underlying) = UPPER(?) AND expiry = ? AND local_ts <= ? "
             "ORDER BY local_ts DESC LIMIT 1",
             [underlying, expiry_ns, at_ns],
         )
@@ -543,7 +543,7 @@ def term_structure(
     try:
         res = conn.execute(
             "SELECT underlying_price FROM options_chain "
-            "WHERE underlying = ? AND local_ts <= ? "
+            "WHERE UPPER(underlying) = UPPER(?) AND local_ts <= ? "
             "ORDER BY local_ts DESC LIMIT 1",
             [underlying, at_ns],
         )

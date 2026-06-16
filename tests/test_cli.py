@@ -9,14 +9,14 @@ from __future__ import annotations
 import pathlib
 
 from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade
+from crypcodile.schema.records import BookSnapshot, Trade, Funding
 from crypcodile.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
 
 async def _write_fixtures(data_dir: pathlib.Path) -> None:
-    """Write 3 trades + 1 book_snapshot into the data lake."""
+    """Write 3 trades + 1 book_snapshot + 1 funding record into the data lake."""
     sink = ParquetSink(data_dir=data_dir, max_buffer_rows=10, flush_interval_seconds=9999)
     for price in [100.0, 200.0, 300.0]:
         await sink.put(
@@ -44,6 +44,17 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
             depth=1,
             sequence_id=1,
             is_snapshot=True,
+        )
+    )
+    await sink.put(
+        Funding(
+            exchange="deribit",
+            symbol="deribit:BTC-PERPETUAL",
+            symbol_raw="BTC-PERPETUAL",
+            exchange_ts=_BASE_TS,
+            local_ts=_BASE_TS,
+            funding_rate=0.0001,
+            interval_hours=8,
         )
     )
     await sink.flush()
@@ -195,7 +206,7 @@ async def test_cli_export_wizard_selects_symbol(tmp_path: pathlib.Path) -> None:
         runner = CliRunner()
         # Input sequence:
         # 1. Wizard prompts for channel (since channel is not provided).
-        #    Options might be book_snapshot and trade. We choose '2' (trade).
+        #    Options are book_snapshot, funding, trade. We choose '3' (trade).
         # 2. Wizard prompts 'Search/Select' for symbol. The user types 'BTC' to search.
         # 3. Next search/select prompt: user selects option '1' (which is 'deribit:BTC-PERPETUAL').
         # 4. Prompt for start range (0).
@@ -211,7 +222,7 @@ async def test_cli_export_wizard_selects_symbol(tmp_path: pathlib.Path) -> None:
                 "--data-dir",
                 str(tmp_path),
             ],
-            input="2\nBTC\n1\n0\n9999999999999999999\n",
+            input="3\nBTC\n1\n0\n9999999999999999999\n",
         )
         print(f"DEBUG WIZARD OUTPUT:\n{result.output}")
         assert result.exit_code == 0, f"stdout:\n{result.output}"
@@ -231,7 +242,7 @@ async def test_cli_replay_wizard(tmp_path: pathlib.Path) -> None:
     with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
         runner = CliRunner()
         # Input sequence:
-        # 1. Wizard prompts for channel. Choose '2' (trade).
+        # 1. Wizard prompts for channel. Choose '3' (trade).
         # 2. Wizard prompts for symbol search. Search 'BTC'.
         # 3. Choose '1' (deribit:BTC-PERPETUAL).
         # 4. Prompt for start range (0).
@@ -243,7 +254,7 @@ async def test_cli_replay_wizard(tmp_path: pathlib.Path) -> None:
                 "--data-dir",
                 str(tmp_path),
             ],
-            input="2\nBTC\n1\n0\n9999999999999999999\n",
+            input="3\nBTC\n1\n0\n9999999999999999999\n",
         )
         assert result.exit_code == 0, f"stdout:\n{result.output}"
         assert "deribit" in result.output or "trade" in result.output
@@ -261,11 +272,10 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
     with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
         runner = CliRunner()
         # Input sequence:
-        # 1. Wizard prompts for channel. Choose '2' (trade).
-        # 2. Wizard prompts for symbol search. Search 'BTC'.
-        # 3. Choose '1'.
-        # 4. Prompt for start range (0).
-        # 5. Prompt for end range (9999999999999999999).
+        # 1. Wizard prompts for symbol search. Search 'BTC'.
+        # 2. Choose '1'.
+        # 3. Prompt for start range (0).
+        # 4. Prompt for end range (9999999999999999999).
         result = runner.invoke(
             app,
             [
@@ -273,8 +283,8 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
                 "--data-dir",
                 str(tmp_path),
             ],
-            input="2\nBTC\n1\n0\n9999999999999999999\n",
+            input="BTC\n1\n0\n9999999999999999999\n",
         )
         # funding-apr might exit 0 with "No funding data found." since trade is not funding channel.
         assert result.exit_code == 0, f"stdout:\n{result.output}"
-        assert "No funding data found." in result.output or "deribit" in result.output
+        assert "No funding data found." in result.output or "deribit" in result.output or "0.0001" in result.output

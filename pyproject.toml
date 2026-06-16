@@ -1,6 +1,6 @@
 [project]
 name = "crypcodile"
-version = "0.1.021"
+version = "0.1.023"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "streamlit>=1.58.0",
+    "prompt-toolkit>=3.0",
 ]
 
 

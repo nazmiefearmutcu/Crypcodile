@@ -13,6 +13,7 @@ from typing import Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from web3 import Web3
 
@@ -56,8 +57,268 @@ app = FastAPI(
         "payment protocol."
     ),
     version=__version__,
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None
 )
+
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Redirect root to /docs."""
+    return RedirectResponse(url="/docs")
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    from fastapi.openapi.docs import get_swagger_ui_html
+    response = get_swagger_ui_html(
+        openapi_url=app.openapi_url or "/openapi.json",
+        title=app.title + " - Swagger UI",
+        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+    )
+    
+    # Custom premium dark green theme CSS for Swagger UI (no filter: invert hack)
+    custom_css = """
+    <style>
+        html, body {
+            background-color: #0b0f19 !important;
+            color: #f1f5f9 !important;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+            margin: 0;
+            padding: 0;
+        }
+        .swagger-ui {
+            color: #e2e8f0 !important;
+            background-color: #0b0f19 !important;
+        }
+        .swagger-ui .topbar {
+            background-color: #0f172a !important;
+            border-bottom: 2px solid #059669 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        }
+        .swagger-ui .topbar a {
+            color: #f1f5f9 !important;
+            font-weight: bold;
+        }
+        .swagger-ui .topbar .download-url-wrapper input[type=text] {
+            border: 1px solid #334155 !important;
+            background-color: #1e293b !important;
+            color: #f1f5f9 !important;
+            border-radius: 4px;
+        }
+        .swagger-ui .topbar .download-url-wrapper .download-url-button {
+            background: #059669 !important;
+            color: #fff !important;
+            border-radius: 4px;
+        }
+        .swagger-ui .info {
+            margin: 30px 0 !important;
+        }
+        .swagger-ui .info .title {
+            color: #059669 !important;
+            font-size: 2.2rem !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.025em;
+        }
+        .swagger-ui .info p, .swagger-ui .info li, .swagger-ui .info td, .swagger-ui label {
+            color: #94a3b8 !important;
+            font-size: 0.95rem !important;
+            line-height: 1.6;
+        }
+        .swagger-ui .info a {
+            color: #10b981 !important;
+            text-decoration: none;
+        }
+        .swagger-ui .info a:hover {
+            color: #34d399 !important;
+            text-decoration: underline;
+        }
+        .swagger-ui .opblock-tag {
+            color: #f1f5f9 !important;
+            border-bottom: 1px solid #1e293b !important;
+            font-size: 1.4rem !important;
+            font-weight: 700 !important;
+        }
+        .swagger-ui .scheme-container {
+            background-color: #0f172a !important;
+            box-shadow: none !important;
+            border: 1px solid #1e293b !important;
+            border-radius: 8px !important;
+            padding: 20px !important;
+            margin-bottom: 25px !important;
+        }
+        .swagger-ui select {
+            background-color: #1e293b !important;
+            border: 1px solid #334155 !important;
+            color: #f1f5f9 !important;
+            border-radius: 6px !important;
+            padding: 6px 10px !important;
+        }
+        .swagger-ui .opblock {
+            background-color: #0f172a !important;
+            border: 1px solid #1e293b !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+            overflow: hidden;
+            margin-bottom: 15px !important;
+        }
+        .swagger-ui .opblock .opblock-summary {
+            padding: 12px 20px !important;
+            border-bottom: 1px solid #1e293b !important;
+        }
+        .swagger-ui .opblock.opblock-get {
+            border-color: rgba(16, 185, 129, 0.4) !important;
+            background-color: rgba(16, 185, 129, 0.03) !important;
+        }
+        .swagger-ui .opblock.opblock-get .opblock-summary-method {
+            background-color: #059669 !important;
+            color: #ffffff !important;
+            font-weight: 700 !important;
+            border-radius: 4px;
+            padding: 6px 12px !important;
+        }
+        .swagger-ui .opblock.opblock-get .opblock-summary {
+            border-color: rgba(16, 185, 129, 0.2) !important;
+        }
+        .swagger-ui .opblock.opblock-post {
+            border-color: rgba(59, 130, 246, 0.4) !important;
+            background-color: rgba(59, 130, 246, 0.03) !important;
+        }
+        .swagger-ui .opblock.opblock-post .opblock-summary-method {
+            background-color: #2563eb !important;
+            color: #ffffff !important;
+            font-weight: 700 !important;
+            border-radius: 4px;
+            padding: 6px 12px !important;
+        }
+        .swagger-ui .opblock.opblock-post .opblock-summary {
+            border-color: rgba(59, 130, 246, 0.2) !important;
+        }
+        .swagger-ui .opblock .opblock-summary-path,
+        .swagger-ui .opblock .opblock-summary-path a {
+            color: #f1f5f9 !important;
+            font-weight: 600 !important;
+            font-size: 0.95rem !important;
+        }
+        .swagger-ui .opblock .opblock-summary-description {
+            color: #94a3b8 !important;
+        }
+        .swagger-ui .btn {
+            border-color: #334155 !important;
+            color: #f1f5f9 !important;
+            background-color: #1e293b !important;
+            border-radius: 6px !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease;
+        }
+        .swagger-ui .btn:hover {
+            background-color: #334155 !important;
+            color: #ffffff !important;
+        }
+        .swagger-ui .btn.execute {
+            background-color: #059669 !important;
+            border-color: #059669 !important;
+            color: #ffffff !important;
+        }
+        .swagger-ui .btn.execute:hover {
+            background-color: #10b981 !important;
+            border-color: #10b981 !important;
+        }
+        .swagger-ui table thead tr td,
+        .swagger-ui table thead tr th {
+            color: #f1f5f9 !important;
+            font-weight: 600 !important;
+            border-bottom: 2px solid #1e293b !important;
+        }
+        .swagger-ui .parameters-col_name {
+            color: #34d399 !important;
+            font-weight: 600 !important;
+        }
+        .swagger-ui .parameter__name.required {
+            color: #f87171 !important;
+        }
+        .swagger-ui .parameter__type {
+            color: #60a5fa !important;
+        }
+        .swagger-ui .parameter__in {
+            color: #94a3b8 !important;
+        }
+        .swagger-ui input[type=text] {
+            background-color: #0b0f19 !important;
+            border: 1px solid #334155 !important;
+            color: #f8fafc !important;
+            border-radius: 6px !important;
+            padding: 8px 12px !important;
+        }
+        .swagger-ui input[type=text]:focus {
+            border-color: #10b981 !important;
+        }
+        .swagger-ui .response-col_status {
+            color: #34d399 !important;
+            font-weight: 700 !important;
+        }
+        .swagger-ui .response-col_description {
+            color: #e2e8f0 !important;
+        }
+        .swagger-ui .opblock-body pre.microlight {
+            background-color: #080c14 !important;
+            border: 1px solid #1e293b !important;
+            color: #34d399 !important;
+            border-radius: 8px !important;
+            padding: 14px !important;
+            font-family: monospace !important;
+            font-size: 0.85rem !important;
+        }
+        .swagger-ui .model-box {
+            background-color: #0f172a !important;
+            border: 1px solid #1e293b !important;
+            border-radius: 6px !important;
+            padding: 12px !important;
+        }
+        .swagger-ui .model {
+            color: #e2e8f0 !important;
+        }
+        .swagger-ui .model-title {
+            color: #f8fafc !important;
+        }
+        .swagger-ui .prop-name {
+            color: #94a3b8 !important;
+        }
+        .swagger-ui .prop-type {
+            color: #60a5fa !important;
+        }
+        .swagger-ui section.models {
+            border: 1px solid #1e293b !important;
+            border-radius: 8px !important;
+            background-color: #0f172a !important;
+            margin-top: 35px !important;
+        }
+        .swagger-ui section.models h4 {
+            color: #059669 !important;
+            border-bottom: 1px solid #1e293b !important;
+            padding: 15px 20px !important;
+            font-size: 1.25rem !important;
+            font-weight: 700 !important;
+        }
+        .swagger-ui section.models .model-container {
+            background-color: #0b0f19 !important;
+            border: 1px solid #1e293b !important;
+            margin: 15px 20px !important;
+            border-radius: 6px !important;
+        }
+        .swagger-ui table.headers td {
+            color: #94a3b8 !important;
+        }
+        .swagger-ui .tabli.active button {
+            color: #10b981 !important;
+        }
+    </style>
+    """
+    html_content = response.body.decode("utf-8")
+    html_content = html_content.replace("</head>", f"{custom_css}</head>")
+    return Response(content=html_content, media_type="text/html")
+
 
 def get_w3() -> AsyncWeb3:
     if hasattr(app.state, "w3") and app.state.w3 is not None:
@@ -405,9 +666,10 @@ async def get_market_data(
                 else json.loads(payment_signature)
             )
         except Exception as e:
+            log.error(f"Malformed signature JSON: {e}")
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed verifying payment signature: Malformed signature JSON: {e}"
+                detail="Failed verifying payment signature: Malformed signature JSON string."
             )
             
         pid = sig_data.get("payment_id")
@@ -433,15 +695,17 @@ async def get_market_data(
             if len(clean_sig) not in (128, 130):
                 raise ValueError("Invalid signature length.")
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Malformed signature: {e}")
+            log.error(f"Signature format error: {e}")
+            raise HTTPException(status_code=400, detail="Malformed signature: Invalid signature format or length.")
             
         try:
             message = encode_defunct(text=pid)
             signer_address = Account.recover_message(message, signature=signature)
         except Exception as e:
+            log.error(f"Signature recovery failed: {e}")
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid cryptographic signature: {e}"
+                detail="Invalid cryptographic signature: Recovery failed."
             )
             
         if not signer_address:
@@ -489,7 +753,7 @@ async def get_market_data(
                         w3 = get_w3()
                         chain_id = await w3.eth.chain_id
                     else:
-                        raise HTTPException(status_code=400, detail=f"Failed to verify chain ID: {e}")
+                        raise HTTPException(status_code=400, detail="Failed to verify chain ID: RPC node is unresponsive.")
                 
                 if chain_id != 8453:
                     raise HTTPException(
@@ -646,9 +910,10 @@ async def get_market_data(
     except HTTPException:
         raise
     except Exception as e:
+        log.error(f"Payment verification failed: {e}")
         raise HTTPException(
             status_code=400,
-            detail=f"Failed verifying payment signature: {e}"
+            detail="Failed verifying payment signature: Invalid payment or signature format."
         ) from e
 
     # 3. Retrieve and return live Base DEX pool data
@@ -693,15 +958,17 @@ async def simulate_payment(payload: PaymentSignature) -> dict[str, Any]:
         if len(clean_sig) not in (128, 130):
             raise ValueError("Invalid signature length.")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Malformed signature: {e}")
+        log.error(f"Simulation malformed signature: {e}")
+        raise HTTPException(status_code=400, detail="Malformed signature: Invalid signature format or length.")
         
     try:
         message = encode_defunct(text=pid)
         signer_address = Account.recover_message(message, signature=signature)
     except Exception as e:
+        log.error(f"Simulation signature recovery failed: {e}")
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid cryptographic signature: {e}"
+            detail="Invalid cryptographic signature: Recovery failed."
         )
         
     if not signer_address:

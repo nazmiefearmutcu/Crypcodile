@@ -39,10 +39,94 @@ from pathlib import Path
 from typing import Any, Annotated
 
 import typer
+import typer.rich_utils
+
+# Change help panels and borders style from cyan to dark green
+typer.rich_utils.STYLE_OPTION = "bold dark_green"
+typer.rich_utils.STYLE_COMMANDS_PANEL_BORDER = "dark_green"
+typer.rich_utils.STYLE_OPTIONS_PANEL_BORDER = "dark_green"
+typer.rich_utils.STYLE_COMMANDS_TABLE_FIRST_COLUMN = "bold dark_green"
 
 def is_interactive_stdin() -> bool:
     import sys
     return sys.stdin.isatty() or getattr(sys.stdin, "_mock_interactive", False)
+
+
+COMMON_DEFAULT_SYMBOLS = [
+    "binance-spot:BTCUSDT",
+    "binance-spot:ETHUSDT",
+    "binance-spot:SOLUSDT",
+    "deribit:BTC-PERPETUAL",
+    "deribit:ETH-PERPETUAL",
+    "deribit:SOL-PERPETUAL",
+]
+
+
+def prompt_with_autocomplete(
+    text: str,
+    suggestions: list[str],
+    default: str = "",
+    meta_dict: dict[str, str] | None = None
+) -> str:
+    """Prompt the user for input, with autocomplete popup, history, and shadow suggestions."""
+    from prompt_toolkit import prompt
+    from prompt_toolkit.completion import WordCompleter
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    import sys
+
+    # If stdin is not interactive (e.g., tests/pipes) or running in pytest, use fallback _prompt_with_esc
+    if not is_interactive_stdin() or "pytest" in sys.modules:
+        return _prompt_with_esc(text, default=default)
+
+    completer = WordCompleter(suggestions, ignore_case=True, meta_dict=meta_dict)
+    
+    prompt_text = text
+    if default:
+        prompt_text += f" [{default}]"
+    prompt_text += ": "
+    
+    try:
+        val = prompt(
+            prompt_text,
+            completer=completer,
+            complete_while_typing=True,
+            auto_suggest=AutoSuggestFromHistory(),
+        )
+        val = val.strip()
+        if not val and default:
+            return default
+        return val
+    except (KeyboardInterrupt, EOFError):
+        sys.stderr.write("\nCancelled.\n")
+        sys.stderr.flush()
+        raise typer.Exit(code=0)
+
+
+def prompt_symbol(text: str, data_dir: Path, channel: str | None = None, default: str = "") -> str:
+    """Prompt the user for a symbol using autocomplete suggestions from the database catalog."""
+    from crypcodile.store.catalog import Catalog
+    
+    suggestions = set()
+    try:
+        cat = Catalog(data_dir)
+        channels = [channel] if channel else list(cat._registered_channels)
+        for ch in channels:
+            try:
+                df = cat.query(f'SELECT DISTINCT symbol FROM "{ch}"')
+                for s in df["symbol"].to_list():
+                    if s:
+                        suggestions.add(str(s))
+            except Exception:
+                pass
+    except Exception:
+        pass
+        
+    suggestions_list = sorted(list(suggestions))
+    if not suggestions_list:
+        suggestions_list = COMMON_DEFAULT_SYMBOLS
+        
+    return prompt_with_autocomplete(text, suggestions_list, default=default)
+
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +489,7 @@ def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> 
 
     if not all_symbols:
         typer.echo(f"No registered symbols found in channel '{channel}' on disk.", err=True)
-        sym_input = typer.prompt("Symbol (e.g. BTC)")
+        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=channel)
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
         return channel, symbols
 
@@ -432,7 +516,7 @@ def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> 
         typer.echo("  - Press Enter with empty query to clear search.")
         typer.echo("  - Press ESC to cancel.")
         
-        choice = typer.prompt("Search/Select", default="").strip()
+        choice = prompt_with_autocomplete("Search/Select", filtered, default="")
         
         if not choice:
             if search_query:
@@ -580,7 +664,7 @@ def export(
     if not channel:
         channel = typer.prompt("Channel (e.g. trade)")
     if not symbols:
-        sym_input = typer.prompt("Symbol (e.g. BTC)")
+        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=channel)
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
@@ -645,7 +729,8 @@ def replay(
         ch_input = typer.prompt("Channel (e.g. trade)")
         channels = [c.strip() for c in ch_input.split(",") if c.strip()]
     if not symbols:
-        sym_input = typer.prompt("Symbol (e.g. BTC)")
+        ch = channels[0] if channels else None
+        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=ch)
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
@@ -746,7 +831,7 @@ def select_collect_params_interactively(
         while True:
             choice = typer.prompt("Select symbol(s)", default="1").strip()
             if choice.lower() == "c":
-                custom_input = typer.prompt("Enter symbol (e.g. BTC)")
+                custom_input = prompt_with_autocomplete("Enter symbol (e.g. BTC)", suggestions)
                 custom_symbols = [s.strip() for s in custom_input.split(",") if s.strip()]
                 if custom_symbols:
                     symbols = [normalize_user_symbol(exchange, s) for s in custom_symbols]
@@ -918,24 +1003,37 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
     from rich.table import Table
     from rich.text import Text
     from rich.align import Align
+    from rich.columns import Columns
     
     console = Console()
     
+    def format_elapsed(secs: int) -> str:
+        h = secs // 3600
+        m = (secs % 3600) // 60
+        s = secs % 60
+        if h > 0:
+            return f"{h:02d}h {m:02d}m {s:02d}s"
+        return f"{m:02d}m {s:02d}s"
+        
     def generate_layout() -> Panel:
         now = time.time()
         elapsed = int(now - monitoring_sink.start_time)
         
+        # Title & Subtitle
         title_text = Text()
-        title_text.append("🐊 CRYPCODILE LIVE DATA STREAMER 🐊\n", style="bold green")
+        title_text.append("🐊 CRYPCODILE LIVE DATA INGESTION PIPELINE 🐊\n", style="bold green")
+        title_text.append("Real-time streaming crypto market data to local Parquet storage\n", style="dim white")
         
-        conn_table = Table.grid(padding=(0, 2))
-        conn_table.add_column("Key", style="bold cyan")
-        conn_table.add_column("Val", style="white")
-        conn_table.add_row("Exchange", f"[bold magenta]{exchange.upper()}[/]")
-        conn_table.add_row("Channels", f"[bold yellow]{', '.join(channels)}[/]")
-        conn_table.add_row("Data Dir", f"[bold blue]{data_dir}[/]")
-        conn_table.add_row("Elapsed Time", f"{elapsed} seconds")
+        # Pipeline Configuration Panel
+        config_table = Table.grid(padding=(0, 2))
+        config_table.add_column("Property", style="bold cyan")
+        config_table.add_column("Value", style="white")
+        config_table.add_row("Exchange source", f"[bold magenta]{exchange.upper()}[/]")
+        config_table.add_row("Data destination", f"[bold blue]{data_dir.resolve()}[/]")
+        config_table.add_row("Subscribed channels", f"[bold yellow]{', '.join(channels)}[/]")
+        config_table.add_row("Session duration", format_elapsed(elapsed))
         
+        # Ingestion Speed and Health calculation
         rate = monitoring_sink.current_rate
         if not monitoring_sink.rates_deque and elapsed > 0:
             rate = monitoring_sink.total_records / elapsed
@@ -945,34 +1043,39 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
             time_since_last_msg = now - max(monitoring_sink.last_ts_by_key.values())
             
         if time_since_last_msg > 10.0:
-            status_text = "[bold yellow]● STALE (Waiting for data)[/]"
+            status_text = "[bold blink red]⚠️  STALE (Waiting for data...)[/]"
+            status_border = "red"
         else:
-            status_text = "[bold green]● STREAMING[/]"
+            status_text = "[bold green]● PIPELINE ACTIVE & STREAMING[/]"
+            status_border = "green"
             
-        rate_table = Table.grid(padding=(0, 2))
-        rate_table.add_column("Key", style="bold cyan")
-        rate_table.add_column("Val", style="white")
-        rate_table.add_row("Status", status_text)
-        rate_table.add_row("Total Records", f"[bold green]{monitoring_sink.total_records:,}[/]")
-        rate_table.add_row("Message Rate", f"[bold green]{rate:.1f} rec/sec[/]")
-        
         buffered_count = 0
         if hasattr(monitoring_sink.target, "_buffers"):
             buffered_count = sum(len(buf) for buf in monitoring_sink.target._buffers.values())
-        rate_table.add_row("Buffered Rows", f"[bold red]{buffered_count:,}[/]")
+            
+        # Stats & Performance Panel
+        perf_table = Table.grid(padding=(0, 2))
+        perf_table.add_column("Metric", style="bold cyan")
+        perf_table.add_column("Value", style="white")
+        perf_table.add_row("Pipeline status", status_text)
+        perf_table.add_row("Total records saved", f"[bold green]{monitoring_sink.total_records:,}[/]")
+        perf_table.add_row("Ingestion speed", f"[bold green]{rate:.1f} records/sec[/]")
+        perf_table.add_row("Write-buffer queue", f"[bold red]{buffered_count:,} rows[/]")
         
-        header_cols = Table.grid(padding=(0, 4))
-        header_cols.add_column()
-        header_cols.add_column()
-        header_cols.add_row(conn_table, rate_table)
+        # Arrange configuration and performance side-by-side inside panels
+        left_panel = Panel(config_table, title="[bold white]⚙️ Pipeline Config[/]", border_style="green")
+        right_panel = Panel(perf_table, title="[bold white]📊 System Performance[/]", border_style=status_border)
         
-        stats_table = Table(title="[bold white]📊 Stream Statistics[/]", border_style="cyan")
-        stats_table.add_column("Symbol", style="bold cyan")
-        stats_table.add_column("Channel", style="bold yellow")
-        stats_table.add_column("Count", justify="right", style="green")
-        stats_table.add_column("Last Value", justify="right", style="magenta")
-        stats_table.add_column("Trend", justify="center")
-        stats_table.add_column("Value History (Sparkline)", width=32)
+        header_columns = Columns([left_panel, right_panel], expand=True)
+        
+        # Active Data Streams Table
+        stats_table = Table(title="[bold white]📈 Active Market Data Streams[/]", border_style="green", expand=True)
+        stats_table.add_column("Asset/Symbol", style="bold cyan", ratio=2)
+        stats_table.add_column("Data Type (Channel)", style="bold yellow", ratio=2)
+        stats_table.add_column("Messages Ingested", justify="right", style="green", ratio=2)
+        stats_table.add_column("Latest Value/Price", justify="right", style="magenta", ratio=2)
+        stats_table.add_column("Trend (since start)", justify="center", ratio=2)
+        stats_table.add_column("Activity Chart (last 30 ticks)", justify="center", ratio=3)
         
         for (sym, ch), count in sorted(monitoring_sink.records_by_key.items()):
             key = (sym, ch)
@@ -1003,19 +1106,19 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
                 
             stats_table.add_row(sym, ch, f"{count:,}", last_val_str, trend_str, sparkline)
             
-        footer_text = Text("\n💡 To view historical data and charts, run: ", style="dim")
-        footer_text.append("crypcodile query \"SELECT * FROM trade\" --data-dir " + str(data_dir), style="bold yellow")
+        footer_text = Text("\n💡 To view and query your historical local data, open a new terminal window and run: ", style="dim")
+        footer_text.append(f"crypcodile query \"SELECT * FROM {channels[0] if channels else 'trade'}\"", style="bold yellow")
         footer_text.append("\nPress ", style="dim")
         footer_text.append("Ctrl-C", style="bold red")
-        footer_text.append(" to stop streaming.", style="dim")
+        footer_text.append(" at any time to safely stop the ingestion pipeline.", style="dim")
         
         group = Group(
             Align.center(title_text),
-            Panel(header_cols, border_style="green"),
+            header_columns,
             stats_table,
             footer_text
         )
-        return Panel(group, border_style="green", expand=False)
+        return Panel(group, border_style="green", expand=True)
 
     with Live(generate_layout(), console=console, refresh_per_second=2) as live:
         while True:
@@ -1062,7 +1165,7 @@ def collect(
     if not exchange:
         exchange = typer.prompt("Exchange (e.g. deribit)")
     if not symbols:
-        sym_input = typer.prompt("Symbol (e.g. BTC)")
+        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols and exchange:
         symbols = [normalize_user_symbol(exchange, s) for s in symbols]
@@ -1162,12 +1265,12 @@ def funding_apr_cmd(
 
     is_interactive = is_interactive_stdin()
     if is_interactive and not symbol:
-        _, selected_symbols = select_symbols_interactively(data_dir)
+        _, selected_symbols = select_symbols_interactively(data_dir, channel="funding")
         if selected_symbols:
             symbol = selected_symbols[0]
 
     if not symbol:
-        symbol = typer.prompt("Symbol (e.g. BTC)")
+        symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="funding")
     if symbol:
         resolved_syms = resolve_input_symbols(data_dir, [symbol])
         if resolved_syms:
@@ -1242,26 +1345,26 @@ def basis_cmd(
         mode = typer.prompt("Basis mode", default="perp")
         if mode == "perp":
             if is_interactive:
-                _, selected_symbols = select_symbols_interactively(data_dir)
+                _, selected_symbols = select_symbols_interactively(data_dir, channel="derivative_ticker")
                 if selected_symbols:
                     perp = selected_symbols[0]
             if not perp:
-                perp = typer.prompt("Perpetual symbol (e.g. BTC)")
+                perp = prompt_symbol("Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker")
         else:
             if is_interactive:
                 typer.echo("\nSelect futures symbol:")
-                _, selected_futures = select_symbols_interactively(data_dir)
+                _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
                 if selected_futures:
                     future = selected_futures[0]
                 typer.echo("\nSelect spot symbol:")
-                _, selected_spots = select_symbols_interactively(data_dir)
+                _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
                 if selected_spots:
                     spot = selected_spots[0]
             
             if not future:
-                future = typer.prompt("Futures symbol (e.g. BTC)")
+                future = prompt_symbol("Futures symbol (e.g. BTC)", data_dir, channel="trade")
             if not spot:
-                spot = typer.prompt("Spot symbol (e.g. BTC)")
+                spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
 
     if perp:
         resolved = resolve_input_symbols(data_dir, [perp])
@@ -1297,6 +1400,36 @@ def basis_cmd(
 
 
 # ---------------------------------------------------------------------------
+def get_available_option_underlyings(data_dir: Path) -> list[str]:
+    """Get list of unique underlyings in options_chain."""
+    from crypcodile.store.catalog import Catalog
+    cat = Catalog(data_dir)
+    if "options_chain" not in cat._registered_channels:
+        return []
+    try:
+        df = cat.query("SELECT DISTINCT underlying FROM options_chain ORDER BY underlying")
+        return [str(x) for x in df["underlying"].to_list() if x]
+    except Exception:
+        return []
+
+
+def get_available_option_snapshots(data_dir: Path, underlying: str | None = None) -> list[int]:
+    """Helper to query the latest available option snapshot timestamps from the catalog."""
+    from crypcodile.store.catalog import Catalog
+    cat = Catalog(data_dir)
+    if "options_chain" not in cat._registered_channels:
+        return []
+    try:
+        u_filter = ""
+        if underlying:
+            u_filter = f" WHERE UPPER(underlying) = '{underlying.upper()}'"
+        sql = f"SELECT DISTINCT local_ts FROM options_chain{u_filter} ORDER BY local_ts DESC LIMIT 5"
+        df = cat.query(sql)
+        return [int(x) for x in df["local_ts"].to_list() if x]
+    except Exception:
+        return []
+
+
 # iv-surface  (Task 6.5)
 # ---------------------------------------------------------------------------
 
@@ -1323,9 +1456,44 @@ def iv_surface_cmd(
     data_dir = resolve_data_dir(data_dir)
 
     if not underlying:
-        underlying = typer.prompt("Underlying asset (e.g. BTC)")
+        underlyings = get_available_option_underlyings(data_dir)
+        if underlyings:
+            typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+        underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
+
     if at is None:
-        at = typer.prompt("Snapshot time", type=int)
+        snapshots = get_available_option_snapshots(data_dir, underlying)
+        if not snapshots:
+            underlyings = get_available_option_underlyings(data_dir)
+            if underlyings:
+                typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+                snapshots = get_available_option_snapshots(data_dir, None)
+                if snapshots:
+                    typer.echo("Here are the latest available options snapshots across all assets:")
+            else:
+                typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
+        
+        if snapshots:
+            import datetime
+            typer.echo("\n--- Available Options Snapshots (latest first) ---")
+            for idx, ts in enumerate(snapshots, 1):
+                dt_str = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+                typer.echo(f"  [{idx}] {ts} ({dt_str})")
+            choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
+                at = snapshots[int(choice) - 1]
+            else:
+                try:
+                    at = int(choice)
+                except ValueError:
+                    at = None
+        else:
+            at_str = typer.prompt("Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)").strip()
+            try:
+                at = int(at_str)
+            except ValueError:
+                at = None
 
     if not underlying or at is None:
         typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
@@ -1366,9 +1534,44 @@ def term_structure_cmd(
     data_dir = resolve_data_dir(data_dir)
 
     if not underlying:
-        underlying = typer.prompt("Underlying asset (e.g. BTC)")
+        underlyings = get_available_option_underlyings(data_dir)
+        if underlyings:
+            typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+        underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
+
     if at is None:
-        at = typer.prompt("Snapshot time", type=int)
+        snapshots = get_available_option_snapshots(data_dir, underlying)
+        if not snapshots:
+            underlyings = get_available_option_underlyings(data_dir)
+            if underlyings:
+                typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+                snapshots = get_available_option_snapshots(data_dir, None)
+                if snapshots:
+                    typer.echo("Here are the latest available options snapshots across all assets:")
+            else:
+                typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
+        
+        if snapshots:
+            import datetime
+            typer.echo("\n--- Available Options Snapshots (latest first) ---")
+            for idx, ts in enumerate(snapshots, 1):
+                dt_str = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+                typer.echo(f"  [{idx}] {ts} ({dt_str})")
+            choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
+                at = snapshots[int(choice) - 1]
+            else:
+                try:
+                    at = int(choice)
+                except ValueError:
+                    at = None
+        else:
+            at_str = typer.prompt("Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)").strip()
+            try:
+                at = int(at_str)
+            except ValueError:
+                at = None
 
     if not underlying or at is None:
         typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
@@ -1393,9 +1596,15 @@ def mcp(
 ) -> None:
     """Start the Model Context Protocol (MCP) server over stdin/stdout."""
     import asyncio
+    import sys
 
     from crypcodile.mcp_server import serve_stdio
     
+    if sys.stdin.isatty():
+        typer.echo("⚠️  Warning: MCP server is running on stdio and expects JSON-RPC input.", err=True)
+        typer.echo("👉 It is meant to be run by an AI client (like Claude Desktop), not run interactively.", err=True)
+        typer.echo("👉 Press Ctrl-C to exit.", err=True)
+
     typer.echo("Starting Crypcodile MCP Server on stdio...", err=True)
     try:
         asyncio.run(serve_stdio(data_dir=data_dir))
@@ -1526,15 +1735,45 @@ def shell() -> None:
     """Start an interactive Crypcodile shell."""
     import shlex
     import click
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.completion import WordCompleter
     
     typer.echo("Welcome to Crypcodile Interactive Shell!")
     typer.echo("Type 'help' to list commands. Type 'exit' or 'quit' to exit.")
     
     click_group = typer.main.get_group(app)
     
+    commands = {}
+    for name in click_group.list_commands(None):
+        cmd = click_group.get_command(None, name)
+        help_text = cmd.help or ""
+        if help_text:
+            help_text = help_text.split("\n")[0].strip()
+        commands[name] = help_text
+        
+    import sys
+    is_pytest = "pytest" in sys.modules
+    session = None
+    if not is_pytest:
+        session = PromptSession(
+            history=InMemoryHistory(),
+            auto_suggest=AutoSuggestFromHistory(),
+            completer=WordCompleter(
+                words=list(commands.keys()) + ["exit", "quit", "help"],
+                meta_dict={**commands, "exit": "Exit the shell", "quit": "Exit the shell", "help": "Show help"},
+                ignore_case=True
+            ),
+            complete_while_typing=True
+        )
+    
     while True:
         try:
-            line = input("crypcodile> ").strip()
+            if is_pytest:
+                line = input("crypcodile> ").strip()
+            else:
+                line = session.prompt("crypcodile> ").strip()
             if not line:
                 continue
             if line.lower() in ("exit", "quit"):
