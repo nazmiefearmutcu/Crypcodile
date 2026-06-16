@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.010] - 2026-06-16
+### Fixed
+- **Logo Presentation**: Suppressed logo display on the `update` command screen.
+
+---
+
 ## [0.1.009] - 2026-06-16
 ### Added
 - **CLI Logo Display**: Configured the shaded crocodile logo to always be displayed when running the CLI interactively in TTY terminal environments. The logo output is routed to `sys.stderr` to keep command pipelining and data redirection of `stdout` clean and unpolluted.

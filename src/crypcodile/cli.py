@@ -36,9 +36,108 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Annotated
+from typing import Any, Annotated
 
 import typer
+
+# ---------------------------------------------------------------------------
+# Override typer.prompt to support cancellation with the ESC key
+# ---------------------------------------------------------------------------
+def _prompt_with_esc(text: str, default: Any = None, type: Any = None, *args: Any, **kwargs: Any) -> Any:
+    """Prompt the user for input, allowing cancellation via ESC or Ctrl+C."""
+    import sys
+    import tty
+    import termios
+    import select
+
+    def read_line() -> str:
+        sys.stdout.write(text)
+        if default is not None:
+            sys.stdout.write(f" [{default}]")
+        sys.stdout.write(": ")
+        sys.stdout.flush()
+
+        # Fallback if stdin is not a TTY (e.g., tests)
+        if not sys.stdin.isatty():
+            line = sys.stdin.readline()
+            if not line:
+                raise KeyboardInterrupt
+            line = line.rstrip("\r\n")
+            if not line and default is not None:
+                return str(default)
+            return line
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        line = ""
+        try:
+            tty.setraw(fd)
+            while True:
+                ch = sys.stdin.read(1)
+                if not ch:
+                    break
+
+                if ch == "\x1b":
+                    # Check if ESC or arrow key escape sequence
+                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                    if not r:
+                        raise KeyboardInterrupt
+                    else:
+                        # Consume arrow keys
+                        sys.stdin.read(1)
+                        sys.stdin.read(1)
+                        continue
+
+                if ch in ("\r", "\n"):
+                    sys.stdout.write("\r\n")
+                    sys.stdout.flush()
+                    break
+
+                if ch in ("\x7f", "\x08"):
+                    if len(line) > 0:
+                        line = line[:-1]
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                    continue
+
+                if ch == "\x03":
+                    raise KeyboardInterrupt
+
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+                line += ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        if not line and default is not None:
+            return str(default)
+        return line
+
+    while True:
+        try:
+            val_str = read_line()
+        except KeyboardInterrupt:
+            # Print newline and Cancelled, then exit cleanly
+            sys.stderr.write("\nCancelled.\n")
+            sys.stderr.flush()
+            raise typer.Exit(code=0)
+
+        if not val_str and default is None:
+            # Re-prompt if value is required and no default is provided
+            continue
+
+        if type is not None:
+            try:
+                return type(val_str)
+            except ValueError:
+                sys.stdout.write(f"Error: Invalid value of type {type.__name__}.\r\n")
+                sys.stdout.flush()
+                continue
+        return val_str
+
+import typing
+typing.cast(Any, typer).prompt = _prompt_with_esc
+
 
 # ---------------------------------------------------------------------------
 # Top-level imports used by collect (kept at module scope so tests can patch
@@ -732,8 +831,8 @@ def main() -> None:
     """Entry-point called by the ``crypcodile`` script."""
     import sys
 
-    # Print the logo always to stderr, unless running the mcp command or tests
-    if "mcp" not in sys.argv and "pytest" not in sys.modules:
+    # Print the logo always to stderr, unless running the mcp/update command or tests
+    if "mcp" not in sys.argv and "update" not in sys.argv and "pytest" not in sys.modules:
         if sys.stderr.isatty():
             sys.stderr.write(LOGO + "\n")
             sys.stderr.flush()
