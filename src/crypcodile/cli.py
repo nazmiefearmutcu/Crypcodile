@@ -54,6 +54,7 @@ app = typer.Typer(
     name="crypcodile",
     help="Crypcodile -- open-source crypto market-data engine.",
     add_completion=False,
+    no_args_is_help=True,
 )
 
 # ---------------------------------------------------------------------------
