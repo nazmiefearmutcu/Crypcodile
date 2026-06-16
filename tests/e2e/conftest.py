@@ -42,7 +42,7 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
     env["PAYMENTS_FILE"] = str(payments_file)
     
     proc = subprocess.Popen(
-        ["uv", "run", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
@@ -79,7 +79,7 @@ def mcp_server_client(mock_rpc) -> Generator[subprocess.Popen, None, None]:
     
     # Run MCP server subprocess (over stdin/stdout) using the cli entrypoint
     proc = subprocess.Popen(
-        ["uv", "run", "python", "-m", "crypcodile.cli", "mcp"],
+        [sys.executable, "-m", "crypcodile.cli", "mcp"],
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

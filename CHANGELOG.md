@@ -4,6 +4,24 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.013] - 2026-06-16
+### Changed
+- **Logo Mascot Design**: Updated the crocodile mascot logo to use a new, friendly side-profile design with scaled ridges.
+
+---
+
+## [0.1.012] - 2026-06-16
+### Changed
+- Release updates.
+
+---
+
+## [0.1.011] - 2026-06-16
+### Changed
+- Release updates.
+
+---
+
 ## [0.1.010] - 2026-06-16
 ### Fixed
 - **Logo Presentation**: Suppressed logo display on the `update` command screen.

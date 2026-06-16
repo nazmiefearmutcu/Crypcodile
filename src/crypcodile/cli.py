@@ -40,6 +40,11 @@ from typing import Any, Annotated
 
 import typer
 
+def is_interactive_stdin() -> bool:
+    import sys
+    return sys.stdin.isatty() or getattr(sys.stdin, "_mock_interactive", False)
+
+
 # ---------------------------------------------------------------------------
 # Override typer.prompt to support cancellation with the ESC key
 # ---------------------------------------------------------------------------
@@ -170,6 +175,187 @@ _DataDirOpt = Annotated[
 ]
 
 
+def resolve_data_dir(data_dir: Path) -> Path:
+    """Resolve the data directory, falling back to test_data or prompting the user if empty."""
+    import sys
+    from pathlib import Path
+    from crypcodile.store.catalog import Catalog
+
+    cwd_test_data = Path("test_data")
+    repo_root = Path(__file__).resolve().parents[2]
+    repo_test_data = repo_root / "test_data"
+
+    def has_data(d: Path) -> bool:
+        if not d.exists() or not d.is_dir():
+            return False
+        try:
+            cat = Catalog(d)
+            return len(cat._registered_channels) > 0
+        except Exception:
+            return False
+
+    # 1. If the requested directory already has data, use it.
+    if has_data(data_dir):
+        return data_dir
+
+    # 2. Find a candidate test_data folder that actually has data.
+    fallback_candidate = None
+    if has_data(cwd_test_data):
+        fallback_candidate = cwd_test_data
+    elif has_data(repo_test_data):
+        fallback_candidate = repo_test_data
+
+    # 3. If running in pytest:
+    if "pytest" in sys.modules:
+        if fallback_candidate and (data_dir == Path("data") or not data_dir.exists()):
+            return fallback_candidate
+        return data_dir
+
+    # 4. If not a TTY (non-interactive / piped / IDE subprocess):
+    if not is_interactive_stdin():
+        if fallback_candidate and (data_dir == Path("data") or not data_dir.exists()):
+            typer.echo(f"Warning: No data found in '{data_dir}', falling back to '{fallback_candidate}'.", err=True)
+            return fallback_candidate
+        return data_dir
+
+    # 5. Interactive TTY:
+    if fallback_candidate and (data_dir == Path("data") or not data_dir.exists()):
+        use_fallback = typer.confirm(
+            f"No data found in '{data_dir}', but test data was found at '{fallback_candidate}'. Use it?",
+            default=True
+        )
+        if use_fallback:
+            return fallback_candidate
+
+    while True:
+        alt_path = typer.prompt("No data found. Enter data directory path", default=str(data_dir))
+        alt_dir = Path(alt_path)
+        if has_data(alt_dir):
+            return alt_dir
+        if not alt_dir.exists():
+            typer.echo(f"Directory '{alt_dir}' does not exist.", err=True)
+        else:
+            typer.echo(f"No registered channels found in '{alt_dir}'.", err=True)
+        
+        if not typer.confirm("Try another path?", default=True):
+            break
+            
+    return data_dir
+
+
+def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> tuple[str, list[str]]:
+    """Select channel and symbol(s) interactively using a search/selection wizard."""
+    import sys
+    from crypcodile.store.catalog import Catalog
+
+    cat = Catalog(data_dir)
+    available_channels = sorted(list(cat._registered_channels))
+
+    if not available_channels:
+        return "", []
+
+    # 1. Resolve channel if not specified
+    if not channel:
+        typer.echo("\n--- Select Channel ---")
+        for idx, ch in enumerate(available_channels, 1):
+            typer.echo(f"  [{idx}] {ch}")
+        
+        while True:
+            choice = typer.prompt("Select channel by number or enter custom channel name", default="1").strip()
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(available_channels):
+                    channel = available_channels[idx]
+                    break
+                else:
+                    typer.echo("Invalid selection. Try again.", err=True)
+            elif choice:
+                channel = choice
+                break
+            else:
+                typer.echo("Channel name cannot be empty.", err=True)
+
+    # 2. Query all unique symbols in this channel
+    typer.echo(f"\nScanning symbol list for channel '{channel}'...")
+    try:
+        df = cat.query(f'SELECT DISTINCT symbol FROM "{channel}"')
+        all_symbols = sorted([str(s) for s in df["symbol"].to_list() if s])
+    except Exception as e:
+        typer.echo(f"Error querying symbols from catalog: {e}", err=True)
+        all_symbols = []
+
+    if not all_symbols:
+        typer.echo(f"No registered symbols found in channel '{channel}' on disk.", err=True)
+        sym_input = typer.prompt("Enter canonical symbol(s) manually (comma-separated)")
+        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        return channel, symbols
+
+    # 3. Grandma's phone filtering loop
+    search_query = ""
+    while True:
+        # Filter symbols matching search_query
+        filtered = [s for s in all_symbols if search_query.lower() in s.lower()]
+        
+        typer.echo(f"\n--- Symbol Search (Filter: '{search_query}') ---")
+        if not filtered:
+            typer.echo("No matching symbols found.")
+        else:
+            display_limit = 15
+            for idx, sym in enumerate(filtered[:display_limit], 1):
+                typer.echo(f"  [{idx}] {sym}")
+            if len(filtered) > display_limit:
+                typer.echo(f"  ... and {len(filtered) - display_limit} more symbols ...")
+                
+        typer.echo("\nOptions:")
+        typer.echo("  - Type number(s) (e.g. 1 or 1,2) to select symbol(s).")
+        typer.echo("  - Type letters to search/filter.")
+        typer.echo("  - Type 'all' to select all currently listed symbols.")
+        typer.echo("  - Press Enter with empty query to clear search.")
+        typer.echo("  - Press ESC to cancel.")
+        
+        choice = typer.prompt("Search/Select", default="").strip()
+        
+        if not choice:
+            if search_query:
+                search_query = ""
+                continue
+            else:
+                typer.echo("Please make a selection or press ESC to cancel.", err=True)
+                continue
+
+        if choice.lower() == "all":
+            if filtered:
+                typer.echo(f"Selected all {len(filtered)} matching symbols: {filtered}")
+                return channel, filtered
+            else:
+                typer.echo("No symbols to select.", err=True)
+                continue
+
+        # Check if choice is a comma-separated list of numbers
+        if "," in choice or (choice.isdigit() and int(choice) > 0):
+            parts = [p.strip() for p in choice.split(",")]
+            selected = []
+            valid = True
+            for p in parts:
+                if p.isdigit():
+                    idx = int(p) - 1
+                    if 0 <= idx < len(filtered) and idx < 15:
+                        selected.append(filtered[idx])
+                    else:
+                        valid = False
+                        typer.echo(f"Invalid index: {p}", err=True)
+                else:
+                    valid = False
+            if valid and selected:
+                typer.echo(f"Selected: {', '.join(selected)}")
+                return channel, selected
+            if not valid:
+                continue
+
+        # Update search query
+        search_query = choice
+
+
 # ---------------------------------------------------------------------------
 # query
 # ---------------------------------------------------------------------------
@@ -182,6 +368,8 @@ def query(
 ) -> None:
     """Execute a DuckDB SQL query against the data lake and print the result."""
     from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
 
     if not sql:
         sql = typer.prompt("Enter DuckDB SQL query")
@@ -206,6 +394,8 @@ def catalog(
     """List channels present in the data lake with their row counts."""
     from crypcodile.client.client import CrypcodileClient
     from crypcodile.store.catalog import Catalog
+
+    data_dir = resolve_data_dir(data_dir)
 
     cat: Catalog = CrypcodileClient(data_dir=data_dir)._catalog
 
@@ -260,6 +450,14 @@ def export(
     """Export channel x symbols x time range to a file."""
     from crypcodile.client.client import CrypcodileClient
 
+    data_dir = resolve_data_dir(data_dir)
+
+    is_interactive = is_interactive_stdin()
+    if is_interactive and (not channel or not symbols):
+        channel, selected_symbols = select_symbols_interactively(data_dir, channel)
+        if selected_symbols:
+            symbols = selected_symbols
+
     if not channel:
         channel = typer.prompt("Enter channel name (e.g. trade)")
     if not symbols:
@@ -310,6 +508,17 @@ def replay(
 ) -> None:
     """Stream canonical Records from the data lake, printed to stdout."""
     from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    is_interactive = is_interactive_stdin()
+    if is_interactive and (not channels or not symbols):
+        wiz_channel = channels[0] if channels else None
+        wiz_channel, selected_symbols = select_symbols_interactively(data_dir, wiz_channel)
+        if wiz_channel and not channels:
+            channels = [wiz_channel]
+        if selected_symbols:
+            symbols = selected_symbols
 
     if not channels:
         ch_input = typer.prompt("Enter channel name(s) (comma-separated, e.g. trade)")
@@ -437,6 +646,14 @@ def funding_apr_cmd(
     """Print per-event funding APR and cumulative funding for a perpetual symbol."""
     from crypcodile.client.client import CrypcodileClient
 
+    data_dir = resolve_data_dir(data_dir)
+
+    is_interactive = is_interactive_stdin()
+    if is_interactive and not symbol:
+        _, selected_symbols = select_symbols_interactively(data_dir)
+        if selected_symbols:
+            symbol = selected_symbols[0]
+
     if not symbol:
         symbol = typer.prompt("Enter canonical symbol (e.g. deribit:BTC-PERPETUAL)")
     if start is None:
@@ -495,19 +712,40 @@ def basis_cmd(
     """
     from crypcodile.client.client import CrypcodileClient
 
+    data_dir = resolve_data_dir(data_dir)
+
     if start is None:
         start = typer.prompt("Enter start of time range (nanoseconds UTC)", type=int, default=0)
     if end is None:
         end = typer.prompt("Enter end of time range (nanoseconds UTC)", type=int, default=9999999999999999999)
 
+    is_interactive = is_interactive_stdin()
+
     # If neither perp nor future/spot is specified, ask user what mode they want
     if perp is None and (future is None or spot is None):
         mode = typer.prompt("Select basis mode (perp or spot-future)", default="perp")
         if mode == "perp":
-            perp = typer.prompt("Enter canonical perpetual symbol (e.g. deribit:BTC-PERPETUAL)")
+            if is_interactive:
+                _, selected_symbols = select_symbols_interactively(data_dir)
+                if selected_symbols:
+                    perp = selected_symbols[0]
+            if not perp:
+                perp = typer.prompt("Enter canonical perpetual symbol (e.g. deribit:BTC-PERPETUAL)")
         else:
-            future = typer.prompt("Enter canonical futures symbol (e.g. deribit:BTC-FUTURE)")
-            spot = typer.prompt("Enter canonical spot symbol (e.g. binance-spot:BTCUSDT)")
+            if is_interactive:
+                typer.echo("\nSelect futures symbol:")
+                _, selected_futures = select_symbols_interactively(data_dir)
+                if selected_futures:
+                    future = selected_futures[0]
+                typer.echo("\nSelect spot symbol:")
+                _, selected_spots = select_symbols_interactively(data_dir)
+                if selected_spots:
+                    spot = selected_spots[0]
+            
+            if not future:
+                future = typer.prompt("Enter canonical futures symbol (e.g. deribit:BTC-FUTURE)")
+            if not spot:
+                spot = typer.prompt("Enter canonical spot symbol (e.g. binance-spot:BTCUSDT)")
 
     client = CrypcodileClient(data_dir=data_dir)
 
@@ -553,6 +791,8 @@ def iv_surface_cmd(
     """Print the implied-vol surface snapshot at a given instant."""
     from crypcodile.client.client import CrypcodileClient
 
+    data_dir = resolve_data_dir(data_dir)
+
     if not underlying:
         underlying = typer.prompt("Enter underlying asset identifier (e.g. BTC)")
     if at is None:
@@ -593,6 +833,8 @@ def term_structure_cmd(
 ) -> None:
     """Print the ATM IV term structure at a given instant."""
     from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
 
     if not underlying:
         underlying = typer.prompt("Enter underlying asset identifier (e.g. BTC)")
@@ -793,36 +1035,21 @@ def shell() -> None:
 # Entry-point
 # ---------------------------------------------------------------------------
 
-LOGO_ART = r"""                                                                                           ░  ▒▒░▒▓░ ▒    
-                                                                                        ░▒▒▒▒▒▒░░░░░░▒▒   
-                             ░░░░  ░▒▒▒▒▒▒                                            ░▒▒░░░░░░░░░░░░▒▒▒  
-  ▒░▒░░░░▒                 ░▒▒░░░▒▒░░░▒▒░░▒░               ░▒    ░                  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░▓░▒ 
- ▒▒░░░▒▓░░▒░           ░░░▒▒▓▒░░░░░▒░▒░▓▓░░▓▒▒▒░     ░▓▒ ░▓▓▓▓░▒▓▓▓ ░▒▓░                         ▒▒▒▒░▓░▒░
-▒░░░░░▒░░░░░░▒▒▒░▒▒▒▒░▒▒░░░░░░░░░░░▒░▓▓▓▓░░░░░░░▒▒░░▒▓▒▒▒░░░░░░░░░▒▒▒▒▒▒▒▓▓                      ▓▓▒▒▒░░▓
-▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▒░▓▓▓▒░░░░░▒▒░░▒░░░░▒▓▓▒░▒▓▓▓░▒▓▓░░▒▓░░▒▒▒▒▓▓                ░░▓▒▒▒░░░▓
- ░░░▒▒▓░░▒▒░░░░░▒▒▒▒▒▒▒░░░░░░░░░░░░░▒░░░░░░░░░▒░░░░▒░░▒▒▒▒▒░░▒░░░▒▒░░░▒▒▒░▒▓▓▒▒▒▒▒▓▒        ░ ▒▓▓▒▒▒▒░░░░▓
-  ░   ░ ░░▒▒▒▒▓▒▒▒░░▓▓▓▓▒▒▒░░░░░░░░░▒▓▒░░░░░░░░░▒░░░░░░▒▒▓▓▓░░▒▒▓▓▓░▒▒▓▓▒░░▒▒░░▒▓▓░▒▒▓▓▒▓▓▒▓▓▒▒▒▒░▒░░░░░░▓
-       ░░   ░░       ░▓▓░▓▓▓▒▒▒▒▒▓▓▓▓▓░       ░░░░░░▒░░▒░░░▒░░░░░░░░▒░░░░░▒▒▓░░▒▓▒░▓▓▒░░░░▒░▒▓▒▒▒░░░░░▒░▒░
-                      ▓▓▓▓▓▓▒▒▓▓▓▓▓▓▓▒        ░░░░░░░░░░▒░░▒░░░▒░░░░░▒░░░▒░░░░▒░░░░▒▒░▒▒░▒▒▒░░▒░░░░░░▒░░▓ 
-                    ░▓▓▓▓▓▓▓▓▒▒▒▓▓▓▓░         ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▒▒▒▒▒▒░░░░░░░░░░▒░ ░▓  
-      ░░   ░░ ░░▒▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░          ░▒░░░░░░░░░░░░░░░░▒░░░░░░░░░░░░░░░░░▒▒░░░░░░▒▒░░░░░▒░ ░▒▓   
-      ▒░▒▒░░ ▒▓▓▒▒▒▒░▒▒▒▒░▒▒▒▒░░            ░▒░░░░░░░░░▒░░░░░░░░▒▒▒░░░░░░░░░░░░░▓░░░▒░░░░░░▓▒▒▒▒░ ░░▒▒    
-     ▒░░░▒▒░░░░░▒░▒░░░                     ░▒▒▒▒▒░░░░░░▒░░░░░░░░░░░▒▒░░░░░░░░░░░▓░░░▒░░░░░▒▒▓░ ░ ░▒▒      
-      ░▒▒░░░░                          ░░    ░   ░░░░▒▒▒▒░░░░░░▒░▒▒░░▒▒▒░░░▒░░▒▒▓▒░░░▒░░░▒▒▒▓░░▒▒▒        
-           ░░░░░░░░▒▒▒▒▒▒▒▒░░░░░░░░░░░░░  ░░░   ░   ░  ▒▒▒░▒░░░░░░▒▒░░▓▒▒▒▒▒▒░▒░░▓░░░░░░░░▒▓▓▒▒           
-                             ░░░▒▒▒▒▒▒░░░░░  ░░░░ ░░  ░░░▒▒▒░░░░░░░░░░░▓░ ░   ░  ▒▓▒░░░░░░░▒▒             
-                                   ░▒▒▒▓▓▒▒▒▒░░ ░░░  ░░   ░▒▓▒▒░░░░░░░▒▒▒░░  ░░▒▒▒▒▓▒▒▒▒▒░░░▒▒            
-                               ░▒▒▓▒░▒▒▒░░░▒▒▓▒▒▒▒▒▒▒▒▒░░▒▒▒░░░▒▒▒░░░░▒▓▓▒▒▒▒░░  ░▒▒░▒░░░░▒░░░▒           
-                             ░▒▒▓▒▒▒▒▒▒▒▒▒▒░         ░▒▒▒▒▒▒░░░░░░░░░▒▒         ░▒░░▒▒▒░▒▒▒░░░▒▒          
-                               ░░░ ▒▒░             ░▓▒▒▒▒░░░░░░░░▒▒▒▒░              ░░    ░               
-                                                      ▒▒▒▒▒▒░▒▒░░░                                        
-                                                      ░   ░▒░     
-  ____                               _ _ _ 
- / ___|_ __ _   _ _ __   ___ ___  __| (_) | ___ 
-| |   | '__| | | | '_ \ / __/ _ \/ _` | | |/ _ \
-| |___| |  | |_| | |_) | (_| (_) | (_| | | |  __/
- \____|_|   \__, | .__/ \___\___/\__,_|_|_|\___|
-            |___/|_|                            """
+LOGO_ART = r"""                    .-._   _ _ _ _ _ _ _ _
+         .-''-.__.-'00  '-' ' ' ' ' ' ' ' '-.
+         '.___ '    .   .--_'-' '-' '-' _'-' '._
+          V: V 'vv-'   '_   '.       .'  _..' '.'.
+            '=.____.=_.--'   :_.__.__:_   '.   : :
+                    (((____.-'        '-.  /   : :
+                                      (((-'\ .' /
+                                    _____..'  .'
+                                   '-._____.-'   
+   ____                               _ _ _ 
+  / ___|_ __ _   _ _ __   ___ ___  __| (_) | ___ 
+ | |   | '__| | | | '_ \ / __/ _ \/ _` | | |/ _ \
+ | |___| |  | |_| | |_) | (_| (_) | (_| | | |  __/
+  \____|_|   \__, | .__/ \___\___/\__,_|_|_|\___|
+             |___/|_|                            """
 
 LOGO = f"\033[32m{LOGO_ART}\033[0m"
 

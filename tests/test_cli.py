@@ -179,3 +179,102 @@ async def test_cli_shell_exits_zero() -> None:
     assert result.exit_code == 0
     assert "Welcome to Crypcodile Interactive Shell!" in result.output
     assert "query" in result.output
+
+
+async def test_cli_export_wizard_selects_symbol(tmp_path: pathlib.Path) -> None:
+    """Test that select_symbols_interactively runs in export and successfully filters and selects symbols."""
+    from typer.testing import CliRunner
+    from unittest.mock import patch
+    import sys
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    dest = tmp_path / "out" / "trades_wizard.csv"
+
+    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+        runner = CliRunner()
+        # Input sequence:
+        # 1. Wizard prompts for channel (since channel is not provided).
+        #    Options might be book_snapshot and trade. We choose '2' (trade).
+        # 2. Wizard prompts 'Search/Select' for symbol. The user types 'BTC' to search.
+        # 3. Next search/select prompt: user selects option '1' (which is 'deribit:BTC-PERPETUAL').
+        # 4. Prompt for start range (0).
+        # 5. Prompt for end range (9999999999999999999).
+        result = runner.invoke(
+            app,
+            [
+                "export",
+                "--fmt",
+                "csv",
+                "--dest",
+                str(dest),
+                "--data-dir",
+                str(tmp_path),
+            ],
+            input="2\nBTC\n1\n0\n9999999999999999999\n",
+        )
+        print(f"DEBUG WIZARD OUTPUT:\n{result.output}")
+        assert result.exit_code == 0, f"stdout:\n{result.output}"
+        assert dest.exists()
+        assert dest.stat().st_size > 0, f"Output is empty. stdout:\n{result.output}"
+
+
+async def test_cli_replay_wizard(tmp_path: pathlib.Path) -> None:
+    """Test that select_symbols_interactively runs in replay command."""
+    from typer.testing import CliRunner
+    from unittest.mock import patch
+    import sys
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+
+    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+        runner = CliRunner()
+        # Input sequence:
+        # 1. Wizard prompts for channel. Choose '2' (trade).
+        # 2. Wizard prompts for symbol search. Search 'BTC'.
+        # 3. Choose '1' (deribit:BTC-PERPETUAL).
+        # 4. Prompt for start range (0).
+        # 5. Prompt for end range (9999999999999999999).
+        result = runner.invoke(
+            app,
+            [
+                "replay",
+                "--data-dir",
+                str(tmp_path),
+            ],
+            input="2\nBTC\n1\n0\n9999999999999999999\n",
+        )
+        assert result.exit_code == 0, f"stdout:\n{result.output}"
+        assert "deribit" in result.output or "trade" in result.output
+
+
+async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
+    """Test that select_symbols_interactively runs in funding-apr command."""
+    from typer.testing import CliRunner
+    from unittest.mock import patch
+    import sys
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+
+    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+        runner = CliRunner()
+        # Input sequence:
+        # 1. Wizard prompts for channel. Choose '2' (trade).
+        # 2. Wizard prompts for symbol search. Search 'BTC'.
+        # 3. Choose '1'.
+        # 4. Prompt for start range (0).
+        # 5. Prompt for end range (9999999999999999999).
+        result = runner.invoke(
+            app,
+            [
+                "funding-apr",
+                "--data-dir",
+                str(tmp_path),
+            ],
+            input="2\nBTC\n1\n0\n9999999999999999999\n",
+        )
+        # funding-apr might exit 0 with "No funding data found." since trade is not funding channel.
+        assert result.exit_code == 0, f"stdout:\n{result.output}"
+        assert "No funding data found." in result.output or "deribit" in result.output
