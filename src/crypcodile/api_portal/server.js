@@ -349,6 +349,16 @@ app.get('/api/events', (req, res) => {
   
   // Send connection event
   res.write(`data: ${JSON.stringify({ type: 'info', message: 'SSE Stream connected successfully' })}\n\n`);
+  
+  // Send immediate initial price tick to prevent client handshake timeouts
+  const initialPrice = (2000 + Math.random() * 100).toFixed(2);
+  res.write(`data: ${JSON.stringify({
+    type: 'tick',
+    stage: 'price_update',
+    status: 'success',
+    message: `Price updated to $${initialPrice}`,
+    data: { price: initialPrice, timestamp: new Date().toISOString() }
+  })}\n\n`);
 
   sseClients.push(res);
 
