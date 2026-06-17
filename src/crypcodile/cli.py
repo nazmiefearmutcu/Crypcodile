@@ -236,6 +236,105 @@ import typing
 typing.cast(Any, typer).prompt = _prompt_with_esc
 
 
+def prompt_time_range_helper(
+    data_dir: Path,
+    channel: str | None,
+    symbols: list[str] | None,
+    default_start: int = 0,
+    default_end: int = 9999999999999999999
+) -> tuple[int, int]:
+    """Helper to show available time range from the database and prompt for Start/End times."""
+    import datetime
+    from crypcodile.store.catalog import Catalog
+    
+    min_ts, max_ts = None, None
+    if channel:
+        cat = Catalog(data_dir)
+        if channel in cat._registered_channels:
+            try:
+                where_clause = ""
+                if symbols:
+                    clean_syms = [s for s in symbols if s]
+                    if clean_syms:
+                        sym_list = ", ".join(f"'{s}'" for s in clean_syms)
+                        where_clause = f" WHERE symbol IN ({sym_list})"
+                df = cat.query(f'SELECT min(local_ts) as min_t, max(local_ts) as max_t FROM "{channel}"{where_clause}')
+                if len(df) > 0:
+                    row = df.to_dicts()[0]
+                    if row.get("min_t") is not None:
+                        min_ts = int(row["min_t"])
+                    if row.get("max_t") is not None:
+                        max_ts = int(row["max_t"])
+            except Exception:
+                pass
+
+    if min_ts is not None and max_ts is not None:
+        min_dt_str = datetime.datetime.fromtimestamp(min_ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        max_dt_str = datetime.datetime.fromtimestamp(max_ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        typer.echo(f"\nAvailable database range: {min_dt_str} to {max_dt_str}")
+        
+        start_prompt = "Start time (default: earliest)"
+        end_prompt = "End time (default: latest)"
+    else:
+        typer.echo("\nNo data range found in catalog. Using absolute defaults.")
+        start_prompt = "Start time (default: 0)"
+        end_prompt = "End time (default: infinity)"
+
+    instructions = (
+        "\n--- Time Range Filter Instruction ---\n"
+        "Start and End times filter the historical market data records retrieved from the database.\n"
+        "Accepted input formats:\n"
+        "  - UTC date-time string: 'YYYY-MM-DD HH:MM:SS', 'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD'\n"
+        "  - Raw 19-digit UTC nanosecond timestamp (e.g., 1718540000000000000)\n"
+        "  - Leave blank (press Enter) to use the default values shown below."
+    )
+    typer.echo(instructions)
+
+    # Helper function to parse user input
+    def parse_time(val: str, fallback: int) -> int:
+        val = val.strip()
+        if not val:
+            return fallback
+        if val.isdigit():
+            try:
+                return int(val)
+            except ValueError:
+                pass
+        formats = [
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d",
+        ]
+        for fmt in formats:
+            try:
+                dt = datetime.datetime.strptime(val, fmt).replace(tzinfo=datetime.UTC)
+                return int(dt.timestamp() * 1_000_000_000)
+            except ValueError:
+                continue
+                
+        # Format a human-readable fallback for the warning message
+        fallback_str = str(fallback)
+        if 0 < fallback < 9999999999999999999:
+            try:
+                fallback_str = datetime.datetime.fromtimestamp(fallback // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            except Exception:
+                pass
+        elif fallback == 0:
+            fallback_str = "earliest / 1970-01-01"
+        elif fallback == 9999999999999999999:
+            fallback_str = "latest / infinity"
+            
+        typer.echo(f"⚠️  Invalid date format '{val}'. Using default: {fallback_str}", err=True)
+        return fallback
+
+    start_input = typer.prompt(start_prompt, default="").strip()
+    resolved_start = parse_time(start_input, min_ts if min_ts is not None else default_start)
+    
+    end_input = typer.prompt(end_prompt, default="").strip()
+    resolved_end = parse_time(end_input, max_ts if max_ts is not None else default_end)
+    
+    return resolved_start, resolved_end
+
 # ---------------------------------------------------------------------------
 # Top-level imports used by collect (kept at module scope so tests can patch
 # them without reloading the module).
@@ -677,10 +776,12 @@ def export(
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
-    if frm is None:
-        frm = typer.prompt("Start time", type=int, default=0)
-    if to is None:
-        to = typer.prompt("End time", type=int, default=9999999999999999999)
+    if frm is None or to is None:
+        resolved_start, resolved_end = prompt_time_range_helper(data_dir, channel, symbols, default_start=0, default_end=9999999999999999999)
+        if frm is None:
+            frm = resolved_start
+        if to is None:
+            to = resolved_end
 
     if not channel or not symbols:
         typer.echo("Error: Channel and symbols are required.", err=True)
@@ -743,10 +844,13 @@ def replay(
         symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
-    if frm is None:
-        frm = typer.prompt("Start time", type=int, default=0)
-    if to is None:
-        to = typer.prompt("End time", type=int, default=9999999999999999999)
+    if frm is None or to is None:
+        wiz_ch = channels[0] if channels else None
+        resolved_start, resolved_end = prompt_time_range_helper(data_dir, wiz_ch, symbols, default_start=0, default_end=9999999999999999999)
+        if frm is None:
+            frm = resolved_start
+        if to is None:
+            to = resolved_end
 
     if not channels or not symbols:
         typer.echo("Error: Channels and symbols are required.", err=True)
@@ -1284,10 +1388,12 @@ def funding_apr_cmd(
         resolved_syms = resolve_input_symbols(data_dir, [symbol])
         if resolved_syms:
             symbol = resolved_syms[0]
-    if start is None:
-        start = typer.prompt("Start time", type=int, default=0)
-    if end is None:
-        end = typer.prompt("End time", type=int, default=9999999999999999999)
+    if start is None or end is None:
+        resolved_start, resolved_end = prompt_time_range_helper(data_dir, "funding", [symbol] if symbol else None, default_start=0, default_end=9999999999999999999)
+        if start is None:
+            start = resolved_start
+        if end is None:
+            end = resolved_end
 
     if not symbol:
         typer.echo("Error: Symbol is required.", err=True)
@@ -1342,10 +1448,7 @@ def basis_cmd(
 
     data_dir = resolve_data_dir(data_dir)
 
-    if start is None:
-        start = typer.prompt("Start time", type=int, default=0)
-    if end is None:
-        end = typer.prompt("End time", type=int, default=9999999999999999999)
+    # We will prompt for time range after mode/symbols are resolved
 
     is_interactive = is_interactive_stdin()
 
@@ -1387,6 +1490,15 @@ def basis_cmd(
         resolved = resolve_input_symbols(data_dir, [spot])
         if resolved:
             spot = resolved[0]
+
+    if start is None or end is None:
+        ch = "derivative_ticker" if perp is not None else "trade"
+        syms = [perp] if perp is not None else ([future, spot] if future and spot else None)
+        resolved_start, resolved_end = prompt_time_range_helper(data_dir, ch, syms, default_start=0, default_end=9999999999999999999)
+        if start is None:
+            start = resolved_start
+        if end is None:
+            end = resolved_end
 
     client = CrypcodileClient(data_dir=data_dir)
 
