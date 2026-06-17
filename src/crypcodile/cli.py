@@ -172,7 +172,7 @@ def _prompt_with_esc(text: str, default: Any = None, type: Any = None, *args: An
             while True:
                 ch = sys.stdin.read(1)
                 if not ch:
-                    break
+                    raise EOFError
 
                 if ch == "\x1b":
                     # Check if ESC or arrow key escape sequence
@@ -213,7 +213,7 @@ def _prompt_with_esc(text: str, default: Any = None, type: Any = None, *args: An
     while True:
         try:
             val_str = read_line()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EOFError):
             # Print newline and Cancelled, then exit cleanly
             sys.stderr.write("\nCancelled.\n")
             sys.stderr.flush()
