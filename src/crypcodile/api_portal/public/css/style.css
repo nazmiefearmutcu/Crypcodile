@@ -1,0 +1,27 @@
+/* Premium dark themes for Crypcodile x402 Micropayments Portal */
+
+body {
+    background-color: #030712;
+    color: #f3f4f6;
+}
+
+#dashboard {
+    background-color: #030712;
+}
+
+/* Custom layout helper styles */
+.text-sky-400 {
+    color: #38bdf8;
+}
+
+.text-emerald-400 {
+    color: #34d399;
+}
+
+.text-red-400 {
+    color: #f87171;
+}
+
+.text-yellow-400 {
+    color: #facc15;
+}

@@ -538,7 +538,7 @@ wheels = [
 
 [[package]]
 name = "crypcodile"
-version = "0.1.25"
+version = "0.1.29"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

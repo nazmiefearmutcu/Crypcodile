@@ -1745,10 +1745,33 @@ def api(
     host: Annotated[str, typer.Option("--host", help="Host address to bind to.")] = "127.0.0.1",
 ) -> None:
     """Start the x402 Micropayment Gated API server."""
-    import uvicorn
+    import shutil
+    import subprocess
+    import os
+    import sys
     
-    typer.echo(f"Starting Crypcodile x402 API server on http://{host}:{port}...", err=True)
-    uvicorn.run("crypcodile.api_server:app", host=host, port=port, log_level="info")
+    node_path = shutil.which("node")
+    portal_dir = Path(__file__).parent / "api_portal"
+    server_js = portal_dir / "server.js"
+    
+    if node_path and server_js.exists():
+        typer.echo(f"Starting Crypcodile Premium x402 API Web Portal (Node.js) on http://{host}:{port}...", err=True)
+        env = os.environ.copy()
+        env["PORT"] = str(port)
+        env["HOST"] = host
+        
+        try:
+            subprocess.run([node_path, str(server_js)], env=env, check=True)
+        except KeyboardInterrupt:
+            typer.echo("\nCrypcodile Premium x402 API Web Portal stopped.", err=True)
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"Node.js server exited with error: {e}", err=True)
+            sys.exit(e.returncode)
+    else:
+        typer.echo("Node.js runtime or server.js not found. Falling back to Python FastAPI server...", err=True)
+        import uvicorn
+        typer.echo(f"Starting Crypcodile x402 API server on http://{host}:{port}...", err=True)
+        uvicorn.run("crypcodile.api_server:app", host=host, port=port, log_level="info")
 
 
 # ---------------------------------------------------------------------------
