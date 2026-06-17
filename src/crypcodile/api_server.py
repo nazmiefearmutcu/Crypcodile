@@ -13,7 +13,7 @@ from typing import Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from web3 import Web3
 
@@ -62,10 +62,11 @@ app = FastAPI(
     redoc_url=None
 )
 
-@app.get("/", include_in_schema=False)
-async def root_redirect():
-    """Redirect root to /docs."""
-    return RedirectResponse(url="/docs")
+@app.get("/", include_in_schema=False, response_class=HTMLResponse)
+async def root_dashboard():
+    """Serve the interactive Crypcodile x402 Micropayments Web Dashboard."""
+    from crypcodile.api_server_html import get_dashboard_html
+    return HTMLResponse(content=get_dashboard_html())
 
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
@@ -1004,3 +1005,11 @@ async def simulate_payment(payload: PaymentSignature) -> dict[str, Any]:
             "message": f"Payment {pid} successfully simulated as paid on Base mainnet.",
             "payment_record": db[pid]
         }
+
+
+@app.get("/api/v1/admin/payments", include_in_schema=False)
+async def get_all_payments():
+    """Return all simulated payments."""
+    async with db_lock:
+        db = await load_payments_db()
+        return db
