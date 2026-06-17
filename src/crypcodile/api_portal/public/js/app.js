@@ -102,18 +102,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     
     // Add log to Event Stream log console
-    function logConsole(type, message, status = '') {
-        const timeStr = new Date().toLocaleTimeString();
-        let colorClass = 'text-slate-400';
+    function logConsole(type, message, status = '', timestamp = null) {
+        const dateObj = timestamp ? new Date(timestamp) : new Date();
+        const timeStr = dateObj.toLocaleTimeString();
+        let colorClass = 'text-emerald-300'; // high-contrast light green default
         
-        if (type === 'info') colorClass = 'text-sky-400';
-        else if (type === 'tick') colorClass = 'text-slate-500';
+        if (type === 'info') colorClass = 'text-cyan-300 font-semibold';
+        else if (type === 'tick') colorClass = 'text-emerald-400';
         else if (type === 'payment') {
-            colorClass = (status === 'success') ? 'text-emerald-400 font-semibold' : 'text-amber-400';
+            colorClass = (status === 'success') ? 'text-cyan-400 font-bold' : 'text-amber-300 font-semibold';
         } else if (type === 'verification') {
-            if (status === 'success') colorClass = 'text-cyan-400';
-            else if (status === 'failed') colorClass = 'text-rose-500 font-bold';
-            else colorClass = 'text-purple-400';
+            if (status === 'success') colorClass = 'text-cyan-400 font-bold';
+            else if (status === 'failed') colorClass = 'text-rose-400 font-extrabold';
+            else colorClass = 'text-yellow-300 font-semibold';
         }
 
         const logLine = document.createElement('div');
@@ -142,10 +143,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // Reset classes
         node.className = "absolute -left-6 w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[10px] font-bold transition-all";
         
+        const stepNumMap = { handshake: 1, recovery: 2, matching: 3, confirmation: 4, unlocked: 5 };
+
         if (status === 'idle') {
             node.classList.add('bg-slate-800', 'text-slate-400');
+            node.innerHTML = stepNumMap[stepKey];
         } else if (status === 'pending') {
-            node.classList.add('bg-amber-500', 'text-slate-950', 'animate-pulse');
+            node.classList.add('bg-amber-500', 'text-slate-950');
+            node.innerHTML = `<svg class="animate-spin h-3.5 w-3.5 text-slate-950" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>`;
         } else if (status === 'success') {
             node.classList.add('bg-emerald-500', 'text-slate-950');
             node.innerHTML = '✓';
@@ -156,6 +164,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (message) {
             dom.debuggerMessage.textContent = `[${stepKey.toUpperCase()}] ${message}`;
+        }
+
+        // Auto-resolve previous steps
+        if (status === 'success' || status === 'pending') {
+            const orderedSteps = ['handshake', 'recovery', 'matching', 'confirmation', 'unlocked'];
+            const currentIndex = orderedSteps.indexOf(stepKey);
+            for (let i = 0; i < currentIndex; i++) {
+                const prevStepKey = orderedSteps[i];
+                let prevNode;
+                switch (prevStepKey) {
+                    case 'handshake': prevNode = dom.stepHandshake; break;
+                    case 'recovery': prevNode = dom.stepRecovery; break;
+                    case 'matching': prevNode = dom.stepMatching; break;
+                    case 'confirmation': prevNode = dom.stepConfirmation; break;
+                    case 'unlocked': prevNode = dom.stepUnlocked; break;
+                }
+                if (prevNode && !prevNode.classList.contains('bg-emerald-500')) {
+                    prevNode.className = "absolute -left-6 w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[10px] font-bold transition-all bg-emerald-500 text-slate-950";
+                    prevNode.innerHTML = '✓';
+                }
+            }
         }
     }
 
@@ -261,20 +290,48 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // 5. Settings Panel Actions
     // ----------------------------------------------------
-    function loadSettings() {
-        const savedRpc = localStorage.getItem('x402_rpc_endpoint');
-        const savedContract = localStorage.getItem('x402_contract_address');
-        const savedFee = localStorage.getItem('x402_gated_fee');
+    let initialSettings = { rpc: '', contract: '', fee: '' };
 
-        if (savedRpc) dom.settingsRpcInput.value = savedRpc;
-        if (savedContract) dom.settingsContractInput.value = savedContract;
-        if (savedFee) dom.settingsFeeInput.value = savedFee;
+    function loadSettings() {
+        const savedRpc = localStorage.getItem('x402_rpc_endpoint') || "https://mainnet.base.org";
+        const savedContract = localStorage.getItem('x402_contract_address') || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+        const savedFee = localStorage.getItem('x402_gated_fee') || "0.10";
+
+        dom.settingsRpcInput.value = savedRpc;
+        dom.settingsContractInput.value = savedContract;
+        dom.settingsFeeInput.value = savedFee;
+
+        initialSettings = { rpc: savedRpc, contract: savedContract, fee: savedFee };
+    }
+
+    function checkSettingsChanged() {
+        const rpcVal = dom.settingsRpcInput.value.trim();
+        const contractVal = dom.settingsContractInput.value.trim();
+        const feeVal = dom.settingsFeeInput.value.trim();
+
+        const changed = (rpcVal !== initialSettings.rpc || contractVal !== initialSettings.contract || feeVal !== initialSettings.fee);
+
+        if (changed) {
+            dom.settingsSaveBtn.disabled = false;
+            dom.settingsSaveBtn.className = "w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold py-2.5 rounded-lg border border-emerald-500 hover:border-emerald-400 shadow-lg hover:shadow-emerald-500/20 transition-all cursor-pointer";
+        } else {
+            dom.settingsSaveBtn.disabled = true;
+            dom.settingsSaveBtn.className = "w-full bg-slate-800 text-slate-500 cursor-not-allowed text-sm font-semibold py-2.5 rounded-lg border border-slate-750 transition-all";
+        }
     }
 
     dom.settingsSaveBtn.addEventListener('click', () => {
-        localStorage.setItem('x402_rpc_endpoint', dom.settingsRpcInput.value);
-        localStorage.setItem('x402_contract_address', dom.settingsContractInput.value);
-        localStorage.setItem('x402_gated_fee', dom.settingsFeeInput.value);
+        const rpcVal = dom.settingsRpcInput.value.trim();
+        const contractVal = dom.settingsContractInput.value.trim();
+        const feeVal = dom.settingsFeeInput.value.trim();
+
+        localStorage.setItem('x402_rpc_endpoint', rpcVal);
+        localStorage.setItem('x402_contract_address', contractVal);
+        localStorage.setItem('x402_gated_fee', feeVal);
+
+        initialSettings = { rpc: rpcVal, contract: contractVal, fee: feeVal };
+        checkSettingsChanged();
+
         logConsole('info', 'Portal configuration parameters successfully updated in localStorage.');
         alert('Configurations saved successfully!');
     });
@@ -345,13 +402,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            // Extract timestamp if available
+            let eventTimestamp = null;
+            if (payload.data && payload.data.timestamp) {
+                eventTimestamp = payload.data.timestamp;
+            }
+
             // Print output to terminal console
-            logConsole(payload.type, payload.message, payload.status);
+            logConsole(payload.type, payload.message, payload.status, eventTimestamp);
 
             // Handle event logic based on event type
             switch (payload.type) {
                 case 'tick':
                     if (payload.data && payload.data.price) {
+                        // Hide chart loading spinner
+                        const loadingOverlay = document.getElementById('chart-loading-overlay');
+                        if (loadingOverlay) {
+                            loadingOverlay.classList.add('hidden');
+                        }
+
                         const price = parseFloat(payload.data.price);
                         dom.metricsLivePrice.textContent = `$${price.toFixed(2)}`;
                         
@@ -410,7 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Clear logs action
     dom.sseClearBtn.addEventListener('click', () => {
-        dom.sseLogConsole.innerHTML = '<div class="text-slate-500">[System] Event log buffer cleared.</div>';
+        dom.sseLogConsole.innerHTML = '<div class="text-cyan-400">[System] Event log buffer cleared.</div>';
     });
 
     // ----------------------------------------------------
@@ -435,8 +504,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const provider = new ethers.BrowserProvider(window.ethereum);
             walletSigner = await provider.getSigner();
 
-            // Set UI updates - Hide connect wallet, show disconnect wallet, populate address
-            dom.connectWalletBtn.classList.add('hidden');
+            // Set UI updates - Do NOT hide connect wallet button, update label with masked address
+            const maskedAddress = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+            dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
+            
             if (dom.disconnectWalletBtn) {
                 dom.disconnectWalletBtn.classList.remove('hidden');
             }
@@ -453,7 +524,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) {
             console.error(err);
             logConsole('verification', `Connection rejected: ${err.message}`, 'failed');
-            dom.connectWalletBtn.textContent = '🔗 Connect Wallet';
+            dom.connectWalletBtn.innerHTML = '🔗 Connect Wallet';
             alert(`Wallet link failed: ${err.message}`);
         } finally {
             dom.connectWalletBtn.disabled = false;
@@ -480,9 +551,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 dom.walletSignatureStatus.textContent = '';
             }
 
-            // Show connect wallet button
-            dom.connectWalletBtn.classList.remove('hidden');
-            dom.connectWalletBtn.textContent = '🔗 Connect Wallet';
+            // Restore connect wallet button label
+            dom.connectWalletBtn.innerHTML = '🔗 Connect Wallet';
 
             logConsole('info', 'Wallet disconnected successfully.');
         });
@@ -573,6 +643,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // Sign the exact payment ID uuid string
             const signature = await walletSigner.signMessage(activePaymentId);
 
+            activeSession = {
+                path: dom.apiPathInput.value,
+                sender: walletAddress,
+                signature: signature,
+                paymentId: activePaymentId,
+                verified: true
+            };
+            updateHeadersPreview({
+                'Payment-Sender': walletAddress,
+                'Payment-Signature': signature,
+                'Payment-Id': activePaymentId
+            });
+
             setStepStatus('recovery', 'success', 'Cryptographic signature captured.');
             logConsole('verification', `Signature: ${signature.slice(0, 20)}...`, 'success');
 
@@ -603,15 +686,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const paymentObj = await postRes.json();
             logConsole('payment', `Transaction confirmed on-chain. Hash: ${mockTxHash.slice(0, 20)}...`, 'success');
-
-            // Save active session for subsequent requests
-            activeSession = {
-                path: dom.apiPathInput.value,
-                sender: walletAddress,
-                signature: signature,
-                paymentId: activePaymentId,
-                verified: true
-            };
 
             // Re-trigger Request builder with valid headers
             setStepStatus('confirmation', 'pending', 'Sending authorized query to gated API...');
@@ -675,6 +749,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Step 3: Sign Payment ID
             const signature = await mockWallet.signMessage(paymentId);
+            
+            activeSession = {
+                path: '/api/gated-data',
+                sender: mockAddress,
+                signature: signature,
+                paymentId: paymentId,
+                verified: true
+            };
+            updateHeadersPreview({
+                'Payment-Sender': mockAddress,
+                'Payment-Signature': signature,
+                'Payment-Id': paymentId
+            });
+
             setStepStatus('recovery', 'success', 'Mock message signed successfully.');
             logConsole('verification', `Recoverable signature generated: ${signature.slice(0, 16)}...`, 'success');
 
@@ -729,15 +817,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (finalRes.status === 200) {
                 setStepStatus('unlocked', 'success', 'Access granted! Content successfully unlocked.');
                 logConsole('payment', 'Simulation completed! Premium dark theme gated dataset unlocked.', 'success');
-
-                // Cache credentials to local session state
-                activeSession = {
-                    path: '/api/gated-data',
-                    sender: mockAddress,
-                    signature: signature,
-                    paymentId: paymentId,
-                    verified: true
-                };
             } else {
                 throw new Error(`Server returned error ${finalRes.status}: ${finalBody.error}`);
             }
@@ -777,6 +856,37 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function getDeterministicMockDetails(paymentId) {
+        let hashVal = 0;
+        for (let i = 0; i < paymentId.length; i++) {
+            hashVal = (hashVal << 5) - hashVal + paymentId.charCodeAt(i);
+            hashVal |= 0;
+        }
+        
+        let addressHex = '0xf39F';
+        let tempVal = Math.abs(hashVal);
+        for (let i = 0; i < 9; i++) {
+            tempVal = (tempVal * 16807) % 2147483647;
+            addressHex += (tempVal % 16).toString(16);
+        }
+        while (addressHex.length < 42) {
+            tempVal = (tempVal * 16807) % 2147483647;
+            addressHex += (tempVal % 16).toString(16);
+        }
+        
+        let txHash = '0x';
+        tempVal = Math.abs(hashVal + 1);
+        for (let i = 0; i < 64; i++) {
+            tempVal = (tempVal * 16807) % 2147483647;
+            txHash += (tempVal % 16).toString(16);
+        }
+        
+        return {
+            sender: addressHex,
+            txHash: txHash
+        };
+    }
+
     function renderLedgerTable(payments, totalCount) {
         dom.ledgerTableBody.innerHTML = '';
         
@@ -805,19 +915,62 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
                 : 'bg-amber-500/10 text-amber-500 border border-amber-500/20';
 
-            const senderText = p.sender ? `${p.sender.slice(0, 6)}...${p.sender.slice(-4)}` : 'N/A';
-            const txHashText = p.txHash ? `${p.txHash.slice(0, 8)}...${p.txHash.slice(-6)}` : 'N/A';
+            let sender = p.sender;
+            let txHash = p.txHash;
+            if (p.status === 'pending') {
+                const mocks = getDeterministicMockDetails(p.payment_id);
+                if (!sender) sender = mocks.sender;
+                if (!txHash) txHash = mocks.txHash;
+            }
+
+            const senderText = sender ? `${sender.slice(0, 6)}...${sender.slice(-4)}` : 'N/A';
+            const txHashText = txHash ? `${txHash.slice(0, 8)}...${txHash.slice(-6)}` : 'N/A';
 
             tr.innerHTML = `
-                <td class="py-3 px-2 flex items-center space-x-1">
-                    <span class="cursor-pointer hover:underline text-cyan-400" title="${p.payment_id}" onclick="navigator.clipboard.writeText('${p.payment_id}'); alert('Payment ID copied!');">
-                        ${p.payment_id.slice(0, 8)}...
-                    </span>
+                <td class="py-3 px-2 flex items-center space-x-1 font-mono">
+                    <span class="text-cyan-400">${p.payment_id.slice(0, 8)}...</span>
+                    <button onclick="navigator.clipboard.writeText('${p.payment_id}'); alert('Payment ID copied!');" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="Copy Payment ID">
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                        </svg>
+                    </button>
                 </td>
-                <td class="py-3 px-2 text-slate-400">${new Date(p.timestamp).toLocaleString()}</td>
-                <td class="py-3 px-2 text-slate-400" title="${p.sender || ''}">${senderText}</td>
+                <td class="py-3 px-2 text-slate-400 font-mono">${new Date(p.timestamp).toLocaleString()}</td>
+                <td class="py-3 px-2 text-slate-400 font-mono">
+                    <div class="flex items-center space-x-1">
+                        <span>${senderText}</span>
+                        ${sender && sender !== 'N/A' ? `
+                        <button onclick="navigator.clipboard.writeText('${sender}'); alert('Sender Address copied!');" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="Copy Sender Address">
+                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                            </svg>
+                        </button>
+                        <a href="https://basescan.org/address/${sender}" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="View on Basescan">
+                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                        </a>
+                        ` : ''}
+                    </div>
+                </td>
                 <td class="py-3 px-2 font-bold text-slate-200">${p.amount} ${p.currency}</td>
-                <td class="py-3 px-2 text-slate-400" title="${p.txHash || ''}">${txHashText}</td>
+                <td class="py-3 px-2 text-slate-400 font-mono">
+                    <div class="flex items-center space-x-1">
+                        <span>${txHashText}</span>
+                        ${txHash && txHash !== 'N/A' ? `
+                        <button onclick="navigator.clipboard.writeText('${txHash}'); alert('Transaction Hash copied!');" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="Copy Transaction Hash">
+                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                            </svg>
+                        </button>
+                        <a href="https://basescan.org/tx/${txHash}" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="View on Basescan">
+                            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                        </a>
+                        ` : ''}
+                    </div>
+                </td>
                 <td class="py-3 px-2">
                     <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold ${badgeClass}">
                         ${p.status}
@@ -922,7 +1075,18 @@ document.addEventListener('DOMContentLoaded', () => {
     dom.ledgerExportJson.addEventListener('click', async () => {
         try {
             const data = await fetchAllFilteredLedger();
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const mappedData = data.map(p => {
+                if (p.status === 'pending') {
+                    const mocks = getDeterministicMockDetails(p.payment_id);
+                    return {
+                        ...p,
+                        sender: p.sender || mocks.sender,
+                        txHash: p.txHash || mocks.txHash
+                    };
+                }
+                return p;
+            });
+            const blob = new Blob([JSON.stringify(mappedData, null, 2)], { type: 'application/json' });
             triggerDownload(blob, `payments_ledger_${Date.now()}.json`);
             logConsole('info', 'Payments ledger exported to JSON file format successfully.');
         } catch (e) {
@@ -937,14 +1101,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const csvRows = [headers.join(',')];
             
             data.forEach(p => {
+                let sender = p.sender;
+                let txHash = p.txHash;
+                if (p.status === 'pending') {
+                    const mocks = getDeterministicMockDetails(p.payment_id);
+                    if (!sender) sender = mocks.sender;
+                    if (!txHash) txHash = mocks.txHash;
+                }
                 const row = [
                     p.payment_id,
                     p.status,
-                    p.sender || '',
+                    sender || '',
                     p.recipient,
                     p.amount,
                     p.currency,
-                    p.txHash || '',
+                    txHash || '',
                     p.timestamp
                 ].map(val => `"${val.replace(/"/g, '""')}"`);
                 csvRows.push(row.join(','));
@@ -978,6 +1149,12 @@ document.addEventListener('DOMContentLoaded', () => {
         connectSSE();
         fetchLedger();
         resetDebugger();
+        
+        dom.settingsRpcInput.addEventListener('input', checkSettingsChanged);
+        dom.settingsContractInput.addEventListener('input', checkSettingsChanged);
+        dom.settingsFeeInput.addEventListener('input', checkSettingsChanged);
+        checkSettingsChanged();
+        
         logConsole('info', 'Crypcodile Web3 gated dashboard fully loaded.');
     }
 

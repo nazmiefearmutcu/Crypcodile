@@ -253,7 +253,7 @@ registerTest('TC-014', 'Settings: Save Button', 'F3', 'Tier 1', async (baseUrl) 
 registerTest('TC-015', 'Settings: Default Values', 'F3', 'Tier 1', async (baseUrl) => {
   const res = await fetch(`${baseUrl}/`);
   const text = await res.text();
-  assert.ok(text.includes('value="0.10"') && text.includes('value="http://localhost:8545"'));
+  assert.ok(text.includes('value="0.10"') && text.includes('value="https://mainnet.base.org"'));
   return true;
 });
 
@@ -1225,6 +1225,25 @@ registerTest('TC-115', 'E2E: Full Export Check', 'F1-F10', 'Tier 4', async (base
   }
   return true;
 });
+
+registerTest('TC-116', 'Syntax: Verify public/js/app.js syntax', 'F1-F10', 'Tier 4', async (baseUrl) => {
+  const { execSync } = await import('child_process');
+  try {
+    execSync('node -c public/js/app.js');
+    return true;
+  } catch (err) {
+    throw new Error(`Syntax check failed: ${err.message}`);
+  }
+});
+
+registerTest('TC-117', 'Dashboard: Verify public/index.html links style.css', 'F1', 'Tier 4', async (baseUrl) => {
+  const res = await fetch(`${baseUrl}/`);
+  assert.strictEqual(res.status, 200);
+  const text = await res.text();
+  assert.ok(text.includes('<link rel="stylesheet" href="/css/style.css">'));
+  return true;
+});
+
 
 // -------------------------------------------------------------
 // CLI RUNNER ENGINE
