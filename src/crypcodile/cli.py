@@ -1756,14 +1756,43 @@ def api(
     
     if node_path and server_js.exists():
         typer.echo(f"Starting Crypcodile Premium x402 API Web Portal (Node.js) on http://{host}:{port}...", err=True)
+        typer.echo("Press CTRL+C to stop the server.", err=True)
         env = os.environ.copy()
         env["PORT"] = str(port)
         env["HOST"] = host
         
+        proc = None
         try:
-            subprocess.run([node_path, str(server_js)], env=env, check=True)
+            # Spawn Node.js server with piped stdout and stderr redirected to stdout
+            proc = subprocess.Popen(
+                [node_path, str(server_js)],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Read and print the Node.js output lines in real-time to stderr (unbuffered)
+            while True:
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    typer.echo(line.strip(), err=True)
+                    
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, [node_path, str(server_js)])
+                
         except KeyboardInterrupt:
-            typer.echo("\nCrypcodile Premium x402 API Web Portal stopped.", err=True)
+            typer.echo("\nStopping Crypcodile Premium x402 API Web Portal...", err=True)
+            if proc:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            typer.echo("Crypcodile Premium x402 API Web Portal stopped.", err=True)
         except subprocess.CalledProcessError as e:
             typer.echo(f"Node.js server exited with error: {e}", err=True)
             sys.exit(e.returncode)

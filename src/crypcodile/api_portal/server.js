@@ -368,7 +368,7 @@ const isMain = nodePath && (
 if (isMain) {
   const HOST = process.env.HOST || '127.0.0.1';
   app.listen(PORT, HOST, () => {
-    console.log(`Server running on http://${HOST}:${PORT}`);
+    console.error(`Server running on http://${HOST}:${PORT}`);
   });
 }
 

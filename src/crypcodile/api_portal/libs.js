@@ -156,9 +156,9 @@ if (!express) {
       return app;
     };
 
-    app.listen = (port, callback) => {
+    app.listen = (...args) => {
       const server = http.createServer(app);
-      server.listen(port, callback);
+      server.listen(...args);
       return server;
     };
 
