@@ -1890,35 +1890,70 @@ def shell() -> None:
             complete_while_typing=True
         )
     
-    while True:
+    import signal
+    original_handler = None
+    if not is_pytest:
         try:
-            if is_pytest:
-                line = input("crypcodile> ").strip()
-            else:
-                line = session.prompt("crypcodile> ").strip()
-            if not line:
-                continue
-            if line.lower() in ("exit", "quit"):
-                break
-            if line.lower() == "shell":
-                typer.echo("You are already in the Crypcodile shell.")
-                continue
-            
-            if line.lower() in ("help", "?", "-h"):
-                args = ["--help"]
-            else:
-                args = shlex.split(line)
+            original_handler = signal.getsignal(signal.SIGWINCH)
+        except Exception:
+            pass
+
+        def sigwinch_handler(signum, frame):
+            if original_handler and callable(original_handler):
+                try:
+                    original_handler(signum, frame)
+                except Exception:
+                    pass
+            from prompt_toolkit.application import get_current_app
+            app = get_current_app()
+            if app and app.renderer:
+                try:
+                    app.renderer.reset(leave_alternate_screen=False)
+                    app.invalidate()
+                except Exception:
+                    pass
+
+        try:
+            signal.signal(signal.SIGWINCH, sigwinch_handler)
+        except Exception:
+            pass
+
+    try:
+        while True:
             try:
-                click_group(args, standalone_mode=False)
-            except click.exceptions.ClickException as e:
-                e.show()
-            except SystemExit:
+                if is_pytest:
+                    line = input("crypcodile> ").strip()
+                else:
+                    line = session.prompt("crypcodile> ").strip()
+                if not line:
+                    continue
+                if line.lower() in ("exit", "quit"):
+                    break
+                if line.lower() == "shell":
+                    typer.echo("You are already in the Crypcodile shell.")
+                    continue
+                
+                if line.lower() in ("help", "?", "-h"):
+                    args = ["--help"]
+                else:
+                    args = shlex.split(line)
+                try:
+                    click_group(args, standalone_mode=False)
+                except click.exceptions.ClickException as e:
+                    e.show()
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    typer.echo(f"Error executing command: {e}", err=True)
+            except (KeyboardInterrupt, EOFError):
+                typer.echo("\nGoodbye!")
+                break
+    finally:
+        if not is_pytest and original_handler:
+            try:
+                signal.signal(signal.SIGWINCH, original_handler)
+            except Exception:
                 pass
-            except Exception as e:
-                typer.echo(f"Error executing command: {e}", err=True)
-        except (KeyboardInterrupt, EOFError):
-            typer.echo("\nGoodbye!")
-            break
 
 
 # ---------------------------------------------------------------------------
