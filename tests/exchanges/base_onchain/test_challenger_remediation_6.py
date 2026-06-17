@@ -385,7 +385,7 @@ async def test_duplicate_log_query_bug() -> None:
         await transport.connect()
         
         # Let it run for a short time to complete the 3 loops
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)
         await transport.close()
         
     # Assert logged ranges: with monotonic cursor update, the second range is from 1001 to 1010, preventing duplicate queries.

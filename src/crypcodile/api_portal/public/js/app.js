@@ -1,6 +1,6 @@
 /**
  * Crypcodile x402 Web3 Gated Portal Redesign
- * public/js/app.js Implementation Plan
+ * public/js/app.js
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -11,6 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let priceChart = null;
     let walletAddress = null;
     let walletSigner = null;
+    let isWalletConnected = false;
+    let priceFeedTimeout = null;
     
     // Active simulation details
     let activePaymentId = null;
@@ -33,6 +35,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const maxChartTicks = 20;
     const chartLabels = [];
     const chartPrices = [];
+
+    // Form dirty state tracker
+    let isDirty = false;
 
     // ----------------------------------------------------
     // 2. DOM Node Accessors
@@ -101,16 +106,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. UI Helpers: Logs, Stepper & Badges
     // ----------------------------------------------------
     
+    // Centralized time utility function
+    function getCurrentTime(dateInput = null) {
+        const date = dateInput ? new Date(dateInput) : new Date();
+        return date.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
+    }
+
     // Add log to Event Stream log console
     function logConsole(type, message, status = '', timestamp = null) {
-        const dateObj = timestamp ? new Date(timestamp) : new Date();
-        const timeStr = dateObj.toLocaleTimeString();
+        const timeStr = getCurrentTime(timestamp);
         let colorClass = 'text-emerald-300'; // high-contrast light green default
         
         if (type === 'info') colorClass = 'text-cyan-300 font-semibold';
         else if (type === 'tick') colorClass = 'text-emerald-400';
         else if (type === 'payment') {
-            colorClass = (status === 'success') ? 'text-cyan-400 font-bold' : 'text-amber-300 font-semibold';
+            colorClass = (status === 'success') ? 'text-cyan-400 font-bold' : 'text-yellow-300 font-semibold';
         } else if (type === 'verification') {
             if (status === 'success') colorClass = 'text-cyan-400 font-bold';
             else if (status === 'failed') colorClass = 'text-rose-400 font-extrabold';
@@ -149,7 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
             node.classList.add('bg-slate-800', 'text-slate-400');
             node.innerHTML = stepNumMap[stepKey];
         } else if (status === 'pending') {
-            node.classList.add('bg-amber-500', 'text-slate-950');
+            node.classList.add('bg-yellow-500', 'text-slate-950', 'animate-pulse');
             node.innerHTML = `<svg class="animate-spin h-3.5 w-3.5 text-slate-950" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -232,11 +247,34 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.apiResponseConsole.textContent = JSON.stringify(payload, null, 2);
     }
 
+    function updateRequestHeaders() {
+        const headers = {};
+        if (activeSession && activeSession.verified) {
+            headers['Payment-Id'] = activeSession.paymentId;
+            headers['Payment-Sender'] = activeSession.sender;
+            headers['Payment-Signature'] = activeSession.signature;
+            headers['Authorization'] = `Bearer ${activeSession.signature}`;
+            headers['X-Wallet-Address'] = activeSession.sender;
+        } else if (isWalletConnected && walletAddress) {
+            const signature = "0x_mock_signature_from_connected_wallet_address_0x" + walletAddress.slice(2, 12) + "...";
+            headers['Payment-Id'] = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+            headers['Payment-Sender'] = walletAddress;
+            headers['Payment-Signature'] = signature;
+            headers['Authorization'] = `Bearer ${signature}`;
+            headers['X-Wallet-Address'] = walletAddress;
+        } else {
+            headers['Payment-Id'] = "challenge_payment_id_required";
+            headers['Payment-Sender'] = "wallet_address_required";
+            headers['Payment-Signature'] = "cryptographic_signature_required";
+        }
+        updateHeadersPreview(headers);
+    }
+
     // ----------------------------------------------------
     // 4. Initializing Chart.js
     // ----------------------------------------------------
     function initChart() {
-        const ctx = dom.priceChartCanvas = document.getElementById('price-chart-canvas').getContext('2d');
+        const ctx = document.getElementById('price-chart-canvas').getContext('2d');
         
         priceChart = new Chart(ctx, {
             type: 'line',
@@ -309,14 +347,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const contractVal = dom.settingsContractInput.value.trim();
         const feeVal = dom.settingsFeeInput.value.trim();
 
-        const changed = (rpcVal !== initialSettings.rpc || contractVal !== initialSettings.contract || feeVal !== initialSettings.fee);
+        isDirty = (rpcVal !== initialSettings.rpc || contractVal !== initialSettings.contract || feeVal !== initialSettings.fee);
 
-        if (changed) {
+        if (isDirty) {
             dom.settingsSaveBtn.disabled = false;
-            dom.settingsSaveBtn.className = "w-full bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold py-2.5 rounded-lg border border-emerald-500 hover:border-emerald-400 shadow-lg hover:shadow-emerald-500/20 transition-all cursor-pointer";
+            dom.settingsSaveBtn.className = "w-full bg-gradient-to-r from-cyan-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-slate-950 text-sm font-bold py-2.5 rounded-lg shadow-[0_0_20px_rgba(34,211,238,0.55)] border-none transition-all cursor-pointer scale-[1.02]";
         } else {
             dom.settingsSaveBtn.disabled = true;
-            dom.settingsSaveBtn.className = "w-full bg-slate-800 text-slate-500 cursor-not-allowed text-sm font-semibold py-2.5 rounded-lg border border-slate-750 transition-all";
+            dom.settingsSaveBtn.className = "w-full bg-slate-800 text-slate-500 cursor-not-allowed text-sm font-semibold py-2.5 rounded-lg border border-slate-700 transition-all opacity-50";
         }
     }
 
@@ -345,7 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.innerHTML = `
             <input type="text" placeholder="Key" class="w-1/3 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
             <input type="text" placeholder="Value" class="w-1/2 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
-            <button class="remove-param-btn text-rose-500 hover:text-rose-400 text-xs px-2 py-1">Remove</button>
+            <button class="remove-param-btn text-rose-500 hover:text-rose-400 text-xs px-2 py-1 font-semibold">Remove</button>
         `;
         
         row.querySelector('.remove-param-btn').addEventListener('click', () => {
@@ -369,97 +407,190 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ----------------------------------------------------
-    // 7. Server-Sent Events (SSE) Client
+    // 7. Server-Sent Events (SSE) Client & Price Feed Timeout
     // ----------------------------------------------------
     function connectSSE() {
         if (eventSource) {
             eventSource.close();
         }
+        if (priceFeedTimeout) {
+            clearTimeout(priceFeedTimeout);
+        }
+
+        const loadingOverlay = document.getElementById('chart-loading-overlay');
+        if (loadingOverlay) {
+            loadingOverlay.classList.remove('hidden');
+            loadingOverlay.innerHTML = `
+                <div class="flex flex-col items-center space-y-2">
+                    <svg class="animate-spin h-8 w-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span class="text-xs font-mono text-slate-400">Awaiting Price Feed Ticks...</span>
+                </div>
+            `;
+        }
 
         dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse transition-all";
         dom.sseStatusText.textContent = "Connecting...";
-        
-        eventSource = new EventSource('/api/events');
-        
-        eventSource.onopen = () => {
-            dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] transition-all";
-            dom.sseStatusText.textContent = "Connected";
-            logConsole('info', 'SSE connection to /api/events successfully established.');
-        };
 
-        eventSource.onerror = (err) => {
-            dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] transition-all";
-            dom.sseStatusText.textContent = "Disconnected";
-            logConsole('verification', 'SSE channel error. Server connection lost.', 'failed');
-        };
-
-        eventSource.onmessage = (event) => {
-            let payload;
+        // Promise-wrapped subscription to handle 5s timeout & connection state
+        const sseConnectionPromise = new Promise((resolve, reject) => {
             try {
-                payload = JSON.parse(event.data);
-            } catch (e) {
-                console.error("Malformed SSE data", e);
+                eventSource = new EventSource('/api/events');
+            } catch (err) {
+                reject(err);
                 return;
             }
 
-            // Extract timestamp if available
-            let eventTimestamp = null;
-            if (payload.data && payload.data.timestamp) {
-                eventTimestamp = payload.data.timestamp;
-            }
+            priceFeedTimeout = setTimeout(() => {
+                reject(new Error("Price Feed Connection Timeout"));
+            }, 5000);
 
-            // Print output to terminal console
-            logConsole(payload.type, payload.message, payload.status, eventTimestamp);
+            eventSource.onopen = () => {
+                dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] transition-all";
+                dom.sseStatusText.textContent = "Connected";
+                logConsole('info', 'SSE connection to /api/events successfully established.');
+            };
 
-            // Handle event logic based on event type
-            switch (payload.type) {
-                case 'tick':
-                    if (payload.data && payload.data.price) {
-                        // Hide chart loading spinner
-                        const loadingOverlay = document.getElementById('chart-loading-overlay');
-                        if (loadingOverlay) {
-                            loadingOverlay.classList.add('hidden');
+            eventSource.onerror = () => {
+                reject(new Error("No Data Available"));
+            };
+
+            eventSource.onmessage = (event) => {
+                let payload;
+                try {
+                    payload = JSON.parse(event.data);
+                } catch (e) {
+                    console.error("Malformed SSE data", e);
+                    return;
+                }
+
+                let eventTimestamp = null;
+                if (payload.data && payload.data.timestamp) {
+                    eventTimestamp = payload.data.timestamp;
+                }
+
+                logConsole(payload.type, payload.message, payload.status, eventTimestamp);
+
+                switch (payload.type) {
+                    case 'tick':
+                        if (payload.data && payload.data.price) {
+                            if (priceFeedTimeout) {
+                                clearTimeout(priceFeedTimeout);
+                                priceFeedTimeout = null;
+                            }
+                            resolve(payload);
+                            handleTick(payload.data);
                         }
+                        break;
 
-                        const price = parseFloat(payload.data.price);
-                        dom.metricsLivePrice.textContent = `$${price.toFixed(2)}`;
-                        
-                        // Push price to Chart data array
-                        const timeString = new Date(payload.data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                        chartLabels.push(timeString);
-                        chartPrices.push(price);
+                    case 'payment':
+                        fetchLedger();
+                        if (payload.data && payload.data.payment_id === activePaymentId) {
+                            if (payload.stage === 'pending') {
+                                setStepStatus('handshake', 'success', 'Gated handshake completed.');
+                            } else if (payload.stage === 'payment_received') {
+                                setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
+                            }
+                        }
+                        break;
 
-                        if (chartLabels.length > maxChartTicks) chartLabels.shift();
-                        if (chartPrices.length > maxChartTicks) chartPrices.shift();
+                    case 'verification':
+                        if (payload.data && payload.data.payment_id === activePaymentId) {
+                            const stepKey = mapStageToStep(payload.stage);
+                            if (stepKey) {
+                                setStepStatus(stepKey, payload.status, payload.message);
+                            }
+                        }
+                        break;
+                }
+            };
+        });
 
-                        priceChart.update('none'); // Update without full redraw animation
+        sseConnectionPromise
+            .then((firstPayload) => {
+                if (loadingOverlay) {
+                    loadingOverlay.classList.add('hidden');
+                }
+                if (firstPayload && firstPayload.data) {
+                    handleTick(firstPayload.data);
+                }
+                // Handle subsequent SSE events
+                eventSource.onmessage = (event) => {
+                    let payload;
+                    try {
+                        payload = JSON.parse(event.data);
+                    } catch (e) {
+                        return;
                     }
-                    break;
-
-                case 'payment':
-                    // Refresh ledger data
-                    fetchLedger();
-                    
-                    // If this broadcast matches our current active operation
-                    if (payload.data && payload.data.payment_id === activePaymentId) {
-                        if (payload.stage === 'pending') {
-                            setStepStatus('handshake', 'success', 'Gated handshake completed.');
-                        } else if (payload.stage === 'payment_received') {
-                            setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
+                    let eventTimestamp = null;
+                    if (payload.data && payload.data.timestamp) {
+                        eventTimestamp = payload.data.timestamp;
+                    }
+                    logConsole(payload.type, payload.message, payload.status, eventTimestamp);
+                    if (payload.type === 'tick') {
+                        if (payload.data) handleTick(payload.data);
+                    } else if (payload.type === 'payment') {
+                        fetchLedger();
+                        if (payload.data && payload.data.payment_id === activePaymentId) {
+                            if (payload.stage === 'pending') {
+                                setStepStatus('handshake', 'success', 'Gated handshake completed.');
+                            } else if (payload.stage === 'payment_received') {
+                                setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
+                            }
+                        }
+                    } else if (payload.type === 'verification') {
+                        if (payload.data && payload.data.payment_id === activePaymentId) {
+                            const stepKey = mapStageToStep(payload.stage);
+                            if (stepKey) {
+                                setStepStatus(stepKey, payload.status, payload.message);
+                            }
                         }
                     }
-                    break;
+                };
+            })
+            .catch((err) => {
+                if (priceFeedTimeout) {
+                    clearTimeout(priceFeedTimeout);
+                    priceFeedTimeout = null;
+                }
+                if (eventSource) {
+                    eventSource.close();
+                }
+                dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] transition-all";
+                dom.sseStatusText.textContent = "Disconnected";
+                dom.metricsLivePrice.textContent = 'N/A';
 
-                case 'verification':
-                    if (payload.data && payload.data.payment_id === activePaymentId) {
-                        const stepKey = mapStageToStep(payload.stage);
-                        if (stepKey) {
-                            setStepStatus(stepKey, payload.status, payload.message);
-                        }
-                    }
-                    break;
-            }
-        };
+                if (loadingOverlay) {
+                    loadingOverlay.innerHTML = `
+                        <div class="flex flex-col items-center space-y-2 text-rose-500 bg-slate-900/90 p-4 rounded-lg border border-rose-500/20 shadow-lg animate-pulse">
+                            <svg class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <span class="text-xs font-mono font-bold">Error: ${err.message}</span>
+                        </div>
+                    `;
+                }
+                logConsole('verification', `Error: ${err.message}`, 'failed');
+            })
+            .finally(() => {
+                // Done setup
+            });
+    }
+
+    function handleTick(tickData) {
+        const price = parseFloat(tickData.price);
+        dom.metricsLivePrice.textContent = `$${price.toFixed(2)}`;
+        
+        const timeString = getCurrentTime(tickData.timestamp);
+        chartLabels.push(timeString);
+        chartPrices.push(price);
+
+        if (chartLabels.length > maxChartTicks) chartLabels.shift();
+        if (chartPrices.length > maxChartTicks) chartPrices.shift();
+
+        priceChart.update('none');
     }
 
     function mapStageToStep(stage) {
@@ -471,42 +602,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Manual Reconnect Actions
     dom.sseReconnectBtn.addEventListener('click', () => {
-        logConsole('info', 'Manually trigger SSE channel reconnection...');
+        logConsole('info', 'Manually triggering SSE channel reconnection...');
         connectSSE();
     });
 
-    // Clear logs action
     dom.sseClearBtn.addEventListener('click', () => {
         dom.sseLogConsole.innerHTML = '<div class="text-cyan-400">[System] Event log buffer cleared.</div>';
     });
 
     // ----------------------------------------------------
-    // 8. Web3 Connect Wallet Functionality
+    // 8. Web3 Connect Wallet Functionality (Single Source of Truth)
     // ----------------------------------------------------
-    dom.connectWalletBtn.addEventListener('click', async () => {
-        if (typeof window.ethereum === 'undefined') {
-            alert('Ethereum browser wallet not detected. Install MetaMask or click ⚡ One-Click Simulation to use an ephemeral client identity.');
-            logConsole('verification', 'Connector error: window.ethereum is undefined.', 'failed');
-            return;
-        }
+    function setWalletConnection(connected, address = null, signer = null) {
+        isWalletConnected = connected;
+        walletAddress = address;
+        walletSigner = signer;
+        updateWalletUI();
+    }
 
-        try {
-            logConsole('info', 'Connecting Web3 wallet provider...');
-            dom.connectWalletBtn.disabled = true;
-            dom.connectWalletBtn.textContent = 'Connecting...';
-
-            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            walletAddress = accounts[0];
-
-            // Setup ethers v6 Provider/Signer
-            const provider = new ethers.BrowserProvider(window.ethereum);
-            walletSigner = await provider.getSigner();
-
-            // Set UI updates - Do NOT hide connect wallet button, update label with masked address
+    function updateWalletUI() {
+        if (isWalletConnected && walletAddress) {
             const maskedAddress = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
             dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
+            dom.connectWalletBtn.classList.remove('bg-cyan-600', 'hover:bg-cyan-500');
+            dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-sm font-semibold px-4 py-2 rounded-lg transition-all flex items-center cursor-default";
             
             if (dom.disconnectWalletBtn) {
                 dom.disconnectWalletBtn.classList.remove('hidden');
@@ -517,27 +637,17 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (dom.walletProviderAlert) {
                 dom.walletProviderAlert.classList.remove('hidden');
-                dom.walletProviderAlert.textContent = "Provider Status: Connected";
+                dom.walletProviderAlert.textContent = "Wallet: Connected";
+                dom.walletProviderAlert.className = "text-xs text-emerald-400 font-semibold px-2";
             }
-
-            logConsole('info', `Successfully linked wallet address: ${walletAddress}`);
-        } catch (err) {
-            console.error(err);
-            logConsole('verification', `Connection rejected: ${err.message}`, 'failed');
-            dom.connectWalletBtn.innerHTML = '🔗 Connect Wallet';
-            alert(`Wallet link failed: ${err.message}`);
-        } finally {
-            dom.connectWalletBtn.disabled = false;
-        }
-    });
-
-    if (dom.disconnectWalletBtn) {
-        dom.disconnectWalletBtn.addEventListener('click', () => {
-            walletAddress = null;
-            walletSigner = null;
-
-            // Hide disconnect wallet button and wallet address span
-            dom.disconnectWalletBtn.classList.add('hidden');
+            updateRequestHeaders();
+        } else {
+            dom.connectWalletBtn.innerHTML = `🔗 Connect Wallet`;
+            dom.connectWalletBtn.className = "bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center";
+            
+            if (dom.disconnectWalletBtn) {
+                dom.disconnectWalletBtn.classList.add('hidden');
+            }
             if (dom.walletAddressSpan) {
                 dom.walletAddressSpan.classList.add('hidden');
                 dom.walletAddressSpan.textContent = '';
@@ -550,10 +660,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 dom.walletSignatureStatus.classList.add('hidden');
                 dom.walletSignatureStatus.textContent = '';
             }
+            updateRequestHeaders();
+        }
+    }
 
-            // Restore connect wallet button label
-            dom.connectWalletBtn.innerHTML = '🔗 Connect Wallet';
+    dom.connectWalletBtn.addEventListener('click', async () => {
+        if (isWalletConnected) return; 
 
+        if (typeof window.ethereum === 'undefined') {
+            alert('Ethereum browser wallet not detected. Install MetaMask or click ⚡ One-Click Simulation to use an ephemeral client identity.');
+            logConsole('verification', 'Connector error: window.ethereum is undefined.', 'failed');
+            return;
+        }
+
+        try {
+            logConsole('info', 'Connecting Web3 wallet provider...');
+            dom.connectWalletBtn.disabled = true;
+            dom.connectWalletBtn.textContent = 'Connecting...';
+
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            const address = accounts[0];
+
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const signer = await provider.getSigner();
+
+            setWalletConnection(true, address, signer);
+            logConsole('info', `Successfully linked wallet address: ${address}`);
+        } catch (err) {
+            console.error(err);
+            logConsole('verification', `Connection rejected: ${err.message}`, 'failed');
+            setWalletConnection(false);
+            alert(`Wallet link failed: ${err.message}`);
+        } finally {
+            dom.connectWalletBtn.disabled = false;
+        }
+    });
+
+    if (dom.disconnectWalletBtn) {
+        dom.disconnectWalletBtn.addEventListener('click', () => {
+            setWalletConnection(false);
             logConsole('info', 'Wallet disconnected successfully.');
         });
     }
@@ -577,15 +722,23 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.apiStatusBadge.className = 'hidden';
 
         try {
-            // Compute Headers
             const headers = {};
             if (activeSession && activeSession.path === path && activeSession.verified) {
                 headers['Payment-Sender'] = activeSession.sender;
                 headers['Payment-Signature'] = activeSession.signature;
                 headers['Payment-Id'] = activeSession.paymentId;
+                headers['Authorization'] = `Bearer ${activeSession.signature}`;
+                headers['X-Wallet-Address'] = activeSession.sender;
+            } else if (isWalletConnected && walletAddress) {
+                const signature = "0x_mock_signature_from_connected_wallet_address_0x" + walletAddress.slice(2, 12) + "...";
+                headers['Payment-Id'] = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+                headers['Payment-Sender'] = walletAddress;
+                headers['Payment-Signature'] = signature;
+                headers['Authorization'] = `Bearer ${signature}`;
+                headers['X-Wallet-Address'] = walletAddress;
             }
 
-            updateHeadersPreview(headers);
+            updateRequestHeaders();
 
             const res = await fetch(url, { method, headers });
             
@@ -594,17 +747,15 @@ document.addEventListener('DOMContentLoaded', () => {
             updateResponseConsole(body);
 
             if (res.status === 402) {
-                // Handshake protocol initialized by 402
                 activePaymentId = body.payment_id;
                 activeFee = body.fee;
                 activeRecipient = body.recipient;
                 activeCurrency = body.currency;
 
                 resetDebugger();
-                setStepStatus('handshake', 'success', `Initial 402 Handshake generated payment_id: ${activePaymentId}`);
+                setStepStatus('handshake', 'pending', `Initial 402 Handshake generated payment_id: ${activePaymentId}`);
                 logConsole('payment', `Gated Resource returned 402. Payment is required: ${activeFee} ${activeCurrency} to ${activeRecipient}`, 'pending');
 
-                // Determine whether to pay using linked browser wallet or alert user to simulation
                 if (walletSigner && walletAddress) {
                     const pay = confirm(`Request requires payment of ${activeFee} ${activeCurrency}.\nSign payment ID: ${activePaymentId} using connected wallet?`);
                     if (pay) {
@@ -634,13 +785,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Web3 Wallet Signature & Settlement Sequence
     async function executeWeb3PaymentFlow() {
         try {
             setStepStatus('recovery', 'pending', 'Awaiting wallet cryptographic signature...');
             logConsole('verification', 'Requesting message signature from connected wallet...', 'pending');
 
-            // Sign the exact payment ID uuid string
             const signature = await walletSigner.signMessage(activePaymentId);
 
             activeSession = {
@@ -650,16 +799,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 paymentId: activePaymentId,
                 verified: true
             };
-            updateHeadersPreview({
-                'Payment-Sender': walletAddress,
-                'Payment-Signature': signature,
-                'Payment-Id': activePaymentId
-            });
+            updateRequestHeaders();
 
             setStepStatus('recovery', 'success', 'Cryptographic signature captured.');
             logConsole('verification', `Signature: ${signature.slice(0, 20)}...`, 'success');
 
-            // Emulate USDC transfer settlement to server payments ledger
             setStepStatus('matching', 'pending', 'Broadcasting mock USDC transfer on-chain...');
             logConsole('payment', 'Simulating payment transaction receipt to ledger...', 'pending');
 
@@ -687,12 +831,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const paymentObj = await postRes.json();
             logConsole('payment', `Transaction confirmed on-chain. Hash: ${mockTxHash.slice(0, 20)}...`, 'success');
 
-            // Re-trigger Request builder with valid headers
             setStepStatus('confirmation', 'pending', 'Sending authorized query to gated API...');
             logConsole('verification', 'Re-executing gated API endpoint with security headers...', 'pending');
             
             setTimeout(async () => {
-                // Clicking send will now pull the credentials from activeSession
                 dom.apiSendBtn.click();
             }, 1200);
 
@@ -707,7 +849,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // 10. One-Click Simulation Flow
     // ----------------------------------------------------
     dom.oneClickSimBtn.addEventListener('click', async () => {
-        // Trigger simulation starting from a new handshake
         await executeSimulationFlow();
     });
 
@@ -716,7 +857,6 @@ document.addEventListener('DOMContentLoaded', () => {
         resetDebugger();
 
         try {
-            // Step 1: Handshake
             if (!paymentId) {
                 setStepStatus('handshake', 'pending', 'Calling Gated resource to retrieve payment challenge...');
                 logConsole('payment', 'Querying gated resource /api/gated-data...', 'pending');
@@ -739,15 +879,16 @@ document.addEventListener('DOMContentLoaded', () => {
             setStepStatus('handshake', 'success', `UUID Handshake completed: ${paymentId}`);
             logConsole('payment', `Received Payment ID Challenge: ${paymentId}`, 'success');
 
-            // Step 2: Create Mock Client Wallet
             setStepStatus('recovery', 'pending', 'Instantiating ephemeral client identity...');
             logConsole('verification', 'Generating secure client mock keypair using ethers.Wallet...', 'pending');
             
             const mockWallet = ethers.Wallet.createRandom();
             const mockAddress = mockWallet.address;
             logConsole('info', `Simulated client address: ${mockAddress}`);
+            
+            // Central Wallet Synchronization: Simulated address acts as the connected address
+            setWalletConnection(true, mockAddress, mockWallet);
 
-            // Step 3: Sign Payment ID
             const signature = await mockWallet.signMessage(paymentId);
             
             activeSession = {
@@ -757,16 +898,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 paymentId: paymentId,
                 verified: true
             };
-            updateHeadersPreview({
-                'Payment-Sender': mockAddress,
-                'Payment-Signature': signature,
-                'Payment-Id': paymentId
-            });
+            updateRequestHeaders();
 
             setStepStatus('recovery', 'success', 'Mock message signed successfully.');
             logConsole('verification', `Recoverable signature generated: ${signature.slice(0, 16)}...`, 'success');
 
-            // Step 4: Register simulated payment transaction
             setStepStatus('matching', 'pending', 'Posting ledger verification status...');
             logConsole('payment', 'Submitting transaction data to /api/payments...', 'pending');
             
@@ -794,14 +930,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const paymentData = await postRes.json();
             logConsole('payment', `Simulated ledger payment marked verified. Hash: ${mockTxHash.slice(0, 16)}...`, 'success');
 
-            // Step 5: Fetch Gated API with correct credentials
             setStepStatus('confirmation', 'pending', 'Awaiting block validation...');
             logConsole('verification', 'Hitting GET /api/gated-data with custom authentication headers...', 'pending');
 
             const headers = {
                 'Payment-Sender': mockAddress,
                 'Payment-Signature': signature,
-                'Payment-Id': paymentId
+                'Payment-Id': paymentId,
+                'Authorization': `Bearer ${signature}`,
+                'X-Wallet-Address': mockAddress
             };
             updateHeadersPreview(headers);
 
@@ -816,7 +953,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (finalRes.status === 200) {
                 setStepStatus('unlocked', 'success', 'Access granted! Content successfully unlocked.');
-                logConsole('payment', 'Simulation completed! Premium dark theme gated dataset unlocked.', 'success');
+                logConsole('payment', 'Simulation completed! Premium gated dataset unlocked.', 'success');
             } else {
                 throw new Error(`Server returned error ${finalRes.status}: ${finalBody.error}`);
             }
@@ -830,17 +967,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ----------------------------------------------------
-    // 11. Payments Ledger Table Actions (Search, Sort, Pagination)
+    // 11. Payments Ledger Table Actions
     // ----------------------------------------------------
     async function fetchLedger() {
-        // Build API URL query params
         const urlParams = new URLSearchParams();
         if (ledgerSearchQuery) urlParams.append('search', ledgerSearchQuery);
         if (ledgerStatus) urlParams.append('status', ledgerStatus);
         urlParams.append('limit', ledgerLimit);
         urlParams.append('offset', ledgerOffset);
-        
-        // Backend handles sorting of timestamp (asc/desc)
         urlParams.append('sort', ledgerSortOrder);
 
         try {
@@ -852,7 +986,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateMetrics(data.payments);
         } catch (err) {
             console.error(err);
-            dom.ledgerTableBody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-rose-500">Error loading ledger records.</td></tr>`;
+            dom.ledgerTableBody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-rose-500 font-bold">Error loading ledger records.</td></tr>`;
         }
     }
 
@@ -890,7 +1024,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderLedgerTable(payments, totalCount) {
         dom.ledgerTableBody.innerHTML = '';
         
-        // If sorting by amount is active, perform client-side sorting since backend does not support it
         if (ledgerAmountSort) {
             payments.sort((a, b) => {
                 const amtA = parseFloat(a.amount);
@@ -935,7 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </svg>
                     </button>
                 </td>
-                <td class="py-3 px-2 text-slate-400 font-mono">${new Date(p.timestamp).toLocaleString()}</td>
+                <td class="py-3 px-2 text-slate-400 font-mono">${getCurrentTime(p.timestamp)}</td>
                 <td class="py-3 px-2 text-slate-400 font-mono">
                     <div class="flex items-center space-x-1">
                         <span>${senderText}</span>
@@ -980,7 +1113,6 @@ document.addEventListener('DOMContentLoaded', () => {
             dom.ledgerTableBody.appendChild(tr);
         });
 
-        // Update pagination buttons
         const totalPages = Math.ceil(totalCount / ledgerLimit) || 1;
         const currentPage = Math.floor(ledgerOffset / ledgerLimit) + 1;
 
@@ -989,14 +1121,11 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.ledgerNextBtn.disabled = (ledgerOffset + ledgerLimit) >= totalCount;
     }
 
-    // Recalculate summary metrics from current loaded list
     function updateMetrics(payments) {
         let totalFees = 0;
         let verifiedCount = 0;
         let pendingCount = 0;
 
-        // Note: For true global metrics, we loop through all records. Since limit is 10, we do local loop.
-        // In a real app we'd fetch aggregate stats from an endpoint. Here we compute from loaded data.
         payments.forEach(p => {
             if (p.status === 'verified') {
                 totalFees += parseFloat(p.amount);
@@ -1009,9 +1138,19 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.metricsTotalFees.textContent = `${totalFees.toFixed(2)} USDC`;
         dom.metricsVerifiedCount.textContent = verifiedCount;
         dom.metricsPendingCount.textContent = pendingCount;
+
+        // Reactive Debugger Update:
+        if (pendingCount > 0) {
+            const pendingPayment = payments.find(p => p.status === 'pending');
+            if (pendingPayment) {
+                activePaymentId = pendingPayment.payment_id;
+                setStepStatus('handshake', 'pending', `Awaiting signature recovery for pending ID: ${activePaymentId}`);
+            }
+        } else if (activePaymentId === null) {
+            resetDebugger();
+        }
     }
 
-    // Debounce helper for Search input
     let searchTimeout;
     dom.ledgerSearchInput.addEventListener('input', (e) => {
         clearTimeout(searchTimeout);
@@ -1022,28 +1161,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 300);
     });
 
-    // Status filter selector change
     dom.ledgerStatusFilter.addEventListener('change', (e) => {
         ledgerStatus = e.target.value;
         ledgerOffset = 0;
         fetchLedger();
     });
 
-    // Toggle Sorting on Table Headers
     dom.ledgerSortTimestamp.addEventListener('click', () => {
-        // Toggle sort order
         ledgerSortOrder = (ledgerSortOrder === 'desc') ? 'asc' : 'desc';
-        ledgerAmountSort = null; // deactivate amount sort
+        ledgerAmountSort = null;
         fetchLedger();
     });
 
     dom.ledgerSortAmount.addEventListener('click', () => {
-        // Toggle client-side amount sort
         ledgerAmountSort = (ledgerAmountSort === 'asc') ? 'desc' : 'asc';
         fetchLedger();
     });
 
-    // Pagination triggers
     dom.ledgerPrevBtn.addEventListener('click', () => {
         if (ledgerOffset >= ledgerLimit) {
             ledgerOffset -= ledgerLimit;
@@ -1056,14 +1190,11 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchLedger();
     });
 
-    // ----------------------------------------------------
-    // 12. JSON / CSV Data Export Action Handlers
-    // ----------------------------------------------------
     async function fetchAllFilteredLedger() {
         const urlParams = new URLSearchParams();
         if (ledgerSearchQuery) urlParams.append('search', ledgerSearchQuery);
         if (ledgerStatus) urlParams.append('status', ledgerStatus);
-        urlParams.append('limit', 100); // Retrieve up to 100 records for bulk exports
+        urlParams.append('limit', 100);
         urlParams.append('offset', 0);
         urlParams.append('sort', ledgerSortOrder);
 
@@ -1141,7 +1272,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ----------------------------------------------------
-    // 13. Application Initialization Entry Point
+    // 12. Application Initialization Entry Point
     // ----------------------------------------------------
     function init() {
         loadSettings();
@@ -1149,6 +1280,7 @@ document.addEventListener('DOMContentLoaded', () => {
         connectSSE();
         fetchLedger();
         resetDebugger();
+        updateWalletUI(); // Start in synchronized connection state
         
         dom.settingsRpcInput.addEventListener('input', checkSettingsChanged);
         dom.settingsContractInput.addEventListener('input', checkSettingsChanged);

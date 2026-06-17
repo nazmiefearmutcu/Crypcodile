@@ -32,7 +32,7 @@ const paymentsLedger = [
     amount: "0.10",
     currency: "USDC",
     txHash: "0x5c5067a6a3b0c801bcbc26759c5d1e2e1d7dc1518f8e811c76a77d7f781dc41b",
-    timestamp: "2026-06-17T09:00:00.000Z",
+    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
     signature: "0x307822..."
   },
   {
@@ -43,7 +43,7 @@ const paymentsLedger = [
     amount: "0.10",
     currency: "USDC",
     txHash: null,
-    timestamp: "2026-06-17T10:15:00.000Z",
+    timestamp: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(), // 1 hour ago
     signature: null
   }
 ];
