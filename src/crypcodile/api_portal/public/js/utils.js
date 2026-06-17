@@ -4,11 +4,19 @@
  */
 
 /**
- * Returns time string formatted as "hh:mm:ss A" using a locked GMT+3 time representation 
- * to prevent server-client timezone drifts.
+ * Returns time string formatted as "hh:mm:ss A" using GMT+3.
  */
 function getSyncedTime(dateInput = null) {
+    if (typeof dateInput === 'string' && /^\d{2}:\d{2}:\d{2}\s+(AM|PM)$/i.test(dateInput)) {
+        return dateInput;
+    }
+    
     const date = dateInput ? new Date(dateInput) : new Date();
+    
+    if (isNaN(date.getTime())) {
+        return "12:00:00 AM";
+    }
+
     // Convert current client time to GMT+3 (Istanbul Timezone equivalent)
     const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
     const targetOffset = 3 * 3600000; // +3 hours
@@ -26,65 +34,57 @@ function getSyncedTime(dateInput = null) {
 }
 
 /**
- * Generates a mock signature of exactly 130 characters (64 bytes of hex + 0x prefix)
- * using a deterministic generator based on wallet address and payment ID.
+ * Generates a valid 66-character mock signature starting with 0x and containing exactly 64 hex characters.
  */
-function generateMockSignature(address = "", paymentId = "") {
-    const addr = address || "0x7a97970C51812dc3A010C7d01b50e0d17dc79C8";
-    const pid = paymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
-    const seedStr = `${addr.toLowerCase()}-${pid.toLowerCase()}`;
-    
-    let hash1 = 0;
-    let hash2 = 0;
-    for (let i = 0; i < seedStr.length; i++) {
-        const char = seedStr.charCodeAt(i);
-        hash1 = (hash1 * 31 + char) & 0xFFFFFFFF;
-        hash2 = (hash2 * 37 + char) & 0xFFFFFFFF;
+function generateValidMockSignature() {
+    let result = "0x";
+    for (let i = 0; i < 64; i++) {
+        result += Math.floor(Math.random() * 16).toString(16);
     }
-
-    let result = "";
-    let s1 = Math.abs(hash1 || 0x12345678);
-    let s2 = Math.abs(hash2 || 0x87654321);
-
-    // Generate exactly 128 random hex characters
-    for (let i = 0; i < 128; i++) {
-        s1 = (s1 * 1664525 + 1013904223) & 0xFFFFFFFF;
-        s2 = (s2 * 1566083941 + 2531011) & 0xFFFFFFFF;
-        const val = (s1 ^ s2) % 16;
-        result += val.toString(16);
-    }
-    return "0x" + result;
+    return result;
 }
 
 /**
- * Generates an array of 20 time-series data entries where each step has a maximum
- * deviation of 0.05% of the current price, preventing crash-to-zero and overflow errors.
+ * Generates an array of time-series data entries with random walk deviation.
  */
-function generateTimeSeriesData(basePrice, count = 20) {
+function generateTimeSeriesData(basePrice, length = 20) {
     const data = [];
     let currentPrice = basePrice;
     const now = Date.now();
     const intervalMs = 2000;
 
-    for (let i = count - 1; i >= 0; i--) {
-        const timeVal = new Date(now - i * intervalMs);
-        const maxDeviation = currentPrice * 0.0005; // max %0.05 deviation per step
-        const change = (Math.random() - 0.5) * 2 * maxDeviation;
-        currentPrice = currentPrice + change;
+    for (let i = 0; i < length; i++) {
+        const timeVal = now - (length - 1 - i) * intervalMs;
         
-        // Safety bounds
-        if (currentPrice < basePrice * 0.8) currentPrice = basePrice * 0.8;
-        if (currentPrice > basePrice * 1.2) currentPrice = basePrice * 1.2;
-        
+        if (i > 0) {
+            // Random walk: max ±0.1% deviation from the previous step's price
+            const deviationPercent = (Math.random() - 0.5) * 2 * 0.001; // Range: [-0.001, 0.001]
+            currentPrice = currentPrice * (1 + deviationPercent);
+        }
+
+        // Never drop below 50% of the base price
+        if (currentPrice < basePrice * 0.5) {
+            currentPrice = basePrice * 0.5;
+        }
+
         data.push({
-            time: timeVal,
+            time: getSyncedTime(timeVal),
             price: parseFloat(currentPrice.toFixed(2))
         });
     }
     return data;
 }
 
-// Export functions for browser / standard script usage
+// Expose utilities on window object for browser compatibility
 window.getSyncedTime = getSyncedTime;
-window.generateMockSignature = generateMockSignature;
+window.generateValidMockSignature = generateValidMockSignature;
+window.generateMockSignature = generateValidMockSignature; // Compatibility mapping for generateMockSignature
 window.generateTimeSeriesData = generateTimeSeriesData;
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        getSyncedTime,
+        generateValidMockSignature,
+        generateTimeSeriesData
+    };
+}
