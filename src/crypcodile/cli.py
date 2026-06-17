@@ -72,6 +72,8 @@ def prompt_with_autocomplete(
     from prompt_toolkit import prompt
     from prompt_toolkit.completion import WordCompleter
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.filters import has_completions
     import sys
 
     # If stdin is not interactive (e.g., tests/pipes) or running in pytest, use fallback _prompt_with_esc
@@ -80,6 +82,11 @@ def prompt_with_autocomplete(
 
     completer = WordCompleter(suggestions, ignore_case=True, meta_dict=meta_dict)
     
+    kb = KeyBindings()
+    @kb.add('escape', filter=~has_completions)
+    def _(event):
+        event.app.exit(exception=KeyboardInterrupt)
+
     prompt_text = text
     if default:
         prompt_text += f" [{default}]"
@@ -91,6 +98,7 @@ def prompt_with_autocomplete(
             completer=completer,
             complete_while_typing=True,
             auto_suggest=AutoSuggestFromHistory(),
+            key_bindings=kb,
         )
         val = val.strip()
         if not val and default:
@@ -480,12 +488,13 @@ def select_symbols_interactively(data_dir: Path, channel: str | None = None) -> 
 
     # 2. Query all unique symbols in this channel
     typer.echo(f"\nScanning symbol list for channel '{channel}'...")
-    try:
-        df = cat.query(f'SELECT DISTINCT symbol FROM "{channel}"')
-        all_symbols = sorted([str(s) for s in df["symbol"].to_list() if s])
-    except Exception as e:
-        typer.echo(f"Error querying symbols from catalog: {e}", err=True)
-        all_symbols = []
+    all_symbols = []
+    if channel in cat._registered_channels:
+        try:
+            df = cat.query(f'SELECT DISTINCT symbol FROM "{channel}"')
+            all_symbols = sorted([str(s) for s in df["symbol"].to_list() if s])
+        except Exception:
+            all_symbols = []
 
     if not all_symbols:
         typer.echo(f"No registered symbols found in channel '{channel}' on disk.", err=True)
