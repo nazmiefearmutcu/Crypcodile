@@ -1861,7 +1861,8 @@ def shell() -> None:
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
     from prompt_toolkit.completion import WordCompleter
     
-    typer.echo("Welcome to Crypcodile Interactive Shell!")
+    from crypcodile import __version__
+    typer.echo(f"Welcome to Crypcodile Interactive Shell! (v{__version__})")
     typer.echo("Type 'help' to list commands. Type 'exit' or 'quit' to exit.")
     
     click_group = typer.main.get_group(app)
@@ -1946,11 +1947,12 @@ LOGO = f"\033[32m{LOGO_ART}\033[0m"
 def main() -> None:
     """Entry-point called by the ``crypcodile`` script."""
     import sys
+    from crypcodile import __version__
 
     # Print the logo always to stderr, unless running the mcp/update command or tests
     if "mcp" not in sys.argv and "update" not in sys.argv and "pytest" not in sys.modules:
         if sys.stderr.isatty():
-            sys.stderr.write(LOGO + "\n")
+            sys.stderr.write(LOGO + f"\n             (v{__version__})\n\n")
             sys.stderr.flush()
 
     if len(sys.argv) == 1:
