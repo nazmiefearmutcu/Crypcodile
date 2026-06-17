@@ -5,15 +5,38 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
-    // 1. Application Global State
+    // 1. Application Global State (Reactive Store)
     // ----------------------------------------------------
     let eventSource = null;
     let priceChart = null;
+    let priceFeedTimeout = null;
+    
+    // Global Wallet State
+    window.globalWalletState = {
+        isConnected: false,
+        address: null,
+        signer: null,
+        subscribers: [],
+        subscribe(callback) {
+            this.subscribers.push(callback);
+            callback(this);
+            return () => {
+                this.subscribers = this.subscribers.filter(cb => cb !== callback);
+            };
+        },
+        update(isConnected, address = null, signer = null) {
+            this.isConnected = isConnected;
+            this.address = address;
+            this.signer = signer;
+            this.subscribers.forEach(cb => cb(this));
+        }
+    };
+
+    // Backward compatibility local variables (synchronized by global state subscriber)
     let walletAddress = null;
     let walletSigner = null;
     let isWalletConnected = false;
-    let priceFeedTimeout = null;
-    
+
     // Active simulation details
     let activePaymentId = null;
     let activeFee = "0.10";
@@ -35,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const maxChartTicks = 20;
     const chartLabels = [];
     const chartPrices = [];
+    let lastPrice = 2096.92;
 
     // Form dirty state tracker
     let isDirty = false;
@@ -106,34 +130,80 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. UI Helpers: Logs, Stepper & Badges
     // ----------------------------------------------------
     
-    // Centralized time utility function
-    function getCurrentTime(dateInput = null) {
-        const date = dateInput ? new Date(dateInput) : new Date();
-        return date.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: true
-        });
+    // Centralized 12-hour time utility function (hh:mm:ss AM/PM)
+    function formatTimestamp(dateInput = null) {
+        return window.getSyncedTime(dateInput);
     }
 
-    // Add log to Event Stream log console
+    function getCurrentTime(dateInput = null) {
+        return window.getSyncedTime(dateInput);
+    }
+
+    // Maps verification stages to debugger stepper node keys
+    function mapStageToStep(stage) {
+        switch (stage) {
+            case 'signature_recovery':
+            case 'recovery':
+                return 'recovery';
+            case 'sender_matching':
+            case 'matching':
+                return 'matching';
+            case 'block_confirmation':
+            case 'confirmation':
+                return 'confirmation';
+            case 'pending':
+            case 'handshake':
+                return 'handshake';
+            case 'payment_received':
+            case 'unlocked':
+                return 'unlocked';
+            default:
+                return null;
+        }
+    }
+
+    // Dynamic mock signature generator producing deterministic 130-char hex string starting with 0x
+    function generateAlgorithmicSignature(address, paymentId) {
+        return window.generateMockSignature(address, paymentId);
+    }
+
+    function generateMockSignature(address, paymentId) {
+        return window.generateMockSignature(address, paymentId);
+    }
+
+    // Add log to Event Stream log console with customizable, high-contrast Cyan/Light Cyan (#22D3EE)
     function logConsole(type, message, status = '', timestamp = null) {
-        const timeStr = getCurrentTime(timestamp);
-        let colorClass = 'text-emerald-300'; // high-contrast light green default
+        const timeStr = formatTimestamp(timestamp);
+        let colorStyle = 'color: #22D3EE;'; // High-contrast Light Cyan (#22D3EE) default log style
+        let isBold = false;
         
-        if (type === 'info') colorClass = 'text-cyan-300 font-semibold';
-        else if (type === 'tick') colorClass = 'text-emerald-400';
-        else if (type === 'payment') {
-            colorClass = (status === 'success') ? 'text-cyan-400 font-bold' : 'text-yellow-300 font-semibold';
+        if (type === 'info') {
+            colorStyle = 'color: #22D3EE;';
+            isBold = true;
+        } else if (type === 'tick') {
+            colorStyle = 'color: #34D399;'; // Emerald Green
+        } else if (type === 'payment') {
+            if (status === 'success') {
+                colorStyle = 'color: #22D3EE;';
+                isBold = true;
+            } else {
+                colorStyle = 'color: #FBBF24;'; // Amber
+            }
         } else if (type === 'verification') {
-            if (status === 'success') colorClass = 'text-cyan-400 font-bold';
-            else if (status === 'failed') colorClass = 'text-rose-400 font-extrabold';
-            else colorClass = 'text-yellow-300 font-semibold';
+            if (status === 'success') {
+                colorStyle = 'color: #22D3EE;';
+                isBold = true;
+            } else if (status === 'failed') {
+                colorStyle = 'color: #F87171;'; // Rose Red
+                isBold = true;
+            } else {
+                colorStyle = 'color: #FBBF24;'; // Amber
+            }
         }
 
         const logLine = document.createElement('div');
-        logLine.className = `${colorClass} py-0.5 border-b border-slate-900/40`;
+        logLine.className = `py-0.5 border-b border-slate-900/40 ${isBold ? 'font-bold' : ''}`;
+        logLine.setAttribute('style', colorStyle);
         logLine.innerHTML = `[${timeStr}] [${type.toUpperCase()}] ${message}`;
         
         dom.sseLogConsole.appendChild(logLine);
@@ -223,6 +293,17 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.debuggerMessage.textContent = "Debugger initialized. Ready to record request steps.";
     }
 
+    // Direct synchronization of debugger stepper when a txHash is present
+    function syncDebuggerState(paymentId, txHash) {
+        if (txHash) {
+            setStepStatus('handshake', 'success', 'Gated handshake completed.');
+            setStepStatus('recovery', 'success', 'Signature recovered successfully.');
+            setStepStatus('matching', 'success', 'Sender address matches headers.');
+            setStepStatus('confirmation', 'pending', `Awaiting block confirmations for tx: ${txHash.slice(0, 16)}...`);
+            setStepStatus('unlocked', 'idle');
+        }
+    }
+
     // Update Request builder HTTP badge
     function updateStatusBadge(statusCode, statusText) {
         dom.apiStatusBadge.classList.remove('hidden', 'bg-emerald-500/10', 'text-emerald-400', 'border-emerald-500/20', 'bg-amber-500/10', 'text-amber-400', 'border-amber-500/20', 'bg-rose-500/10', 'text-rose-400', 'border-rose-500/20');
@@ -249,24 +330,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateRequestHeaders() {
         const headers = {};
-        if (activeSession && activeSession.verified) {
-            headers['Payment-Id'] = activeSession.paymentId;
-            headers['Payment-Sender'] = activeSession.sender;
-            headers['Payment-Signature'] = activeSession.signature;
-            headers['Authorization'] = `Bearer ${activeSession.signature}`;
-            headers['X-Wallet-Address'] = activeSession.sender;
-        } else if (isWalletConnected && walletAddress) {
-            const signature = "0x_mock_signature_from_connected_wallet_address_0x" + walletAddress.slice(2, 12) + "...";
-            headers['Payment-Id'] = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
-            headers['Payment-Sender'] = walletAddress;
-            headers['Payment-Signature'] = signature;
-            headers['Authorization'] = `Bearer ${signature}`;
-            headers['X-Wallet-Address'] = walletAddress;
-        } else {
-            headers['Payment-Id'] = "challenge_payment_id_required";
-            headers['Payment-Sender'] = "wallet_address_required";
-            headers['Payment-Signature'] = "cryptographic_signature_required";
-        }
+        const activeAddress = (window.globalWalletState && window.globalWalletState.address) || walletAddress || "0x0000000000000000000000000000000000000000";
+        const currentPaymentId = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+        const signature = generateAlgorithmicSignature(activeAddress, currentPaymentId);
+
+        headers['Payment-Id'] = currentPaymentId;
+        headers['Payment-Sender'] = activeAddress;
+        headers['Payment-Signature'] = signature;
+        headers['Authorization'] = `Bearer ${signature}`;
+        headers['X-Wallet-Address'] = activeAddress;
+
         updateHeadersPreview(headers);
     }
 
@@ -281,16 +354,16 @@ document.addEventListener('DOMContentLoaded', () => {
             data: {
                 labels: chartLabels,
                 datasets: [{
-                    label: 'Mock Token Price (USDC)',
+                    label: 'Token Price (USDC)',
                     data: chartPrices,
-                    borderColor: 'rgba(34, 211, 238, 1)', // cyan-400
-                    backgroundColor: 'rgba(34, 211, 238, 0.05)',
+                    borderColor: '#00E5FF', // Bright Cyan
+                    backgroundColor: 'rgba(0, 229, 255, 0.05)',
                     borderWidth: 2,
-                    tension: 0.3,
+                    tension: 0.35,
                     fill: true,
                     pointRadius: 2,
                     pointHoverRadius: 6,
-                    pointHoverBackgroundColor: 'rgba(34, 211, 238, 1)',
+                    pointHoverBackgroundColor: '#00E5FF',
                     pointHoverBorderColor: '#020617',
                     pointHoverBorderWidth: 2
                 }]
@@ -325,6 +398,86 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Hook / custom manager for sliding window price feed (Time-Series)
+    function usePriceTimeSeries(intervalMs = 2000, windowSize = 20) {
+        let data = window.generateTimeSeriesData(lastPrice, windowSize);
+        const listeners = [];
+
+        const intervalId = setInterval(() => {
+            const lastEntry = data[data.length - 1] || { price: 2096.92 };
+            const maxDeviation = lastEntry.price * 0.0005; // max %0.05 deviation per step
+            const change = (Math.random() - 0.5) * 2 * maxDeviation;
+            let nextPrice = lastEntry.price + change;
+
+            // Safety bounds to prevent zero/infinity drift
+            if (nextPrice < 1000.0) nextPrice = 1000.0;
+            if (nextPrice > 5000.0) nextPrice = 5000.0;
+
+            const nextTime = new Date();
+            data = [...data, { time: nextTime, price: parseFloat(nextPrice.toFixed(2)) }];
+            if (data.length > windowSize) {
+                data.shift();
+            }
+
+            listeners.forEach(cb => cb(data));
+        }, intervalMs);
+
+        return {
+            getData() {
+                return data;
+            },
+            subscribe(cb) {
+                listeners.push(cb);
+                cb(data);
+                return () => {
+                    const idx = listeners.indexOf(cb);
+                    if (idx > -1) listeners.splice(idx, 1);
+                };
+            },
+            updateExternalPrice(newPrice) {
+                const nextTime = new Date();
+                data = [...data, { time: nextTime, price: newPrice }];
+                if (data.length > windowSize) {
+                    data.shift();
+                }
+                listeners.forEach(cb => cb(data));
+            },
+            destroy() {
+                clearInterval(intervalId);
+            }
+        };
+    }
+
+    // Shared time series hook instance
+    window.priceTimeSeriesHook = null;
+
+    function startPriceChartSimulation() {
+        if (!window.priceTimeSeriesHook) {
+            window.priceTimeSeriesHook = usePriceTimeSeries(2000, maxChartTicks);
+        }
+        
+        window.priceTimeSeriesHook.subscribe((data) => {
+            chartLabels.length = 0;
+            chartPrices.length = 0;
+            
+            data.forEach(item => {
+                chartLabels.push(formatTimestamp(item.time));
+                chartPrices.push(item.price);
+            });
+
+            if (data.length > 0) {
+                lastPrice = data[data.length - 1].price;
+                if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+                    dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                }
+            }
+
+            if (priceChart) {
+                priceChart.update('none');
+            }
+        });
+    }
+
     // ----------------------------------------------------
     // 5. Settings Panel Actions
     // ----------------------------------------------------
@@ -351,10 +504,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isDirty) {
             dom.settingsSaveBtn.disabled = false;
-            dom.settingsSaveBtn.className = "w-full bg-gradient-to-r from-cyan-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-slate-950 text-sm font-bold py-2.5 rounded-lg shadow-[0_0_20px_rgba(34,211,238,0.55)] border-none transition-all cursor-pointer scale-[1.02]";
+            dom.settingsSaveBtn.style.backgroundColor = "#00E5FF";
+            dom.settingsSaveBtn.style.color = "#020617";
+            dom.settingsSaveBtn.style.opacity = "1.0";
+            dom.settingsSaveBtn.style.boxShadow = "0 0 15px rgba(0, 229, 255, 0.6)";
+            dom.settingsSaveBtn.className = "w-full text-sm font-bold py-2.5 rounded-lg border-none transition-all cursor-pointer transform hover:scale-[1.02] active:scale-[0.98]";
         } else {
             dom.settingsSaveBtn.disabled = true;
-            dom.settingsSaveBtn.className = "w-full bg-slate-800 text-slate-500 cursor-not-allowed text-sm font-semibold py-2.5 rounded-lg border border-slate-700 transition-all opacity-50";
+            dom.settingsSaveBtn.style.backgroundColor = "#1e293b";
+            dom.settingsSaveBtn.style.color = "#64748b";
+            dom.settingsSaveBtn.style.opacity = "0.5";
+            dom.settingsSaveBtn.style.boxShadow = "none";
+            dom.settingsSaveBtn.className = "w-full text-sm font-semibold py-2.5 rounded-lg border border-slate-800 cursor-not-allowed transition-all";
         }
     }
 
@@ -481,14 +642,23 @@ document.addEventListener('DOMContentLoaded', () => {
                                 priceFeedTimeout = null;
                             }
                             resolve(payload);
-                            handleTick(payload.data);
+                            
+                            // Inject SSE price tick into the time series hook
+                            const newPrice = parseFloat(payload.data.price);
+                            if (window.priceTimeSeriesHook) {
+                                window.priceTimeSeriesHook.updateExternalPrice(newPrice);
+                            }
+                            
+                            dom.metricsLivePrice.textContent = `$${newPrice.toFixed(2)}`;
                         }
                         break;
 
                     case 'payment':
                         fetchLedger();
                         if (payload.data && payload.data.payment_id === activePaymentId) {
-                            if (payload.stage === 'pending') {
+                            if (payload.data.txHash) {
+                                syncDebuggerState(payload.data.payment_id, payload.data.txHash);
+                            } else if (payload.stage === 'pending') {
                                 setStepStatus('handshake', 'success', 'Gated handshake completed.');
                             } else if (payload.stage === 'payment_received') {
                                 setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
@@ -514,8 +684,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     loadingOverlay.classList.add('hidden');
                 }
                 if (firstPayload && firstPayload.data) {
-                    handleTick(firstPayload.data);
+                    lastPrice = parseFloat(firstPayload.data.price);
+                    dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
                 }
+                
                 // Handle subsequent SSE events
                 eventSource.onmessage = (event) => {
                     let payload;
@@ -530,11 +702,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     logConsole(payload.type, payload.message, payload.status, eventTimestamp);
                     if (payload.type === 'tick') {
-                        if (payload.data) handleTick(payload.data);
+                        if (payload.data && payload.data.price) {
+                            const newPrice = parseFloat(payload.data.price);
+                            if (window.priceTimeSeriesHook) {
+                                window.priceTimeSeriesHook.updateExternalPrice(newPrice);
+                            }
+                            dom.metricsLivePrice.textContent = `$${newPrice.toFixed(2)}`;
+                        }
                     } else if (payload.type === 'payment') {
                         fetchLedger();
                         if (payload.data && payload.data.payment_id === activePaymentId) {
-                            if (payload.stage === 'pending') {
+                            if (payload.data.txHash) {
+                                syncDebuggerState(payload.data.payment_id, payload.data.txHash);
+                            } else if (payload.stage === 'pending') {
                                 setStepStatus('handshake', 'success', 'Gated handshake completed.');
                             } else if (payload.stage === 'payment_received') {
                                 setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
@@ -560,7 +740,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] transition-all";
                 dom.sseStatusText.textContent = "Disconnected";
-                dom.metricsLivePrice.textContent = 'N/A';
+                
+                // Keep the price simulation alive on timeout, do not freeze metrics
+                dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
 
                 if (loadingOverlay) {
                     loadingOverlay.innerHTML = `
@@ -579,89 +761,69 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
-    function handleTick(tickData) {
-        const price = parseFloat(tickData.price);
-        dom.metricsLivePrice.textContent = `$${price.toFixed(2)}`;
-        
-        const timeString = getCurrentTime(tickData.timestamp);
-        chartLabels.push(timeString);
-        chartPrices.push(price);
-
-        if (chartLabels.length > maxChartTicks) chartLabels.shift();
-        if (chartPrices.length > maxChartTicks) chartPrices.shift();
-
-        priceChart.update('none');
-    }
-
-    function mapStageToStep(stage) {
-        switch (stage) {
-            case 'signature_recovery': return 'recovery';
-            case 'sender_matching': return 'matching';
-            case 'block_confirmation': return 'confirmation';
-            default: return null;
-        }
-    }
-
-    dom.sseReconnectBtn.addEventListener('click', () => {
-        logConsole('info', 'Manually triggering SSE channel reconnection...');
-        connectSSE();
-    });
-
-    dom.sseClearBtn.addEventListener('click', () => {
-        dom.sseLogConsole.innerHTML = '<div class="text-cyan-400">[System] Event log buffer cleared.</div>';
-    });
-
     // ----------------------------------------------------
     // 8. Web3 Connect Wallet Functionality (Single Source of Truth)
     // ----------------------------------------------------
     function setWalletConnection(connected, address = null, signer = null) {
-        isWalletConnected = connected;
-        walletAddress = address;
-        walletSigner = signer;
-        updateWalletUI();
+        if (window.globalWalletState) {
+            window.globalWalletState.update(connected, address, signer);
+        }
     }
 
-    function updateWalletUI() {
-        if (isWalletConnected && walletAddress) {
-            const maskedAddress = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
-            dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
-            dom.connectWalletBtn.classList.remove('bg-cyan-600', 'hover:bg-cyan-500');
-            dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-sm font-semibold px-4 py-2 rounded-lg transition-all flex items-center cursor-default";
-            
-            if (dom.disconnectWalletBtn) {
-                dom.disconnectWalletBtn.classList.remove('hidden');
-            }
-            if (dom.walletAddressSpan) {
-                dom.walletAddressSpan.classList.remove('hidden');
-                dom.walletAddressSpan.textContent = walletAddress;
-            }
-            if (dom.walletProviderAlert) {
-                dom.walletProviderAlert.classList.remove('hidden');
-                dom.walletProviderAlert.textContent = "Wallet: Connected";
-                dom.walletProviderAlert.className = "text-xs text-emerald-400 font-semibold px-2";
+    // Subscribe to global cüzdan state to keep UI, Console, Table, and headers strictly synchronized
+    if (window.globalWalletState) {
+        window.globalWalletState.subscribe((state) => {
+            isWalletConnected = state.isConnected;
+            walletAddress = state.address;
+            walletSigner = state.signer;
+
+            if (state.isConnected && state.address) {
+                const maskedAddress = state.address.slice(0, 6) + '...' + state.address.slice(-4);
+                dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
+                dom.connectWalletBtn.classList.remove('bg-cyan-600', 'hover:bg-cyan-500');
+                dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-sm font-semibold px-4 py-2 rounded-lg transition-all flex items-center cursor-default";
+                
+                if (dom.disconnectWalletBtn) {
+                    dom.disconnectWalletBtn.classList.remove('hidden');
+                }
+                if (dom.walletAddressSpan) {
+                    dom.walletAddressSpan.classList.remove('hidden');
+                    dom.walletAddressSpan.textContent = state.address;
+                }
+                if (dom.walletProviderAlert) {
+                    dom.walletProviderAlert.classList.remove('hidden');
+                    dom.walletProviderAlert.textContent = "Wallet: Connected";
+                    dom.walletProviderAlert.className = "text-xs text-emerald-400 font-semibold px-2";
+                }
+                logConsole('info', `Active Wallet Updated: Connected - ${state.address}`);
+            } else {
+                dom.connectWalletBtn.innerHTML = `🔗 Connect Wallet`;
+                dom.connectWalletBtn.className = "bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center";
+                
+                if (dom.disconnectWalletBtn) {
+                    dom.disconnectWalletBtn.classList.add('hidden');
+                }
+                if (dom.walletAddressSpan) {
+                    dom.walletAddressSpan.classList.add('hidden');
+                    dom.walletAddressSpan.textContent = '';
+                }
+                if (dom.walletProviderAlert) {
+                    dom.walletProviderAlert.classList.add('hidden');
+                    dom.walletProviderAlert.textContent = '';
+                }
+                if (dom.walletSignatureStatus) {
+                    dom.walletSignatureStatus.classList.add('hidden');
+                    dom.walletSignatureStatus.textContent = '';
+                }
+                logConsole('info', 'Active Wallet Updated: Disconnected');
             }
             updateRequestHeaders();
-        } else {
-            dom.connectWalletBtn.innerHTML = `🔗 Connect Wallet`;
-            dom.connectWalletBtn.className = "bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center";
             
-            if (dom.disconnectWalletBtn) {
-                dom.disconnectWalletBtn.classList.add('hidden');
+            // Re-render ledger table to reflect global state sender matching changes
+            if (dom.ledgerTableBody) {
+                fetchLedger();
             }
-            if (dom.walletAddressSpan) {
-                dom.walletAddressSpan.classList.add('hidden');
-                dom.walletAddressSpan.textContent = '';
-            }
-            if (dom.walletProviderAlert) {
-                dom.walletProviderAlert.classList.add('hidden');
-                dom.walletProviderAlert.textContent = '';
-            }
-            if (dom.walletSignatureStatus) {
-                dom.walletSignatureStatus.classList.add('hidden');
-                dom.walletSignatureStatus.textContent = '';
-            }
-            updateRequestHeaders();
-        }
+        });
     }
 
     dom.connectWalletBtn.addEventListener('click', async () => {
@@ -723,6 +885,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const headers = {};
+            const activeAddress = walletAddress || "0x0000000000000000000000000000000000000000";
+            const currentPaymentId = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+            const signature = generateMockSignature(activeAddress, currentPaymentId);
+
             if (activeSession && activeSession.path === path && activeSession.verified) {
                 headers['Payment-Sender'] = activeSession.sender;
                 headers['Payment-Signature'] = activeSession.signature;
@@ -730,8 +896,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers['Authorization'] = `Bearer ${activeSession.signature}`;
                 headers['X-Wallet-Address'] = activeSession.sender;
             } else if (isWalletConnected && walletAddress) {
-                const signature = "0x_mock_signature_from_connected_wallet_address_0x" + walletAddress.slice(2, 12) + "...";
-                headers['Payment-Id'] = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+                headers['Payment-Id'] = currentPaymentId;
                 headers['Payment-Sender'] = walletAddress;
                 headers['Payment-Signature'] = signature;
                 headers['Authorization'] = `Bearer ${signature}`;
@@ -1139,12 +1304,20 @@ document.addEventListener('DOMContentLoaded', () => {
         dom.metricsVerifiedCount.textContent = verifiedCount;
         dom.metricsPendingCount.textContent = pendingCount;
 
-        // Reactive Debugger Update:
+        // Reactive Debugger Update on Block Confirmations (If pending count > 0)
         if (pendingCount > 0) {
             const pendingPayment = payments.find(p => p.status === 'pending');
             if (pendingPayment) {
                 activePaymentId = pendingPayment.payment_id;
-                setStepStatus('handshake', 'pending', `Awaiting signature recovery for pending ID: ${activePaymentId}`);
+                
+                const mocks = getDeterministicMockDetails(pendingPayment.payment_id);
+                const txHash = pendingPayment.txHash || mocks.txHash;
+
+                if (txHash) {
+                    syncDebuggerState(activePaymentId, txHash);
+                } else {
+                    setStepStatus('handshake', 'pending', `Awaiting signature recovery for pending ID: ${activePaymentId}`);
+                }
             }
         } else if (activePaymentId === null) {
             resetDebugger();
@@ -1280,7 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
         connectSSE();
         fetchLedger();
         resetDebugger();
-        updateWalletUI(); // Start in synchronized connection state
+        startPriceChartSimulation(); // Run local time-series sliding window updates
         
         dom.settingsRpcInput.addEventListener('input', checkSettingsChanged);
         dom.settingsContractInput.addEventListener('input', checkSettingsChanged);
