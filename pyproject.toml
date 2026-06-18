@@ -1,6 +1,6 @@
 [project]
 name = "crypcodile"
-version = "0.1.038"
+version = "0.1.039"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -63,3 +63,24 @@ mypy_path = "src"
 packages = ["crypcodile"]
 strict = true
 ignore_missing_imports = true
+
+[tool.hatch.build]
+exclude = [
+  "/.venv",
+  "/.uv-cache",
+  "/.agents",
+  "/dist",
+  "/bin",
+  "/.git",
+  "/.mypy_cache",
+  "/.ruff_cache",
+  "/.pytest_cache",
+  "/tmp",
+  "/tmp_test_run",
+  "/verify_cli_robustness.py",
+  "/test_failures.txt",
+  "/test_out.txt",
+  "/test_run_details.txt",
+  "/uv",
+]
+

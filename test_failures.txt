@@ -1,0 +1,475 @@
+..FFF......F.........................................                    [100%]
+=================================== FAILURES ===================================
+________________________ test_pagination_invalid_range _________________________
+
+    @pytest.mark.asyncio
+    async def test_pagination_invalid_range():
+        """Verify that error behavior is handled and propagates when block fetching fails or returns invalid value."""
+        transport = BaseOnchainTransport("mock_rpc", ["cbBTC-USDC"], poll_interval=0.1)
+    
+        async def mock_fail_get_bn():
+            raise ValueError("Invalid block height representation")
+    
+        with pytest.raises(ValueError, match="Invalid block height representation"):
+>           await transport._get_block_number(MagicMock(eth=MagicMock(block_number=AwaitableValue(mock_fail_get_bn()))))
+
+tests/exchanges/base_onchain/test_adversarial.py:137: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/crypcodile/exchanges/base_onchain/connector.py:271: in _get_block_number
+    return int(await self._call_with_retry(get_bn))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/crypcodile/exchanges/base_onchain/connector.py:249: in _call_with_retry
+    res = await res
+          ^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def get_bn() -> int:
+        import inspect
+        val = w3.eth.block_number
+        if inspect.isawaitable(val):
+>           return int(await val)
+                   ^^^^^^^^^^^^^^
+E           TypeError: int() argument must be a string, a bytes-like object or a real number, not 'coroutine'
+
+src/crypcodile/exchanges/base_onchain/connector.py:269: TypeError
+------------------------------ Captured log call -------------------------------
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: int() argument must be a string, a bytes-like object or a real number, not 'coroutine'. Retrying in 0.0001s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: int() argument must be a string, a bytes-like object or a real number, not 'coroutine'. Retrying in 0.0001s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: int() argument must be a string, a bytes-like object or a real number, not 'coroutine'. Retrying in 0.0004s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: int() argument must be a string, a bytes-like object or a real number, not 'coroutine'. Retrying in 0.0007s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: int() argument must be a string, a bytes-like object or a real number, not 'coroutine'
+_______________________ test_backoff_retry_jitter_limits _______________________
+
+    async def mock_failing_func():
+        nonlocal call_count
+        call_count += 1
+>       raise ConnectionError("Intermittent node failure")
+E       ConnectionError: Intermittent node failure
+
+tests/exchanges/base_onchain/test_adversarial.py:155: ConnectionError
+
+During handling of the above exception, another exception occurred:
+
+    @pytest.mark.asyncio
+    async def test_backoff_retry_jitter_limits():
+        """Verify exponential backoff progression, jitter scaling limits, and maximum delay capping."""
+        transport = BaseOnchainTransport("mock_rpc", ["cbBTC-USDC"], poll_interval=1.0)
+    
+        sleep_calls = []
+    
+        async def mock_sleep(delay):
+            sleep_calls.append(delay)
+            await asyncio.sleep(0)
+    
+        call_count = 0
+        async def mock_failing_func():
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError("Intermittent node failure")
+    
+        base_delay = 1.0
+        with patch("asyncio.sleep", mock_sleep):
+            with pytest.raises(ConnectionError):
+>               await transport._call_with_retry(mock_failing_func, base_delay=base_delay)
+
+tests/exchanges/base_onchain/test_adversarial.py:160: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/crypcodile/exchanges/base_onchain/connector.py:262: in _call_with_retry
+    await asyncio.sleep(delay)
+tests/exchanges/base_onchain/test_adversarial.py:149: in mock_sleep
+    await asyncio.sleep(0)
+tests/exchanges/base_onchain/test_adversarial.py:149: in mock_sleep
+    await asyncio.sleep(0)
+tests/exchanges/base_onchain/test_adversarial.py:149: in mock_sleep
+    await asyncio.sleep(0)
+E   RecursionError: maximum recursion depth exceeded
+!!! Recursion detected (same locals & position)
+------------------------------ Captured log call -------------------------------
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent node failure. Retrying in 0.6471s... (Attempt 1/5)
+________________ test_retry_thundering_herd_jitter_distribution ________________
+
+    async def failing_func():
+>       raise ConnectionError("Intermittent error")
+E       ConnectionError: Intermittent error
+
+tests/exchanges/base_onchain/test_adversarial.py:210: ConnectionError
+
+During handling of the above exception, another exception occurred:
+
+    @pytest.mark.asyncio
+    async def test_retry_thundering_herd_jitter_distribution():
+        """Verify that multiple concurrent tasks fail and retry with sufficiently distinct jittered times (no synchronization)."""
+        transport = BaseOnchainTransport("mock_rpc", ["cbBTC-USDC"], poll_interval=1.0)
+    
+        # We want to measure the sleep times of multiple concurrent calls
+        task_sleeps = {}
+    
+        async def mock_sleep_trace(task_id, delay):
+            if task_id not in task_sleeps:
+                task_sleeps[task_id] = []
+            task_sleeps[task_id].append(delay)
+            await asyncio.sleep(0)
+    
+        async def failing_call_task(task_id):
+            async def failing_func():
+                raise ConnectionError("Intermittent error")
+            # Explicit patch of asyncio.sleep inside this task context
+            with patch("asyncio.sleep", lambda delay: mock_sleep_trace(task_id, delay)):
+                try:
+                    await transport._call_with_retry(failing_func, base_delay=1.0)
+                except ConnectionError:
+                    pass
+    
+        # Spawn 20 concurrent tasks all starting at the exact same time
+        tasks = [failing_call_task(i) for i in range(20)]
+>       await asyncio.gather(*tasks)
+
+tests/exchanges/base_onchain/test_adversarial.py:220: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/exchanges/base_onchain/test_adversarial.py:214: in failing_call_task
+    await transport._call_with_retry(failing_func, base_delay=1.0)
+src/crypcodile/exchanges/base_onchain/connector.py:262: in _call_with_retry
+    await asyncio.sleep(delay)
+tests/exchanges/base_onchain/test_adversarial.py:206: in mock_sleep_trace
+    await asyncio.sleep(0)
+tests/exchanges/base_onchain/test_adversarial.py:206: in mock_sleep_trace
+    await asyncio.sleep(0)
+tests/exchanges/base_onchain/test_adversarial.py:206: in mock_sleep_trace
+    await asyncio.sleep(0)
+E   RecursionError: maximum recursion depth exceeded
+!!! Recursion detected (same locals & position)
+------------------------------ Captured log call -------------------------------
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.9593s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.7460s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6355s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.9160s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.5486s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.5375s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6208s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6727s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.7664s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.5045s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.9389s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.9585s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6175s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.8712s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.7309s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6024s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.7123s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6681s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.8798s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Intermittent error. Retrying in 0.6360s... (Attempt 1/5)
+_______________________ test_thundering_herd_concurrency _______________________
+
+    @pytest.mark.asyncio
+    async def test_thundering_herd_concurrency() -> None:
+        """Simulate a thundering herd scenario where multiple connections fail
+    
+        simultaneously. Verify that the restricted jitter [0.5, 1.0] keeps retry times
+        highly correlated, failing to distribute the load as widely as full jitter.
+        """
+        transport = BaseOnchainTransport("mock_rpc", ["cbBTC-USDC"], poll_interval=0.1)
+    
+        # Simulate 50 concurrent tasks failing on their first attempt
+        # Delay for first retry is min(10.0, 1.0 * 2^0) = 1.0
+        # Jittered delay is 1.0 * random.uniform(0.5, 1.0), so all retries fall in [0.5, 1.0].
+        # This means the maximum separation between any two retries is only 0.5s.
+    
+        num_tasks = 50
+        delays = []
+    
+        async def mock_sleep_record(delay):
+            delays.append(delay)
+            return
+    
+        async def run_failing_task():
+            async def fail_call():
+                raise ValueError("Failure")
+            with patch("asyncio.sleep", mock_sleep_record):
+                try:
+                    await transport._call_with_retry(fail_call, base_delay=1.0)
+                except ValueError:
+                    pass
+    
+        # Run the tasks concurrently
+        await asyncio.gather(*(run_failing_task() for _ in range(num_tasks)))
+    
+        # We only care about the first attempt retry sleeps
+        first_retry_sleeps = delays[:num_tasks]
+        assert len(first_retry_sleeps) == num_tasks
+    
+        # Assert all delays are within [0.5, 1.0]
+        for d in first_retry_sleeps:
+>           assert 0.5 <= d <= 1.0
+E           assert 1.0230174799992282 <= 1.0
+
+tests/exchanges/base_onchain/test_challenger_m2_adversarial.py:373: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5738s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.0230s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.6788s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.0599s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9907s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.7501s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.7998s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.2756s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7599s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2452s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.1321s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.6515s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6265s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2246s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.0943s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.3330s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5951s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.4698s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.9213s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.3942s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9254s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.1083s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.6973s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.4568s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7653s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2755s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.4228s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.5650s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5519s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8100s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.8158s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.6207s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9777s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5735s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.3698s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.2918s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6058s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5824s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.5360s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.6596s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7371s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.6714s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.5148s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.7251s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8198s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3860s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.0064s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.8771s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6995s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.9112s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.3118s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.7511s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5664s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5071s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.6542s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.0297s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7170s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.7262s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.5765s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.8025s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9095s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.7499s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.2961s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.5740s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6060s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8793s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.5021s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.4086s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5936s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.6881s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.5245s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.8957s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5537s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8882s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.9734s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.8358s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9729s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3457s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.4065s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.9647s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6539s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2840s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.5356s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.2795s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6913s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3739s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.3725s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.2435s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7547s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5033s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.7464s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.2159s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8193s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8638s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.1548s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.1744s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7455s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.7384s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.5461s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.9993s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8859s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8026s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.0958s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.2212s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9848s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.4428s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.3768s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.5090s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7807s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.4050s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.7813s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.7035s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7424s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5056s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.0188s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.1505s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7242s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3591s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.1454s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.8622s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5433s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2744s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.9115s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.8302s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6489s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.9487s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.0909s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.9916s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9428s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3351s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.5480s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.3134s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6920s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.0889s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.5996s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.1908s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8887s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5563s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.9949s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.4192s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8461s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.6559s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.2309s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.1092s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6523s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3319s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.7349s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.0053s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6700s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2370s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.9943s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.7862s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8714s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.2388s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.5302s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.4684s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8044s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8828s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.7726s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.2972s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8854s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.0536s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.6485s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.3961s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8390s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.1877s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.1749s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.9004s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5570s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.1121s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.3966s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.9753s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.7814s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.8950s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.1975s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.4909s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.8643s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5283s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.1818s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.8838s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6334s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.5167s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.9541s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 7.8446s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.9720s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.6691s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.5968s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 6.6454s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5796s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.9822s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.7763s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 5.9688s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.6504s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.3852s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 3.0069s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.4637s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 0.5946s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 1.0593s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 2.2852s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:258 RPC call failed: Failure. Retrying in 4.4490s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:254 RPC call failed after 5 attempts: Failure
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6
+  /Users/nazmi/Crypcodile/.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+tests/exchanges/base_onchain/test_adversarial.py::test_backoff_retry_jitter_limits
+  /Users/nazmi/Crypcodile/.venv/lib/python3.12/site-packages/_pytest/_code/code.py:196: RuntimeWarning: coroutine 'test_pagination_invalid_range.<locals>.mock_fail_get_bn' was never awaited
+    def __init__(
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/exchanges/base_onchain/test_adversarial.py::test_pagination_invalid_range
+FAILED tests/exchanges/base_onchain/test_adversarial.py::test_backoff_retry_jitter_limits
+FAILED tests/exchanges/base_onchain/test_adversarial.py::test_retry_thundering_herd_jitter_distribution
+FAILED tests/exchanges/base_onchain/test_challenger_m2_adversarial.py::test_thundering_herd_concurrency
+4 failed, 49 passed, 2 warnings in 1.34s

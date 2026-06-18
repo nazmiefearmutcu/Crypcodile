@@ -78,7 +78,7 @@ def prompt_with_autocomplete(
 
     # If stdin is not interactive (e.g., tests/pipes) or running in pytest, use fallback _prompt_with_esc
     if not is_interactive_stdin() or "pytest" in sys.modules:
-        return _prompt_with_esc(text, default=default)
+        return typer.prompt(text, default=default)
 
     completer = WordCompleter(suggestions, ignore_case=True, meta_dict=meta_dict)
     
@@ -269,8 +269,16 @@ def prompt_time_range_helper(
                 pass
 
     if min_ts is not None and max_ts is not None:
-        min_dt_str = datetime.datetime.fromtimestamp(min_ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-        max_dt_str = datetime.datetime.fromtimestamp(max_ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        try:
+            min_dt_str = datetime.datetime.fromtimestamp(min_ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except (ValueError, OSError, OverflowError):
+            min_dt_str = str(min_ts) if min_ts is not None else "unknown"
+
+        try:
+            max_dt_str = datetime.datetime.fromtimestamp(max_ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except (ValueError, OSError, OverflowError):
+            max_dt_str = str(max_ts) if max_ts is not None else "unknown"
+
         typer.echo(f"\nAvailable database range: {min_dt_str} to {max_dt_str}")
         
         start_prompt = "Start time (default: earliest)"
@@ -295,7 +303,7 @@ def prompt_time_range_helper(
         val = val.strip()
         if not val:
             return fallback
-        if val.isdigit():
+        if val.isdigit() and len(val) <= 19:
             try:
                 return int(val)
             except ValueError:
@@ -683,13 +691,25 @@ def query(
     data_dir = resolve_data_dir(data_dir)
 
     if not sql:
-        sql = typer.prompt("SQL query")
+        if is_interactive_stdin():
+            sql = typer.prompt("SQL query")
+        else:
+            import sys
+            sql = sys.stdin.read().strip()
+            if not sql:
+                typer.echo("Error: SQL query is required and stdin is empty.", err=True)
+                raise typer.Exit(code=1)
+
     if not sql:
         typer.echo("Error: SQL query cannot be empty.", err=True)
         raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
-    df = client.query(sql)
+    try:
+        df = client.query(sql)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(df)
 
 
@@ -763,25 +783,35 @@ def export(
 
     data_dir = resolve_data_dir(data_dir)
 
-    is_interactive = is_interactive_stdin()
-    if is_interactive and (not channel or not symbols):
-        channel, selected_symbols = select_symbols_interactively(data_dir, channel)
-        if selected_symbols:
-            symbols = selected_symbols
+    if not is_interactive_stdin():
+        if not channel or not symbols:
+            typer.echo("Error: channel and symbols are required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if frm is None:
+            frm = 0
+        if to is None:
+            to = 9999999999999999999
+    else:
+        # Interactive
+        if not channel or not symbols:
+            channel, selected_symbols = select_symbols_interactively(data_dir, channel)
+            if selected_symbols:
+                symbols = selected_symbols
 
-    if not channel:
-        channel = typer.prompt("Channel (e.g. trade)")
-    if not symbols:
-        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=channel)
-        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if not channel:
+            channel = typer.prompt("Channel (e.g. trade)")
+        if not symbols:
+            sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=channel)
+            symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if frm is None or to is None:
+            resolved_start, resolved_end = prompt_time_range_helper(data_dir, channel, symbols, default_start=0, default_end=9999999999999999999)
+            if frm is None:
+                frm = resolved_start
+            if to is None:
+                to = resolved_end
+
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
-    if frm is None or to is None:
-        resolved_start, resolved_end = prompt_time_range_helper(data_dir, channel, symbols, default_start=0, default_end=9999999999999999999)
-        if frm is None:
-            frm = resolved_start
-        if to is None:
-            to = resolved_end
 
     if not channel or not symbols:
         typer.echo("Error: Channel and symbols are required.", err=True)
@@ -824,33 +854,41 @@ def replay(
     """Stream canonical Records from the data lake, printed to stdout."""
     from crypcodile.client.client import CrypcodileClient
 
-    data_dir = resolve_data_dir(data_dir)
+    if not is_interactive_stdin():
+        if not channels or not symbols:
+            typer.echo("Error: channels and symbols are required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if frm is None:
+            frm = 0
+        if to is None:
+            to = 9999999999999999999
+    else:
+        # Interactive
+        if not channels or not symbols:
+            wiz_channel = channels[0] if channels else None
+            wiz_channel, selected_symbols = select_symbols_interactively(data_dir, wiz_channel)
+            if wiz_channel and not channels:
+                channels = [wiz_channel]
+            if selected_symbols:
+                symbols = selected_symbols
 
-    is_interactive = is_interactive_stdin()
-    if is_interactive and (not channels or not symbols):
-        wiz_channel = channels[0] if channels else None
-        wiz_channel, selected_symbols = select_symbols_interactively(data_dir, wiz_channel)
-        if wiz_channel and not channels:
-            channels = [wiz_channel]
-        if selected_symbols:
-            symbols = selected_symbols
+        if not channels:
+            ch_input = typer.prompt("Channel (e.g. trade)")
+            channels = [c.strip() for c in ch_input.split(",") if c.strip()]
+        if not symbols:
+            ch = channels[0] if channels else None
+            sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=ch)
+            symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if frm is None or to is None:
+            wiz_ch = channels[0] if channels else None
+            resolved_start, resolved_end = prompt_time_range_helper(data_dir, wiz_ch, symbols, default_start=0, default_end=9999999999999999999)
+            if frm is None:
+                frm = resolved_start
+            if to is None:
+                to = resolved_end
 
-    if not channels:
-        ch_input = typer.prompt("Channel (e.g. trade)")
-        channels = [c.strip() for c in ch_input.split(",") if c.strip()]
-    if not symbols:
-        ch = channels[0] if channels else None
-        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel=ch)
-        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
     if symbols:
         symbols = resolve_input_symbols(data_dir, symbols)
-    if frm is None or to is None:
-        wiz_ch = channels[0] if channels else None
-        resolved_start, resolved_end = prompt_time_range_helper(data_dir, wiz_ch, symbols, default_start=0, default_end=9999999999999999999)
-        if frm is None:
-            frm = resolved_start
-        if to is None:
-            to = resolved_end
 
     if not channels or not symbols:
         typer.echo("Error: Channels and symbols are required.", err=True)
@@ -910,7 +948,10 @@ def select_collect_params_interactively(
             typer.echo(f"  [{idx}] {ch}")
         while True:
             choice = typer.prompt("Select channel(s)", default="1").strip()
-            if "," in choice or (choice.isdigit() and int(choice) > 0):
+            if not choice:
+                typer.echo("Invalid selection. Try again.", err=True)
+                continue
+            if any(c.isdigit() for c in choice):
                 parts = [p.strip() for p in choice.split(",")]
                 selected = []
                 valid = True
@@ -926,11 +967,11 @@ def select_collect_params_interactively(
                 if valid and selected:
                     channels = selected
                     break
-            # Fallback to custom input
-            custom_channels = [c.strip() for c in choice.split(",") if c.strip()]
-            if custom_channels:
-                channels = custom_channels
-                break
+            else:
+                custom_channels = [c.strip() for c in choice.split(",") if c.strip()]
+                if custom_channels and all(c in valid_channels for c in custom_channels):
+                    channels = custom_channels
+                    break
             typer.echo("Invalid selection. Try again.", err=True)
 
     # 3. Select Symbols
@@ -943,13 +984,16 @@ def select_collect_params_interactively(
         
         while True:
             choice = typer.prompt("Select symbol(s)", default="1").strip()
+            if not choice:
+                typer.echo("Invalid selection. Try again.", err=True)
+                continue
             if choice.lower() == "c":
                 custom_input = prompt_with_autocomplete("Enter symbol (e.g. BTC)", suggestions)
                 custom_symbols = [s.strip() for s in custom_input.split(",") if s.strip()]
                 if custom_symbols:
                     symbols = [normalize_user_symbol(exchange, s) for s in custom_symbols]
                     break
-            elif "," in choice or (choice.isdigit() and int(choice) > 0):
+            elif any(c.isdigit() for c in choice):
                 parts = [p.strip() for p in choice.split(",")]
                 selected = []
                 valid = True
@@ -965,9 +1009,6 @@ def select_collect_params_interactively(
                 if valid and selected:
                     symbols = selected
                     break
-            if choice and not choice.isdigit():
-                symbols = [normalize_user_symbol(exchange, s.strip()) for s in choice.split(",") if s.strip()]
-                break
             typer.echo("Invalid selection. Try again.", err=True)
 
     return exchange, symbols, channels
@@ -1040,6 +1081,8 @@ def format_record_value(channel: str, val: float) -> str:
 
 
 def make_sparkline(prices: list[float]) -> str:
+    import math
+    prices = [p for p in prices if p is not None and math.isfinite(p)]
     if not prices or len(prices) < 2:
         return ""
     min_p = min(prices)
@@ -1271,20 +1314,26 @@ def collect(
         crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
                           --channels trade --channels book_delta --data-dir data
     """
-    is_interactive = is_interactive_stdin()
-    if is_interactive and (not exchange or not symbols or not channels):
-        exchange, symbols, channels = select_collect_params_interactively(exchange, symbols, channels)
+    if not is_interactive_stdin():
+        if not exchange or not symbols or not channels:
+            typer.echo("Error: exchange, symbols, and channels are required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # Interactive
+        if not exchange or not symbols or not channels:
+            exchange, symbols, channels = select_collect_params_interactively(exchange, symbols, channels)
 
-    if not exchange:
-        exchange = typer.prompt("Exchange (e.g. deribit)")
-    if not symbols:
-        sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
-        symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if not exchange:
+            exchange = typer.prompt("Exchange (e.g. deribit)")
+        if not symbols:
+            sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
+            symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if not channels:
+            ch_input = typer.prompt("Channel (e.g. trade)")
+            channels = [c.strip() for c in ch_input.split(",") if c.strip()]
+
     if symbols and exchange:
         symbols = [normalize_user_symbol(exchange, s) for s in symbols]
-    if not channels:
-        ch_input = typer.prompt("Channel (e.g. trade)")
-        channels = [c.strip() for c in ch_input.split(",") if c.strip()]
 
     if not exchange or not symbols or not channels:
         typer.echo("Error: Exchange, symbols, and channels are required.", err=True)
@@ -1322,7 +1371,7 @@ def collect(
     monitoring_sink = MonitoringSink(sink)
     connector.out = monitoring_sink
 
-    if is_interactive:
+    if is_interactive_stdin():
 
         async def collect_with_dashboard():
             dashboard_task = asyncio.create_task(
@@ -1376,31 +1425,46 @@ def funding_apr_cmd(
 
     data_dir = resolve_data_dir(data_dir)
 
-    is_interactive = is_interactive_stdin()
-    if is_interactive and not symbol:
-        _, selected_symbols = select_symbols_interactively(data_dir, channel="funding")
-        if selected_symbols:
-            symbol = selected_symbols[0]
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if start is None:
+            start = 0
+        if end is None:
+            end = 9999999999999999999
+    else:
+        # Interactive
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(data_dir, channel="funding")
+            if selected_symbols:
+                symbol = selected_symbols[0]
 
-    if not symbol:
-        symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="funding")
+        if not symbol:
+            symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="funding")
+        if start is None or end is None:
+            resolved_start, resolved_end = prompt_time_range_helper(data_dir, "funding", [symbol] if symbol else None, default_start=0, default_end=9999999999999999999)
+            if start is None:
+                start = resolved_start
+            if end is None:
+                end = resolved_end
+
     if symbol:
         resolved_syms = resolve_input_symbols(data_dir, [symbol])
         if resolved_syms:
             symbol = resolved_syms[0]
-    if start is None or end is None:
-        resolved_start, resolved_end = prompt_time_range_helper(data_dir, "funding", [symbol] if symbol else None, default_start=0, default_end=9999999999999999999)
-        if start is None:
-            start = resolved_start
-        if end is None:
-            end = resolved_end
 
     if not symbol:
         typer.echo("Error: Symbol is required.", err=True)
         raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
-    df = client.funding_apr(symbol, start, end)
+    try:
+        df = client.funding_apr(symbol, start, end)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
     if len(df) == 0:
         typer.echo("No funding data found.")
         raise typer.Exit(code=0)
@@ -1450,20 +1514,54 @@ def basis_cmd(
 
     # We will prompt for time range after mode/symbols are resolved
 
-    is_interactive = is_interactive_stdin()
+    if perp is not None and (future is not None or spot is not None):
+        typer.echo("Error: --perp and --future/--spot are mutually exclusive.", err=True)
+        raise typer.Exit(code=1)
 
-    # If neither perp nor future/spot is specified, ask user what mode they want
-    if perp is None and (future is None or spot is None):
-        mode = typer.prompt("Basis mode", default="perp")
-        if mode == "perp":
-            if is_interactive:
+    if not is_interactive_stdin():
+        if perp is None and (future is None or spot is None):
+            typer.echo("Error: Either --perp, or both --future and --spot must be specified in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if perp is not None and not perp:
+            typer.echo("Error: --perp symbol is empty.", err=True)
+            raise typer.Exit(code=1)
+        if future is not None and not future:
+            typer.echo("Error: --future symbol is empty.", err=True)
+            raise typer.Exit(code=1)
+        if spot is not None and not spot:
+            typer.echo("Error: --spot symbol is empty.", err=True)
+            raise typer.Exit(code=1)
+        if start is None:
+            start = 0
+        if end is None:
+            end = 9999999999999999999
+    else:
+        # Interactive
+        # If perp is None and only one of future or spot is specified, skip prompting for mode
+        if perp is None and (future is not None or spot is not None):
+            # Skip prompting, set mode implicitly to futures/spot, and only prompt for the missing futures/spot symbol
+            if not future:
+                _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
+                if selected_futures:
+                    future = selected_futures[0]
+                if not future:
+                    future = prompt_symbol("Futures symbol (e.g. BTC)", data_dir, channel="trade")
+            if not spot:
+                _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
+                if selected_spots:
+                    spot = selected_spots[0]
+                if not spot:
+                    spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+        # If neither perp nor future/spot is specified, ask user what mode they want
+        elif perp is None and future is None and spot is None:
+            mode = typer.prompt("Basis mode", default="perp")
+            if mode == "perp":
                 _, selected_symbols = select_symbols_interactively(data_dir, channel="derivative_ticker")
                 if selected_symbols:
                     perp = selected_symbols[0]
-            if not perp:
-                perp = prompt_symbol("Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker")
-        else:
-            if is_interactive:
+                if not perp:
+                    perp = prompt_symbol("Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker")
+            else:
                 typer.echo("\nSelect futures symbol:")
                 _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
                 if selected_futures:
@@ -1472,11 +1570,20 @@ def basis_cmd(
                 _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
                 if selected_spots:
                     spot = selected_spots[0]
-            
-            if not future:
-                future = prompt_symbol("Futures symbol (e.g. BTC)", data_dir, channel="trade")
-            if not spot:
-                spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+                
+                if not future:
+                    future = prompt_symbol("Futures symbol (e.g. BTC)", data_dir, channel="trade")
+                if not spot:
+                    spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+
+        if start is None or end is None:
+            ch = "derivative_ticker" if perp is not None else "trade"
+            syms = [perp] if perp is not None else ([future, spot] if future and spot else None)
+            resolved_start, resolved_end = prompt_time_range_helper(data_dir, ch, syms, default_start=0, default_end=9999999999999999999)
+            if start is None:
+                start = resolved_start
+            if end is None:
+                end = resolved_end
 
     if perp:
         resolved = resolve_input_symbols(data_dir, [perp])
@@ -1490,15 +1597,6 @@ def basis_cmd(
         resolved = resolve_input_symbols(data_dir, [spot])
         if resolved:
             spot = resolved[0]
-
-    if start is None or end is None:
-        ch = "derivative_ticker" if perp is not None else "trade"
-        syms = [perp] if perp is not None else ([future, spot] if future and spot else None)
-        resolved_start, resolved_end = prompt_time_range_helper(data_dir, ch, syms, default_start=0, default_end=9999999999999999999)
-        if start is None:
-            start = resolved_start
-        if end is None:
-            end = resolved_end
 
     client = CrypcodileClient(data_dir=data_dir)
 
@@ -1521,12 +1619,42 @@ def basis_cmd(
 
 
 # ---------------------------------------------------------------------------
+def get_latest_options_chain_date_glob(data_dir: Path) -> str | None:
+    import glob
+    pattern = str(Path(data_dir) / "exchange=*" / "channel=options_chain" / "date=*")
+    date_paths = glob.glob(pattern)
+    if not date_paths:
+        return None
+    def extract_date(path_str):
+        parts = Path(path_str).name.split("=")
+        if len(parts) == 2 and parts[0] == "date":
+            return parts[1]
+        return ""
+    date_paths.sort(key=extract_date)
+    latest_path = date_paths[-1]
+    return str(Path(latest_path) / "bucket=*" / "part-*.parquet")
+
+
 def get_available_option_underlyings(data_dir: Path) -> list[str]:
     """Get list of unique underlyings in options_chain."""
     from crypcodile.store.catalog import Catalog
     cat = Catalog(data_dir)
     if "options_chain" not in cat._registered_channels:
         return []
+    
+    # Try querying only the latest date partition first
+    try:
+        latest_glob = get_latest_options_chain_date_glob(data_dir)
+        if latest_glob:
+            escaped_glob = latest_glob.replace("'", "''")
+            df = cat.query(f"SELECT DISTINCT underlying FROM read_parquet('{escaped_glob}', hive_partitioning=>true, union_by_name=>true) ORDER BY underlying")
+            res = [str(x) for x in df["underlying"].to_list() if x]
+            if res:
+                return res
+    except Exception:
+        pass
+
+    # Fallback to full database query
     try:
         df = cat.query("SELECT DISTINCT underlying FROM options_chain ORDER BY underlying")
         return [str(x) for x in df["underlying"].to_list() if x]
@@ -1540,6 +1668,24 @@ def get_available_option_snapshots(data_dir: Path, underlying: str | None = None
     cat = Catalog(data_dir)
     if "options_chain" not in cat._registered_channels:
         return []
+
+    # Try querying only the latest date partition first
+    try:
+        latest_glob = get_latest_options_chain_date_glob(data_dir)
+        if latest_glob:
+            escaped_glob = latest_glob.replace("'", "''")
+            u_filter = ""
+            if underlying:
+                u_filter = f" WHERE UPPER(underlying) = '{underlying.upper()}'"
+            sql = f"SELECT DISTINCT local_ts FROM read_parquet('{escaped_glob}', hive_partitioning=>true, union_by_name=>true){u_filter} ORDER BY local_ts DESC LIMIT 5"
+            df = cat.query(sql)
+            res = [int(x) for x in df["local_ts"].to_list() if x]
+            if res:
+                return res
+    except Exception:
+        pass
+
+    # Fallback to full database query
     try:
         u_filter = ""
         if underlying:
@@ -1571,50 +1717,56 @@ def iv_surface_cmd(
     ] = 0.0,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
-    """Print the implied-vol surface snapshot at a given instant."""
     from crypcodile.client.client import CrypcodileClient
 
-    data_dir = resolve_data_dir(data_dir)
-
-    if not underlying:
-        underlyings = get_available_option_underlyings(data_dir)
-        if underlyings:
-            typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
-        underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
-
-    if at is None:
-        snapshots = get_available_option_snapshots(data_dir, underlying)
-        if not snapshots:
+    if not is_interactive_stdin():
+        if not underlying or at is None:
+            typer.echo("Error: underlying and at snapshot instant are required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # Interactive
+        if not underlying:
             underlyings = get_available_option_underlyings(data_dir)
             if underlyings:
-                typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
                 typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
-                snapshots = get_available_option_snapshots(data_dir, None)
-                if snapshots:
-                    typer.echo("Here are the latest available options snapshots across all assets:")
+            underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
+
+        if at is None:
+            snapshots = get_available_option_snapshots(data_dir, underlying)
+            if not snapshots:
+                underlyings = get_available_option_underlyings(data_dir)
+                if underlyings:
+                    typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                    typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+                    snapshots = get_available_option_snapshots(data_dir, None)
+                    if snapshots:
+                        typer.echo("Here are the latest available options snapshots across all assets:")
+                else:
+                    typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
+            
+            if snapshots:
+                import datetime
+                typer.echo("\n--- Available Options Snapshots (latest first) ---")
+                for idx, ts in enumerate(snapshots, 1):
+                    try:
+                        dt_str = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    except Exception:
+                        dt_str = "Invalid timestamp"
+                    typer.echo(f"  [{idx}] {ts} ({dt_str})")
+                choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
+                if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
+                    at = snapshots[int(choice) - 1]
+                else:
+                    try:
+                        at = int(choice)
+                    except ValueError:
+                        at = None
             else:
-                typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
-        
-        if snapshots:
-            import datetime
-            typer.echo("\n--- Available Options Snapshots (latest first) ---")
-            for idx, ts in enumerate(snapshots, 1):
-                dt_str = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-                typer.echo(f"  [{idx}] {ts} ({dt_str})")
-            choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
-                at = snapshots[int(choice) - 1]
-            else:
+                at_str = typer.prompt("Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)").strip()
                 try:
-                    at = int(choice)
+                    at = int(at_str)
                 except ValueError:
                     at = None
-        else:
-            at_str = typer.prompt("Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)").strip()
-            try:
-                at = int(at_str)
-            except ValueError:
-                at = None
 
     if not underlying or at is None:
         typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
@@ -1654,45 +1806,54 @@ def term_structure_cmd(
 
     data_dir = resolve_data_dir(data_dir)
 
-    if not underlying:
-        underlyings = get_available_option_underlyings(data_dir)
-        if underlyings:
-            typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
-        underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
-
-    if at is None:
-        snapshots = get_available_option_snapshots(data_dir, underlying)
-        if not snapshots:
+    if not is_interactive_stdin():
+        if not underlying or at is None:
+            typer.echo("Error: underlying and at snapshot instant are required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # Interactive
+        if not underlying:
             underlyings = get_available_option_underlyings(data_dir)
             if underlyings:
-                typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
                 typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
-                snapshots = get_available_option_snapshots(data_dir, None)
-                if snapshots:
-                    typer.echo("Here are the latest available options snapshots across all assets:")
+            underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
+
+        if at is None:
+            snapshots = get_available_option_snapshots(data_dir, underlying)
+            if not snapshots:
+                underlyings = get_available_option_underlyings(data_dir)
+                if underlyings:
+                    typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                    typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+                    snapshots = get_available_option_snapshots(data_dir, None)
+                    if snapshots:
+                        typer.echo("Here are the latest available options snapshots across all assets:")
+                else:
+                    typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
+            
+            if snapshots:
+                import datetime
+                typer.echo("\n--- Available Options Snapshots (latest first) ---")
+                for idx, ts in enumerate(snapshots, 1):
+                    try:
+                        dt_str = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    except Exception:
+                        dt_str = "Invalid timestamp"
+                    typer.echo(f"  [{idx}] {ts} ({dt_str})")
+                choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
+                if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
+                    at = snapshots[int(choice) - 1]
+                else:
+                    try:
+                        at = int(choice)
+                    except ValueError:
+                        at = None
             else:
-                typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
-        
-        if snapshots:
-            import datetime
-            typer.echo("\n--- Available Options Snapshots (latest first) ---")
-            for idx, ts in enumerate(snapshots, 1):
-                dt_str = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-                typer.echo(f"  [{idx}] {ts} ({dt_str})")
-            choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
-                at = snapshots[int(choice) - 1]
-            else:
+                at_str = typer.prompt("Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)").strip()
                 try:
-                    at = int(choice)
+                    at = int(at_str)
                 except ValueError:
                     at = None
-        else:
-            at_str = typer.prompt("Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)").strip()
-            try:
-                at = int(at_str)
-            except ValueError:
-                at = None
 
     if not underlying or at is None:
         typer.echo("Error: Underlying and snapshot instant (at) are required.", err=True)
@@ -1798,7 +1959,11 @@ def api(
             sys.exit(e.returncode)
     else:
         typer.echo("Node.js runtime or server.js not found. Falling back to Python FastAPI server...", err=True)
-        import uvicorn
+        try:
+            import uvicorn
+        except ImportError:
+            typer.echo("Error: uvicorn is required to run the Python FastAPI API server.", err=True)
+            raise typer.Exit(code=1)
         typer.echo(f"Starting Crypcodile x402 API server on http://{host}:{port}...", err=True)
         uvicorn.run("crypcodile.api_server:app", host=host, port=port, log_level="info")
 
@@ -1857,14 +2022,17 @@ def update(
         clean_current = current_version.lstrip("v")
         clean_latest = latest_version.lstrip("v")
         
-        def parse_version(v: str) -> list[int]:
-            return [int(x) for x in re.findall(r"\d+", v)]
-            
         is_newer = False
         try:
-            is_newer = parse_version(clean_latest) > parse_version(clean_current)
+            from packaging.version import Version
+            is_newer = Version(clean_latest) > Version(clean_current)
         except Exception:
-            is_newer = clean_latest != clean_current
+            def parse_version(v: str) -> list[int]:
+                return [int(x) for x in re.findall(r"\d+", v)]
+            try:
+                is_newer = parse_version(clean_latest) > parse_version(clean_current)
+            except Exception:
+                is_newer = clean_latest != clean_current
 
         if not is_newer and not force:
             typer.echo("✓ You are already on the latest version.", err=True)
@@ -1886,12 +2054,14 @@ def update(
         "git+https://github.com/nazmiefearmutcu/Crypcodile.git",
     ]
     try:
-        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             target_v = latest_version if latest_version else "latest"
             typer.echo(f"✓ Successfully upgraded to {target_v}!", err=True)
         else:
             typer.echo("✗ Failed to upgrade Crypcodile.", err=True)
+            if result.stderr:
+                typer.echo(f"Details:\n{result.stderr}", err=True)
             raise typer.Exit(code=1)
     except Exception as e:
         typer.echo(f"✗ Error upgrading Crypcodile: {e}", err=True)
@@ -1929,8 +2099,9 @@ def shell() -> None:
         
     import sys
     is_pytest = "pytest" in sys.modules
+    is_interactive = is_interactive_stdin()
     session = None
-    if not is_pytest:
+    if is_interactive and not is_pytest:
         session = PromptSession(
             history=InMemoryHistory(),
             auto_suggest=AutoSuggestFromHistory(),
@@ -1944,7 +2115,7 @@ def shell() -> None:
     
     import signal
     original_handler = None
-    if not is_pytest:
+    if is_interactive and not is_pytest:
         try:
             original_handler = signal.getsignal(signal.SIGWINCH)
         except Exception:
@@ -1973,7 +2144,7 @@ def shell() -> None:
     try:
         while True:
             try:
-                if is_pytest:
+                if not is_interactive or is_pytest:
                     line = input("crypcodile> ").strip()
                 else:
                     line = session.prompt("crypcodile> ").strip()
@@ -1993,6 +2164,8 @@ def shell() -> None:
                     click_group(args, standalone_mode=False)
                 except click.exceptions.ClickException as e:
                     e.show()
+                except click.exceptions.Exit:
+                    pass
                 except SystemExit:
                     pass
                 except Exception as e:
@@ -2001,7 +2174,7 @@ def shell() -> None:
                 typer.echo("\nGoodbye!")
                 break
     finally:
-        if not is_pytest and original_handler:
+        if is_interactive and not is_pytest and original_handler:
             try:
                 signal.signal(signal.SIGWINCH, original_handler)
             except Exception:

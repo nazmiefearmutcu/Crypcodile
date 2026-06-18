@@ -49,6 +49,74 @@ ExportFmt = Literal["parquet", "csv", "arrow", "json", "jsonl"]
 _VALID_FMTS: frozenset[str] = frozenset({"parquet", "csv", "arrow", "json", "jsonl"})
 
 
+def _python_type_to_polars(py_type) -> pl.DataType:
+    import typing
+    origin = typing.get_origin(py_type)
+    if origin is typing.Union:
+        args = typing.get_args(py_type)
+        args = [a for a in args if a is not type(None)]
+        if len(args) == 1:
+            py_type = args[0]
+        else:
+            py_type = args[0]
+
+    origin = typing.get_origin(py_type)
+    if origin is list:
+        return pl.List(pl.Null)
+
+    if py_type is int:
+        return pl.Int64
+    if py_type is float:
+        return pl.Float64
+    if py_type is bool:
+        return pl.Boolean
+    if py_type is str:
+        return pl.String
+
+    import enum
+    if isinstance(py_type, type) and issubclass(py_type, enum.Enum):
+        return pl.String
+
+    return pl.Null
+
+
+def _get_empty_df_for_channel(catalog: Catalog, channel: str) -> pl.DataFrame:
+    try:
+        df = catalog.query(f'SELECT * FROM "{channel}" LIMIT 0')
+        if len(df.columns) > 0:
+            return df
+    except Exception:
+        pass
+
+    try:
+        import msgspec
+        from crypcodile.schema import records
+        cls = None
+        for name in dir(records):
+            item = getattr(records, name)
+            if (
+                isinstance(item, type)
+                and hasattr(item, "__struct_config__")
+                and getattr(item.__struct_config__, "tag", None) == channel
+            ):
+                cls = item
+                break
+
+        if cls is not None:
+            fields = msgspec.structs.fields(cls)
+            schema = {}
+            for f in fields:
+                schema[f.name] = _python_type_to_polars(f.type)
+            schema["channel"] = pl.String
+            schema["date"] = pl.String
+            schema["bucket"] = pl.Int64
+            return pl.DataFrame(schema=schema)
+    except Exception:
+        pass
+
+    return pl.DataFrame()
+
+
 def export(
     catalog: Catalog,
     channel: str,
@@ -96,7 +164,7 @@ def export(
         else:
             result = frames[0]
     else:
-        result = pl.DataFrame()
+        result = _get_empty_df_for_channel(catalog, channel)
 
     _write(result, fmt, dest)
 

@@ -109,3 +109,20 @@ async def clear_mock_rpc_state(mock_rpc):
                 await resp.text()
         except Exception:
             pass
+
+
+def is_localhost_blocked() -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return False
+    except Exception:
+        return True
+
+
+def pytest_runtest_setup(item):
+    test_path = getattr(item, "path", None) or getattr(item, "fspath", None)
+    if test_path and "tests/e2e" in str(test_path):
+        if is_localhost_blocked():
+            pytest.skip("Localhost port binding is blocked.")
+

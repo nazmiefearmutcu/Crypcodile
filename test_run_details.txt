@@ -1,0 +1,136 @@
+........................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+.....................F.................................................. [ 38%]
+........................................................................ [ 47%]
+........................................................................ [ 57%]
+........................................................................ [ 66%]
+........................................................................ [ 76%]
+........................................................................ [ 85%]
+........................................................................ [ 95%]
+..................................                                       [100%]
+=================================== FAILURES ===================================
+________________________ test_t2_huge_pagination_split _________________________
+
+mock_rpc = ('http://127.0.0.1:51126', 51126)
+
+    @pytest.mark.asyncio
+    async def test_t2_huge_pagination_split(mock_rpc) -> None:
+        rpc_url, _ = mock_rpc
+        pool_data = {
+            "address": "0x0000000000000000000000000000000000000001",
+            "factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+            "token0": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+            "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+            "fee": 500,
+            "sqrtPriceX96": 2**96,
+            "tick": 0,
+            "liquidity": 1000
+        }
+        async with aiohttp.ClientSession() as session:
+            await session.post(f"{rpc_url}/control/pool", json=pool_data)
+            # Block difference of 1500 blocks (starts at current_block - 20 by default unless last_block is set)
+            await session.post(f"{rpc_url}/control/block", json={"block_number": 2500})
+    
+        transport = BaseOnchainTransport(rpc_url, ["cbBTC-USDC"], poll_interval=0.1)
+        transport._last_blocks["cbBTC-USDC"] = 1000
+        await transport.connect()
+        try:
+            await asyncio.sleep(0.3)
+        finally:
+            await transport.close()
+    
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{rpc_url}/control/history") as resp:
+                history = (await resp.json())["history"]
+    
+        get_logs_calls = [r for r in history if r["method"] == "eth_getLogs"]
+>       assert len(get_logs_calls) == 3 # 1500 blocks divided by 500 size -> 3 calls
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert 5 == 3
+E        +  where 5 = len([{'method': 'eth_getLogs', 'params': [{'address': ['0x0000000000000000000000000000000000000001'], 'fromBlock': '0x3e4'...ock': '0x9c0', 'toBlock': '0x9c4', 'topics': ['0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daEE5297F6e85']}]}])
+
+tests/e2e/test_tier2_boundaries.py:152: AssertionError
+----------------------------- Captured stdout call -----------------------------
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+HANDLE_RPC BEHAVIOR: {'status_code': 200, 'error_count': 0, 'delay': 0.0}
+------------------------------ Captured log call -------------------------------
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0001s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0001s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0004s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0005s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:277 RPC call failed after 5 attempts: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:509 base_onchain: Failed to fetch tickSpacing dynamically: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Deriving from fee tier.
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0001s... (Attempt 1/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0002s... (Attempt 2/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0002s... (Attempt 3/5)
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:281 RPC call failed: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Retrying in 0.0005s... (Attempt 4/5)
+ERROR    crypcodile.exchanges.base_onchain.connector:connector.py:277 RPC call failed after 5 attempts: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}
+WARNING  crypcodile.exchanges.base_onchain.connector:connector.py:509 base_onchain: Failed to fetch tickSpacing dynamically: {'code': -32603, 'message': 'Execution error: Unknown selector 0xd0c93a7c on contract 0x0000000000000000000000000000000000000001'}. Deriving from fee tier.
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6
+  /Users/nazmi/Crypcodile/.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+tests/e2e/test_tier1_features.py: 18 warnings
+tests/e2e/test_tier2_boundaries.py: 12 warnings
+tests/e2e/test_tier3_combinations.py: 3 warnings
+tests/e2e/test_tier4_real_world.py: 2 warnings
+  /Users/nazmi/Crypcodile/.venv/lib/python3.12/site-packages/aiohttp/connector.py:986: DeprecationWarning: enable_cleanup_closed ignored because https://github.com/python/cpython/pull/118960 is fixed in Python version sys.version_info(major=3, minor=12, micro=12, releaselevel='final', serial=0)
+    super().__init__(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/e2e/test_tier2_boundaries.py::test_t2_huge_pagination_split - As...
+1 failed, 753 passed, 36 warnings in 38.70s

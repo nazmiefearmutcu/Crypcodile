@@ -1,0 +1,911 @@
+diff --git a/src/crypcodile/api_server.py b/src/crypcodile/api_server.py
+index 0a68057..964d6bd 100644
+--- a/src/crypcodile/api_server.py
++++ b/src/crypcodile/api_server.py
+@@ -1,22 +1,25 @@
+ from __future__ import annotations
+ 
+ import json
+-import uuid
+ import logging
++import os
++import uuid
+ from typing import Any
+ 
+-from fastapi import FastAPI, Header, Response, HTTPException
++from fastapi import FastAPI, Header, HTTPException, Response
+ from pydantic import BaseModel
+ from web3 import Web3
+ 
+ from crypcodile.mcp_server import get_onchain_price
+ 
+-
+ log = logging.getLogger(__name__)
+ 
+ app = FastAPI(
+     title="Crypcodile x402 Gated Market Data API",
+-    description="A demo API gating Base mainnet market data behind the x402 AI Agent payment protocol.",
++    description=(
++        "A demo API gating Base mainnet market data behind the x402 AI Agent "
++        "payment protocol."
++    ),
+     version="0.1.0"
+ )
+ 
+@@ -24,7 +27,7 @@ app = FastAPI(
+ PAYMENTS_DB: dict[str, dict[str, Any]] = {}
+ 
+ # Demo recipient wallet address (e.g. Nazmi's developer wallet)
+-RECIPIENT_WALLET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913" 
++RECIPIENT_WALLET = os.getenv("RECIPIENT_WALLET", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+ PRICE_USDC = "0.001" # $0.001 USDC per request
+ 
+ class PaymentSignature(BaseModel):
+@@ -37,7 +40,7 @@ async def get_market_data(
+     symbol: str,
+     response: Response,
+     payment_signature: str | None = Header(None, alias="Payment-Signature")
+-):
++) -> dict[str, Any]:
+     """Get real-time Base DEX market data. Gated behind x402 micropayments."""
+     # 1. Check if the payment signature is provided
+     if not payment_signature:
+@@ -65,16 +68,23 @@ async def get_market_data(
+         response.headers["Payment-Required"] = Web3.to_json(payment_required_payload)
+         return {
+             "status": "payment_required",
+-            "message": "Please pay 0.001 USDC on Base mainnet. Resubmit the request with the 'Payment-Signature' header.",
++            "message": (
++                "Please pay 0.001 USDC on Base mainnet. Resubmit the request "
++                "with the 'Payment-Signature' header."
++            ),
+             "payment_required": payment_required_payload
+         }
+         
+     # 2. Parse and verify the payment signature
+     try:
+-        sig_data = Web3.to_json(payment_signature) if isinstance(payment_signature, dict) else json.loads(payment_signature)
++        sig_data = (
++            Web3.to_json(payment_signature)
++            if isinstance(payment_signature, dict)
++            else json.loads(payment_signature)
++        )
+         pid = sig_data.get("payment_id")
+         tx_hash = sig_data.get("tx_hash")
+-        sig_proof = sig_data.get("signature")
++        sig_data.get("signature")
+         
+         if not pid or pid not in PAYMENTS_DB:
+             raise HTTPException(status_code=400, detail="Invalid or expired payment ID.")
+@@ -82,32 +92,40 @@ async def get_market_data(
+         record = PAYMENTS_DB[pid]
+         
+         # Verify the signature (for the demo, we verify that the client signed the payment_id)
+-        # Real-world: verifying on-chain event/logs for tx_hash or verifying EIP-712 signature of the payment payload.
++        # Real-world: verifying on-chain event/logs for tx_hash or verifying
++        # EIP-712 signature of the payment payload.
+         # Here we simulate/verify the signature proof and mark as paid.
+         record["status"] = "paid"
+         record["tx_hash"] = tx_hash
+-        
+-        # 3. Retrieve and return live Base DEX pool data
+-        data = get_onchain_price(symbol)
+-        
+-        # Set x402 success headers
+-        response.headers["Payment-Response"] = Web3.to_json({
+-            "status": "success",
+-            "payment_id": pid,
+-            "tx_hash": tx_hash
+-        })
+-        
+-        return {
+-            "status": "success",
+-            "payment_id": pid,
+-            "tx_hash": tx_hash,
+-            "data": data
+-        }
++    except HTTPException:
++        raise
+     except Exception as e:
+-        raise HTTPException(status_code=400, detail=f"Failed verifying payment signature: {e}")
++        raise HTTPException(
++            status_code=400,
++            detail=f"Failed verifying payment signature: {e}"
++        ) from e
++
++    # 3. Retrieve and return live Base DEX pool data
++    data = await get_onchain_price(symbol)
++    if "error" in data:
++        raise HTTPException(status_code=500, detail=data["error"])
++        
++    # Set x402 success headers
++    response.headers["Payment-Response"] = Web3.to_json({
++        "status": "success",
++        "payment_id": pid,
++        "tx_hash": tx_hash
++    })
++    
++    return {
++        "status": "success",
++        "payment_id": pid,
++        "tx_hash": tx_hash,
++        "data": data
++    }
+ 
+ @app.post("/api/v1/simulate-payment")
+-async def simulate_payment(payload: PaymentSignature):
++async def simulate_payment(payload: PaymentSignature) -> dict[str, Any]:
+     """Helper endpoint to mark a payment_id as paid and generate a mock signature.
+     
+     This allows testing clients to easily simulate the on-chain transfer.
+diff --git a/src/crypcodile/cli.py b/src/crypcodile/cli.py
+index 5e5a326..b21cb9d 100644
+--- a/src/crypcodile/cli.py
++++ b/src/crypcodile/cli.py
+@@ -433,6 +433,7 @@ def mcp(
+ ) -> None:
+     """Start the Model Context Protocol (MCP) server over stdin/stdout."""
+     import asyncio
++
+     from crypcodile.mcp_server import serve_stdio
+     
+     typer.echo("Starting Crypcodile MCP Server on stdio...", err=True)
+diff --git a/src/crypcodile/exchanges/base_onchain/connector.py b/src/crypcodile/exchanges/base_onchain/connector.py
+index e8558df..bae4185 100644
+--- a/src/crypcodile/exchanges/base_onchain/connector.py
++++ b/src/crypcodile/exchanges/base_onchain/connector.py
+@@ -4,8 +4,8 @@ import asyncio
+ import json
+ import logging
+ import os
+-from collections.abc import Iterable, AsyncIterator
+-from typing import Any
++from collections.abc import AsyncIterator, Iterable
++from typing import Any, cast
+ 
+ from crypcodile.exchanges.base import Connector
+ from crypcodile.ingest.transport import Transport
+@@ -84,9 +84,18 @@ class BaseOnchainTransport:
+         self.symbols = symbols
+         self.poll_interval = poll_interval
+         self._connected = False
+-        self._queue: asyncio.Queue[bytes] = asyncio.Queue()
+-        self._poll_task: asyncio.Task | None = None
+-        self._last_block: int | None = None
++        self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
++        self._poll_task: asyncio.Task[None] | None = None
++        self._last_blocks: dict[str, int] = {}
++        self._block_cache: dict[int, int] = {}
++
++    async def _get_block_timestamp(self, w3: Any, block_number: int) -> int:
++        if block_number not in self._block_cache:
++            if len(self._block_cache) > 1000:
++                self._block_cache.clear()
++            blk = await w3.eth.get_block(block_number)
++            self._block_cache[block_number] = int(blk["timestamp"])
++        return self._block_cache[block_number]
+ 
+     async def connect(self) -> None:
+         self._connected = True
+@@ -99,6 +108,8 @@ class BaseOnchainTransport:
+         while self._connected or not self._queue.empty():
+             try:
+                 val = await self._queue.get()
++                if val is None:
++                    break
+                 yield val
+             except asyncio.CancelledError:
+                 break
+@@ -108,6 +119,7 @@ class BaseOnchainTransport:
+ 
+     async def close(self) -> None:
+         self._connected = False
++        await self._queue.put(None)
+         if self._poll_task:
+             self._poll_task.cancel()
+             try:
+@@ -117,9 +129,9 @@ class BaseOnchainTransport:
+             self._poll_task = None
+ 
+     async def _poll_loop(self) -> None:
+-        from web3 import Web3
++        from web3 import AsyncHTTPProvider, AsyncWeb3
+         
+-        w3 = Web3(Web3.HTTPProvider(self.rpc_url))
++        w3 = AsyncWeb3(AsyncHTTPProvider(self.rpc_url))
+         
+         # ABIs for factories and pools
+         factory_v3_abi = [{
+@@ -178,169 +190,238 @@ class BaseOnchainTransport:
+             "stateMutability": "view", "type": "function"
+         }]
+ 
+-        # 1. Resolve pool addresses dynamically on start
+-        resolved_pools = {}
+-        for sym in self.symbols:
+-            spec = POOL_SPECS.get(sym)
+-            if not spec:
+-                continue
+-            
+-            t0_addr = Web3.to_checksum_address(TOKENS[spec["token0"]])
+-            t1_addr = Web3.to_checksum_address(TOKENS[spec["token1"]])
+-            
+-            try:
+-                if spec["type"] == "uniswap_v3":
+-                    # Sort token addresses for Uniswap V3
+-                    sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr])
+-                    factory = w3.eth.contract(
+-                        address=Web3.to_checksum_address(FACTORIES["uniswap_v3"]),
+-                        abi=factory_v3_abi
+-                    )
+-                    pool_addr = factory.functions.getPool(sorted_t0, sorted_t1, spec["fee"]).call()
+-                else: # aerodrome_v2
+-                    factory = w3.eth.contract(
+-                        address=Web3.to_checksum_address(FACTORIES["aerodrome"]),
+-                        abi=factory_aero_abi
+-                    )
+-                    pool_addr = factory.functions.getPool(t0_addr, t1_addr, spec["stable"]).call()
+-                
+-                if pool_addr != "0x0000000000000000000000000000000000000000":
+-                    resolved_pools[sym] = {
+-                        "address": Web3.to_checksum_address(pool_addr),
+-                        "spec": spec,
+-                        "contract": w3.eth.contract(address=Web3.to_checksum_address(pool_addr), abi=pool_v3_abi if spec["type"] == "uniswap_v3" else pool_v2_abi)
+-                    }
+-                    log.info(f"base_onchain: Resolved pool {sym} to {pool_addr}")
+-            except Exception as e:
+-                log.error(f"base_onchain: Failed resolving pool {sym}: {e}")
++        resolved_pools: dict[str, dict[str, Any]] = {}
+ 
+         # 2. Main polling loop
+         while self._connected:
+             try:
+-                current_block = w3.eth.block_number
+-                if self._last_block is None:
+-                    self._last_block = current_block - 20  # query last 20 blocks initially (~40 seconds)
++                # 1. Resolve pool addresses dynamically inside the polling loop
++                for sym in self.symbols:
++                    if sym in resolved_pools:
++                        continue
++                    spec = cast(dict[str, Any], POOL_SPECS.get(sym))
++                    if not spec:
++                        continue
++                    
++                    try:
++                        token0_name = str(spec["token0"])
++                        token1_name = str(spec["token1"])
++                        t0_addr = AsyncWeb3.to_checksum_address(TOKENS[token0_name])
++                        t1_addr = AsyncWeb3.to_checksum_address(TOKENS[token1_name])
++                        is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
++                        
++                        if spec["type"] == "uniswap_v3":
++                            # Sort token addresses for Uniswap V3
++                            sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr])
++                            factory = w3.eth.contract(
++                                address=AsyncWeb3.to_checksum_address(FACTORIES["uniswap_v3"]),
++                                abi=factory_v3_abi
++                            )
++                            fee = int(spec["fee"])
++                            pool_addr = await factory.functions.getPool(
++                                sorted_t0, sorted_t1, fee
++                            ).call()
++                        else: # aerodrome_v2
++                            factory = w3.eth.contract(
++                                address=AsyncWeb3.to_checksum_address(FACTORIES["aerodrome"]),
++                                abi=factory_aero_abi
++                            )
++                            stable = bool(spec["stable"])
++                            pool_addr = await factory.functions.getPool(
++                                t0_addr, t1_addr, stable
++                            ).call()
++                        
++                        if pool_addr != "0x0000000000000000000000000000000000000000":
++                            resolved_pools[sym] = {
++                                "address": AsyncWeb3.to_checksum_address(pool_addr),
++                                "spec": spec,
++                                "contract": w3.eth.contract(
++                                    address=AsyncWeb3.to_checksum_address(pool_addr),
++                                    abi=(pool_v3_abi if spec["type"] == "uniswap_v3"
++                                         else pool_v2_abi)
++                                ),
++                                "is_flipped": is_flipped
++                            }
++                            log.info(
++                                f"base_onchain: Resolved pool {sym} to {pool_addr} "
++                                f"(flipped: {is_flipped})"
++                            )
++                    except Exception as e:
++                        log.error(f"base_onchain: Failed resolving pool {sym}: {e}")
++
++                current_block = await w3.eth.block_number
+                 
+                 for sym, pool in resolved_pools.items():
+                     spec = pool["spec"]
+                     addr = pool["address"]
+                     contract = pool["contract"]
++                    is_flipped = pool["is_flipped"]
+                     
+                     price = 0.0
+                     reserve0 = 0.0
+                     reserve1 = 0.0
+-                    
+-                    # A. Query current price and reserves/liquidity
+-                    if spec["type"] == "uniswap_v3":
+-                        slot0 = contract.functions.slot0().call()
+-                        liquidity = contract.functions.liquidity().call()
+-                        
+-                        sqrtPriceX96 = slot0[0]
+-                        price_ratio = (sqrtPriceX96 / (2**96)) ** 2
+-                        
+-                        # Price of token0 in terms of token1
+-                        # Sort tokens to ensure decimal correction is correct
+-                        sorted_tokens = sorted([TOKENS[spec["token0"]], TOKENS[spec["token1"]]])
+-                        if sorted_tokens[0] == TOKENS[spec["token0"]]:
+-                            dec_diff = spec["decimals0"] - spec["decimals1"]
+-                            price = price_ratio * (10 ** dec_diff)
+-                        else:
+-                            dec_diff = spec["decimals1"] - spec["decimals0"]
+-                            price = (1.0 / price_ratio) * (10 ** dec_diff) if price_ratio > 0 else 0.0
+-                        
+-                        # Calculate virtual reserves
+-                        sqrtP = sqrtPriceX96 / (2**96)
+-                        x_virtual = liquidity / sqrtP if sqrtP > 0 else 0
+-                        y_virtual = liquidity * sqrtP
+-                        
+-                        # Sort virtual reserves matching spec token order
+-                        if sorted_tokens[0] == TOKENS[spec["token0"]]:
+-                            reserve0 = x_virtual / (10 ** spec["decimals0"])
+-                            reserve1 = y_virtual / (10 ** spec["decimals1"])
+-                        else:
+-                            reserve0 = y_virtual / (10 ** spec["decimals0"])
+-                            reserve1 = x_virtual / (10 ** spec["decimals1"])
+-                    
+-                    else: # aerodrome_v2
+-                        res = contract.functions.getReserves().call()
+-                        reserve0 = res[0] / (10 ** spec["decimals0"])
+-                        reserve1 = res[1] / (10 ** spec["decimals1"])
+-                        price = reserve1 / reserve0 if reserve0 > 0 else 0.0
+-
+-                    # B. Fetch Swap logs
+                     swaps = []
+-                    swap_topic = SWAP_TOPIC_V3 if spec["type"] == "uniswap_v3" else SWAP_TOPIC_V2
++                    
++                    if sym not in self._last_blocks:
++                        self._last_blocks[sym] = current_block - 20
+                     
+                     try:
+-                        logs = w3.eth.get_logs({
+-                            "address": addr,
+-                            "fromBlock": self._last_block + 1,
+-                            "toBlock": current_block,
+-                            "topics": [swap_topic]
+-                        })
++                        # A. Query current price and reserves/liquidity
++                        if spec["type"] == "uniswap_v3":
++                            slot0 = await contract.functions.slot0().call()
++                            liquidity = await contract.functions.liquidity().call()
++                            
++                            sqrtPriceX96 = slot0[0]
++                            price_ratio = (sqrtPriceX96 / (2**96)) ** 2
++                            
++                            # Price of base in terms of quote
++                            # Ensure the decimal correction is always decimals0 - decimals1
++                            dec_diff = int(spec["decimals0"]) - int(spec["decimals1"])
++                            if not is_flipped:
++                                price = price_ratio * (10 ** dec_diff)
++                            else:
++                                price = (
++                                    (1.0 / price_ratio) * (10 ** dec_diff)
++                                    if price_ratio > 0 else 0.0
++                                )
++                            
++                            # Calculate virtual reserves
++                            sqrtP = sqrtPriceX96 / (2**96)
++                            x_virtual = liquidity / sqrtP if sqrtP > 0 else 0
++                            y_virtual = liquidity * sqrtP
++                            
++                            if not is_flipped:
++                                reserve0 = x_virtual / (10 ** int(spec["decimals0"]))
++                                reserve1 = y_virtual / (10 ** int(spec["decimals1"]))
++                            else:
++                                reserve0 = y_virtual / (10 ** int(spec["decimals0"]))
++                                reserve1 = x_virtual / (10 ** int(spec["decimals1"]))
++                        
++                        else: # aerodrome_v2
++                            res = await contract.functions.getReserves().call()
++                            if not is_flipped:
++                                reserve0 = res[0] / (10 ** int(spec["decimals0"]))
++                                reserve1 = res[1] / (10 ** int(spec["decimals1"]))
++                            else:
++                                reserve0 = res[1] / (10 ** int(spec["decimals0"]))
++                                reserve1 = res[0] / (10 ** int(spec["decimals1"]))
++                            price = reserve1 / reserve0 if reserve0 > 0 else 0.0
++
++                        # B. Fetch Swap logs
++                        swap_topic = (
++                            SWAP_TOPIC_V3 if spec["type"] == "uniswap_v3"
++                            else SWAP_TOPIC_V2
++                        )
++                        
++                        logs = await w3.eth.get_logs(
++                            {
++                                "address": addr,
++                                "fromBlock": self._last_blocks[sym] + 1,
++                                "toBlock": current_block,
++                                "topics": [swap_topic]
++                            }
++                        )
+                         
+                         for lg in logs:
+                             data = lg["data"]
+                             tx_hash = lg["transactionHash"].hex()
+                             log_index = lg["logIndex"]
+-                            block_hash = lg["blockHash"].hex()
+                             
+-                            # Fetch block to get timestamp
+-                            blk = w3.eth.get_block(lg["blockNumber"])
+-                            ts = blk["timestamp"]
++                            # Fetch block to get timestamp (cached)
++                            ts = await self._get_block_timestamp(w3, lg["blockNumber"])
+                             
+                             if spec["type"] == "uniswap_v3":
+-                                # Decode Swap(address,address,int256,int256,uint160,uint128,int24)
+-                                amount0 = int.from_bytes(data[0:32], byteorder='big', signed=True)
+-                                amount1 = int.from_bytes(data[32:64], byteorder='big', signed=True)
++                                # Decode Swap(address,address,int256,int256,...)
++                                amount0 = int.from_bytes(
++                                    data[0:32], byteorder='big', signed=True
++                                )
++                                amount1 = int.from_bytes(
++                                    data[32:64], byteorder='big', signed=True
++                                )
+                                 
+-                                abs0 = abs(amount0) / (10 ** spec["decimals0"])
+-                                abs1 = abs(amount1) / (10 ** spec["decimals1"])
++                                if not is_flipped:
++                                    abs_base = abs(amount0) / (10 ** int(spec["decimals0"]))
++                                    abs_quote = abs(amount1) / (10 ** int(spec["decimals1"]))
++                                    is_buy = amount0 < 0
++                                else:
++                                    abs_base = abs(amount1) / (10 ** int(spec["decimals0"]))
++                                    abs_quote = abs(amount0) / (10 ** int(spec["decimals1"]))
++                                    is_buy = amount1 < 0
+                                 
+-                                sw_price = abs1 / abs0 if abs0 > 0 else 0.0
+-                                # If amount0 is negative, token0 was bought (bought using token1)
+-                                is_buy = amount0 < 0
++                                sw_price = (
++                                    abs_quote / abs_base if abs_base > 0
++                                    else 0.0
++                                )
+                                 
+                                 swaps.append({
+                                     "tx_hash": tx_hash,
+                                     "log_index": log_index,
+                                     "timestamp": ts,
+                                     "price": sw_price,
+-                                    "amount": abs0,
++                                    "amount": abs_base,
+                                     "is_buy": is_buy
+                                 })
+                             else: # aerodrome_v2
+-                                # Decode Swap(address,address,uint256,uint256,uint256,uint256)
+-                                amt0_in = int.from_bytes(data[0:32], byteorder='big', signed=False)
+-                                amt1_in = int.from_bytes(data[32:64], byteorder='big', signed=False)
+-                                amt0_out = int.from_bytes(data[64:96], byteorder='big', signed=False)
+-                                amt1_out = int.from_bytes(data[96:128], byteorder='big', signed=False)
++                                # Decode Swap(address,address,uint256,...)
++                                amt0_in = int.from_bytes(
++                                    data[0:32], byteorder='big', signed=False
++                                )
++                                amt1_in = int.from_bytes(
++                                    data[32:64], byteorder='big', signed=False
++                                )
++                                amt0_out = int.from_bytes(
++                                    data[64:96], byteorder='big', signed=False
++                                )
++                                amt1_out = int.from_bytes(
++                                    data[96:128], byteorder='big', signed=False
++                                )
+                                 
+-                                # Token0 amount traded
+-                                amt0 = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** spec["decimals0"])
+-                                amt1 = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** spec["decimals1"])
++                                if not is_flipped:
++                                    amt_base = (
++                                        (amt0_in if amt0_in > 0 else amt0_out)
++                                        / (10 ** int(spec["decimals0"]))
++                                    )
++                                    amt_quote = (
++                                        (amt1_in if amt1_in > 0 else amt1_out)
++                                        / (10 ** int(spec["decimals1"]))
++                                    )
++                                    is_buy = amt0_out > 0
++                                else:
++                                    amt_base = (
++                                        (amt1_in if amt1_in > 0 else amt1_out)
++                                        / (10 ** int(spec["decimals0"]))
++                                    )
++                                    amt_quote = (
++                                        (amt0_in if amt0_in > 0 else amt0_out)
++                                        / (10 ** int(spec["decimals1"]))
++                                    )
++                                    is_buy = amt1_out > 0
+                                 
+-                                sw_price = amt1 / amt0 if amt0 > 0 else 0.0
+-                                is_buy = amt1_in > 0 # token1 deposited to buy token0
++                                sw_price = (
++                                    amt_quote / amt_base if amt_base > 0
++                                    else 0.0
++                                )
+                                 
+                                 swaps.append({
+                                     "tx_hash": tx_hash,
+                                     "log_index": log_index,
+                                     "timestamp": ts,
+                                     "price": sw_price,
+-                                    "amount": amt0,
++                                    "amount": amt_base,
+                                     "is_buy": is_buy
+                                 })
++                        
++                        self._last_blocks[sym] = current_block
+                     except Exception as e:
+-                        log.error(f"base_onchain: Error querying swap logs: {e}")
+-
++                        log.error(f"base_onchain: Error polling pool data for {sym}: {e}")
++ 
+                     # C. Push state update to queue
+                     update_msg = {
+                         "type": "onchain_update",
+                         "block": current_block,
+                         "pool": sym,
+                         "pool_type": spec["type"],
+-                        "timestamp": w3.eth.get_block(current_block)["timestamp"],
++                        "timestamp": await self._get_block_timestamp(w3, current_block),
+                         "state": {
+                             "price": price,
+                             "reserve0": reserve0,
+@@ -350,8 +431,6 @@ class BaseOnchainTransport:
+                     }
+                     await self._queue.put(json.dumps(update_msg).encode())
+                 
+-                self._last_block = current_block
+-                
+             except Exception as e:
+                 log.error(f"base_onchain: Error polling pool data: {e}")
+             
+diff --git a/src/crypcodile/exchanges/base_onchain/normalize.py b/src/crypcodile/exchanges/base_onchain/normalize.py
+index 7dc2aee..6f94fe1 100644
+--- a/src/crypcodile/exchanges/base_onchain/normalize.py
++++ b/src/crypcodile/exchanges/base_onchain/normalize.py
+@@ -2,14 +2,16 @@ from __future__ import annotations
+ 
+ import logging
+ from collections.abc import Iterable
++from typing import Any
++
+ from crypcodile.schema.enums import Side
+-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade, Record
++from crypcodile.schema.records import BookSnapshot, BookTicker, Record, Trade
+ 
+ log = logging.getLogger(__name__)
+ 
+ EXCHANGE = "base_onchain"
+ 
+-def normalize_onchain_update(msg: dict, local_ts: int) -> Iterable[Record]:
++def normalize_onchain_update(msg: dict[str, Any], local_ts: int) -> Iterable[Record]:
+     """Normalize on-chain pool updates.
+     
+     The input msg has the structure:
+@@ -24,7 +26,7 @@ def normalize_onchain_update(msg: dict, local_ts: int) -> Iterable[Record]:
+     }
+     """
+     pool_name = msg["pool"]
+-    pool_type = msg["pool_type"]
++    msg["pool_type"]
+     state = msg["state"]
+     swaps = msg.get("swaps", [])
+     block = msg["block"]
+diff --git a/src/crypcodile/exchanges/factory.py b/src/crypcodile/exchanges/factory.py
+index 9ae409a..39b2910 100644
+--- a/src/crypcodile/exchanges/factory.py
++++ b/src/crypcodile/exchanges/factory.py
+@@ -23,12 +23,12 @@ from __future__ import annotations
+ from typing import Any
+ 
+ from crypcodile.exchanges.base import Connector
++from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
+ from crypcodile.exchanges.binance.connector import BinanceConnector
+ from crypcodile.exchanges.bybit.connector import BybitConnector
+ from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
+ from crypcodile.exchanges.deribit.connector import DeribitConnector
+ from crypcodile.exchanges.okx.connector import OKXConnector
+-from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
+ from crypcodile.instruments.registry import InstrumentRegistry
+ from crypcodile.sink.base import Sink
+ 
+diff --git a/src/crypcodile/mcp_server.py b/src/crypcodile/mcp_server.py
+index 5850693..cf206fb 100644
+--- a/src/crypcodile/mcp_server.py
++++ b/src/crypcodile/mcp_server.py
+@@ -4,13 +4,13 @@ import asyncio
+ import json
+ import sys
+ import traceback
+-from typing import Any
+-from web3 import Web3
+ from pathlib import Path
++from typing import Any, cast
+ 
+-from crypcodile.client.client import CrypcodileClient
+-from crypcodile.exchanges.base_onchain.connector import TOKENS, FACTORIES, POOL_SPECS
++from web3 import AsyncHTTPProvider, AsyncWeb3
+ 
++from crypcodile.client.client import CrypcodileClient
++from crypcodile.exchanges.base_onchain.connector import FACTORIES, POOL_SPECS, TOKENS
+ DEFAULT_RPC_URL = "https://base-rpc.publicnode.com"
+ 
+ # Minimal ABIs for slot0 and getReserves
+@@ -28,6 +28,12 @@ POOL_V3_ABI = [
+             {"name": "unlocked", "type": "bool"}
+         ],
+         "stateMutability": "view", "type": "function"
++    },
++    {
++        "inputs": [],
++        "name": "liquidity",
++        "outputs": [{"type": "uint128"}],
++        "stateMutability": "view", "type": "function"
+     }
+ ]
+ 
+@@ -67,69 +73,89 @@ FACTORY_AERO_ABI = [{
+     "stateMutability": "view", "type": "function"
+ }]
+ 
+-def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict[str, Any]:
++async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict[str, Any]:
+     """Helper to fetch price and reserve stats from Base mainnet."""
+-    spec = POOL_SPECS.get(symbol)
++    spec = cast(dict[str, Any], POOL_SPECS.get(symbol))
+     if not spec:
+         return {"error": f"Symbol {symbol} not supported. Supported: {list(POOL_SPECS.keys())}"}
+     
+     try:
+-        w3 = Web3(Web3.HTTPProvider(rpc_url))
+-        t0_addr = Web3.to_checksum_address(TOKENS[spec["token0"]])
+-        t1_addr = Web3.to_checksum_address(TOKENS[spec["token1"]])
+-        
+-        # 1. Resolve pool address
+-        if spec["type"] == "uniswap_v3":
+-            sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr])
+-            factory = w3.eth.contract(
+-                address=Web3.to_checksum_address(FACTORIES["uniswap_v3"]),
+-                abi=FACTORY_V3_ABI
+-            )
+-            pool_addr = factory.functions.getPool(sorted_t0, sorted_t1, spec["fee"]).call()
+-        else:
+-            factory = w3.eth.contract(
+-                address=Web3.to_checksum_address(FACTORIES["aerodrome"]),
+-                abi=FACTORY_AERO_ABI
+-            )
+-            pool_addr = factory.functions.getPool(t0_addr, t1_addr, spec["stable"]).call()
++        async with AsyncWeb3(AsyncHTTPProvider(rpc_url)) as w3:
++            t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
++            t1_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token1"])])
+             
+-        if pool_addr == "0x0000000000000000000000000000000000000000":
+-            return {"error": f"Pool for {symbol} not found on Base mainnet."}
+-            
+-        # 2. Query pool state
+-        price = 0.0
+-        reserve0 = 0.0
+-        reserve1 = 0.0
+-        
+-        if spec["type"] == "uniswap_v3":
+-            pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V3_ABI)
+-            slot0 = pool_contract.functions.slot0().call()
+-            sqrtPriceX96 = slot0[0]
+-            price_ratio = (sqrtPriceX96 / (2**96)) ** 2
+-            
+-            sorted_tokens = sorted([TOKENS[spec["token0"]], TOKENS[spec["token1"]]])
+-            if sorted_tokens[0] == TOKENS[spec["token0"]]:
+-                dec_diff = spec["decimals0"] - spec["decimals1"]
+-                price = price_ratio * (10 ** dec_diff)
++            # 1. Resolve pool address
++            if spec["type"] == "uniswap_v3":
++                sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr])
++                factory = w3.eth.contract(
++                    address=AsyncWeb3.to_checksum_address(FACTORIES["uniswap_v3"]),
++                    abi=FACTORY_V3_ABI
++                )
++                pool_addr = await factory.functions.getPool(
++                    sorted_t0, sorted_t1, int(spec["fee"])
++                ).call()
+             else:
+-                dec_diff = spec["decimals1"] - spec["decimals0"]
+-                price = (1.0 / price_ratio) * (10 ** dec_diff) if price_ratio > 0 else 0.0
+-        else:
+-            pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V2_ABI)
+-            res = pool_contract.functions.getReserves().call()
+-            reserve0 = res[0] / (10 ** spec["decimals0"])
+-            reserve1 = res[1] / (10 ** spec["decimals1"])
+-            price = reserve1 / reserve0 if reserve0 > 0 else 0.0
++                factory = w3.eth.contract(
++                    address=AsyncWeb3.to_checksum_address(FACTORIES["aerodrome"]),
++                    abi=FACTORY_AERO_ABI
++                )
++                pool_addr = await factory.functions.getPool(
++                    t0_addr, t1_addr, bool(spec["stable"])
++                ).call()
++                
++            if pool_addr == "0x0000000000000000000000000000000000000000":
++                return {"error": f"Pool for {symbol} not found on Base mainnet."}
++                
++            # 2. Query pool state
++            price = 0.0
++            reserve0 = 0.0
++            reserve1 = 0.0
++            is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
+             
+-        return {
+-            "symbol": symbol,
+-            "pool_address": pool_addr,
+-            "price": price,
+-            "reserve0": reserve0,
+-            "reserve1": reserve1,
+-            "pool_type": spec["type"],
+-            "block": w3.eth.block_number
+-        }
++            if spec["type"] == "uniswap_v3":
++                pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V3_ABI)
++                slot0 = await pool_contract.functions.slot0().call()
++                liquidity = await pool_contract.functions.liquidity().call()
++                sqrtPriceX96 = slot0[0]
++                price_ratio = (sqrtPriceX96 / (2**96)) ** 2
++                
++                dec_diff = int(spec["decimals0"]) - int(spec["decimals1"])
++                if not is_flipped:
++                    price = price_ratio * (10 ** dec_diff)
++                else:
++                    price = (1.0 / price_ratio) * (10 ** dec_diff) if price_ratio > 0 else 0.0
++                
++                # Calculate virtual reserves
++                sqrtP = sqrtPriceX96 / (2**96)
++                x_virtual = liquidity / sqrtP if sqrtP > 0 else 0
++                y_virtual = liquidity * sqrtP
++                
++                if not is_flipped:
++                    reserve0 = x_virtual / (10 ** int(spec["decimals0"]))
++                    reserve1 = y_virtual / (10 ** int(spec["decimals1"]))
++                else:
++                    reserve0 = y_virtual / (10 ** int(spec["decimals0"]))
++                    reserve1 = x_virtual / (10 ** int(spec["decimals1"]))
++            else:
++                pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V2_ABI)
++                res = await pool_contract.functions.getReserves().call()
++                if not is_flipped:
++                    reserve0 = res[0] / (10 ** int(spec["decimals0"]))
++                    reserve1 = res[1] / (10 ** int(spec["decimals1"]))
++                else:
++                    reserve0 = res[1] / (10 ** int(spec["decimals0"]))
++                    reserve1 = res[0] / (10 ** int(spec["decimals1"]))
++                price = reserve1 / reserve0 if reserve0 > 0 else 0.0
++                
++            return {
++                "symbol": symbol,
++                "pool_address": pool_addr,
++                "price": price,
++                "reserve0": reserve0,
++                "reserve1": reserve1,
++                "pool_type": spec["type"],
++                "block": await w3.eth.block_number
++            }
+     except Exception as e:
+         return {"error": f"Failed fetching pool state: {e}"}
+ 
+@@ -137,13 +163,20 @@ def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict[str,
+ TOOLS = [
+     {
+         "name": "get_onchain_price",
+-        "description": "Fetch real-time price, reserves, and pool stats from Base mainnet DEX (Uniswap V3 or Aerodrome). Supported symbols: AERO-USDC, cbBTC-USDC, DEGEN-WETH, WELL-WETH.",
++        "description": (
++            "Fetch real-time price, reserves, and pool stats from Base mainnet "
++            "DEX (Uniswap V3 or Aerodrome). Supported symbols: AERO-USDC, "
++            "cbBTC-USDC, DEGEN-WETH, WELL-WETH."
++        ),
+         "inputSchema": {
+             "type": "object",
+             "properties": {
+                 "symbol": {
+                     "type": "string",
+-                    "description": "Symbol name (e.g. 'AERO-USDC', 'cbBTC-USDC', 'DEGEN-WETH', 'WELL-WETH')."
++                    "description": (
++                        "Symbol name (e.g. 'AERO-USDC', 'cbBTC-USDC', "
++                        "'DEGEN-WETH', 'WELL-WETH')."
++                    )
+                 }
+             },
+             "required": ["symbol"]
+@@ -151,7 +184,11 @@ TOOLS = [
+     },
+     {
+         "name": "query_market_data",
+-        "description": "Execute a DuckDB SQL query against the Crypcodile parquet data lake. Replayed tables: trade, book_snapshot, book_ticker, ohlcv, funding, basis.",
++        "description": (
++            "Execute a DuckDB SQL query against the Crypcodile parquet data lake. "
++            "Replayed tables: trade, book_snapshot, book_ticker, ohlcv, "
++            "funding, basis."
++        ),
+         "inputSchema": {
+             "type": "object",
+             "properties": {
+@@ -165,13 +202,28 @@ TOOLS = [
+     },
+     {
+         "name": "get_funding_apr",
+-        "description": "Analyze perpetual funding rates and print per-event funding APR and cumulative funding.",
++        "description": (
++            "Analyze perpetual funding rates and print per-event funding APR "
++            "and cumulative funding."
++        ),
+         "inputSchema": {
+             "type": "object",
+             "properties": {
+-                "symbol": {"type": "string", "description": "Canonical perpetual symbol (e.g., deribit:BTC-PERPETUAL)"},
+-                "start": {"type": "integer", "description": "Start timestamp in nanoseconds UTC"},
+-                "end": {"type": "integer", "description": "End timestamp in nanoseconds UTC"}
++                "symbol": {
++                    "type": "string",
++                    "description": (
++                        "Canonical perpetual symbol (e.g., "
++                        "deribit:BTC-PERPETUAL)"
++                    )
++                },
++                "start": {
++                    "type": "integer",
++                    "description": "Start timestamp in nanoseconds UTC"
++                },
++                "end": {
++                    "type": "integer",
++                    "description": "End timestamp in nanoseconds UTC"
++                }
+             },
+             "required": ["symbol", "start", "end"]
+         }
+@@ -227,16 +279,19 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
+                 tool_name = params.get("name")
+                 arguments = params.get("arguments", {})
+                 
+-                tool_result = None
++                tool_result: Any = None
+                 if tool_name == "get_onchain_price":
+                     sym = arguments.get("symbol", "")
+-                    tool_result = get_onchain_price(sym)
++                    tool_result = await get_onchain_price(sym)
+                 elif tool_name == "query_market_data":
+                     sql = arguments.get("sql", "")
+                     try:
+                         df = client.query(sql)
+                         # Convert polars/pandas DataFrame to dict list
+-                        tool_result = df.to_dicts() if hasattr(df, "to_dicts") else df.to_dict(orient="records")
++                        tool_result = (
++                            df.to_dicts() if hasattr(df, "to_dicts")
++                            else cast(Any, df).to_dict(orient="records")
++                        )
+                     except Exception as e:
+                         tool_result = {"error": f"SQL execution failed: {e}"}
+                 elif tool_name == "get_funding_apr":
+@@ -245,7 +300,10 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
+                     end = arguments.get("end", 0)
+                     try:
+                         df = client.funding_apr(sym, start, end)
+-                        tool_result = df.to_dicts() if hasattr(df, "to_dicts") else df.to_dict(orient="records")
++                        tool_result = (
++                            df.to_dicts() if hasattr(df, "to_dicts")
++                            else cast(Any, df).to_dict(orient="records")
++                        )
+                     except Exception as e:
+                         tool_result = {"error": f"Funding APR analysis failed: {e}"}
+                 else:

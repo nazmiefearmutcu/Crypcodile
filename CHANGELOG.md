@@ -4,6 +4,23 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.039] - 2026-06-18
+### Changed
+- **Query piped multiline**: Enabled non-interactive queries to read from stdin.
+- **Non-interactive prompt bypass**: Added check to exit 1 if required parameters are missing in non-interactive environment.
+- **Shell on non-TTY**: Enabled fallback to standard Python `input()` on non-TTY.
+- **Shell subcommand exit resilience**: Allowed click.exceptions.Exit to be handled gracefully without crashing the shell.
+- **Sparkline verification**: Filtered non-finite floats out from make_sparkline input.
+- **Param selector validation**: Enhanced wizard checks for digit index selection and custom string selection.
+- **Upgrade output capture**: Captured pip upgrade output and printed details on failure.
+- **Semantic version comparison**: Used packaging.version.Version with try-except fallback.
+- **Basis mutual exclusivity**: Enforced mutually exclusive options and implicit mode configuration for basis command.
+- **Exception wrapping**: Wrapped client query and funding_apr to show clean error messages without DuckDB tracebacks.
+- **Pruned option scans**: Optimized distinct scans by checking latest date partition directory first.
+- **Safe timestamp formatting**: Wrapped options snapshot datetime conversion in try-except to avoid corrupt metadata crashes.
+- **Uvicorn import check**: Handled missing uvicorn library with clean error in API server fallback.
+- **Empty DataFrame export**: Built schema-rich empty Polars DataFrame based on msgspec fields for empty exports.
+
 ## [0.1.038] - 2026-06-18
 ### Changed
 - **Premium UI/UX Design**: Overhauled dashboard look with glowing ambiance backdrops, Plus Jakarta Sans typography, and sleek card hovers.
