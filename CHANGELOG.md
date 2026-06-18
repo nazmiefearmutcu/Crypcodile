@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.038] - 2026-06-18
+### Changed
+- **Premium UI/UX Design**: Overhauled dashboard look with glowing ambiance backdrops, Plus Jakarta Sans typography, and sleek card hovers.
+- **SSE Connection Resilience**: Resolved infinite "Awaiting Price Feed Ticks" spinner when backend is offline by providing local simulation ticks fallback.
+- **Transaction Debugger Fix**: Fixed missing payment_id in SSE verification payloads, enabling block confirmation steps to successfully complete (turn green).
+
 ## [0.1.037] - 2026-06-18
 ### Changed
 - **Unified API Portal**: Integrated Node.js Express dashboard with Python FastAPI backend, serving identical static templates.

@@ -279,7 +279,7 @@ app.get('/api/gated-data', (req, res) => {
     stage: 'sender_matching',
     status: 'pending',
     message: `Recovered signer: ${recoveredAddress}. Comparing with Payment-Sender: ${paymentSenderHeader}`,
-    data: { recovered: recoveredAddress, expected: paymentSenderHeader }
+    data: { recovered: recoveredAddress, expected: paymentSenderHeader, payment_id: paymentIdHeader }
   });
 
   if (recoveredAddress.toLowerCase() !== paymentSenderHeader.toLowerCase()) {
@@ -288,7 +288,7 @@ app.get('/api/gated-data', (req, res) => {
       stage: 'sender_matching',
       status: 'failed',
       message: `Recovered address ${recoveredAddress} does not match Payment-Sender ${paymentSenderHeader}`,
-      data: { recovered: recoveredAddress, expected: paymentSenderHeader }
+      data: { recovered: recoveredAddress, expected: paymentSenderHeader, payment_id: paymentIdHeader }
     });
     return res.status(400).json({ error: 'Recovered signer matches mismatch' });
   }
@@ -299,7 +299,7 @@ app.get('/api/gated-data', (req, res) => {
     stage: 'block_confirmation',
     status: 'success',
     message: 'Transaction confirmed with 12/12 block confirmations on-chain.',
-    data: { confirmations: 12 }
+    data: { confirmations: 12, payment_id: paymentIdHeader }
   });
 
   // Find or create ledger entry

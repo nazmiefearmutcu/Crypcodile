@@ -712,12 +712,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'payment':
                         fetchLedger();
                         if (payload.data && payload.data.payment_id === activePaymentId) {
-                            if (payload.data.txHash) {
+                            if (payload.stage === 'payment_received') {
+                                setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
+                            } else if (payload.data.txHash) {
                                 syncDebuggerState(payload.data.payment_id, payload.data.txHash);
                             } else if (payload.stage === 'pending') {
                                 setStepStatus('handshake', 'success', 'Gated handshake completed.');
-                            } else if (payload.stage === 'payment_received') {
-                                setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
                             }
                         }
                         break;
@@ -758,7 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] transition-all";
                 }
                 if (dom.sseStatusText) {
-                    dom.sseStatusText.textContent = "Disconnected";
+                    dom.sseStatusText.textContent = `Disconnected: ${err.message}`;
                 }
                 
                 if (dom.metricsLivePrice) {
@@ -766,14 +766,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (loadingOverlay) {
-                    loadingOverlay.innerHTML = `
-                        <div class="flex flex-col items-center space-y-2 text-rose-500 bg-slate-900/90 p-4 rounded-lg border border-rose-500/20 shadow-lg animate-pulse">
-                            <svg class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                            <span class="text-xs font-mono font-bold">Error: ${err.message}</span>
-                        </div>
-                    `;
+                    loadingOverlay.classList.add('hidden');
                 }
                 logConsole('verification', `Error: ${err.message}`, 'failed');
             });
@@ -1629,6 +1622,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dom.settingsRpcInput) dom.settingsRpcInput.addEventListener('input', checkSettingsChanged);
         if (dom.settingsContractInput) dom.settingsContractInput.addEventListener('input', checkSettingsChanged);
         if (dom.settingsFeeInput) dom.settingsFeeInput.addEventListener('input', checkSettingsChanged);
+
+        if (dom.sseReconnectBtn) {
+            dom.sseReconnectBtn.addEventListener('click', () => {
+                connectSSE();
+            });
+        }
+        if (dom.sseClearBtn) {
+            dom.sseClearBtn.addEventListener('click', () => {
+                if (dom.sseLogConsole) {
+                    dom.sseLogConsole.innerHTML = '';
+                }
+            });
+        }
         
         // Auto configure Request Builder path and params depending on backend
         if (isPythonBackend && dom.apiPathInput) {
