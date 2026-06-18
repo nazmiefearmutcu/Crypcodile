@@ -32,7 +32,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // Backward compatibility local variables (synchronized by global state subscriber)
+    // Backend Detection config
+    let apiRoutes = {
+        marketData: '/api/gated-data',
+        payments: '/api/payments',
+        simulate: '/api/payments', // Node.js fallback
+        events: '/api/events'
+    };
+    let isPythonBackend = false;
+
+    // Backward compatibility local variables
     let walletAddress = null;
     let walletSigner = null;
     let isWalletConnected = false;
@@ -44,15 +53,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeCurrency = "USDC";
 
     // Gated Content cache
-    let activeSession = null; // { path, sender, signature, paymentId, verified }
+    let activeSession = null; // { path, sender, signature, paymentId, verified, txHash }
 
     // Ledger filters
     let ledgerSearchQuery = '';
     let ledgerStatus = '';
     let ledgerLimit = 10;
     let ledgerOffset = 0;
-    let ledgerSortOrder = 'desc'; // 'asc' or 'desc' for timestamps
-    let ledgerAmountSort = null;  // null, 'asc' or 'desc' (handled client side)
+    let ledgerSortOrder = 'desc'; 
+    let ledgerAmountSort = null;  
 
     // Chart tick tracker
     const maxChartTicks = 20;
@@ -130,7 +139,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. UI Helpers: Logs, Stepper & Badges
     // ----------------------------------------------------
     
-    // Centralized 12-hour time utility function (hh:mm:ss AM/PM)
     function formatTimestamp(dateInput = null) {
         return window.getSyncedTime(dateInput);
     }
@@ -139,7 +147,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.getSyncedTime(dateInput);
     }
 
-    // Maps verification stages to debugger stepper node keys
     function mapStageToStep(stage) {
         switch (stage) {
             case 'signature_recovery':
@@ -162,7 +169,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Dynamic mock signature generator producing deterministic 130-char hex string starting with 0x
     function generateAlgorithmicSignature(address, paymentId) {
         return window.generateMockSignature(address, paymentId);
     }
@@ -171,10 +177,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.generateMockSignature(address, paymentId);
     }
 
-    // Add log to Event Stream log console with customizable, high-contrast Cyan/Light Cyan (#22D3EE)
     function logConsole(type, message, status = '', timestamp = null) {
         const timeStr = formatTimestamp(timestamp);
-        let colorStyle = 'color: #22D3EE;'; // High-contrast Light Cyan (#22D3EE) default log style
+        let colorStyle = 'color: #22D3EE;'; // High-contrast Light Cyan
         let isBold = false;
         
         if (type === 'info') {
@@ -206,14 +211,14 @@ document.addEventListener('DOMContentLoaded', () => {
         logLine.setAttribute('style', colorStyle);
         logLine.innerHTML = `[${timeStr}] [${type.toUpperCase()}] ${message}`;
         
-        dom.sseLogConsole.appendChild(logLine);
-        
-        if (dom.sseAutoscrollChk.checked) {
-            dom.sseLogConsole.scrollTop = dom.sseLogConsole.scrollHeight;
+        if (dom.sseLogConsole) {
+            dom.sseLogConsole.appendChild(logLine);
+            if (dom.sseAutoscrollChk && dom.sseAutoscrollChk.checked) {
+                dom.sseLogConsole.scrollTop = dom.sseLogConsole.scrollHeight;
+            }
         }
     }
 
-    // Set styling and messages for verification steps
     function setStepStatus(stepKey, status, message) {
         let node;
         switch (stepKey) {
@@ -225,9 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!node) return;
 
-        // Reset classes
         node.className = "absolute -left-6 w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[10px] font-bold transition-all";
-        
         const stepNumMap = { handshake: 1, recovery: 2, matching: 3, confirmation: 4, unlocked: 5 };
 
         if (status === 'idle') {
@@ -247,11 +250,10 @@ document.addEventListener('DOMContentLoaded', () => {
             node.innerHTML = '✗';
         }
 
-        if (message) {
+        if (message && dom.debuggerMessage) {
             dom.debuggerMessage.textContent = `[${stepKey.toUpperCase()}] ${message}`;
         }
 
-        // Auto-resolve previous steps
         if (status === 'success' || status === 'pending') {
             const orderedSteps = ['handshake', 'recovery', 'matching', 'confirmation', 'unlocked'];
             const currentIndex = orderedSteps.indexOf(stepKey);
@@ -273,7 +275,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Reset verification stepper back to idle state
     function resetDebugger() {
         const steps = ['handshake', 'recovery', 'matching', 'confirmation', 'unlocked'];
         steps.forEach((step, idx) => {
@@ -290,10 +291,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 node.innerHTML = (idx + 1).toString();
             }
         });
-        dom.debuggerMessage.textContent = "Debugger initialized. Ready to record request steps.";
+        if (dom.debuggerMessage) {
+            dom.debuggerMessage.textContent = "Debugger initialized. Ready to record request steps.";
+        }
     }
 
-    // Direct synchronization of debugger stepper when a txHash is present
     function syncDebuggerState(paymentId, txHash) {
         if (txHash) {
             setStepStatus('handshake', 'success', 'Gated handshake completed.');
@@ -304,8 +306,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Update Request builder HTTP badge
     function updateStatusBadge(statusCode, statusText) {
+        if (!dom.apiStatusBadge) return;
         dom.apiStatusBadge.classList.remove('hidden', 'bg-emerald-500/10', 'text-emerald-400', 'border-emerald-500/20', 'bg-amber-500/10', 'text-amber-400', 'border-amber-500/20', 'bg-rose-500/10', 'text-rose-400', 'border-rose-500/20');
         dom.apiStatusBadge.classList.add('inline-flex', 'border', 'px-2', 'py-0.5', 'rounded', 'font-mono', 'text-xs');
         
@@ -321,22 +323,71 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateHeadersPreview(headers) {
-        dom.apiHeadersPreview.textContent = JSON.stringify(headers, null, 2);
+        if (dom.apiHeadersPreview) {
+            dom.apiHeadersPreview.textContent = JSON.stringify(headers, null, 2);
+        }
     }
 
     function updateResponseConsole(payload) {
-        dom.apiResponseConsole.textContent = JSON.stringify(payload, null, 2);
+        if (dom.apiResponseConsole) {
+            dom.apiResponseConsole.textContent = JSON.stringify(payload, null, 2);
+        }
+        
+        // Dynamically render a table if python backend returns structured market data
+        const renderedContainer = document.getElementById('api-response-rendered');
+        if (renderedContainer) {
+            renderedContainer.innerHTML = '';
+            if (payload && payload.status === 'success' && payload.data && typeof payload.data === 'object') {
+                const mdata = payload.data;
+                const symbol = mdata.symbol || 'N/A';
+                const tableHtml = `
+                    <div class="mt-4 p-4 rounded-lg bg-emerald-950/20 border border-emerald-500/20">
+                        <h4 class="text-sm font-semibold text-emerald-400 mb-2">Normalized Base DEX Data Result</h4>
+                        <table class="w-full text-left text-xs border-collapse font-mono">
+                            <tbody>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Asset Symbol</td><td class="py-2 font-bold text-cyan-400">${symbol}</td></tr>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">DEX Pool Address</td><td class="py-2 text-slate-300">${mdata.pool_address || 'N/A'}</td></tr>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Token 0 (Base)</td><td class="py-2 text-slate-400 text-[10px]">${mdata.token0 || 'N/A'}</td></tr>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Token 1 (USDC)</td><td class="py-2 text-slate-400 text-[10px]">${mdata.token1 || 'N/A'}</td></tr>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Current Spot Price</td><td class="py-2 font-bold text-emerald-400">${mdata.price_usdc || mdata.price || 'N/A'} USDC</td></tr>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Current Tick</td><td class="py-2 text-slate-300">${mdata.tick || '0'}</td></tr>
+                                <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Current Liquidity</td><td class="py-2 text-slate-300">${mdata.liquidity || 'N/A'}</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                renderedContainer.innerHTML = tableHtml;
+            } else if (payload && payload.status === 'success' && typeof payload.data === 'string') {
+                renderedContainer.innerHTML = `
+                    <div class="mt-4 p-4 rounded-lg bg-emerald-950/20 border border-emerald-500/20">
+                        <h4 class="text-sm font-semibold text-emerald-400 mb-1">Gated Content Unlocked</h4>
+                        <p class="text-xs text-slate-300">${payload.data}</p>
+                    </div>
+                `;
+            }
+        }
     }
 
     function updateRequestHeaders() {
         const headers = {};
         const activeAddress = (window.globalWalletState && window.globalWalletState.address) || walletAddress || "0x0000000000000000000000000000000000000000";
         const currentPaymentId = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+        const currentTxHash = (activeSession && activeSession.txHash) || "0x5c5067a6a3b0c801bcbc26759c5d1e2e1d7dc1518f8e811c76a77d7f781dc41b";
         const signature = generateAlgorithmicSignature(activeAddress, currentPaymentId);
 
-        headers['Payment-Id'] = currentPaymentId;
-        headers['Payment-Sender'] = activeAddress;
-        headers['Payment-Signature'] = signature;
+        if (isPythonBackend) {
+            const headerPayload = {
+                payment_id: currentPaymentId,
+                tx_hash: currentTxHash,
+                signature: signature
+            };
+            headers['Payment-Signature'] = JSON.stringify(headerPayload);
+        } else {
+            headers['Payment-Id'] = currentPaymentId;
+            headers['Payment-Sender'] = activeAddress;
+            headers['Payment-Signature'] = signature;
+        }
+        
         headers['Authorization'] = `Bearer ${signature}`;
         headers['X-Wallet-Address'] = activeAddress;
 
@@ -347,7 +398,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // 4. Initializing Chart.js
     // ----------------------------------------------------
     function initChart() {
-        const ctx = document.getElementById('price-chart-canvas').getContext('2d');
+        const canvas = document.getElementById('price-chart-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
         
         priceChart = new Chart(ctx, {
             type: 'line',
@@ -356,7 +409,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 datasets: [{
                     label: 'Token Price (USDC)',
                     data: chartPrices,
-                    borderColor: '#00E5FF', // Bright Cyan
+                    borderColor: '#00E5FF', 
                     backgroundColor: 'rgba(0, 229, 255, 0.05)',
                     borderWidth: 2,
                     tension: 0.35,
@@ -398,18 +451,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Hook / custom manager for sliding window price feed (Time-Series)
     function usePriceTimeSeries(intervalMs = 2000, windowSize = 20) {
         let data = window.generateTimeSeriesData(lastPrice, windowSize);
         const listeners = [];
 
         const intervalId = setInterval(() => {
             const lastEntry = data[data.length - 1] || { price: 2096.92 };
-            const maxDeviation = lastEntry.price * 0.0005; // max %0.05 deviation per step
+            const maxDeviation = lastEntry.price * 0.0005; 
             const change = (Math.random() - 0.5) * 2 * maxDeviation;
             let nextPrice = lastEntry.price + change;
 
-            // Safety bounds to prevent zero/infinity drift
             if (nextPrice < 1000.0) nextPrice = 1000.0;
             if (nextPrice > 5000.0) nextPrice = 5000.0;
 
@@ -448,7 +499,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    // Shared time series hook instance
     window.priceTimeSeriesHook = null;
 
     function startPriceChartSimulation() {
@@ -468,7 +518,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.length > 0) {
                 lastPrice = data[data.length - 1].price;
                 if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
-                    dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                    if (dom.metricsLivePrice) {
+                        dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                    }
                 }
             }
 
@@ -488,26 +540,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const savedContract = localStorage.getItem('x402_contract_address') || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
         const savedFee = localStorage.getItem('x402_gated_fee') || "0.10";
 
-        dom.settingsRpcInput.value = savedRpc;
-        dom.settingsContractInput.value = savedContract;
-        dom.settingsFeeInput.value = savedFee;
+        if (dom.settingsRpcInput) dom.settingsRpcInput.value = savedRpc;
+        if (dom.settingsContractInput) dom.settingsContractInput.value = savedContract;
+        if (dom.settingsFeeInput) dom.settingsFeeInput.value = savedFee;
 
         initialSettings = { rpc: savedRpc, contract: savedContract, fee: savedFee };
     }
 
     function checkSettingsChanged() {
-        const rpcVal = dom.settingsRpcInput.value.trim();
-        const contractVal = dom.settingsContractInput.value.trim();
-        const feeVal = dom.settingsFeeInput.value.trim();
+        if (!dom.settingsSaveBtn) return;
+        const rpcVal = dom.settingsRpcInput ? dom.settingsRpcInput.value.trim() : '';
+        const contractVal = dom.settingsContractInput ? dom.settingsContractInput.value.trim() : '';
+        const feeVal = dom.settingsFeeInput ? dom.settingsFeeInput.value.trim() : '';
 
         isDirty = (rpcVal !== initialSettings.rpc || contractVal !== initialSettings.contract || feeVal !== initialSettings.fee);
 
         if (isDirty) {
             dom.settingsSaveBtn.disabled = false;
-            dom.settingsSaveBtn.style.backgroundColor = "#00E5FF";
+            dom.settingsSaveBtn.style.backgroundColor = "#06b6d4";
             dom.settingsSaveBtn.style.color = "#020617";
             dom.settingsSaveBtn.style.opacity = "1.0";
-            dom.settingsSaveBtn.style.boxShadow = "0 0 15px rgba(0, 229, 255, 0.6)";
+            dom.settingsSaveBtn.style.boxShadow = "0 0 15px rgba(6, 182, 212, 0.4)";
             dom.settingsSaveBtn.className = "w-full text-sm font-bold py-2.5 rounded-lg border-none transition-all cursor-pointer transform hover:scale-[1.02] active:scale-[0.98]";
         } else {
             dom.settingsSaveBtn.disabled = true;
@@ -519,41 +572,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    dom.settingsSaveBtn.addEventListener('click', () => {
-        const rpcVal = dom.settingsRpcInput.value.trim();
-        const contractVal = dom.settingsContractInput.value.trim();
-        const feeVal = dom.settingsFeeInput.value.trim();
+    if (dom.settingsSaveBtn) {
+        dom.settingsSaveBtn.addEventListener('click', () => {
+            const rpcVal = dom.settingsRpcInput.value.trim();
+            const contractVal = dom.settingsContractInput.value.trim();
+            const feeVal = dom.settingsFeeInput.value.trim();
 
-        localStorage.setItem('x402_rpc_endpoint', rpcVal);
-        localStorage.setItem('x402_contract_address', contractVal);
-        localStorage.setItem('x402_gated_fee', feeVal);
+            localStorage.setItem('x402_rpc_endpoint', rpcVal);
+            localStorage.setItem('x402_contract_address', contractVal);
+            localStorage.setItem('x402_gated_fee', feeVal);
 
-        initialSettings = { rpc: rpcVal, contract: contractVal, fee: feeVal };
-        checkSettingsChanged();
+            initialSettings = { rpc: rpcVal, contract: contractVal, fee: feeVal };
+            checkSettingsChanged();
 
-        logConsole('info', 'Portal configuration parameters successfully updated in localStorage.');
-        alert('Configurations saved successfully!');
-    });
+            logConsole('info', 'Portal configuration parameters successfully updated in localStorage.');
+            alert('Configurations saved successfully!');
+        });
+    }
 
     // ----------------------------------------------------
     // 6. Query Parameters Dynamic Form Builder
     // ----------------------------------------------------
-    dom.apiAddParamBtn.addEventListener('click', () => {
-        const row = document.createElement('div');
-        row.className = 'flex items-center space-x-2 param-row';
-        row.innerHTML = `
-            <input type="text" placeholder="Key" class="w-1/3 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
-            <input type="text" placeholder="Value" class="w-1/2 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
-            <button class="remove-param-btn text-rose-500 hover:text-rose-400 text-xs px-2 py-1 font-semibold">Remove</button>
-        `;
-        
-        row.querySelector('.remove-param-btn').addEventListener('click', () => {
-            row.remove();
+    if (dom.apiAddParamBtn) {
+        dom.apiAddParamBtn.addEventListener('click', () => {
+            const row = document.createElement('div');
+            row.className = 'flex items-center space-x-2 param-row mt-2';
+            row.innerHTML = `
+                <input type="text" placeholder="Key" class="w-1/3 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
+                <input type="text" placeholder="Value" class="w-1/2 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
+                <button class="remove-param-btn text-rose-500 hover:text-rose-400 text-xs px-2 py-1 font-semibold">Remove</button>
+            `;
+            
+            row.querySelector('.remove-param-btn').addEventListener('click', () => {
+                row.remove();
+            });
+            dom.apiParamsContainer.appendChild(row);
         });
-        dom.apiParamsContainer.appendChild(row);
-    });
+    }
 
     function getQueryParameters() {
+        if (!dom.apiParamsContainer) return '';
         const rows = dom.apiParamsContainer.querySelectorAll('.param-row');
         const urlParams = new URLSearchParams();
         rows.forEach(row => {
@@ -568,7 +626,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ----------------------------------------------------
-    // 7. Server-Sent Events (SSE) Client & Price Feed Timeout
+    // 7. Server-Sent Events (SSE) Client
     // ----------------------------------------------------
     function connectSSE() {
         if (eventSource) {
@@ -581,24 +639,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const loadingOverlay = document.getElementById('chart-loading-overlay');
         if (loadingOverlay) {
             loadingOverlay.classList.remove('hidden');
-            loadingOverlay.innerHTML = `
-                <div class="flex flex-col items-center space-y-2">
-                    <svg class="animate-spin h-8 w-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span class="text-xs font-mono text-slate-400">Awaiting Price Feed Ticks...</span>
-                </div>
-            `;
         }
 
-        dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse transition-all";
-        dom.sseStatusText.textContent = "Connecting...";
+        if (dom.sseStatusDot) {
+            dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse transition-all";
+        }
+        if (dom.sseStatusText) {
+            dom.sseStatusText.textContent = "Connecting...";
+        }
 
-        // Promise-wrapped subscription to handle 5s timeout & connection state
         const sseConnectionPromise = new Promise((resolve, reject) => {
             try {
-                eventSource = new EventSource('/api/events');
+                eventSource = new EventSource(apiRoutes.events);
             } catch (err) {
                 reject(err);
                 return;
@@ -609,8 +661,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 5000);
 
             eventSource.onopen = () => {
-                dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] transition-all";
-                dom.sseStatusText.textContent = "Connected";
+                if (dom.sseStatusDot) {
+                    dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] transition-all";
+                }
+                if (dom.sseStatusText) {
+                    dom.sseStatusText.textContent = "Connected";
+                }
                 logConsole('info', 'SSE connection to /api/events successfully established.');
             };
 
@@ -643,13 +699,13 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                             resolve(payload);
                             
-                            // Inject SSE price tick into the time series hook
                             const newPrice = parseFloat(payload.data.price);
                             if (window.priceTimeSeriesHook) {
                                 window.priceTimeSeriesHook.updateExternalPrice(newPrice);
                             }
-                            
-                            dom.metricsLivePrice.textContent = `$${newPrice.toFixed(2)}`;
+                            if (dom.metricsLivePrice) {
+                                dom.metricsLivePrice.textContent = `$${newPrice.toFixed(2)}`;
+                            }
                         }
                         break;
 
@@ -685,50 +741,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (firstPayload && firstPayload.data) {
                     lastPrice = parseFloat(firstPayload.data.price);
-                    dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                    if (dom.metricsLivePrice) {
+                        dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                    }
                 }
-                
-                // Handle subsequent SSE events
-                eventSource.onmessage = (event) => {
-                    let payload;
-                    try {
-                        payload = JSON.parse(event.data);
-                    } catch (e) {
-                        return;
-                    }
-                    let eventTimestamp = null;
-                    if (payload.data && payload.data.timestamp) {
-                        eventTimestamp = payload.data.timestamp;
-                    }
-                    logConsole(payload.type, payload.message, payload.status, eventTimestamp);
-                    if (payload.type === 'tick') {
-                        if (payload.data && payload.data.price) {
-                            const newPrice = parseFloat(payload.data.price);
-                            if (window.priceTimeSeriesHook) {
-                                window.priceTimeSeriesHook.updateExternalPrice(newPrice);
-                            }
-                            dom.metricsLivePrice.textContent = `$${newPrice.toFixed(2)}`;
-                        }
-                    } else if (payload.type === 'payment') {
-                        fetchLedger();
-                        if (payload.data && payload.data.payment_id === activePaymentId) {
-                            if (payload.data.txHash) {
-                                syncDebuggerState(payload.data.payment_id, payload.data.txHash);
-                            } else if (payload.stage === 'pending') {
-                                setStepStatus('handshake', 'success', 'Gated handshake completed.');
-                            } else if (payload.stage === 'payment_received') {
-                                setStepStatus('unlocked', 'success', 'Payment settled. Gated content ready.');
-                            }
-                        }
-                    } else if (payload.type === 'verification') {
-                        if (payload.data && payload.data.payment_id === activePaymentId) {
-                            const stepKey = mapStageToStep(payload.stage);
-                            if (stepKey) {
-                                setStepStatus(stepKey, payload.status, payload.message);
-                            }
-                        }
-                    }
-                };
             })
             .catch((err) => {
                 if (priceFeedTimeout) {
@@ -738,11 +754,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (eventSource) {
                     eventSource.close();
                 }
-                dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] transition-all";
-                dom.sseStatusText.textContent = "Disconnected";
+                if (dom.sseStatusDot) {
+                    dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] transition-all";
+                }
+                if (dom.sseStatusText) {
+                    dom.sseStatusText.textContent = "Disconnected";
+                }
                 
-                // Keep the price simulation alive on timeout, do not freeze metrics
-                dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                if (dom.metricsLivePrice) {
+                    dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                }
 
                 if (loadingOverlay) {
                     loadingOverlay.innerHTML = `
@@ -755,14 +776,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     `;
                 }
                 logConsole('verification', `Error: ${err.message}`, 'failed');
-            })
-            .finally(() => {
-                // Done setup
             });
     }
 
     // ----------------------------------------------------
-    // 8. Web3 Connect Wallet Functionality (Single Source of Truth)
+    // 8. Web3 Connect Wallet Functionality
     // ----------------------------------------------------
     function setWalletConnection(connected, address = null, signer = null) {
         if (window.globalWalletState) {
@@ -770,7 +788,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Subscribe to global cüzdan state to keep UI, Console, Table, and headers strictly synchronized
     if (window.globalWalletState) {
         window.globalWalletState.subscribe((state) => {
             isWalletConnected = state.isConnected;
@@ -779,9 +796,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (state.isConnected && state.address) {
                 const maskedAddress = state.address.slice(0, 6) + '...' + state.address.slice(-4);
-                dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
-                dom.connectWalletBtn.classList.remove('bg-cyan-600', 'hover:bg-cyan-500');
-                dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-sm font-semibold px-4 py-2 rounded-lg transition-all flex items-center cursor-default";
+                if (dom.connectWalletBtn) {
+                    dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
+                    dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-sm font-semibold px-4 py-2 rounded-lg transition-all flex items-center cursor-default";
+                }
                 
                 if (dom.disconnectWalletBtn) {
                     dom.disconnectWalletBtn.classList.remove('hidden');
@@ -797,8 +815,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 logConsole('info', `Active Wallet Updated: Connected - ${state.address}`);
             } else {
-                dom.connectWalletBtn.innerHTML = `🔗 Connect Wallet`;
-                dom.connectWalletBtn.className = "bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center";
+                if (dom.connectWalletBtn) {
+                    dom.connectWalletBtn.innerHTML = `🔗 Connect Wallet`;
+                    dom.connectWalletBtn.className = "bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center";
+                }
                 
                 if (dom.disconnectWalletBtn) {
                     dom.disconnectWalletBtn.classList.add('hidden');
@@ -819,44 +839,45 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             updateRequestHeaders();
             
-            // Re-render ledger table to reflect global state sender matching changes
             if (dom.ledgerTableBody) {
                 fetchLedger();
             }
         });
     }
 
-    dom.connectWalletBtn.addEventListener('click', async () => {
-        if (isWalletConnected) return; 
+    if (dom.connectWalletBtn) {
+        dom.connectWalletBtn.addEventListener('click', async () => {
+            if (isWalletConnected) return; 
 
-        if (typeof window.ethereum === 'undefined') {
-            alert('Ethereum browser wallet not detected. Install MetaMask or click ⚡ One-Click Simulation to use an ephemeral client identity.');
-            logConsole('verification', 'Connector error: window.ethereum is undefined.', 'failed');
-            return;
-        }
+            if (typeof window.ethereum === 'undefined') {
+                alert('Ethereum browser wallet not detected. Install MetaMask or click ⚡ One-Click Simulation to use an ephemeral client identity.');
+                logConsole('verification', 'Connector error: window.ethereum is undefined.', 'failed');
+                return;
+            }
 
-        try {
-            logConsole('info', 'Connecting Web3 wallet provider...');
-            dom.connectWalletBtn.disabled = true;
-            dom.connectWalletBtn.textContent = 'Connecting...';
+            try {
+                logConsole('info', 'Connecting Web3 wallet provider...');
+                dom.connectWalletBtn.disabled = true;
+                dom.connectWalletBtn.textContent = 'Connecting...';
 
-            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-            const address = accounts[0];
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                const address = accounts[0];
 
-            const provider = new ethers.BrowserProvider(window.ethereum);
-            const signer = await provider.getSigner();
+                const provider = new ethers.BrowserProvider(window.ethereum);
+                const signer = await provider.getSigner();
 
-            setWalletConnection(true, address, signer);
-            logConsole('info', `Successfully linked wallet address: ${address}`);
-        } catch (err) {
-            console.error(err);
-            logConsole('verification', `Connection rejected: ${err.message}`, 'failed');
-            setWalletConnection(false);
-            alert(`Wallet link failed: ${err.message}`);
-        } finally {
-            dom.connectWalletBtn.disabled = false;
-        }
-    });
+                setWalletConnection(true, address, signer);
+                logConsole('info', `Successfully linked wallet address: ${address}`);
+            } catch (err) {
+                console.error(err);
+                logConsole('verification', `Connection rejected: ${err.message}`, 'failed');
+                setWalletConnection(false);
+                alert(`Wallet link failed: ${err.message}`);
+            } finally {
+                dom.connectWalletBtn.disabled = false;
+            }
+        });
+    }
 
     if (dom.disconnectWalletBtn) {
         dom.disconnectWalletBtn.addEventListener('click', () => {
@@ -868,87 +889,113 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // 9. Interactive API Send & Verification Protocol
     // ----------------------------------------------------
-    dom.apiSendBtn.addEventListener('click', async () => {
-        const method = dom.apiMethodSelect.value;
-        const path = dom.apiPathInput.value;
-        const params = getQueryParameters();
-        
-        let url = path;
-        if (params) {
-            url += `?${params}`;
-        }
-
-        dom.apiSendBtn.disabled = true;
-        dom.apiSendBtn.textContent = 'Sending...';
-        dom.apiResponseConsole.textContent = 'Executing network query...';
-        dom.apiStatusBadge.className = 'hidden';
-
-        try {
-            const headers = {};
-            const activeAddress = walletAddress || "0x0000000000000000000000000000000000000000";
-            const currentPaymentId = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
-            const signature = generateMockSignature(activeAddress, currentPaymentId);
-
-            if (activeSession && activeSession.path === path && activeSession.verified) {
-                headers['Payment-Sender'] = activeSession.sender;
-                headers['Payment-Signature'] = activeSession.signature;
-                headers['Payment-Id'] = activeSession.paymentId;
-                headers['Authorization'] = `Bearer ${activeSession.signature}`;
-                headers['X-Wallet-Address'] = activeSession.sender;
-            } else if (isWalletConnected && walletAddress) {
-                headers['Payment-Id'] = currentPaymentId;
-                headers['Payment-Sender'] = walletAddress;
-                headers['Payment-Signature'] = signature;
-                headers['Authorization'] = `Bearer ${signature}`;
-                headers['X-Wallet-Address'] = walletAddress;
+    if (dom.apiSendBtn) {
+        dom.apiSendBtn.addEventListener('click', async () => {
+            const method = dom.apiMethodSelect ? dom.apiMethodSelect.value : 'GET';
+            const path = dom.apiPathInput ? dom.apiPathInput.value : apiRoutes.marketData;
+            const params = getQueryParameters();
+            
+            let url = path;
+            if (params) {
+                url += `?${params}`;
             }
 
-            updateRequestHeaders();
+            dom.apiSendBtn.disabled = true;
+            dom.apiSendBtn.textContent = 'Sending...';
+            if (dom.apiResponseConsole) dom.apiResponseConsole.textContent = 'Executing network query...';
+            if (dom.apiStatusBadge) dom.apiStatusBadge.className = 'hidden';
 
-            const res = await fetch(url, { method, headers });
-            
-            updateStatusBadge(res.status, res.statusText);
-            const body = await res.json();
-            updateResponseConsole(body);
+            try {
+                const headers = {};
+                const activeAddress = walletAddress || "0x0000000000000000000000000000000000000000";
+                const currentPaymentId = activePaymentId || "a3b04c8f-2879-4d8e-9d22-132d7b5f6390";
+                const currentTxHash = (activeSession && activeSession.txHash) || "0x5c5067a6a3b0c801bcbc26759c5d1e2e1d7dc1518f8e811c76a77d7f781dc41b";
+                const signature = generateMockSignature(activeAddress, currentPaymentId);
 
-            if (res.status === 402) {
-                activePaymentId = body.payment_id;
-                activeFee = body.fee;
-                activeRecipient = body.recipient;
-                activeCurrency = body.currency;
+                // Build correct verification headers based on environment
+                if (activeSession && activeSession.path === path && activeSession.verified) {
+                    if (isPythonBackend) {
+                        headers['Payment-Signature'] = JSON.stringify({
+                            payment_id: activeSession.paymentId,
+                            tx_hash: activeSession.txHash,
+                            signature: activeSession.signature
+                        });
+                    } else {
+                        headers['Payment-Sender'] = activeSession.sender;
+                        headers['Payment-Signature'] = activeSession.signature;
+                        headers['Payment-Id'] = activeSession.paymentId;
+                    }
+                    headers['Authorization'] = `Bearer ${activeSession.signature}`;
+                    headers['X-Wallet-Address'] = activeSession.sender;
+                } else if (isWalletConnected && walletAddress) {
+                    if (isPythonBackend) {
+                        headers['Payment-Signature'] = JSON.stringify({
+                            payment_id: currentPaymentId,
+                            tx_hash: currentTxHash,
+                            signature: signature
+                        });
+                    } else {
+                        headers['Payment-Id'] = currentPaymentId;
+                        headers['Payment-Sender'] = walletAddress;
+                        headers['Payment-Signature'] = signature;
+                    }
+                    headers['Authorization'] = `Bearer ${signature}`;
+                    headers['X-Wallet-Address'] = walletAddress;
+                }
 
-                resetDebugger();
-                setStepStatus('handshake', 'pending', `Initial 402 Handshake generated payment_id: ${activePaymentId}`);
-                logConsole('payment', `Gated Resource returned 402. Payment is required: ${activeFee} ${activeCurrency} to ${activeRecipient}`, 'pending');
+                updateRequestHeaders();
 
-                if (walletSigner && walletAddress) {
-                    const pay = confirm(`Request requires payment of ${activeFee} ${activeCurrency}.\nSign payment ID: ${activePaymentId} using connected wallet?`);
-                    if (pay) {
-                        await executeWeb3PaymentFlow();
+                const res = await fetch(url, { method, headers });
+                
+                updateStatusBadge(res.status, res.statusText);
+                const body = await res.json();
+                updateResponseConsole(body);
+
+                if (res.status === 402) {
+                    activePaymentId = body.payment_id;
+                    if (body.payment_required) {
+                        activeFee = body.payment_required.price;
+                        activeRecipient = body.payment_required.recipient;
+                        activeCurrency = body.payment_required.currency;
+                    } else {
+                        activeFee = body.fee || "0.10";
+                        activeRecipient = body.recipient || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+                        activeCurrency = body.currency || "USDC";
+                    }
+
+                    resetDebugger();
+                    setStepStatus('handshake', 'pending', `Initial 402 Handshake generated payment_id: ${activePaymentId}`);
+                    logConsole('payment', `Gated Resource returned 402. Payment is required: ${activeFee} ${activeCurrency} to ${activeRecipient}`, 'pending');
+
+                    if (walletSigner && walletAddress) {
+                        const pay = confirm(`Request requires payment of ${activeFee} ${activeCurrency}.\nSign payment ID: ${activePaymentId} using connected wallet?`);
+                        if (pay) {
+                            await executeWeb3PaymentFlow();
+                        }
+                    } else {
+                        const sim = confirm(`No Web3 wallet is connected.\nWould you like to auto-trigger the ⚡ One-Click Simulation flow instead?`);
+                        if (sim) {
+                            await executeSimulationFlow(activePaymentId, activeFee, activeRecipient, activeCurrency);
+                        }
+                    }
+                } else if (res.status === 200) {
+                    logConsole('payment', 'Micropayments payload successfully resolved. Content unlocked.', 'success');
+                    if (activePaymentId) {
+                        setStepStatus('unlocked', 'success', 'Authorized access verified!');
                     }
                 } else {
-                    const sim = confirm(`No Web3 wallet is connected.\nWould you like to auto-trigger the ⚡ One-Click Simulation flow instead?`);
-                    if (sim) {
-                        await executeSimulationFlow(activePaymentId, activeFee, activeRecipient, activeCurrency);
-                    }
+                    logConsole('verification', `HTTP request finished with status code: ${res.status}`, 'failed');
                 }
-            } else if (res.status === 200) {
-                logConsole('payment', 'Micropayments payload successfully resolved. Content unlocked.', 'success');
-                if (activePaymentId) {
-                    setStepStatus('unlocked', 'success', 'Authorized access verified!');
-                }
-            } else {
-                logConsole('verification', `HTTP request finished with status code: ${res.status}`, 'failed');
+            } catch (err) {
+                console.error(err);
+                updateResponseConsole({ error: err.message });
+                logConsole('verification', `Request failed: ${err.message}`, 'failed');
+            } finally {
+                dom.apiSendBtn.disabled = false;
+                dom.apiSendBtn.textContent = 'Send Request';
             }
-        } catch (err) {
-            console.error(err);
-            updateResponseConsole({ error: err.message });
-            logConsole('verification', `Request failed: ${err.message}`, 'failed');
-        } finally {
-            dom.apiSendBtn.disabled = false;
-            dom.apiSendBtn.textContent = 'Send Request';
-        }
-    });
+        });
+    }
 
     async function executeWeb3PaymentFlow() {
         try {
@@ -956,13 +1003,15 @@ document.addEventListener('DOMContentLoaded', () => {
             logConsole('verification', 'Requesting message signature from connected wallet...', 'pending');
 
             const signature = await walletSigner.signMessage(activePaymentId);
+            const mockTxHash = '0x' + Array.from({length: 64}, () => Math.floor(Math.random()*16).toString(16)).join('');
 
             activeSession = {
                 path: dom.apiPathInput.value,
                 sender: walletAddress,
                 signature: signature,
                 paymentId: activePaymentId,
-                verified: true
+                verified: true,
+                txHash: mockTxHash
             };
             updateRequestHeaders();
 
@@ -972,35 +1021,39 @@ document.addEventListener('DOMContentLoaded', () => {
             setStepStatus('matching', 'pending', 'Broadcasting mock USDC transfer on-chain...');
             logConsole('payment', 'Simulating payment transaction receipt to ledger...', 'pending');
 
-            const mockTxHash = '0x' + Array.from({length: 64}, () => Math.floor(Math.random()*16).toString(16)).join('');
-            
-            const postRes = await fetch('/api/payments', {
+            const postUrl = isPythonBackend ? '/api/v1/simulate-payment' : '/api/payments';
+            const postBody = isPythonBackend ? {
+                payment_id: activePaymentId,
+                tx_hash: mockTxHash,
+                signature: signature
+            } : {
+                payment_id: activePaymentId,
+                status: 'verified',
+                sender: walletAddress,
+                recipient: activeRecipient,
+                amount: activeFee,
+                currency: activeCurrency,
+                txHash: mockTxHash,
+                signature: signature
+            };
+
+            const postRes = await fetch(postUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    payment_id: activePaymentId,
-                    status: 'verified',
-                    sender: walletAddress,
-                    recipient: activeRecipient,
-                    amount: activeFee,
-                    currency: activeCurrency,
-                    txHash: mockTxHash,
-                    signature: signature
-                })
+                body: JSON.stringify(postBody)
             });
 
             if (!postRes.ok) {
                 throw new Error('On-chain simulation rejected by payments ledger.');
             }
 
-            const paymentObj = await postRes.json();
             logConsole('payment', `Transaction confirmed on-chain. Hash: ${mockTxHash.slice(0, 20)}...`, 'success');
 
             setStepStatus('confirmation', 'pending', 'Sending authorized query to gated API...');
             logConsole('verification', 'Re-executing gated API endpoint with security headers...', 'pending');
             
             setTimeout(async () => {
-                dom.apiSendBtn.click();
+                if (dom.apiSendBtn) dom.apiSendBtn.click();
             }, 1200);
 
         } catch (err) {
@@ -1013,9 +1066,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // 10. One-Click Simulation Flow
     // ----------------------------------------------------
-    dom.oneClickSimBtn.addEventListener('click', async () => {
-        await executeSimulationFlow();
-    });
+    if (dom.oneClickSimBtn) {
+        dom.oneClickSimBtn.addEventListener('click', async () => {
+            await executeSimulationFlow();
+        });
+    }
 
     async function executeSimulationFlow(paymentId = null, fee = "0.10", recipient = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", currency = "USDC") {
         logConsole('info', '⚡ Initializing automated One-Click Gated API simulation...');
@@ -1024,17 +1079,25 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             if (!paymentId) {
                 setStepStatus('handshake', 'pending', 'Calling Gated resource to retrieve payment challenge...');
-                logConsole('payment', 'Querying gated resource /api/gated-data...', 'pending');
+                logConsole('payment', 'Querying gated resource challenge...', 'pending');
 
-                const initRes = await fetch('/api/gated-data');
+                const challengeUrl = isPythonBackend ? '/api/v1/market-data?symbol=cbBTC-USDC' : '/api/gated-data';
+                const initRes = await fetch(challengeUrl);
                 if (initRes.status !== 402) {
                     throw new Error(`Expected handshake response 402, got: ${initRes.status}`);
                 }
                 const challenge = await initRes.json();
                 paymentId = challenge.payment_id;
-                fee = challenge.fee;
-                recipient = challenge.recipient;
-                currency = challenge.currency;
+                
+                if (challenge.payment_required) {
+                    fee = challenge.payment_required.price;
+                    recipient = challenge.payment_required.recipient;
+                    currency = challenge.payment_required.currency;
+                } else {
+                    fee = challenge.fee || "0.10";
+                    recipient = challenge.recipient || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+                    currency = challenge.currency || "USDC";
+                }
                 
                 activePaymentId = paymentId;
                 updateResponseConsole(challenge);
@@ -1051,17 +1114,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const mockAddress = mockWallet.address;
             logConsole('info', `Simulated client address: ${mockAddress}`);
             
-            // Central Wallet Synchronization: Simulated address acts as the connected address
             setWalletConnection(true, mockAddress, mockWallet);
 
             const signature = await mockWallet.signMessage(paymentId);
+            const mockTxHash = '0x' + Array.from({length: 64}, () => Math.floor(Math.random()*16).toString(16)).join('');
             
             activeSession = {
-                path: '/api/gated-data',
+                path: isPythonBackend ? '/api/v1/market-data' : '/api/gated-data',
                 sender: mockAddress,
                 signature: signature,
                 paymentId: paymentId,
-                verified: true
+                verified: true,
+                txHash: mockTxHash
             };
             updateRequestHeaders();
 
@@ -1069,45 +1133,59 @@ document.addEventListener('DOMContentLoaded', () => {
             logConsole('verification', `Recoverable signature generated: ${signature.slice(0, 16)}...`, 'success');
 
             setStepStatus('matching', 'pending', 'Posting ledger verification status...');
-            logConsole('payment', 'Submitting transaction data to /api/payments...', 'pending');
+            logConsole('payment', 'Submitting transaction data to register verified payment...', 'pending');
             
-            const mockTxHash = '0x' + Array.from({length: 64}, () => Math.floor(Math.random()*16).toString(16)).join('');
-            
-            const postRes = await fetch('/api/payments', {
+            const postUrl = isPythonBackend ? '/api/v1/simulate-payment' : '/api/payments';
+            const postBody = isPythonBackend ? {
+                payment_id: paymentId,
+                tx_hash: mockTxHash,
+                signature: signature
+            } : {
+                payment_id: paymentId,
+                status: 'verified',
+                sender: mockAddress,
+                recipient: recipient,
+                amount: fee,
+                currency: currency,
+                txHash: mockTxHash,
+                signature: signature
+            };
+
+            const postRes = await fetch(postUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    payment_id: paymentId,
-                    status: 'verified',
-                    sender: mockAddress,
-                    recipient: recipient,
-                    amount: fee,
-                    currency: currency,
-                    txHash: mockTxHash,
-                    signature: signature
-                })
+                body: JSON.stringify(postBody)
             });
 
             if (!postRes.ok) {
                 throw new Error('Server rejected simulated payment registration.');
             }
 
-            const paymentData = await postRes.json();
             logConsole('payment', `Simulated ledger payment marked verified. Hash: ${mockTxHash.slice(0, 16)}...`, 'success');
 
             setStepStatus('confirmation', 'pending', 'Awaiting block validation...');
-            logConsole('verification', 'Hitting GET /api/gated-data with custom authentication headers...', 'pending');
+            logConsole('verification', 'Hitting GET endpoint with custom authentication headers...', 'pending');
 
-            const headers = {
-                'Payment-Sender': mockAddress,
-                'Payment-Signature': signature,
-                'Payment-Id': paymentId,
-                'Authorization': `Bearer ${signature}`,
-                'X-Wallet-Address': mockAddress
-            };
+            const headers = {};
+            if (isPythonBackend) {
+                headers['Payment-Signature'] = JSON.stringify({
+                    payment_id: paymentId,
+                    tx_hash: mockTxHash,
+                    signature: signature
+                });
+            } else {
+                headers['Payment-Sender'] = mockAddress,
+                headers['Payment-Signature'] = signature,
+                headers['Payment-Id'] = paymentId;
+            }
+            
+            headers['Authorization'] = `Bearer ${signature}`;
+            headers['X-Wallet-Address'] = mockAddress;
+            
             updateHeadersPreview(headers);
 
-            const finalRes = await fetch('/api/gated-data', {
+            const finalUrl = isPythonBackend ? `/api/v1/market-data?symbol=cbBTC-USDC` : `/api/gated-data`;
+            const finalRes = await fetch(finalUrl, {
                 method: 'GET',
                 headers: headers
             });
@@ -1120,7 +1198,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setStepStatus('unlocked', 'success', 'Access granted! Content successfully unlocked.');
                 logConsole('payment', 'Simulation completed! Premium gated dataset unlocked.', 'success');
             } else {
-                throw new Error(`Server returned error ${finalRes.status}: ${finalBody.error}`);
+                throw new Error(`Server returned error ${finalRes.status}: ${finalBody.error || finalBody.detail}`);
             }
 
         } catch (err) {
@@ -1135,20 +1213,74 @@ document.addEventListener('DOMContentLoaded', () => {
     // 11. Payments Ledger Table Actions
     // ----------------------------------------------------
     async function fetchLedger() {
-        const urlParams = new URLSearchParams();
-        if (ledgerSearchQuery) urlParams.append('search', ledgerSearchQuery);
-        if (ledgerStatus) urlParams.append('status', ledgerStatus);
-        urlParams.append('limit', ledgerLimit);
-        urlParams.append('offset', ledgerOffset);
-        urlParams.append('sort', ledgerSortOrder);
-
+        if (!dom.ledgerTableBody) return;
         try {
-            const res = await fetch(`/api/payments?${urlParams.toString()}`);
+            let res;
+            if (isPythonBackend) {
+                res = await fetch(apiRoutes.payments);
+            } else {
+                const urlParams = new URLSearchParams();
+                if (ledgerSearchQuery) urlParams.append('search', ledgerSearchQuery);
+                if (ledgerStatus) urlParams.append('status', ledgerStatus);
+                urlParams.append('limit', ledgerLimit);
+                urlParams.append('offset', ledgerOffset);
+                urlParams.append('sort', ledgerSortOrder);
+                res = await fetch(`${apiRoutes.payments}?${urlParams.toString()}`);
+            }
+
             if (!res.ok) throw new Error('Failed to retrieve ledger data');
             const data = await res.json();
 
-            renderLedgerTable(data.payments, data.total);
-            updateMetrics(data.payments);
+            let paymentsList = [];
+            let totalCount = 0;
+
+            if (isPythonBackend) {
+                const keys = Object.keys(data);
+                paymentsList = keys.map(pid => {
+                    const rec = data[pid];
+                    return {
+                        payment_id: pid,
+                        status: rec.status === 'paid' ? 'verified' : 'pending',
+                        sender: rec.sender || null,
+                        recipient: rec.recipient || '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+                        amount: rec.price || '0.001',
+                        currency: rec.currency || 'USDC',
+                        txHash: rec.tx_hash || null,
+                        timestamp: rec.timestamp || new Date().toISOString(),
+                        signature: rec.signature || null,
+                        symbol: rec.symbol || 'N/A'
+                    };
+                });
+
+                // Apply client-side filters for python backend
+                if (ledgerSearchQuery) {
+                    const query = ledgerSearchQuery.toLowerCase();
+                    paymentsList = paymentsList.filter(p => 
+                        p.payment_id.toLowerCase().includes(query) ||
+                        (p.sender && p.sender.toLowerCase().includes(query)) ||
+                        (p.txHash && p.txHash.toLowerCase().includes(query))
+                    );
+                }
+                if (ledgerStatus) {
+                    paymentsList = paymentsList.filter(p => p.status === ledgerStatus);
+                }
+
+                // Apply client-side sort
+                paymentsList.sort((a, b) => {
+                    const timeA = new Date(a.timestamp).getTime();
+                    const timeB = new Date(b.timestamp).getTime();
+                    return ledgerSortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+                });
+
+                totalCount = paymentsList.length;
+                paymentsList = paymentsList.slice(ledgerOffset, ledgerOffset + ledgerLimit);
+            } else {
+                paymentsList = data.payments || [];
+                totalCount = data.total || 0;
+            }
+
+            renderLedgerTable(paymentsList, totalCount);
+            updateMetrics(paymentsList);
         } catch (err) {
             console.error(err);
             dom.ledgerTableBody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-rose-500 font-bold">Error loading ledger records.</td></tr>`;
@@ -1187,6 +1319,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderLedgerTable(payments, totalCount) {
+        if (!dom.ledgerTableBody) return;
         dom.ledgerTableBody.innerHTML = '';
         
         if (ledgerAmountSort) {
@@ -1199,9 +1332,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (payments.length === 0) {
             dom.ledgerTableBody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-slate-500">No payment records found.</td></tr>`;
-            dom.ledgerPageInfo.textContent = 'Page 1 of 1';
-            dom.ledgerPrevBtn.disabled = true;
-            dom.ledgerNextBtn.disabled = true;
+            if (dom.ledgerPageInfo) dom.ledgerPageInfo.textContent = 'Page 1 of 1';
+            if (dom.ledgerPrevBtn) dom.ledgerPrevBtn.disabled = true;
+            if (dom.ledgerNextBtn) dom.ledgerNextBtn.disabled = true;
             return;
         }
 
@@ -1281,9 +1414,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalPages = Math.ceil(totalCount / ledgerLimit) || 1;
         const currentPage = Math.floor(ledgerOffset / ledgerLimit) + 1;
 
-        dom.ledgerPageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
-        dom.ledgerPrevBtn.disabled = ledgerOffset === 0;
-        dom.ledgerNextBtn.disabled = (ledgerOffset + ledgerLimit) >= totalCount;
+        if (dom.ledgerPageInfo) dom.ledgerPageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+        if (dom.ledgerPrevBtn) dom.ledgerPrevBtn.disabled = ledgerOffset === 0;
+        if (dom.ledgerNextBtn) dom.ledgerNextBtn.disabled = (ledgerOffset + ledgerLimit) >= totalCount;
     }
 
     function updateMetrics(payments) {
@@ -1300,11 +1433,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        dom.metricsTotalFees.textContent = `${totalFees.toFixed(2)} USDC`;
-        dom.metricsVerifiedCount.textContent = verifiedCount;
-        dom.metricsPendingCount.textContent = pendingCount;
+        if (dom.metricsTotalFees) dom.metricsTotalFees.textContent = `${totalFees.toFixed(2)} USDC`;
+        if (dom.metricsVerifiedCount) dom.metricsVerifiedCount.textContent = verifiedCount;
+        if (dom.metricsPendingCount) dom.metricsPendingCount.textContent = pendingCount;
 
-        // Reactive Debugger Update on Block Confirmations (If pending count > 0)
         if (pendingCount > 0) {
             const pendingPayment = payments.find(p => p.status === 'pending');
             if (pendingPayment) {
@@ -1325,45 +1457,78 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let searchTimeout;
-    dom.ledgerSearchInput.addEventListener('input', (e) => {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => {
-            ledgerSearchQuery = e.target.value.trim();
+    if (dom.ledgerSearchInput) {
+        dom.ledgerSearchInput.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                ledgerSearchQuery = e.target.value.trim();
+                ledgerOffset = 0;
+                fetchLedger();
+            }, 300);
+        });
+    }
+
+    if (dom.ledgerStatusFilter) {
+        dom.ledgerStatusFilter.addEventListener('change', (e) => {
+            ledgerStatus = e.target.value;
             ledgerOffset = 0;
             fetchLedger();
-        }, 300);
-    });
+        });
+    }
 
-    dom.ledgerStatusFilter.addEventListener('change', (e) => {
-        ledgerStatus = e.target.value;
-        ledgerOffset = 0;
-        fetchLedger();
-    });
-
-    dom.ledgerSortTimestamp.addEventListener('click', () => {
-        ledgerSortOrder = (ledgerSortOrder === 'desc') ? 'asc' : 'desc';
-        ledgerAmountSort = null;
-        fetchLedger();
-    });
-
-    dom.ledgerSortAmount.addEventListener('click', () => {
-        ledgerAmountSort = (ledgerAmountSort === 'asc') ? 'desc' : 'asc';
-        fetchLedger();
-    });
-
-    dom.ledgerPrevBtn.addEventListener('click', () => {
-        if (ledgerOffset >= ledgerLimit) {
-            ledgerOffset -= ledgerLimit;
+    if (dom.ledgerSortTimestamp) {
+        dom.ledgerSortTimestamp.addEventListener('click', () => {
+            ledgerSortOrder = (ledgerSortOrder === 'desc') ? 'asc' : 'desc';
+            ledgerAmountSort = null;
             fetchLedger();
-        }
-    });
+        });
+    }
 
-    dom.ledgerNextBtn.addEventListener('click', () => {
-        ledgerOffset += ledgerLimit;
-        fetchLedger();
-    });
+    if (dom.ledgerSortAmount) {
+        dom.ledgerSortAmount.addEventListener('click', () => {
+            ledgerAmountSort = (ledgerAmountSort === 'asc') ? 'desc' : 'asc';
+            fetchLedger();
+        });
+    }
+
+    if (dom.ledgerPrevBtn) {
+        dom.ledgerPrevBtn.addEventListener('click', () => {
+            if (ledgerOffset >= ledgerLimit) {
+                ledgerOffset -= ledgerLimit;
+                fetchLedger();
+            }
+        });
+    }
+
+    if (dom.ledgerNextBtn) {
+        dom.ledgerNextBtn.addEventListener('click', () => {
+            ledgerOffset += ledgerLimit;
+            fetchLedger();
+        });
+    }
 
     async function fetchAllFilteredLedger() {
+        if (isPythonBackend) {
+            const res = await fetch(apiRoutes.payments);
+            const data = await res.json();
+            const keys = Object.keys(data);
+            return keys.map(pid => {
+                const rec = data[pid];
+                return {
+                    payment_id: pid,
+                    status: rec.status === 'paid' ? 'verified' : 'pending',
+                    sender: rec.sender || null,
+                    recipient: rec.recipient || '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+                    amount: rec.price || '0.001',
+                    currency: rec.currency || 'USDC',
+                    txHash: rec.tx_hash || null,
+                    timestamp: rec.timestamp || new Date().toISOString(),
+                    signature: rec.signature || null,
+                    symbol: rec.symbol || 'N/A'
+                };
+            });
+        }
+        
         const urlParams = new URLSearchParams();
         if (ledgerSearchQuery) urlParams.append('search', ledgerSearchQuery);
         if (ledgerStatus) urlParams.append('status', ledgerStatus);
@@ -1371,67 +1536,71 @@ document.addEventListener('DOMContentLoaded', () => {
         urlParams.append('offset', 0);
         urlParams.append('sort', ledgerSortOrder);
 
-        const res = await fetch(`/api/payments?${urlParams.toString()}`);
+        const res = await fetch(`${apiRoutes.payments}?${urlParams.toString()}`);
         const data = await res.json();
         return data.payments || [];
     }
 
-    dom.ledgerExportJson.addEventListener('click', async () => {
-        try {
-            const data = await fetchAllFilteredLedger();
-            const mappedData = data.map(p => {
-                if (p.status === 'pending') {
-                    const mocks = getDeterministicMockDetails(p.payment_id);
-                    return {
-                        ...p,
-                        sender: p.sender || mocks.sender,
-                        txHash: p.txHash || mocks.txHash
-                    };
-                }
-                return p;
-            });
-            const blob = new Blob([JSON.stringify(mappedData, null, 2)], { type: 'application/json' });
-            triggerDownload(blob, `payments_ledger_${Date.now()}.json`);
-            logConsole('info', 'Payments ledger exported to JSON file format successfully.');
-        } catch (e) {
-            alert('Export failed.');
-        }
-    });
+    if (dom.ledgerExportJson) {
+        dom.ledgerExportJson.addEventListener('click', async () => {
+            try {
+                const data = await fetchAllFilteredLedger();
+                const mappedData = data.map(p => {
+                    if (p.status === 'pending') {
+                        const mocks = getDeterministicMockDetails(p.payment_id);
+                        return {
+                            ...p,
+                            sender: p.sender || mocks.sender,
+                            txHash: p.txHash || mocks.txHash
+                        };
+                    }
+                    return p;
+                });
+                const blob = new Blob([JSON.stringify(mappedData, null, 2)], { type: 'application/json' });
+                triggerDownload(blob, `payments_ledger_${Date.now()}.json`);
+                logConsole('info', 'Payments ledger exported to JSON file format successfully.');
+            } catch (e) {
+                alert('Export failed.');
+            }
+        });
+    }
 
-    dom.ledgerExportCsv.addEventListener('click', async () => {
-        try {
-            const data = await fetchAllFilteredLedger();
-            const headers = ['Payment ID', 'Status', 'Sender', 'Recipient', 'Amount', 'Currency', 'Tx Hash', 'Timestamp'];
-            const csvRows = [headers.join(',')];
-            
-            data.forEach(p => {
-                let sender = p.sender;
-                let txHash = p.txHash;
-                if (p.status === 'pending') {
-                    const mocks = getDeterministicMockDetails(p.payment_id);
-                    if (!sender) sender = mocks.sender;
-                    if (!txHash) txHash = mocks.txHash;
-                }
-                const row = [
-                    p.payment_id,
-                    p.status,
-                    sender || '',
-                    p.recipient,
-                    p.amount,
-                    p.currency,
-                    txHash || '',
-                    p.timestamp
-                ].map(val => `"${val.replace(/"/g, '""')}"`);
-                csvRows.push(row.join(','));
-            });
+    if (dom.ledgerExportCsv) {
+        dom.ledgerExportCsv.addEventListener('click', async () => {
+            try {
+                const data = await fetchAllFilteredLedger();
+                const headers = ['Payment ID', 'Status', 'Sender', 'Recipient', 'Amount', 'Currency', 'Tx Hash', 'Timestamp'];
+                const csvRows = [headers.join(',')];
+                
+                data.forEach(p => {
+                    let sender = p.sender;
+                    let txHash = p.txHash;
+                    if (p.status === 'pending') {
+                        const mocks = getDeterministicMockDetails(p.payment_id);
+                        if (!sender) sender = mocks.sender;
+                        if (!txHash) txHash = mocks.txHash;
+                    }
+                    const row = [
+                        p.payment_id,
+                        p.status,
+                        sender || '',
+                        p.recipient,
+                        p.amount,
+                        p.currency,
+                        txHash || '',
+                        p.timestamp
+                    ].map(val => `"${val.replace(/"/g, '""')}"`);
+                    csvRows.push(row.join(','));
+                });
 
-            const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-            triggerDownload(blob, `payments_ledger_${Date.now()}.csv`);
-            logConsole('info', 'Payments ledger exported to CSV file format successfully.');
-        } catch (e) {
-            alert('Export failed.');
-        }
-    });
+                const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                triggerDownload(blob, `payments_ledger_${Date.now()}.csv`);
+                logConsole('info', 'Payments ledger exported to CSV file format successfully.');
+            } catch (e) {
+                alert('Export failed.');
+            }
+        });
+    }
 
     function triggerDownload(blob, filename) {
         const url = URL.createObjectURL(blob);
@@ -1447,19 +1616,38 @@ document.addEventListener('DOMContentLoaded', () => {
     // ----------------------------------------------------
     // 12. Application Initialization Entry Point
     // ----------------------------------------------------
-    function init() {
+    async function init() {
+        await detectBackend();
+        
         loadSettings();
         initChart();
         connectSSE();
         fetchLedger();
         resetDebugger();
-        startPriceChartSimulation(); // Run local time-series sliding window updates
+        startPriceChartSimulation(); 
         
-        dom.settingsRpcInput.addEventListener('input', checkSettingsChanged);
-        dom.settingsContractInput.addEventListener('input', checkSettingsChanged);
-        dom.settingsFeeInput.addEventListener('input', checkSettingsChanged);
+        if (dom.settingsRpcInput) dom.settingsRpcInput.addEventListener('input', checkSettingsChanged);
+        if (dom.settingsContractInput) dom.settingsContractInput.addEventListener('input', checkSettingsChanged);
+        if (dom.settingsFeeInput) dom.settingsFeeInput.addEventListener('input', checkSettingsChanged);
+        
+        // Auto configure Request Builder path and params depending on backend
+        if (isPythonBackend && dom.apiPathInput) {
+            dom.apiPathInput.value = '/api/v1/market-data';
+            if (dom.apiParamsContainer) {
+                dom.apiParamsContainer.innerHTML = '';
+                const row = document.createElement('div');
+                row.className = 'flex items-center space-x-2 param-row mt-2';
+                row.innerHTML = `
+                    <input type="text" value="symbol" placeholder="Key" class="w-1/3 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
+                    <input type="text" value="cbBTC-USDC" placeholder="Value" class="w-1/2 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
+                    <button class="remove-param-btn text-rose-500 hover:text-rose-400 text-xs px-2 py-1 font-semibold">Remove</button>
+                `;
+                row.querySelector('.remove-param-btn').addEventListener('click', () => { row.remove(); });
+                dom.apiParamsContainer.appendChild(row);
+            }
+        }
+        
         checkSettingsChanged();
-        
         logConsole('info', 'Crypcodile Web3 gated dashboard fully loaded.');
     }
 

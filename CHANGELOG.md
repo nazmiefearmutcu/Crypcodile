@@ -4,6 +4,13 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.037] - 2026-06-18
+### Changed
+- **Unified API Portal**: Integrated Node.js Express dashboard with Python FastAPI backend, serving identical static templates.
+- **SSE Tick Feeds**: Added `/api/events` price tick support on python server.
+- **Glassmorphic Design**: Overhauled stylesheet to adopt premium visuals, Outfit/Inter typography, and hover micro-animations.
+- **E2E Compatibility**: Ensured full test compatibility for 117 E2E UI assertions.
+
 ## [0.1.013] - 2026-06-16
 ### Changed
 - **Logo Mascot Design**: Updated the crocodile mascot logo to use a new, friendly side-profile design with scaled ridges.

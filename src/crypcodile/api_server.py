@@ -50,6 +50,8 @@ async def lifespan(app: FastAPI):
 
 from crypcodile import __version__
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(
     title="Crypcodile x402 Gated Market Data API",
     description=(
@@ -61,6 +63,10 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None
 )
+
+portal_public_dir = os.path.join(os.path.dirname(__file__), "api_portal", "public")
+app.mount("/css", StaticFiles(directory=os.path.join(portal_public_dir, "css")), name="css")
+app.mount("/js", StaticFiles(directory=os.path.join(portal_public_dir, "js")), name="js")
 
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def root_dashboard():
@@ -1013,3 +1019,43 @@ async def get_all_payments():
     async with db_lock:
         db = await load_payments_db()
         return db
+
+@app.get("/api/events")
+async def sse_events():
+    """SSE events endpoint returning price ticks for the UI client."""
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+    
+    async def event_generator():
+        yield f"data: {json.dumps({'type': 'info', 'message': 'SSE Stream connected successfully to Python backend'})}\n\n"
+        
+        # Send initial price tick
+        init_price = round(2000 + random.random() * 100, 2)
+        init_payload = {
+            "type": "tick",
+            "stage": "price_update",
+            "status": "success",
+            "message": f"Price updated to ${init_price}",
+            "data": {
+                "price": str(init_price),
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+        }
+        yield f"data: {json.dumps(init_payload)}\n\n"
+        
+        while True:
+            await asyncio.sleep(2.0)
+            mock_price = round(2000 + random.random() * 100, 2)
+            payload = {
+                "type": "tick",
+                "stage": "price_update",
+                "status": "success",
+                "message": f"Price updated to ${mock_price}",
+                "data": {
+                    "price": str(mock_price),
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
