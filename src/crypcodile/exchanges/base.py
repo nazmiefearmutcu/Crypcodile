@@ -32,6 +32,40 @@ def backoff_delays(
     return min(cap, raw * (1.0 + jitter * rand))
 
 
+async def http_get_helper(
+    url: str,
+    params: dict[str, Any] | None = None,
+    session: aiohttp.ClientSession | None = None,
+    max_retries: int = 3,
+    timeout_sec: float = 10.0,
+) -> Any:
+    timeout = aiohttp.ClientTimeout(total=timeout_sec)
+    
+    async def run_req(sess: aiohttp.ClientSession) -> Any:
+        for attempt in range(max_retries):
+            try:
+                async with sess.get(url, params=params, timeout=timeout) as resp:
+                    if resp.status == 429:
+                        retry_after = float(resp.headers.get("Retry-After", 1.0))
+                        await asyncio.sleep(retry_after)
+                        continue
+                    resp.raise_for_status()
+                    return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt == max_retries - 1:
+                    raise e
+                await asyncio.sleep(0.5 * (2 ** attempt))
+
+    if session is not None:
+        return await run_req(session)
+    else:
+        async with aiohttp.ClientSession() as sess:
+            return await run_req(sess)
+
+
+import aiohttp
+from typing import Any
+
 class Connector(ABC):
     name: str
     ws_url: str
@@ -50,6 +84,35 @@ class Connector(ABC):
         self.registry = registry
         self.transport: Transport | None = None
         self._dlq: DeadLetterQueue = DeadLetterQueue()
+        self._session: aiohttp.ClientSession | None = None
+
+    @property
+    def http_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def http_get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        max_retries: int = 3,
+        timeout_sec: float = 10.0,
+    ) -> Any:
+        timeout = aiohttp.ClientTimeout(total=timeout_sec)
+        for attempt in range(max_retries):
+            try:
+                async with self.http_session.get(url, params=params, timeout=timeout) as resp:
+                    if resp.status == 429:
+                        retry_after = float(resp.headers.get("Retry-After", 1.0))
+                        await asyncio.sleep(retry_after)
+                        continue
+                    resp.raise_for_status()
+                    return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt == max_retries - 1:
+                    raise e
+                await asyncio.sleep(0.5 * (2 ** attempt))
 
     @abstractmethod
     def normalize(self, msg: object, local_ts: int) -> Iterable[Record]: ...
@@ -151,3 +214,5 @@ class Connector(ABC):
                 attempt += 1
             finally:
                 await transport.close()
+                if self._session is not None and not self._session.closed:
+                    await self._session.close()

@@ -18,9 +18,8 @@ def get_free_port() -> int:
 
 @pytest.fixture(scope="function")
 async def mock_rpc() -> AsyncGenerator[tuple[str, int], None]:
-    # Start Mock RPC server on dynamic port
-    port = get_free_port()
-    runner, actual_port = await start_mock_server(host="127.0.0.1", port=port)
+    # Start Mock RPC server on dynamic port (passing 0 allows the OS to select a free port atomically)
+    runner, actual_port = await start_mock_server(host="127.0.0.1", port=0)
     rpc_url = f"http://127.0.0.1:{actual_port}"
     
     yield rpc_url, actual_port
@@ -30,45 +29,56 @@ async def mock_rpc() -> AsyncGenerator[tuple[str, int], None]:
 @pytest.fixture(scope="function")
 def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
     rpc_url, _ = mock_rpc
-    port = get_free_port()
     
-    # Isolate the payment DB file for each test function
-    payments_file = tmp_path / "payments_db.json"
-    
-    # Run API server subprocess overriding BASE_RPC_URL and setting PYTHONPATH
-    env = os.environ.copy()
-    env["BASE_RPC_URL"] = rpc_url
-    env["PYTHONPATH"] = os.path.abspath("src")
-    env["PAYMENTS_FILE"] = str(payments_file)
-    
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    
-    # Wait for FastAPI to start
-    start_time = time.time()
-    api_url = f"http://127.0.0.1:{port}"
-    
-    while time.time() - start_time < 5.0:
-        if proc.poll() is not None:
-            # Server crashed!
-            raise RuntimeError("API server failed to start.")
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        port = get_free_port()
+        
+        # Isolate the payment DB file for each test function
+        payments_file = tmp_path / f"payments_db_{attempt}.json"
+        
+        # Run API server subprocess overriding BASE_RPC_URL and setting PYTHONPATH
+        env = os.environ.copy()
+        env["BASE_RPC_URL"] = rpc_url
+        env["PYTHONPATH"] = os.path.abspath("src")
+        env["PAYMENTS_FILE"] = str(payments_file)
+        
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Wait for FastAPI to start
+        start_time = time.time()
+        api_url = f"http://127.0.0.1:{port}"
+        success = False
+        
+        while time.time() - start_time < 5.0:
+            if proc.poll() is not None:
+                # Server crashed (e.g. port collision), break to try next port
                 break
-        except OSError:
-            time.sleep(0.1)
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    success = True
+                    break
+            except OSError:
+                time.sleep(0.1)
+        
+        if success:
+            yield api_url
+            proc.terminate()
+            proc.wait()
+            return
+        else:
+            try:
+                proc.terminate()
+                proc.wait()
+            except Exception:
+                pass
     else:
-        proc.terminate()
-        raise RuntimeError("API server did not start in time.")
-    
-    yield api_url
-    
-    proc.terminate()
-    proc.wait()
+        raise RuntimeError("API server failed to start on any ports after multiple retries.")
 
 @pytest.fixture(scope="function")
 def mcp_server_client(mock_rpc) -> Generator[subprocess.Popen, None, None]:
@@ -115,6 +125,11 @@ def is_localhost_blocked() -> bool:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            s.listen(1)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(0.1)
+                client.connect(("127.0.0.1", port))
             return False
     except Exception:
         return True

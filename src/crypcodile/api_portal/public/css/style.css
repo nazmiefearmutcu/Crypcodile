@@ -100,7 +100,7 @@ h1, h2, h3, h4 {
 }
 
 /* Glassmorphism panel cards */
-.bg-slate-900, .panel, .sim-card {
+.panel, .sim-card {
     background: var(--bg-panel) !important;
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -110,14 +110,14 @@ h1, h2, h3, h4 {
     transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.bg-slate-900:hover, .panel:hover, .sim-card:hover {
+.panel:hover, .sim-card:hover {
     border-color: var(--border-hover) !important;
     box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.6), 0 0 40px -10px var(--accent-cyan-glow) !important;
     transform: translateY(-3px);
 }
 
 /* Stat Cards */
-.bg-slate-950 {
+.stat-card {
     background: rgba(3, 7, 18, 0.6) !important;
     border: 1px solid rgba(255, 255, 255, 0.03) !important;
     border-radius: 14px;
@@ -126,7 +126,7 @@ h1, h2, h3, h4 {
     box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
 }
 
-.bg-slate-950:hover {
+.stat-card:hover {
     transform: translateY(-2px);
     border-color: rgba(255, 255, 255, 0.1) !important;
     box-shadow: 0 10px 20px -10px rgba(0, 0, 0, 0.5), inset 0 2px 4px 0 rgba(0, 0, 0, 0.06) !important;

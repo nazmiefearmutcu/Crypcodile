@@ -11,6 +11,10 @@ from crypcodile.schema.enums import Side
 from crypcodile.schema.records import BookSnapshot, BookTicker, Trade
 from crypcodile.sink.memory import MemorySink
 
+@pytest.fixture(autouse=True)
+def mock_load_ipc_sync():
+    with patch("crypcodile.exchanges.base_onchain.connector._load_ipc_sync", return_value=None):
+        yield
 
 class AwaitableValue:
     def __init__(self, val: Any) -> None:
@@ -530,7 +534,7 @@ async def test_log_pagination_chunking() -> None:
     assert captured_logs_calls[1]["fromBlock"] == 1496
     assert captured_logs_calls[1]["toBlock"] == 1995
     assert captured_logs_calls[2]["fromBlock"] == 1996
-    assert captured_logs_calls[2]["toBlock"] == 2100
+    assert captured_logs_calls[2]["toBlock"] == 2085
 
 
 def test_realistic_multilevel_orderbook_normalization() -> None:
@@ -1054,3 +1058,178 @@ async def test_aerodrome_real_fixture_normalization() -> None:
         assert trade.price > 0
         assert trade.amount > 0
 
+
+@pytest.mark.asyncio
+async def test_rpc_list_initialization_and_properties() -> None:
+    # 1. Single string URL
+    t1 = BaseOnchainTransport("http://rpc1.com", ["cbBTC-USDC"])
+    assert t1.rpc_urls == ["http://rpc1.com"]
+    assert t1.current_rpc_index == 0
+    assert t1.active_rpc_url == "http://rpc1.com"
+    assert t1.rpc_url == "http://rpc1.com"
+
+    # 2. Comma-separated string URL
+    t2 = BaseOnchainTransport("http://rpc1.com,  http://rpc2.com  ,http://rpc3.com", ["cbBTC-USDC"])
+    assert t2.rpc_urls == ["http://rpc1.com", "http://rpc2.com", "http://rpc3.com"]
+    assert t2.current_rpc_index == 0
+    assert t2.active_rpc_url == "http://rpc1.com"
+
+    # 3. List of URLs
+    t3 = BaseOnchainTransport(["http://rpc1.com", "http://rpc2.com"], ["cbBTC-USDC"])
+    assert t3.rpc_urls == ["http://rpc1.com", "http://rpc2.com"]
+
+    # 4. Failover switching
+    await t2.switch_rpc_failover()
+    assert t2.current_rpc_index == 1
+    assert t2.active_rpc_url == "http://rpc2.com"
+    await t2.switch_rpc_failover()
+    assert t2.current_rpc_index == 2
+    assert t2.active_rpc_url == "http://rpc3.com"
+    await t2.switch_rpc_failover()
+    assert t2.current_rpc_index == 0
+    assert t2.active_rpc_url == "http://rpc1.com"
+
+
+@pytest.mark.asyncio
+async def test_is_connection_or_rate_limit() -> None:
+    t = BaseOnchainTransport("http://rpc1.com", ["cbBTC-USDC"])
+    
+    # Standard exceptions
+    assert t._is_connection_or_rate_limit(ConnectionError("refused")) is True
+    assert t._is_connection_or_rate_limit(TimeoutError("timeout")) is True
+    assert t._is_connection_or_rate_limit(asyncio.TimeoutError()) is True
+    
+    import socket
+    assert t._is_connection_or_rate_limit(socket.gaierror(-2, "Name or service not known")) is True
+
+    # web3 exceptions
+    from web3.exceptions import ProviderConnectionError, PersistentConnectionError, ContractLogicError
+    assert t._is_connection_or_rate_limit(ProviderConnectionError("cannot connect")) is True
+    assert t._is_connection_or_rate_limit(PersistentConnectionError("persistent connection lost")) is True
+    assert t._is_connection_or_rate_limit(ContractLogicError("execution reverted")) is False
+
+    # Exception with status code
+    class CustomHTTPError(Exception):
+        def __init__(self, status):
+            self.status = status
+    assert t._is_connection_or_rate_limit(CustomHTTPError(429)) is True
+    assert t._is_connection_or_rate_limit(CustomHTTPError(502)) is True
+    assert t._is_connection_or_rate_limit(CustomHTTPError(200)) is False
+
+    class CustomHTTPError2(Exception):
+        def __init__(self, status_code):
+            self.status_code = status_code
+    assert t._is_connection_or_rate_limit(CustomHTTPError2(429)) is True
+    assert t._is_connection_or_rate_limit(CustomHTTPError2(504)) is True
+    assert t._is_connection_or_rate_limit(CustomHTTPError2(400)) is False
+
+    # Pattern based message matching
+    assert t._is_connection_or_rate_limit(Exception("Rate limit exceeded")) is True
+    assert t._is_connection_or_rate_limit(Exception("Too Many Requests")) is True
+    assert t._is_connection_or_rate_limit(Exception("gateway timeout")) is True
+    assert t._is_connection_or_rate_limit(Exception("some other error")) is False
+
+
+@pytest.mark.asyncio
+async def test_failover_in_call_with_retry() -> None:
+    t = BaseOnchainTransport(["http://rpc1.com", "http://rpc2.com"], ["cbBTC-USDC"])
+    assert t.current_rpc_index == 0
+
+    call_count = 0
+    async def mock_func():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ConnectionError("Connection refused")
+        return "success"
+
+    res = await t._call_with_retry(mock_func, base_delay=0.0001)
+    assert res == "success"
+    assert call_count == 2
+    assert t.current_rpc_index == 1
+    assert t.active_rpc_url == "http://rpc2.com"
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_reinstantiates_provider_on_failover() -> None:
+    # We want to test that _poll_loop detects when active_rpc_url changes
+    # and disconnects the previous provider, reinstantiates AsyncWeb3, and clears resolved_pools.
+    t = BaseOnchainTransport(["http://rpc1.com", "http://rpc2.com"], ["cbBTC-USDC"], poll_interval=0.05)
+    
+    with patch("web3.AsyncWeb3") as mock_web3_class:
+        mock_w3_1 = MagicMock()
+        mock_w3_2 = MagicMock()
+        
+        # Track provider disconnect calls
+        disconnect_calls = []
+        async def mock_disconnect():
+            disconnect_calls.append(True)
+        
+        mock_w3_1.provider.disconnect = mock_disconnect
+        mock_w3_2.provider.disconnect = mock_disconnect
+        
+        # When AsyncWeb3 is instantiated, return mock_w3_1 first, then mock_w3_2
+        instantiation_count = 0
+        def web3_side_effect(*args, **kwargs):
+            nonlocal instantiation_count
+            instantiation_count += 1
+            if instantiation_count == 1:
+                return mock_w3_1
+            return mock_w3_2
+            
+        mock_web3_class.side_effect = web3_side_effect
+        mock_web3_class.to_checksum_address = lambda x: x
+        
+        # Mock functions that will be called in poll loop
+        mock_w3_1.eth.block_number = AwaitableValue(1000)
+        mock_w3_2.eth.block_number = AwaitableValue(1001)
+        
+        mock_w3_1.eth.get_block = AsyncMock(return_value={"timestamp": 12345})
+        mock_w3_2.eth.get_block = AsyncMock(return_value={"timestamp": 12346})
+        
+        # Let's mock a simple custom factory/pool structure
+        mock_pool = MagicMock()
+        mock_pool.functions.slot0.return_value.call = AsyncMock(return_value=[
+            (2**96), 0, 0, 0, 0, 0, True
+        ])
+        mock_pool.functions.liquidity.return_value.call = AsyncMock(return_value=100)
+        
+        mock_factory = MagicMock()
+        mock_factory.functions.getPool.return_value.call = AsyncMock(
+            return_value="0xResolvedAddress"
+        )
+        
+        def contract_side_effect(address: Any, abi: Any) -> Any:
+            if address == "0x33128a8fC17869897dcE68Ed026d694621f6FDfD":
+                return mock_factory
+            return mock_pool
+
+        mock_w3_1.eth.contract.side_effect = contract_side_effect
+        mock_w3_2.eth.contract.side_effect = contract_side_effect
+        
+        mock_w3_1.eth.get_logs = AsyncMock(return_value=[])
+        mock_w3_2.eth.get_logs = AsyncMock(return_value=[])
+        
+        # Let's run the transport.
+        # During the sleep, we'll switch RPC, which should trigger re-instantiation on the next loop iteration.
+        original_sleep = asyncio.sleep
+        loop_runs = 0
+        async def mock_sleep(delay: Any) -> None:
+            nonlocal loop_runs
+            loop_runs += 1
+            if loop_runs == 1:
+                # Trigger failover
+                await t.switch_rpc_failover()
+                await original_sleep(0.01)
+            else:
+                t._connected = False
+                await original_sleep(0)
+
+        with patch("asyncio.sleep", mock_sleep):
+            await t.connect()
+            await t._poll_task
+
+        # Verify that AsyncWeb3 was instantiated twice
+        assert instantiation_count == 2
+        # Verify that disconnect was called on the first provider
+        assert len(disconnect_calls) >= 1

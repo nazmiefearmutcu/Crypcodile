@@ -125,6 +125,7 @@ def export(
     to: int,
     fmt: str,
     dest: Path | str,
+    limit: int | None = None,
 ) -> None:
     """Export rows for ``(channel, symbols, [frm, to])`` to a file in ``fmt`` format.
 
@@ -139,6 +140,7 @@ def export(
         fmt:      One of ``parquet``, ``csv``, ``arrow``, ``json``, ``jsonl``.
         dest:     Destination file path.  Parent directories are created if
                   they do not exist.
+        limit:    Optional maximum number of rows to export.
 
     Raises:
         ValueError: If ``fmt`` is not one of the supported format strings.
@@ -151,18 +153,10 @@ def export(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    # Collect rows across all requested symbols.
-    frames: list[pl.DataFrame] = []
-    for symbol in symbols:
-        df = catalog.scan(channel, symbol, frm, to)
-        if len(df) > 0:
-            frames.append(df)
-
-    if frames:
-        if len(frames) > 1:
-            result = pl.concat(frames, how="diagonal").sort("local_ts")
-        else:
-            result = frames[0]
+    # Scan all requested symbols in a single database pass
+    df = catalog.scan(channel, symbols, frm, to, limit=limit)
+    if len(df) > 0:
+        result = df
     else:
         result = _get_empty_df_for_channel(catalog, channel)
 

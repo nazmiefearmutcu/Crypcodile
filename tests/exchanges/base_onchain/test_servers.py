@@ -403,7 +403,7 @@ async def test_successful_payment_verification() -> None:
         
         assert resp_res["status"] == "success"
         assert resp_res["data"]["price"] == 50000.0
-        assert PAYMENTS_DB[payment_id]["status"] == "paid"
+        assert PAYMENTS_DB[payment_id]["status"] == "spent"
         assert PAYMENTS_DB[payment_id]["sender"] == address
 
 
@@ -749,3 +749,24 @@ async def test_concurrency_lock_validation() -> None:
             mock_get_price.return_value = {"symbol": "cbBTC-USDC", "price": 50000.0}
             resp_res = await t1
             assert resp_res["status"] == "success"
+
+
+async def test_api_server_metrics_endpoint() -> None:
+    """Verify that the /metrics endpoint returns standard Prometheus exposition metrics and tracks usage."""
+    from crypcodile.api_server import metrics, METRICS_METRICS_REQUESTS
+    
+    # Track initial metrics requests count
+    init_count = METRICS_METRICS_REQUESTS
+    
+    resp = await metrics()
+    assert resp.status_code == 200
+    content = resp.body.decode()
+    
+    assert "process_cpu_seconds_total" in content
+    assert "process_resident_memory_bytes" in content
+    assert "crypcodile_uptime_seconds" in content
+    assert "crypcodile_api_requests_total" in content
+    assert "crypcodile_payments_total" in content
+    
+    from crypcodile.api_server import METRICS_METRICS_REQUESTS as new_count
+    assert new_count == init_count + 1

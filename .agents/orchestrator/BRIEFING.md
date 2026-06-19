@@ -56,17 +56,22 @@ Audit, identify, and resolve any missing features, bugs, or inconsistencies acro
 | challenger_m3_2_gen2 | teamwork_preview_challenger | Adversarial Challenger 2 | completed | af84e4eb-3ea7-4324-ba11-fc6c2ce0e764 |
 | auditor_m3_gen2 | teamwork_preview_auditor | Forensic Auditor | completed | 87619cc4-c9f9-4c27-a8b0-48c178422256 |
 | worker_m4_gen2 | teamwork_preview_worker | Build & Package Release | failed | 6e39a315-19af-457f-953c-9ea16e7aa00f |
-| worker_m4_gen2_retry | teamwork_preview_worker | Build & Package Release (Retry) | in-progress | 2a7cd47c-9045-46ce-b291-3166ae087532 |
+| worker_m4_gen2_retry | teamwork_preview_worker | Build & Package Release (Retry) | completed | 2a7cd47c-9045-46ce-b291-3166ae087532 |
+| worker_push_gen2 | teamwork_preview_worker | Push Git Commit & Tags | completed | 6833e6c6-8dd4-4efa-8064-bb982f574d3f |
+| worker_update_project_md_gen2 | teamwork_preview_worker | Update PROJECT.md | completed | 81881875-c855-463f-9af8-a0205a4c2631 |
+| explorer_m3_remediation_gen2 | teamwork_preview_explorer | Remediation Analysis | completed | 9a11d2d9-9427-4e06-b35c-ad005cca596b |
+| worker_remediation_retest | teamwork_preview_worker | Remediation Implementation | completed | f15993ec-a7c7-42a4-95bf-2936b9760976 |
+| auditor_remediation_retest | teamwork_preview_auditor | Remediation Forensic Audit | completed | ffa6f327-1d61-4a94-943a-5700d6af9e93 |
 
 ## Succession Status
 - Succession required: no
-- Spawn count: 7 / 16
-- Pending subagents: 2a7cd47c-9045-46ce-b291-3166ae087532
+- Spawn count: 12 / 16
+- Pending subagents: none
 - Predecessor: 17029fdf-8c03-4795-a55d-6a5f266f87ca
 - Successor: not yet spawned
 
 ## Active Timers
-- Heartbeat cron: 8790a2d3-728c-48a4-8acd-0fcb67e3cc2e/task-33
+- Heartbeat cron: none
 - Safety timer: none
 - On succession: kill all timers before spawning successor
 - On context truncation: run `manage_task(Action="list")` — re-create if missing

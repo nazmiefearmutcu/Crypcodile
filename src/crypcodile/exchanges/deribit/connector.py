@@ -142,18 +142,15 @@ class DeribitConnector(Connector):
 
     async def list_instruments(self) -> list[Instrument]:  # pragma: no cover
         """Fetch instruments from Deribit REST API and parse them."""
-        async with aiohttp.ClientSession() as session:
-            # Fetch all currencies x kinds (§3.1: BTC|ETH|SOL|USDC)
-            instruments: list[Instrument] = []
-            for currency in ("BTC", "ETH", "SOL", "USDC"):
-                for kind in ("future", "option", "spot", "future_combo", "option_combo"):
-                    url = f"{REST_BASE}/public/get_instruments"
-                    params = {"currency": currency, "kind": kind, "expired": "false"}
-                    async with session.get(url, params=params) as resp:
-                        resp.raise_for_status()
-                        data: dict[str, Any] = await resp.json()
-                        instruments.extend(parse_instruments(data))
-            return instruments
+        # Fetch all currencies x kinds (§3.1: BTC|ETH|SOL|USDC)
+        instruments: list[Instrument] = []
+        for currency in ("BTC", "ETH", "SOL", "USDC"):
+            for kind in ("future", "option", "spot", "future_combo", "option_combo"):
+                url = f"{REST_BASE}/public/get_instruments"
+                params = {"currency": currency, "kind": kind, "expired": "false"}
+                data = await self.http_get(url, params=params)
+                instruments.extend(parse_instruments(data))
+        return instruments
 
     def subscribe_channels(self) -> list[str]:
         """Return the list of Deribit channel strings this connector will subscribe to."""

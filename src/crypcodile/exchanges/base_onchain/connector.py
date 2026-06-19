@@ -77,6 +77,8 @@ def _write_ipc_to_file(name: str, data_dict: dict[str, Any]) -> None:
     except Exception as e:
         log.error(f"Failed to write IPC to file: {e}")
 
+import threading
+
 def _load_ipc_sync() -> None:
     TOKENS._sync()
     POOL_SPECS._sync()
@@ -91,14 +93,17 @@ class IPCDict(dict[str, Any]):
         self._last_ipc_file = ""
         self._last_mtime = None
         self._last_size = None
+        self._lock = threading.RLock()
+        self._sync()
 
     def _sync(self) -> None:
         current_file = _get_ipc_file()
         try:
             if not os.path.exists(current_file):
                 if self._last_ipc_file != current_file or self._last_mtime is not None:
-                    dict.clear(self)
-                    dict.update(self, self._default)
+                    with self._lock:
+                        super().clear()
+                        super().update(self._default)
                     self._last_ipc_file = current_file
                     self._last_mtime = None
                     self._last_size = None
@@ -129,10 +134,15 @@ class IPCDict(dict[str, Any]):
                 if content:
                     try:
                         file_data = json.loads(content)
-                        dict.clear(self)
-                        dict.update(self, self._default)
+                        # Build new state locally first
+                        new_data = dict(self._default)
                         if self._name in file_data:
-                            dict.update(self, file_data[self._name])
+                            new_data.update(file_data[self._name])
+                        
+                        # Atomically update under lock to avoid race conditions
+                        with self._lock:
+                            super().clear()
+                            super().update(new_data)
                         
                         self._last_ipc_file = current_file
                         self._last_mtime = mtime
@@ -146,8 +156,9 @@ class IPCDict(dict[str, Any]):
                         self._last_mtime = mtime
                         self._last_size = size
                 else:
-                    dict.clear(self)
-                    dict.update(self, self._default)
+                    with self._lock:
+                        super().clear()
+                        super().update(self._default)
                     self._last_ipc_file = current_file
                     self._last_mtime = mtime
                     self._last_size = size
@@ -155,25 +166,31 @@ class IPCDict(dict[str, Any]):
             log.warning(f"Error syncing IPC dictionary: {e}")
 
     def __contains__(self, key: object) -> bool:
-        self._sync()
-        return super().__contains__(key)
+        # Avoid blocking self._sync() inside event loop
+        with self._lock:
+            return super().__contains__(key)
 
     def __getitem__(self, key: str) -> Any:
-        self._sync()
-        return super().__getitem__(key)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self._sync()
+        with self._lock:
+            return super().__getitem__(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
-        self._sync()
-        super().__setitem__(key, value)
+        with self._lock:
+            super().__setitem__(key, value)
         self._write_ipc()
 
     def update(self, *args: Any, **kwargs: Any) -> None:
-        self._sync()
-        super().update(*args, **kwargs)
+        with self._lock:
+            super().update(*args, **kwargs)
         self._write_ipc()
 
     def _write_ipc(self) -> None:
-        data_copy = dict(self)
+        with self._lock:
+            data_copy = dict(self)
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(
@@ -185,32 +202,32 @@ class IPCDict(dict[str, Any]):
             _ipc_executor.submit(_write_ipc_to_file, self._name, data_copy)
 
     def get(self, key: str, default: Any = None) -> Any:
-        self._sync()
-        return super().get(key, default)
+        with self._lock:
+            return super().get(key, default)
 
     def keys(self) -> Any:
-        self._sync()
-        return super().keys()
+        with self._lock:
+            return list(super().keys())
 
     def values(self) -> Any:
-        self._sync()
-        return super().values()
+        with self._lock:
+            return list(super().values())
 
     def items(self) -> Any:
-        self._sync()
-        return super().items()
+        with self._lock:
+            return list(super().items())
 
     def __len__(self) -> int:
-        self._sync()
-        return super().__len__()
+        with self._lock:
+            return super().__len__()
 
     def __iter__(self) -> Any:
-        self._sync()
-        return super().__iter__()
+        with self._lock:
+            return super().__iter__()
 
     def __repr__(self) -> str:
-        self._sync()
-        return super().__repr__()
+        with self._lock:
+            return super().__repr__()
 
 async def _load_ipc() -> None:
     await asyncio.to_thread(_load_ipc_sync)
@@ -380,12 +397,19 @@ class BaseOnchainTransport:
 
     def __init__(
         self,
-        rpc_url: str,
+        rpc_url: str | list[str],
         symbols: list[str],
         poll_interval: float = 5.0,
         custom_pools: dict[str, dict[str, Any]] | None = None
     ) -> None:
-        self.rpc_url = rpc_url
+        if isinstance(rpc_url, list):
+            self.rpc_urls = rpc_url
+        elif isinstance(rpc_url, str) and "," in rpc_url:
+            self.rpc_urls = [url.strip() for url in rpc_url.split(",")]
+        else:
+            self.rpc_urls = [rpc_url]
+        self.current_rpc_index = 0
+        self.w3 = None
         self.symbols = symbols
         self.poll_interval = poll_interval
         self._connected = False
@@ -395,6 +419,65 @@ class BaseOnchainTransport:
         self._block_cache: dict[int, int] = {}
         self._seen_logs: set[tuple[str, int]] = set()
         _register_custom_pools(custom_pools)
+
+    @property
+    def active_rpc_url(self) -> str:
+        return self.rpc_urls[self.current_rpc_index]
+
+    @property
+    def rpc_url(self) -> str:
+        return self.active_rpc_url
+
+    async def switch_rpc_failover(self) -> None:
+        if self.rpc_urls:
+            self.current_rpc_index = (self.current_rpc_index + 1) % len(self.rpc_urls)
+            log.warning(f"Switching RPC failover to index {self.current_rpc_index}: {self.active_rpc_url}")
+            
+            # Dynamically swap provider endpoint in-place to prevent retry stalls
+            if self.w3 is not None and getattr(self.w3, "provider", None) is not None:
+                try:
+                    self.w3.provider.endpoint_uri = self.active_rpc_url
+                except Exception as err:
+                    log.warning(f"Error swapping provider endpoint in-place: {err}")
+
+    def _is_connection_or_rate_limit(self, e: Exception) -> bool:
+        """Detect connection errors, rate limit errors (429), timeouts, and standard network/RPC gateway issues."""
+        import socket
+        import asyncio
+        from web3.exceptions import ProviderConnectionError, PersistentConnectionError
+        
+        # Check type directly
+        if isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError, socket.gaierror, ProviderConnectionError, PersistentConnectionError)):
+            return True
+            
+        try:
+            import aiohttp
+            if isinstance(e, aiohttp.ClientError):
+                return True
+        except ImportError:
+            pass
+
+        # Check for status code attributes (e.g. 429, 5xx)
+        status = getattr(e, "status", None) or getattr(e, "status_code", None)
+        if status is not None:
+            try:
+                status_int = int(status)
+                if status_int == 429 or 500 <= status_int <= 599:
+                    return True
+            except (ValueError, TypeError):
+                pass
+                
+        # Check for string patterns in message
+        msg = str(e).lower()
+        keywords = (
+            "429", "rate limit", "too many requests", "timeout", "time out",
+            "connection", "connect", "disconnect", "eof", "gateway", "502", "503", "504",
+            "server error", "bad status", "status code", "http error", "request limit"
+        )
+        if any(kw in msg for kw in keywords):
+            return True
+            
+        return False
 
     async def _call_with_retry(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         import inspect
@@ -445,6 +528,8 @@ class BaseOnchainTransport:
                 if deterministic_exceptions and isinstance(e, deterministic_exceptions):
                     log.error(f"Deterministic RPC exception encountered, raising immediately: {e}")
                     raise
+                if self._is_connection_or_rate_limit(e):
+                    await self.switch_rpc_failover()
                 attempt += 1
                 if attempt >= max_attempts:
                     log.error(f"RPC call failed after {attempt} attempts: {e}")
@@ -511,12 +596,12 @@ class BaseOnchainTransport:
     async def _poll_loop(self) -> None:
         from web3 import AsyncHTTPProvider, AsyncWeb3
         
-        provider = AsyncHTTPProvider(self.rpc_url)
-        w3 = AsyncWeb3(provider)
+        last_active_rpc = None
+        w3 = None
         
         async def get_bn() -> int:
             import inspect
-            val = w3.eth.block_number
+            val = w3.eth.block_number if w3 is not None else None
             if inspect.isawaitable(val):
                 return await val
             return val
@@ -589,6 +674,28 @@ class BaseOnchainTransport:
 
             # 2. Main polling loop
             while self._connected:
+                if self.active_rpc_url != last_active_rpc:
+                    if w3 is not None and getattr(w3, "provider", None) is not None:
+                        try:
+                            import inspect
+                            res = w3.provider.disconnect()
+                            if inspect.isawaitable(res):
+                                await res
+                        except Exception as disconnect_err:
+                            log.warning(f"Error disconnecting previous provider: {disconnect_err}")
+                    
+                    w3 = AsyncWeb3(AsyncHTTPProvider(self.active_rpc_url))
+                    self.w3 = w3
+                    # Re-instantiate contracts with the new w3 without clearing static address cache
+                    for sym, pool in list(resolved_pools.items()):
+                        spec = pool["spec"]
+                        pool_addr = pool["address"]
+                        pool["contract"] = w3.eth.contract(
+                            address=AsyncWeb3.to_checksum_address(pool_addr),
+                            abi=(pool_v3_abi if spec["type"] == "uniswap_v3" else pool_v2_abi)
+                        )
+                    last_active_rpc = self.active_rpc_url
+
                 await asyncio.get_running_loop().run_in_executor(_ipc_executor, _load_ipc_sync)
                 try:
                     default_pools = {"AERO-USDC", "cbBTC-USDC", "DEGEN-WETH", "WELL-WETH", "WETH-USDC"}
@@ -616,8 +723,8 @@ class BaseOnchainTransport:
                             if "address" in spec:
                                 pool_addr = AsyncWeb3.to_checksum_address(spec["address"])
                             elif spec["type"] == "uniswap_v3":
-                                # Sort token addresses for Uniswap V3
-                                sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr])
+                                # Sort token addresses for Uniswap V3 numerically
+                                sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr], key=lambda x: int(x, 16))
                                 factory = w3.eth.contract(
                                     address=AsyncWeb3.to_checksum_address(FACTORIES["uniswap_v3"]),
                                     abi=factory_v3_abi
@@ -662,7 +769,9 @@ class BaseOnchainTransport:
                     if resolution_tasks:
                         await asyncio.gather(*resolution_tasks, return_exceptions=True)
 
-                    current_block = await self._get_block_number(w3)
+                    tip_block = await self._get_block_number(w3)
+                    lag = 0 if ("127.0.0.1" in self.active_rpc_url or "localhost" in self.active_rpc_url) else 15
+                    current_block = max(0, tip_block - lag)
                     
                     async def poll_single_pool(sym: str, pool: dict[str, Any]) -> None:
                         spec = pool["spec"]
@@ -750,7 +859,7 @@ class BaseOnchainTransport:
                                         }
                                     )
                                     logs_list.extend(chunk_logs)
-                                    self._last_blocks[sym] = max(self._last_blocks[sym], to_b)
+                                    self._last_blocks[sym] = to_b
                             return logs_list
 
                         initial_last_block = self._last_blocks[sym]
@@ -770,14 +879,14 @@ class BaseOnchainTransport:
                                         await task
                                     except BaseException:
                                         pass
-                                is_cancelled = isinstance(e, asyncio.CancelledError)
                                 state_failed = False
-                                try:
-                                    if state_task.done() and not state_task.cancelled() and state_task.exception() is not None:
-                                        state_failed = True
-                                except Exception:
-                                    pass
-                                if is_cancelled or state_failed:
+                                if state_task.done() and not state_task.cancelled():
+                                    try:
+                                        if state_task.exception() is not None:
+                                            state_failed = True
+                                    except Exception:
+                                        pass
+                                if state_failed:
                                     self._last_blocks[sym] = initial_last_block
                                 raise
                             
@@ -821,6 +930,7 @@ class BaseOnchainTransport:
                                     reserve1 = res[0] / (10 ** int(spec["decimals1"]))
                                 price = reserve1 / reserve0 if reserve0 > 0 else 0.0
                             
+                            new_seen_log_keys = []
                             for lg in logs:
                                 data = lg["data"]
                                 tx_hash = lg["transactionHash"].hex()
@@ -830,9 +940,6 @@ class BaseOnchainTransport:
                                 log_key = (tx_hash, log_index)
                                 if log_key in self._seen_logs:
                                     continue
-                                self._seen_logs.add(log_key)
-                                if len(self._seen_logs) > 5000:
-                                    self._seen_logs = set(list(self._seen_logs)[2500:])
                                     
                                 ts = await self._get_block_timestamp(w3, lg["blockNumber"])
                                 
@@ -914,6 +1021,7 @@ class BaseOnchainTransport:
                                         "amount": amt_base,
                                         "is_buy": is_buy
                                     })
+                                new_seen_log_keys.append(log_key)
                             
                             state_payload = {
                                 "price": price,
@@ -939,6 +1047,11 @@ class BaseOnchainTransport:
                                 "swaps": swaps
                             }
                             await self._queue.put(json.dumps(update_msg).encode())
+                            # Success! Mark logs as seen and update block number
+                            for lk in new_seen_log_keys:
+                                self._seen_logs.add(lk)
+                            if len(self._seen_logs) > 5000:
+                                self._seen_logs = set(list(self._seen_logs)[2500:])
                             self._last_blocks[sym] = max(self._last_blocks[sym], current_block)
                         except Exception as e:
                             log.error(f"base_onchain: Error polling pool data for {sym}: {e}")
@@ -962,9 +1075,10 @@ class BaseOnchainTransport:
         finally:
             try:
                 import inspect
-                res = w3.provider.disconnect()
-                if inspect.isawaitable(res):
-                    await res
+                if w3 is not None and getattr(w3, "provider", None) is not None:
+                    res = w3.provider.disconnect()
+                    if inspect.isawaitable(res):
+                        await res
             except Exception:
                 pass
 

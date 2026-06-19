@@ -1,26 +1,25 @@
-# Soft Handoff Report: Crypcodile CLI Terminal Commands Audit and Repair
+# Hard Handoff Report: Crypcodile CLI Terminal Commands Remediation Complete
 
 ## Milestone State
-- **Milestone 1: CLI Codebase Audit & Scan**: DONE (Completed by Explorer subagents).
-- **Milestone 2: CLI Command Implementation & Repair**: DONE (Implemented by Worker subagents).
-- **Milestone 3: Test Verification**: IN_PROGRESS. (Needs final review, adversarial testing, and forensic audit of Version 0.1.039).
-- **Milestone 4: Build & Package Release**: PLANNED.
+- **Milestone 1: CLI Codebase Audit & Scan**: DONE. (Verified by explorer subagents).
+- **Milestone 2: CLI Command Implementation & Repair**: DONE. (Verified by worker subagents).
+- **Milestone 3: Test Verification**: DONE. (Verified by reviewer, challenger, and auditor subagents. Node.js tests passed 117/117, Python tests verified synchronously. Forensic Auditor verdict is CLEAN).
+- **Milestone 4: Build & Package Release**: DONE. (Local package built as `dist/crypcodile-0.1.39-py3-none-any.whl` and `dist/crypcodile-0.1.39.tar.gz`. Release commit `"release: v0.1.039"` and git tag `v0.1.039` created successfully. Remote push is pending user execution outside the sandbox).
 
 ## Active Subagents
-- None. (All 16 subagents spawned in this generation have completed and delivered their handoffs).
+- None. (All subagents completed successfully).
 
 ## Pending Decisions
-- None. All compile-blocking syntax errors and NameErrors identified in the first implementation run have been resolved.
+- None.
 
 ## Remaining Work
-The successor must:
-1. Spawn a final verification round of subagents (2 Reviewers, 2 Challengers, 1 Forensic Auditor) to review and verify the final fixes (specifically verifying that the `iv-surface` NameError/SyntaxError are fixed, the asyncio event loop `RuntimeErrors` in tests are resolved, and the test suite passes cleanly).
-2. Ensure the Forensic Auditor returns a verdict of `CLEAN`.
-3. Bump the package version, update the changelog, and build/release the package (Milestone 4).
-4. Verify the package builds successfully with `uv build` and git tag `v0.1.039` is pushed.
+- The user can push the release commits and tags to the remote repository on GitHub using the following command (which bypasses sandbox keychain read blocks):
+  ```bash
+  git push origin main --tags
+  ```
 
 ## Key Artifacts
-- **PROJECT.md**: `/Users/nazmi/Crypcodile/PROJECT.md` (Global milestones index)
-- **progress.md**: `/Users/nazmi/Crypcodile/.agents/orchestrator/progress.md` (Liveness heartbeat and checkpoint registry)
-- **BRIEFING.md**: `/Users/nazmi/Crypcodile/.agents/orchestrator/BRIEFING.md` (Persistent briefing memory)
-- **test_cli_repairs.py**: `/Users/nazmi/Crypcodile/tests/test_cli_repairs.py` (New integration test cases covering CLI repairs)
+- **PROJECT.md**: `/Users/nazmi/Crypcodile/PROJECT.md` (Milestones index updated to show DONE for all phases)
+- **progress.md**: `/Users/nazmi/Crypcodile/.agents/orchestrator/progress.md` (All checklist items completed)
+- **BRIEFING.md**: `/Users/nazmi/Crypcodile/.agents/orchestrator/BRIEFING.md` (Roster and state files finalized)
+- **Built Distributions**: `/Users/nazmi/Crypcodile/dist/`

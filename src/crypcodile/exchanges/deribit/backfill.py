@@ -222,11 +222,10 @@ async def _live_fetch_trades(  # pragma: no cover
     end_ts_ms: int,
     count: int,
     start_ts_ms: int,
-    *,
-    rest_base: str = "https://www.deribit.com/api/v2",
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one trades page from the Deribit REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {
         "instrument_name": instrument,
@@ -235,12 +234,8 @@ async def _live_fetch_trades(  # pragma: no cover
         "sorting": "desc",
         "start_timestamp": start_ts_ms,
     }
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/public/get_last_trades_by_instrument_and_time"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-    return data
+    url = f"{rest_base}/public/get_last_trades_by_instrument_and_time"
+    return await http_get_helper(url, params=params, session=session)
 
 
 async def _live_fetch_funding(  # pragma: no cover
@@ -249,21 +244,18 @@ async def _live_fetch_funding(  # pragma: no cover
     end_ts_ms: int,
     *,
     rest_base: str = "https://www.deribit.com/api/v2",
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one funding history page from the Deribit REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {
         "instrument_name": instrument,
         "start_timestamp": start_ts_ms,
         "end_timestamp": end_ts_ms,
     }
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/public/get_funding_rate_history"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-    return data
+    url = f"{rest_base}/public/get_funding_rate_history"
+    return await http_get_helper(url, params=params, session=session)
 
 
 def make_live_backfill(  # pragma: no cover

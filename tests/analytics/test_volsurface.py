@@ -390,3 +390,48 @@ def test_iv_surface_propagates_unexpected_errors(tmp_path: Path) -> None:
     assert len(df) == 1, (
         "iv_surface returned empty for valid data — bare except may have swallowed a real error"
     )
+
+
+# ---------------------------------------------------------------------------
+# SABR and Spline Skew Fitting Tests (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_iv_surface_contains_fitted_iv(options_catalog: Catalog) -> None:
+    """The output of iv_surface must contain the 'fitted_iv' column."""
+    df = iv_surface(options_catalog, _UNDERLYING, _AT_NS)
+    assert "fitted_iv" in df.columns
+    assert len(df) == 4
+    for val in df["fitted_iv"].to_list():
+        assert val is not None
+        assert math.isfinite(val)
+        assert val > 0.0
+
+
+def test_vol_skew_sabr_fitting(options_catalog: Catalog) -> None:
+    """The vol_skew output with SABR fitting must provide realistic fitted IVs."""
+    df = vol_skew(options_catalog, _UNDERLYING, _E1_NS, _AT_NS, fit_method="sabr")
+    assert "fitted_iv" in df.columns
+    assert len(df) == 3
+    # Check that fitted_iv is close to the actual iv at the strikes
+    # Strikes: 90 (iv=0.5), 100 (iv ~ 0.4), 110 (iv=0.55)
+    row_90 = df.filter(pl.col("strike") == 90.0).row(0, named=True)
+    row_110 = df.filter(pl.col("strike") == 110.0).row(0, named=True)
+
+    # Allow some tolerance for model smoothing
+    assert abs(row_90["fitted_iv"] - 0.5) < 0.15
+    assert abs(row_110["fitted_iv"] - 0.55) < 0.15
+
+
+def test_vol_skew_spline_fitting(options_catalog: Catalog) -> None:
+    """The vol_skew output with spline fitting must provide exact fit at knots."""
+    df = vol_skew(options_catalog, _UNDERLYING, _E1_NS, _AT_NS, fit_method="spline")
+    assert "fitted_iv" in df.columns
+    assert len(df) == 3
+
+    # Natural Splines interpolate the knots exactly
+    row_90 = df.filter(pl.col("strike") == 90.0).row(0, named=True)
+    row_110 = df.filter(pl.col("strike") == 110.0).row(0, named=True)
+
+    assert abs(row_90["fitted_iv"] - 0.5) < 1e-5
+    assert abs(row_110["fitted_iv"] - 0.55) < 1e-5

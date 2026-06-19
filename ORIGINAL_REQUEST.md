@@ -175,3 +175,34 @@ Integrity mode: development
 - [ ] All 776 Python unit tests and 117 Node.js E2E tests pass successfully without any errors or regressions.
 - [ ] Added new unit tests covering the CLI fixes.
 - [ ] Successfully built version `0.1.039` and pushed the tag to remote origin `https://github.com/nazmiefearmutcu/Crypcodile.git`.
+
+## Follow-up — 2026-06-19T12:22:04Z
+
+Perform a comprehensive audit, scan, and code repair of the Crypcodile codebase. The objective is to identify potential bugs, unhandled exceptions, edge cases, input validation gaps, or concurrent race conditions, and fix them.
+
+Working directory: /Users/nazmi/Crypcodile
+Integrity mode: development
+
+## Requirements
+
+### R1. Deep Codebase Scan and Bug Discovery
+- Scan the entire codebase, including all CLI commands defined in `src/crypcodile/cli.py`, `src/crypcodile/api_server.py`, `src/crypcodile/mcp_server.py`, and the exchange connectors under `src/crypcodile/exchanges/`.
+- Identify any structural bugs, syntax issues, unhandled exceptions, or logic/race conditions under boundary conditions (e.g., empty data lakes, malformed inputs, rate-limiting, and block re-orgs).
+
+### R2. Automated Code Repair
+- Fix any identified issues by implementing proper input validation, interactive prompt safety, fail-safe defaults, and robust error handling.
+- Ensure that the repairs preserve backwards compatibility.
+
+### R3. Test Coverage & Robustness
+- Add new unit or integration test cases under `tests/` covering any fixed edge cases or repaired logic.
+- Ensure all modifications keep the system 100% compliant with existing tests.
+
+## Acceptance Criteria
+
+### Test Verification
+- [ ] Running `uv run pytest` executes all Python tests successfully.
+- [ ] All 800+ Python unit tests and existing E2E/stress tests pass without errors.
+- [ ] New unit tests have been added to cover the repaired code paths.
+
+### Package & Build
+- [ ] Running `uv build` in `/Users/nazmi/Crypcodile` succeeds cleanly.

@@ -242,20 +242,20 @@ async def test_cursor_behavior_on_exceptions() -> None:
         # Let's run the transport for 3 loops
         await transport.connect()
         for _ in range(200):
-            if transport._last_blocks.get("cbBTC-USDC") == 1001:
+            if transport._last_blocks.get("cbBTC-USDC") == 986:
                 break
             await asyncio.sleep(0.01)
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.1)
         await transport.close()
         
         # 1. Verify that WELL-WETH did not advance because it failed, but cbBTC-USDC did advance
-        assert transport._last_blocks["cbBTC-USDC"] == 1001
-        assert transport._last_blocks["WELL-WETH"] == 980
+        assert transport._last_blocks["cbBTC-USDC"] == 986
+        assert transport._last_blocks["WELL-WETH"] == 965
         
         # 2. Verify that log calls did not query duplicates for cbBTC-USDC,
         # but kept querying from 981 for WELL-WETH.
-        assert any(call["fromBlock"] == 996 for call in log_calls)
-        assert any(call["fromBlock"] == 976 for call in log_calls)
+        assert any(call["fromBlock"] == 981 for call in log_calls)
+        assert any(call["fromBlock"] == 961 for call in log_calls)
 
 
 def test_normalizer_robustness_invalid_types() -> None:

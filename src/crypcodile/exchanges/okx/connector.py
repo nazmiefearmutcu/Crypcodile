@@ -209,17 +209,14 @@ class OKXConnector(Connector):
         """
         instruments: list[Instrument] = []
         inst_types = ["SWAP", "FUTURES", "SPOT", "OPTION"]
-        async with aiohttp.ClientSession() as session:
-            for inst_type in inst_types:
-                url = f"{self._rest_base}/public/instruments"
-                params: dict[str, str] = {"instType": inst_type}
-                try:
-                    async with session.get(url, params=params) as resp:
-                        resp.raise_for_status()
-                        data: dict[str, Any] = await resp.json()
-                    instruments.extend(parse_instruments(data))
-                except Exception as exc:
-                    log.warning("OKX: failed to fetch %s instruments: %s", inst_type, exc)
+        for inst_type in inst_types:
+            url = f"{self._rest_base}/public/instruments"
+            params: dict[str, str] = {"instType": inst_type}
+            try:
+                data = await self.http_get(url, params=params)
+                instruments.extend(parse_instruments(data))
+            except Exception as exc:
+                log.warning("OKX: failed to fetch %s instruments: %s", inst_type, exc)
         return instruments
 
     def subscribe_channels(self) -> list[dict[str, str]]:

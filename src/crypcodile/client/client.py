@@ -170,18 +170,13 @@ class CrypcodileClient:
         symbols: list[str],
         frm: int,
         to: int,
+        limit: int | None = None,
     ) -> Iterator[Record]:
         """Iterate over canonical Records sorted by ``local_ts`` (k-way merge).
 
-        Reads matching Parquet partitions for each ``(channel, symbol)`` pair,
+        Reads matching Parquet partitions for each channel,
         reconstructs Record objects from the flat Parquet rows, and merges all
-        per-(channel, symbol) streams using the M2 k-way merge engine
-        (``heapq.merge`` with sort key ``(local_ts, exchange_ts_or_neg_inf,
-        seq_or_0)``).
-
-        Each per-(channel, symbol) stream is already sorted on disk (written
-        in ``local_ts`` order by the ParquetSink); the merge combines them
-        globally without materialising the full result set.
+        per-channel streams using the M2 k-way merge engine.
 
         Args:
             channels: Channel names to include, e.g. ``["trade", "book_delta"]``.
@@ -190,28 +185,20 @@ class CrypcodileClient:
                       An empty list yields nothing immediately.
             frm:      Inclusive start of the time range (nanoseconds UTC).
             to:       Inclusive end of the time range (nanoseconds UTC).
+            limit:    Optional maximum number of records to return.
 
         Yields:
             Record objects in non-decreasing ``local_ts`` order.
-
-        Note:
-            DataFrames are loaded eagerly per-(channel, symbol) pair before
-            merging begins: all ``catalog.scan()`` calls complete upfront and
-            their results are materialised into memory.  The k-way merge then
-            iterates over those in-memory frames lazily (row by row), but the
-            Parquet scan itself is not deferred.  If you need all records
-            in memory, wrap with ``list(client.replay(...))``.
         """
         if not symbols or not channels:
             return iter([])
 
-        # Build one sorted iterator per (channel, symbol) pair.
+        # Build one sorted iterator per channel, querying all symbols in a single scan.
         streams: list[Iterator[Record]] = []
         for channel in channels:
-            for symbol in symbols:
-                df = self._catalog.scan(channel, symbol, frm, to)
-                if len(df) > 0:
-                    streams.append(_df_to_record_iter(df))
+            df = self._catalog.scan(channel, symbols, frm, to, limit=limit)
+            if len(df) > 0:
+                streams.append(_df_to_record_iter(df))
 
         if not streams:
             return iter([])
@@ -415,6 +402,7 @@ class CrypcodileClient:
         to: int,
         fmt: ExportFmt,
         dest: Path | str,
+        limit: int | None = None,
     ) -> None:
         """Write rows for a channel x symbols x time range to a file.
 
@@ -432,6 +420,7 @@ class CrypcodileClient:
             fmt:     Output format — one of ``parquet``, ``csv``, ``arrow``,
                      ``json``, ``jsonl``.
             dest:    Destination file path (string or :class:`~pathlib.Path`).
+            limit:   Optional maximum number of rows to export.
 
         Raises:
             ValueError: If ``fmt`` is not a recognised format string.
@@ -447,4 +436,4 @@ class CrypcodileClient:
                 dest="/tmp/btc_trades.csv",
             )
         """
-        _export(self._catalog, channel, symbols, frm, to, fmt, Path(dest))
+        _export(self._catalog, channel, symbols, frm, to, fmt, Path(dest), limit=limit)

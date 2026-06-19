@@ -230,7 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!node) return;
 
-        node.className = "absolute -left-6 w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[10px] font-bold transition-all";
+        node.className = "absolute -left-[29px] w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[9px] font-bold z-10 transition-all shadow-md";
         const stepNumMap = { handshake: 1, recovery: 2, matching: 3, confirmation: 4, unlocked: 5 };
 
         if (status === 'idle') {
@@ -268,7 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'unlocked': prevNode = dom.stepUnlocked; break;
                 }
                 if (prevNode && !prevNode.classList.contains('bg-emerald-500')) {
-                    prevNode.className = "absolute -left-6 w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[10px] font-bold transition-all bg-emerald-500 text-slate-950";
+                    prevNode.className = "absolute -left-[29px] w-6 h-6 rounded-full border-4 border-slate-950 flex items-center justify-center text-[9px] font-bold z-10 transition-all shadow-md bg-emerald-500 text-slate-950";
                     prevNode.innerHTML = '✓';
                 }
             }
@@ -504,30 +504,36 @@ document.addEventListener('DOMContentLoaded', () => {
     function startPriceChartSimulation() {
         if (!window.priceTimeSeriesHook) {
             window.priceTimeSeriesHook = usePriceTimeSeries(2000, maxChartTicks);
-        }
-        
-        window.priceTimeSeriesHook.subscribe((data) => {
-            chartLabels.length = 0;
-            chartPrices.length = 0;
-            
-            data.forEach(item => {
-                chartLabels.push(formatTimestamp(item.time));
-                chartPrices.push(item.price);
-            });
+            window.priceTimeSeriesHook.subscribe((data) => {
+                chartLabels.length = 0;
+                chartPrices.length = 0;
+                
+                data.forEach(item => {
+                    chartLabels.push(formatTimestamp(item.time));
+                    chartPrices.push(item.price);
+                });
 
-            if (data.length > 0) {
-                lastPrice = data[data.length - 1].price;
-                if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
-                    if (dom.metricsLivePrice) {
-                        dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                if (data.length > 0) {
+                    lastPrice = data[data.length - 1].price;
+                    if (!eventSource || eventSource.readyState !== EventSource.OPEN) {
+                        if (dom.metricsLivePrice) {
+                            dom.metricsLivePrice.textContent = `$${lastPrice.toFixed(2)}`;
+                        }
                     }
                 }
-            }
 
-            if (priceChart) {
-                priceChart.update('none');
-            }
-        });
+                if (priceChart) {
+                    priceChart.update('none');
+                }
+            });
+        }
+    }
+
+    function stopPriceChartSimulation() {
+        if (window.priceTimeSeriesHook) {
+            window.priceTimeSeriesHook.destroy();
+            window.priceTimeSeriesHook = null;
+        }
     }
 
     // ----------------------------------------------------
@@ -554,22 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const feeVal = dom.settingsFeeInput ? dom.settingsFeeInput.value.trim() : '';
 
         isDirty = (rpcVal !== initialSettings.rpc || contractVal !== initialSettings.contract || feeVal !== initialSettings.fee);
-
-        if (isDirty) {
-            dom.settingsSaveBtn.disabled = false;
-            dom.settingsSaveBtn.style.backgroundColor = "#06b6d4";
-            dom.settingsSaveBtn.style.color = "#020617";
-            dom.settingsSaveBtn.style.opacity = "1.0";
-            dom.settingsSaveBtn.style.boxShadow = "0 0 15px rgba(6, 182, 212, 0.4)";
-            dom.settingsSaveBtn.className = "w-full text-sm font-bold py-2.5 rounded-lg border-none transition-all cursor-pointer transform hover:scale-[1.02] active:scale-[0.98]";
-        } else {
-            dom.settingsSaveBtn.disabled = true;
-            dom.settingsSaveBtn.style.backgroundColor = "#1e293b";
-            dom.settingsSaveBtn.style.color = "#64748b";
-            dom.settingsSaveBtn.style.opacity = "0.5";
-            dom.settingsSaveBtn.style.boxShadow = "none";
-            dom.settingsSaveBtn.className = "w-full text-sm font-semibold py-2.5 rounded-lg border border-slate-800 cursor-not-allowed transition-all";
-        }
+        dom.settingsSaveBtn.disabled = !isDirty;
     }
 
     if (dom.settingsSaveBtn) {
@@ -668,10 +659,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     dom.sseStatusText.textContent = "Connected";
                 }
                 logConsole('info', 'SSE connection to /api/events successfully established.');
+                stopPriceChartSimulation();
             };
 
             eventSource.onerror = () => {
-                reject(new Error("No Data Available"));
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    reject(new Error("No Data Available"));
+                } else {
+                    if (dom.sseStatusDot) {
+                        dom.sseStatusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse transition-all";
+                    }
+                    if (dom.sseStatusText) {
+                        dom.sseStatusText.textContent = "Reconnecting...";
+                    }
+                    logConsole('verification', 'SSE connection lost. Reconnecting...', 'failed');
+                    startPriceChartSimulation();
+                }
             };
 
             eventSource.onmessage = (event) => {
@@ -769,6 +772,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     loadingOverlay.classList.add('hidden');
                 }
                 logConsole('verification', `Error: ${err.message}`, 'failed');
+                startPriceChartSimulation();
             });
     }
 
@@ -791,7 +795,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const maskedAddress = state.address.slice(0, 6) + '...' + state.address.slice(-4);
                 if (dom.connectWalletBtn) {
                     dom.connectWalletBtn.innerHTML = `🔗 ${maskedAddress}`;
-                    dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-sm font-semibold px-4 py-2 rounded-lg transition-all flex items-center cursor-default";
+                    dom.connectWalletBtn.className = "bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1 cursor-default";
                 }
                 
                 if (dom.disconnectWalletBtn) {
@@ -810,7 +814,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 if (dom.connectWalletBtn) {
                     dom.connectWalletBtn.innerHTML = `🔗 Connect Wallet`;
-                    dom.connectWalletBtn.className = "bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center";
+                    dom.connectWalletBtn.className = "bg-gradient-to-r from-cyan-600 to-sky-500 hover:from-cyan-500 hover:to-sky-400 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-lg hover:shadow-cyan-500/20 active:scale-95 transition-all flex items-center gap-1";
                 }
                 
                 if (dom.disconnectWalletBtn) {
@@ -1353,7 +1357,7 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.innerHTML = `
                 <td class="py-3 px-2 flex items-center space-x-1 font-mono">
                     <span class="text-cyan-400">${p.payment_id.slice(0, 8)}...</span>
-                    <button onclick="navigator.clipboard.writeText('${p.payment_id}'); alert('Payment ID copied!');" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="Copy Payment ID">
+                    <button onclick="navigator.clipboard.writeText('${p.payment_id}'); alert('Payment ID copied!');" class="text-slate-500 hover:text-cyan-400 transition-all active:scale-90 focus:outline-none" title="Copy Payment ID">
                         <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                         </svg>
@@ -1364,12 +1368,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="flex items-center space-x-1">
                         <span>${senderText}</span>
                         ${sender && sender !== 'N/A' ? `
-                        <button onclick="navigator.clipboard.writeText('${sender}'); alert('Sender Address copied!');" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="Copy Sender Address">
+                        <button onclick="navigator.clipboard.writeText('${sender}'); alert('Sender Address copied!');" class="text-slate-500 hover:text-cyan-400 transition-all active:scale-90 focus:outline-none" title="Copy Sender Address">
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                             </svg>
                         </button>
-                        <a href="https://basescan.org/address/${sender}" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="View on Basescan">
+                        <a href="https://basescan.org/address/${sender}" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-cyan-400 transition-all active:scale-90 focus:outline-none" title="View on Basescan">
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                             </svg>
@@ -1382,12 +1386,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="flex items-center space-x-1">
                         <span>${txHashText}</span>
                         ${txHash && txHash !== 'N/A' ? `
-                        <button onclick="navigator.clipboard.writeText('${txHash}'); alert('Transaction Hash copied!');" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="Copy Transaction Hash">
+                        <button onclick="navigator.clipboard.writeText('${txHash}'); alert('Transaction Hash copied!');" class="text-slate-500 hover:text-cyan-400 transition-all active:scale-90 focus:outline-none" title="Copy Transaction Hash">
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                             </svg>
                         </button>
-                        <a href="https://basescan.org/tx/${txHash}" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-cyan-400 transition-colors focus:outline-none" title="View on Basescan">
+                        <a href="https://basescan.org/tx/${txHash}" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-cyan-400 transition-all active:scale-90 focus:outline-none" title="View on Basescan">
                             <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                             </svg>
@@ -1604,6 +1608,31 @@ document.addEventListener('DOMContentLoaded', () => {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    }
+
+    async function detectBackend() {
+        try {
+            const response = await fetch('/api/v1/admin/payments');
+            if (response.status === 200 || response.status === 401 || response.status === 402) {
+                isPythonBackend = true;
+                apiRoutes.marketData = '/api/v1/market-data';
+                apiRoutes.payments = '/api/v1/admin/payments';
+                apiRoutes.simulate = '/api/v1/simulate-payment';
+                apiRoutes.events = '/api/events';
+            } else {
+                isPythonBackend = false;
+                apiRoutes.marketData = '/api/gated-data';
+                apiRoutes.payments = '/api/payments';
+                apiRoutes.simulate = '/api/payments';
+                apiRoutes.events = '/api/events';
+            }
+        } catch (e) {
+            isPythonBackend = false;
+            apiRoutes.marketData = '/api/gated-data';
+            apiRoutes.payments = '/api/payments';
+            apiRoutes.simulate = '/api/payments';
+            apiRoutes.events = '/api/events';
+        }
     }
 
     // ----------------------------------------------------

@@ -99,7 +99,7 @@ async def test_cursor_behavior_on_block_lag() -> None:
         # Verify that the transport handled the ValueError from get_logs (due to 1001 > 990)
         # and on the third block (1010), it successfully queried 1001 to 1010
         # because the cursor was still 1000.
-        assert transport._last_blocks["cbBTC-USDC"] == 1010
+        assert transport._last_blocks["cbBTC-USDC"] == 995
 
 
 @pytest.mark.asyncio

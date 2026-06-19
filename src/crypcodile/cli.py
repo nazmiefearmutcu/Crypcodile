@@ -493,38 +493,64 @@ def normalize_user_symbol(exchange: str, symbol: str) -> str:
     return s_upper
 
 
-def resolve_input_symbols(data_dir: Path, symbols_input: list[str]) -> list[str]:
+def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: list[str] | str | None = None) -> list[str]:
     """Resolve user entered symbols to matching catalog symbols if possible."""
     from crypcodile.store.catalog import Catalog
-    try:
-        cat = Catalog(data_dir)
+    
+    all_registered = None
+    
+    def get_registered():
+        nonlocal all_registered
+        if all_registered is not None:
+            return all_registered
         all_registered = set()
-        for ch in cat._registered_channels:
-            try:
-                df = cat.query(f'SELECT DISTINCT symbol FROM "{ch}"')
-                for s in df["symbol"].to_list():
-                    if s:
-                        all_registered.add(str(s))
-            except Exception:
-                pass
-    except Exception:
-        all_registered = set()
+        try:
+            cat = Catalog(data_dir)
+            target_channels = cat._registered_channels
+            if channels:
+                if isinstance(channels, str):
+                    ch_list = [channels]
+                else:
+                    ch_list = list(channels)
+                target_channels = [c for c in ch_list if c in target_channels]
+                
+            for ch in target_channels:
+                try:
+                    df = cat.query(f'SELECT DISTINCT symbol FROM "{ch}"')
+                    for s in df["symbol"].to_list():
+                        if s:
+                            all_registered.add(str(s))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return all_registered
 
     resolved = []
     for sym in symbols_input:
         sym_clean = sym.strip()
         if not sym_clean:
             continue
-        
-        # 1. Exact match in registered symbols
-        if sym_clean in all_registered:
+            
+        # Fast path: if the input is already in canonical format (e.g. exchange:symbol)
+        # we can bypass checking the DB entirely to avoid slow startup queries.
+        if ":" in sym_clean:
             resolved.append(sym_clean)
             continue
             
+        reg_symbols_set = get_registered()
+        
+        # 1. Exact match in registered symbols
+        if sym_clean in reg_symbols_set:
+            resolved.append(sym_clean)
+            continue
+            
+        reg_symbols = sorted(list(reg_symbols_set))
+        
         # 2. Case-insensitive exact match
         lower_sym = sym_clean.lower()
         matched = False
-        for reg in all_registered:
+        for reg in reg_symbols:
             if reg.lower() == lower_sym:
                 resolved.append(reg)
                 matched = True
@@ -533,7 +559,7 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str]) -> list[str]
             continue
             
         # 3. Prefix-less match (e.g., "BTC-PERPETUAL" matching "deribit:BTC-PERPETUAL")
-        for reg in all_registered:
+        for reg in reg_symbols:
             if ":" in reg:
                 parts = reg.split(":", 1)
                 if parts[1].lower() == lower_sym:
@@ -545,13 +571,10 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str]) -> list[str]
 
         # 4. Fuzzy substring match (e.g., "btc" matching "deribit:BTC-PERPETUAL")
         matches = []
-        for reg in all_registered:
+        for reg in reg_symbols:
             if lower_sym in reg.lower():
                 matches.append(reg)
-        if len(matches) == 1:
-            resolved.append(matches[0])
-            continue
-        elif len(matches) > 1:
+        if len(matches) >= 1:
             resolved.append(matches[0])
             continue
 
@@ -777,6 +800,10 @@ def export(
         typer.Option("--dest", help="Destination file path."),
     ] = Path("export.parquet"),
     data_dir: _DataDirOpt = Path("data"),
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Maximum number of rows to export."),
+    ] = None,
 ) -> None:
     """Export channel x symbols x time range to a file."""
     from crypcodile.client.client import CrypcodileClient
@@ -811,14 +838,18 @@ def export(
                 to = resolved_end
 
     if symbols:
-        symbols = resolve_input_symbols(data_dir, symbols)
+        symbols = resolve_input_symbols(data_dir, symbols, channel)
 
     if not channel or not symbols:
         typer.echo("Error: Channel and symbols are required.", err=True)
         raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
-    client.export(channel, symbols, frm, to, fmt=fmt, dest=dest)  # type: ignore[arg-type]
+    try:
+        client.export(channel, symbols, frm, to, fmt=fmt, dest=dest, limit=limit)  # type: ignore[arg-type]
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(f"Exported to: {dest}")
 
 
@@ -888,7 +919,7 @@ def replay(
                 to = resolved_end
 
     if symbols:
-        symbols = resolve_input_symbols(data_dir, symbols)
+        symbols = resolve_input_symbols(data_dir, symbols, channels)
 
     if not channels or not symbols:
         typer.echo("Error: Channels and symbols are required.", err=True)
@@ -896,11 +927,15 @@ def replay(
 
     client = CrypcodileClient(data_dir=data_dir)
     count = 0
-    for record in client.replay(channels, symbols, frm, to):
-        typer.echo(repr(record))
-        count += 1
-        if limit is not None and count >= limit:
-            break
+    try:
+        for record in client.replay(channels, symbols, frm, to, limit=limit):
+            typer.echo(repr(record))
+            count += 1
+            if limit is not None and count >= limit:
+                break
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(f"-- {count} record(s) replayed.")
 
 
@@ -946,12 +981,19 @@ def select_collect_params_interactively(
         typer.echo("\n--- Select Channels ---")
         for idx, ch in enumerate(valid_channels, 1):
             typer.echo(f"  [{idx}] {ch}")
+        typer.echo("  [C] Enter custom channel(s)")
         while True:
             choice = typer.prompt("Select channel(s)", default="1").strip()
             if not choice:
                 typer.echo("Invalid selection. Try again.", err=True)
                 continue
-            if any(c.isdigit() for c in choice):
+            if choice.lower() == "c":
+                custom_input = typer.prompt("Enter channel(s), comma-separated").strip()
+                custom_channels = [c.strip() for c in custom_input.split(",") if c.strip()]
+                if custom_channels:
+                    channels = custom_channels
+                    break
+            elif any(c.isdigit() for c in choice):
                 parts = [p.strip() for p in choice.split(",")]
                 selected = []
                 valid = True
@@ -968,9 +1010,9 @@ def select_collect_params_interactively(
                     channels = selected
                     break
             else:
-                custom_channels = [c.strip() for c in choice.split(",") if c.strip()]
-                if custom_channels and all(c in valid_channels for c in custom_channels):
-                    channels = custom_channels
+                input_channels = [c.strip() for c in choice.split(",") if c.strip()]
+                if input_channels and all(ch in valid_channels for ch in input_channels):
+                    channels = input_channels
                     break
             typer.echo("Invalid selection. Try again.", err=True)
 
@@ -1197,6 +1239,9 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
         time_since_last_msg = 999.0
         if monitoring_sink.last_ts_by_key:
             time_since_last_msg = now - max(monitoring_sink.last_ts_by_key.values())
+            
+        if time_since_last_msg > 1.0:
+            rate = 0.0
             
         if time_since_last_msg > 10.0:
             status_text = "[bold blink red]⚠️  STALE (Waiting for data...)[/]"
@@ -1450,7 +1495,7 @@ def funding_apr_cmd(
                 end = resolved_end
 
     if symbol:
-        resolved_syms = resolve_input_symbols(data_dir, [symbol])
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "funding")
         if resolved_syms:
             symbol = resolved_syms[0]
 
@@ -1511,6 +1556,19 @@ def basis_cmd(
     from crypcodile.client.client import CrypcodileClient
 
     data_dir = resolve_data_dir(data_dir)
+
+    if perp is not None:
+        perp = perp.strip()
+        if not perp:
+            perp = None
+    if future is not None:
+        future = future.strip()
+        if not future:
+            future = None
+    if spot is not None:
+        spot = spot.strip()
+        if not spot:
+            spot = None
 
     # We will prompt for time range after mode/symbols are resolved
 
@@ -1586,30 +1644,34 @@ def basis_cmd(
                 end = resolved_end
 
     if perp:
-        resolved = resolve_input_symbols(data_dir, [perp])
+        resolved = resolve_input_symbols(data_dir, [perp], ["derivative_ticker", "ticker"])
         if resolved:
             perp = resolved[0]
     if future:
-        resolved = resolve_input_symbols(data_dir, [future])
+        resolved = resolve_input_symbols(data_dir, [future], ["trade", "derivative_ticker", "ticker"])
         if resolved:
             future = resolved[0]
     if spot:
-        resolved = resolve_input_symbols(data_dir, [spot])
+        resolved = resolve_input_symbols(data_dir, [spot], ["trade", "ticker"])
         if resolved:
             spot = resolved[0]
 
     client = CrypcodileClient(data_dir=data_dir)
 
-    if perp is not None:
-        df = client.perp_basis(perp, start, end)
-    elif future is not None and spot is not None:
-        df = client.spot_future_basis(future, spot, start, end, expiry_ns=expiry)
-    else:
-        typer.echo(
-            "Error: provide either --perp <symbol> or both --future <symbol> and "
-            "--spot <symbol>.",
-            err=True,
-        )
+    try:
+        if perp is not None:
+            df = client.perp_basis(perp, start, end)
+        elif future is not None and spot is not None:
+            df = client.spot_future_basis(future, spot, start, end, expiry_ns=expiry)
+        else:
+            typer.echo(
+                "Error: provide either --perp <symbol> or both --future <symbol> and "
+                "--spot <symbol>.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
 
     if len(df) == 0:
@@ -1677,9 +1739,16 @@ def get_available_option_snapshots(data_dir: Path, underlying: str | None = None
             u_filter = ""
             if underlying:
                 u_filter = f" WHERE UPPER(underlying) = '{underlying.upper()}'"
-            sql = f"SELECT DISTINCT local_ts FROM read_parquet('{escaped_glob}', hive_partitioning=>true, union_by_name=>true){u_filter} ORDER BY local_ts DESC LIMIT 5"
+            sql = f"SELECT local_ts FROM read_parquet('{escaped_glob}', hive_partitioning=>true, union_by_name=>true){u_filter} ORDER BY local_ts DESC LIMIT 200"
             df = cat.query(sql)
-            res = [int(x) for x in df["local_ts"].to_list() if x]
+            seen = set()
+            res = []
+            for x in df["local_ts"].to_list():
+                if x and x not in seen:
+                    seen.add(x)
+                    res.append(int(x))
+                    if len(res) >= 5:
+                        break
             if res:
                 return res
     except Exception:
@@ -1690,9 +1759,17 @@ def get_available_option_snapshots(data_dir: Path, underlying: str | None = None
         u_filter = ""
         if underlying:
             u_filter = f" WHERE UPPER(underlying) = '{underlying.upper()}'"
-        sql = f"SELECT DISTINCT local_ts FROM options_chain{u_filter} ORDER BY local_ts DESC LIMIT 5"
+        sql = f"SELECT local_ts FROM options_chain{u_filter} ORDER BY local_ts DESC LIMIT 1000"
         df = cat.query(sql)
-        return [int(x) for x in df["local_ts"].to_list() if x]
+        seen = set()
+        res = []
+        for x in df["local_ts"].to_list():
+            if x and x not in seen:
+                seen.add(x)
+                res.append(int(x))
+                if len(res) >= 5:
+                    break
+        return res
     except Exception:
         return []
 
@@ -1773,7 +1850,11 @@ def iv_surface_cmd(
         raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
-    df = client.iv_surface(underlying, at, rate=rate)
+    try:
+        df = client.iv_surface(underlying, at, rate=rate)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
     if len(df) == 0:
         typer.echo("No options data found.")
         raise typer.Exit(code=0)
@@ -1860,7 +1941,11 @@ def term_structure_cmd(
         raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
-    df = client.term_structure(underlying, at, rate=rate)
+    try:
+        df = client.term_structure(underlying, at, rate=rate)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
     if len(df) == 0:
         typer.echo("No options data found.")
         raise typer.Exit(code=0)
@@ -2045,14 +2130,31 @@ def update(
     else:
         typer.echo("⟳ Could not check version. Proceeding with upgrade...", err=True)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "git+https://github.com/nazmiefearmutcu/Crypcodile.git",
-    ]
+    use_uv = False
+    try:
+        subprocess.run(["uv", "--version"], capture_output=True, check=True)
+        if os.getenv("VIRTUAL_ENV"):
+            use_uv = True
+    except Exception:
+        pass
+
+    if use_uv:
+        cmd = [
+            "uv",
+            "pip",
+            "install",
+            "--upgrade",
+            "git+https://github.com/nazmiefearmutcu/Crypcodile.git",
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "git+https://github.com/nazmiefearmutcu/Crypcodile.git",
+        ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:

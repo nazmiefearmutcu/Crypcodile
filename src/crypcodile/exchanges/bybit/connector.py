@@ -187,21 +187,18 @@ class BybitConnector(Connector):
     async def list_instruments(self) -> list[Instrument]:  # pragma: no cover
         """Fetch instruments from Bybit REST API for this connector's category."""
         instruments: list[Instrument] = []
-        async with aiohttp.ClientSession() as session:
-            cursor: str | None = None
-            while True:
-                params: dict[str, Any] = {"category": self.category, "limit": 1000}
-                if cursor:
-                    params["cursor"] = cursor
-                url = f"{REST_BASE}/market/instruments-info"
-                async with session.get(url, params=params) as resp:
-                    resp.raise_for_status()
-                    data: dict[str, Any] = await resp.json()
-                instruments.extend(parse_instruments(data, category=self.category))
-                next_cursor: str = (data.get("result") or {}).get("nextPageCursor", "")
-                if not next_cursor:
-                    break
-                cursor = next_cursor
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"category": self.category, "limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            url = f"{REST_BASE}/market/instruments-info"
+            data = await self.http_get(url, params=params)
+            instruments.extend(parse_instruments(data, category=self.category))
+            next_cursor: str = (data.get("result") or {}).get("nextPageCursor", "")
+            if not next_cursor:
+                break
+            cursor = next_cursor
         return instruments
 
     def subscribe_channels(self) -> list[str]:

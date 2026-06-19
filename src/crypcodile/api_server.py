@@ -9,10 +9,12 @@ import random
 import time
 import asyncio
 import fcntl
+import threading
 from typing import Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Response, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from web3 import Web3
@@ -34,19 +36,25 @@ def _get_rpc_urls() -> list[str]:
 async def lifespan(app: FastAPI):
     app.state.rpc_urls = _get_rpc_urls()
     app.state.current_rpc_index = 0
+    if not app.state.rpc_urls:
+        app.state.rpc_urls = ["https://base-rpc.publicnode.com"]
     url = app.state.rpc_urls[0]
     app.state.w3 = AsyncWeb3(AsyncHTTPProvider(url))
     yield
     # Shutdown
-    disconnect_fn = getattr(app.state.w3.provider, "disconnect", None)
-    if disconnect_fn is not None:
-        import inspect
-        try:
-            res = disconnect_fn()
-            if inspect.isawaitable(res):
-                await res
-        except Exception:
-            pass
+    try:
+        w3 = getattr(app.state, "w3", None)
+        if w3 is not None:
+            provider = getattr(w3, "provider", None)
+            if provider is not None:
+                disconnect_fn = getattr(provider, "disconnect", None)
+                if disconnect_fn is not None:
+                    import inspect
+                    res = disconnect_fn()
+                    if inspect.isawaitable(res):
+                        await res
+    except (AttributeError, Exception):
+        pass
 
 from crypcodile import __version__
 
@@ -64,13 +72,30 @@ app = FastAPI(
     redoc_url=None
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 portal_public_dir = os.path.join(os.path.dirname(__file__), "api_portal", "public")
+os.makedirs(os.path.join(portal_public_dir, "css"), exist_ok=True)
+os.makedirs(os.path.join(portal_public_dir, "js"), exist_ok=True)
 app.mount("/css", StaticFiles(directory=os.path.join(portal_public_dir, "css")), name="css")
 app.mount("/js", StaticFiles(directory=os.path.join(portal_public_dir, "js")), name="js")
+
+# Prometheus metrics tracking variables
+METRICS_DASHBOARD_REQUESTS = 0
+METRICS_MARKET_DATA_REQUESTS = 0
+METRICS_METRICS_REQUESTS = 0
+SERVER_START_TIME = time.time()
 
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def root_dashboard():
     """Serve the interactive Crypcodile x402 Micropayments Web Dashboard."""
+    global METRICS_DASHBOARD_REQUESTS
+    METRICS_DASHBOARD_REQUESTS += 1
     from crypcodile.api_server_html import get_dashboard_html
     return HTMLResponse(content=get_dashboard_html())
 
@@ -486,37 +511,40 @@ def _load_db_file() -> dict[str, dict[str, Any]]:
     payments_file = get_payments_file()
     if not os.path.exists(payments_file):
         return {}
+    lock_file = payments_file + ".lock"
     try:
-        with open(payments_file, "r") as f:
+        with open(lock_file, "a") as lf:
             try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-            except OSError:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+            except (OSError, AttributeError):
                 pass
-            content = f.read().strip()
-            if not content:
+            if not os.path.exists(payments_file):
                 return {}
-            return json.loads(content)
+            with open(payments_file, "r") as f:
+                content = f.read().strip()
+                if not content:
+                    return {}
+                return json.loads(content)
     except Exception as e:
         log.error(f"Error loading PAYMENTS_DB file: {e}")
         return {}
 
 def _save_db_file(data: dict[str, dict[str, Any]]) -> None:
     payments_file = get_payments_file()
-    temp_file = payments_file + f".{uuid.uuid4().hex}.tmp"
     try:
         os.makedirs(os.path.dirname(payments_file), exist_ok=True)
-        with open(temp_file, "w") as f:
-            json.dump(data, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_file, payments_file)
+        lock_file = payments_file + ".lock"
+        with open(lock_file, "a") as lf:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            except (OSError, AttributeError):
+                pass
+            with open(payments_file, "w") as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
     except Exception as e:
         log.error(f"Error saving PAYMENTS_DB file: {e}")
-        if os.path.exists(temp_file):
-            try:
-                os.remove(temp_file)
-            except OSError:
-                pass
 
 class PersistentDict(dict[str, Any]):
     def __init__(self, default_data: dict[str, Any] | None = None) -> None:
@@ -525,26 +553,82 @@ class PersistentDict(dict[str, Any]):
         super().__init__(default_data)
         self._default = default_data
         self._last_payments_file = ""
+        self._last_mtime = -1.0
+        self._syncing = False
+
+    async def sync_async(self) -> None:
+        await asyncio.to_thread(self._sync)
+
+    async def save_async(self) -> None:
+        await asyncio.to_thread(self._save)
+
+    async def get_async(self, key: str, default: Any = None) -> Any:
+        await self.sync_async()
+        return dict.get(self, key, default)
+
+    async def set_async(self, key: str, value: Any) -> None:
+        await self.sync_async()
+        dict.__setitem__(self, key, value)
+        await self.save_async()
+
+    async def contains_async(self, key: str) -> bool:
+        await self.sync_async()
+        return dict.__contains__(self, key)
+
+    async def items_async(self) -> dict[str, Any]:
+        await self.sync_async()
+        return dict(self)
 
     def _sync(self) -> None:
-        current_file = get_payments_file()
-        if current_file != self._last_payments_file:
-            dict.clear(self)
-            dict.update(self, self._default)
-            try:
+        if getattr(self, "_syncing", False):
+            return
+        self._syncing = True
+        try:
+            current_file = get_payments_file()
+            mtime = 0.0
+            if os.path.exists(current_file):
+                try:
+                    mtime = os.path.getmtime(current_file)
+                except OSError:
+                    pass
+            if current_file != self._last_payments_file or mtime != self._last_mtime:
+                dict.clear(self)
+                dict.update(self, self._default)
                 if os.path.exists(current_file):
-                    with open(current_file, "r") as f:
-                        content = f.read().strip()
-                        if content:
-                            dict.update(self, json.loads(content))
-            except Exception:
+                    try:
+                        lock_file = current_file + ".lock"
+                        with open(lock_file, "a") as lf:
+                            try:
+                                fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+                            except (OSError, AttributeError):
+                                pass
+                            if os.path.exists(current_file):
+                                with open(current_file, "r") as f:
+                                    content = f.read().strip()
+                                    if content:
+                                        dict.update(self, json.loads(content))
+                    except Exception:
+                        pass
+                self._last_payments_file = current_file
+                self._last_mtime = mtime
+        finally:
+            self._syncing = False
+
+    def _save(self) -> None:
+        _save_db_file(dict(self))
+        current_file = get_payments_file()
+        if os.path.exists(current_file):
+            try:
+                self._last_mtime = os.path.getmtime(current_file)
+            except OSError:
                 pass
-            self._last_payments_file = current_file
+        else:
+            self._last_mtime = 0.0
 
     def clear(self) -> None:
         self._sync()
         dict.clear(self)
-        _save_db_file({})
+        self._save()
 
     def __contains__(self, key: object) -> bool:
         self._sync()
@@ -557,12 +641,12 @@ class PersistentDict(dict[str, Any]):
     def __setitem__(self, key: str, value: Any) -> None:
         self._sync()
         super().__setitem__(key, value)
-        _save_db_file(dict(self))
+        self._save()
 
     def __delitem__(self, key: str) -> None:
         self._sync()
         super().__delitem__(key)
-        _save_db_file(dict(self))
+        self._save()
 
     def get(self, key: str, default: Any = None) -> Any:
         self._sync()
@@ -573,7 +657,8 @@ class PersistentDict(dict[str, Any]):
         return super().keys()
 
     def values(self) -> Any:
-        return self._load().values() if hasattr(self, '_load') else super().values()
+        self._sync()
+        return super().values()
 
     def items(self) -> Any:
         self._sync()
@@ -594,14 +679,75 @@ class PersistentDict(dict[str, Any]):
     def update(self, *args: Any, **kwargs: Any) -> None:
         self._sync()
         super().update(*args, **kwargs)
-        _save_db_file(dict(self))
+        self._save()
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        self._sync()
+        res = super().pop(key, default)
+        self._save()
+        return res
+
+    def popitem(self) -> tuple[str, Any]:
+        self._sync()
+        res = super().popitem()
+        self._save()
+        return res
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        self._sync()
+        res = super().setdefault(key, default)
+        self._save()
+        return res
 
 # Initial load for import-time queries
 PAYMENTS_DB: dict[str, dict[str, Any]] = PersistentDict()
 
+class SlidingWindowRateLimiter:
+    def __init__(self, window_size: float = 60.0, max_requests: int = 100):
+        self.window_size = window_size
+        self.max_requests = max_requests
+        self.requests: dict[str, list[float]] = {}
+        self.lock = threading.Lock()
+        self.last_cleanup = time.time()
+
+    def check_rate_limit(self, client_ip: str) -> bool:
+        """
+        Check if client_ip is rate-limited.
+        Returns True if the limit is exceeded (rate-limited), otherwise False.
+        """
+        now = time.time()
+        with self.lock:
+            # Periodically clean all old requests to avoid memory leaks
+            if now - self.last_cleanup > self.window_size:
+                self._cleanup_all(now)
+                self.last_cleanup = now
+            
+            cutoff = now - self.window_size
+            timestamps = self.requests.get(client_ip, [])
+            valid_timestamps = [t for t in timestamps if t > cutoff]
+            
+            if len(valid_timestamps) >= self.max_requests:
+                self.requests[client_ip] = valid_timestamps
+                return True
+            
+            valid_timestamps.append(now)
+            self.requests[client_ip] = valid_timestamps
+            return False
+
+    def _cleanup_all(self, now: float) -> None:
+        cutoff = now - self.window_size
+        for ip in list(self.requests.keys()):
+            valid = [t for t in self.requests[ip] if t > cutoff]
+            if not valid:
+                self.requests.pop(ip, None)
+            else:
+                self.requests[ip] = valid
+
+rate_limiter = SlidingWindowRateLimiter(window_size=60.0, max_requests=100)
+
 # Demo recipient wallet address (e.g. Nazmi's developer wallet)
 RECIPIENT_WALLET = os.getenv("RECIPIENT_WALLET", "0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
-PRICE_USDC = "0.001" # $0.001 USDC per request
+PRICE_USDC = os.getenv("PRICE_USDC", "0.001") # $0.001 USDC per request
 
 class PaymentSignature(BaseModel):
     payment_id: str
@@ -620,27 +766,36 @@ async def save_payments_db(db: dict[str, dict[str, Any]]) -> None:
 async def get_market_data(
     symbol: str,
     response: Response,
+    request: Request = None,
     payment_signature: str | None = Header(None, alias="Payment-Signature")
 ) -> dict[str, Any]:
     """Get real-time Base DEX market data. Gated behind x402 micropayments."""
+    global METRICS_MARKET_DATA_REQUESTS
+    METRICS_MARKET_DATA_REQUESTS += 1
+    client_ip = "unknown"
+    if request is not None:
+        trust_forwarded = os.getenv("TRUST_FORWARDED_FOR", "false").lower() == "true"
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded and trust_forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client is not None else "unknown"
+    if rate_limiter.check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+
     # 1. Check if the payment signature is provided
     if not payment_signature:
         # Generate a unique payment ID for this request
         payment_id = str(uuid.uuid4())
         
         async with db_lock:
-            db = await load_payments_db()
-            db[payment_id] = {
+            await PAYMENTS_DB.set_async(payment_id, {
                 "status": "pending",
                 "price": PRICE_USDC,
                 "currency": "USDC",
                 "recipient": RECIPIENT_WALLET,
                 "symbol": symbol
-            }
-            await save_payments_db(db)
-            
-            dict.clear(PAYMENTS_DB)
-            PAYMENTS_DB.update(db)
+            })
         
         payment_required_payload = {
             "price": PRICE_USDC,
@@ -722,16 +877,19 @@ async def get_market_data(
             )
             
         async with db_lock:
-            db = await load_payments_db()
-            if pid not in db:
+            if not await PAYMENTS_DB.contains_async(pid):
                 raise HTTPException(status_code=400, detail="Invalid or expired payment ID.")
                 
-            # Verify that tx_hash is not already used in any paid payment record in DB
-            for db_pid, db_record in db.items():
-                if db_pid != pid and db_record.get("status") == "paid" and db_record.get("tx_hash") == tx_hash:
+            record = await PAYMENTS_DB.get_async(pid)
+            if record.get("status") == "spent":
+                raise HTTPException(status_code=400, detail="Payment already spent.")
+                
+            # Verify that tx_hash is not already used in any paid or spent payment record in DB
+            items = await PAYMENTS_DB.items_async()
+            for db_pid, db_record in items.items():
+                if db_pid != pid and db_record.get("status") in ("paid", "spent") and db_record.get("tx_hash") == tx_hash:
                     raise HTTPException(status_code=400, detail="Transaction hash already processed.")
                     
-            record = db[pid]
             is_paid = record.get("status") == "paid"
             
             if is_paid:
@@ -741,6 +899,13 @@ async def get_market_data(
                         status_code=400,
                         detail="Payment signature does not match transaction sender."
                     )
+                # Ensure the signature matches the stored signature
+                stored_signature = record.get("signature")
+                if stored_signature and signature != stored_signature:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Payment signature does not match stored signature."
+                    )
             else:
                 if tx_hash in VERIFYING_TXS:
                     raise HTTPException(status_code=400, detail="Transaction hash is currently being verified.")
@@ -749,16 +914,13 @@ async def get_market_data(
         if not is_paid:
             tx_from = None
             try:
-                w3 = get_w3()
-                
                 # Check Chain ID is Base mainnet (8453)
                 try:
-                    chain_id = await w3.eth.chain_id
+                    chain_id = await get_w3().eth.chain_id
                 except Exception as e:
                     if is_connection_or_rate_limit_error(e):
                         await switch_rpc_failover()
-                        w3 = get_w3()
-                        chain_id = await w3.eth.chain_id
+                        chain_id = await get_w3().eth.chain_id
                     else:
                         raise HTTPException(status_code=400, detail="Failed to verify chain ID: RPC node is unresponsive.")
                 
@@ -769,10 +931,10 @@ async def get_market_data(
                     )
                     
                 # Poll receipt first inside retry/backoff
-                receipt = await get_transaction_receipt_with_failover(w3, tx_hash)
+                receipt = await get_transaction_receipt_with_failover(get_w3(), tx_hash)
                 
                 # Fetch transaction details
-                tx_details = await get_transaction_with_failover(w3, tx_hash)
+                tx_details = await get_transaction_with_failover(get_w3(), tx_hash)
                 
                 # Verify sender
                 tx_from = tx_details.get("from")
@@ -804,12 +966,11 @@ async def get_market_data(
                 if block_number is not None:
                     block = None
                     try:
-                        block = await w3.eth.get_block(block_number)
+                        block = await get_w3().eth.get_block(block_number)
                     except Exception as e:
                         if is_connection_or_rate_limit_error(e):
                             await switch_rpc_failover()
-                            w3 = get_w3()
-                            block = await w3.eth.get_block(block_number)
+                            block = await get_w3().eth.get_block(block_number)
                         else:
                             raise
                             
@@ -817,12 +978,11 @@ async def get_market_data(
                     if block_timestamp is not None:
                         latest_block = None
                         try:
-                            latest_block = await w3.eth.get_block("latest")
+                            latest_block = await get_w3().eth.get_block("latest")
                         except Exception as e:
                             if is_connection_or_rate_limit_error(e):
                                 await switch_rpc_failover()
-                                w3 = get_w3()
-                                latest_block = await w3.eth.get_block("latest")
+                                latest_block = await get_w3().eth.get_block("latest")
                                 
                         latest_timestamp = latest_block.get("timestamp") if latest_block else None
                         if latest_timestamp is None:
@@ -883,7 +1043,8 @@ async def get_market_data(
                         if not data_val:
                             continue
                         amount = int(clean_hex(data_val), 16)
-                        if amount != 1000:
+                        expected_amount = int(round(float(PRICE_USDC) * 1_000_000))
+                        if amount != expected_amount:
                             continue
                             
                         valid_transfer = True
@@ -900,23 +1061,27 @@ async def get_market_data(
                     
                 # Re-acquire lock to write to DB
                 async with db_lock:
-                    db = await load_payments_db()
-                    record = db.get(pid)
+                    record = await PAYMENTS_DB.get_async(pid)
                     if record:
+                        if record.get("status") == "paid":
+                            raise HTTPException(status_code=400, detail="Payment already processed.")
                         record["status"] = "paid"
                         record["tx_hash"] = tx_hash
                         record["sender"] = tx_from
                         record["signature"] = signature
-                        await save_payments_db(db)
-                        
-                        dict.clear(PAYMENTS_DB)
-                        PAYMENTS_DB.update(db)
+                        await PAYMENTS_DB.set_async(pid, record)
             finally:
                 async with db_lock:
                     VERIFYING_TXS.discard(tx_hash)
     except HTTPException:
         raise
-    except Exception as e:
+    except (asyncio.TimeoutError, Exception) as e:
+        if isinstance(e, asyncio.TimeoutError) or is_connection_or_rate_limit_error(e):
+            log.error(f"RPC connection/timeout error during verification: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Bad Gateway: RPC network or timeout error: {e}"
+            ) from e
         log.error(f"Payment verification failed: {e}")
         raise HTTPException(
             status_code=400,
@@ -924,9 +1089,17 @@ async def get_market_data(
         ) from e
 
     # 3. Retrieve and return live Base DEX pool data
-    data = await get_onchain_price(symbol)
+    active_rpc = get_w3().provider.endpoint_uri
+    data = await get_onchain_price(symbol, rpc_url=active_rpc)
     if "error" in data:
         raise HTTPException(status_code=500, detail=data["error"])
+
+    # Mark the payment as spent to prevent reuse of payment_id
+    async with db_lock:
+        record = await PAYMENTS_DB.get_async(pid)
+        if record:
+            record["status"] = "spent"
+            await PAYMENTS_DB.set_async(pid, record)
         
     # Set x402 success headers
     response.headers["Payment-Response"] = Web3.to_json({
@@ -943,11 +1116,28 @@ async def get_market_data(
     }
 
 @app.post("/api/v1/simulate-payment")
-async def simulate_payment(payload: PaymentSignature) -> dict[str, Any]:
+async def simulate_payment(payload: PaymentSignature, request: Request = None) -> dict[str, Any]:
     """Helper endpoint to mark a payment_id as paid and generate a mock signature.
     
     This allows testing clients to easily simulate the on-chain transfer.
     """
+    client_ip = "unknown"
+    if request is not None:
+        trust_forwarded = os.getenv("TRUST_FORWARDED_FOR", "false").lower() == "true"
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded and trust_forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client is not None else "unknown"
+    if rate_limiter.check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+
+    if not (os.getenv("ALLOW_SIMULATION", "true") == "true" or "pytest" in sys.modules):
+        raise HTTPException(
+            status_code=400,
+            detail="Simulation mode is disabled."
+        )
+
     pid = payload.payment_id
     tx_hash = payload.tx_hash
     signature = payload.signature
@@ -985,31 +1175,29 @@ async def simulate_payment(payload: PaymentSignature) -> dict[str, Any]:
         )
         
     async with db_lock:
-        db = await load_payments_db()
-        if pid not in db:
+        if not await PAYMENTS_DB.contains_async(pid):
             raise HTTPException(status_code=404, detail="Payment ID not found.")
             
-        for db_pid, db_record in db.items():
-            if db_pid != pid and db_record.get("status") == "paid" and db_record.get("tx_hash") == tx_hash:
+        items = await PAYMENTS_DB.items_async()
+        for db_pid, db_record in items.items():
+            if db_pid != pid and db_record.get("status") in ("paid", "spent") and db_record.get("tx_hash") == tx_hash:
                 raise HTTPException(status_code=400, detail="Transaction hash already processed.")
                 
         if tx_hash in VERIFYING_TXS:
             raise HTTPException(status_code=400, detail="Transaction hash is currently being verified.")
             
-        db[pid]["status"] = "paid"
-        db[pid]["tx_hash"] = tx_hash
-        db[pid]["sender"] = signer_address
-        db[pid]["signature"] = signature
+        record = await PAYMENTS_DB.get_async(pid)
+        record["status"] = "paid"
+        record["tx_hash"] = tx_hash
+        record["sender"] = signer_address
+        record["signature"] = signature
         
-        await save_payments_db(db)
-        
-        dict.clear(PAYMENTS_DB)
-        PAYMENTS_DB.update(db)
+        await PAYMENTS_DB.set_async(pid, record)
         
         return {
             "status": "success",
             "message": f"Payment {pid} successfully simulated as paid on Base mainnet.",
-            "payment_record": db[pid]
+            "payment_record": record
         }
 
 
@@ -1017,8 +1205,7 @@ async def simulate_payment(payload: PaymentSignature) -> dict[str, Any]:
 async def get_all_payments():
     """Return all simulated payments."""
     async with db_lock:
-        db = await load_payments_db()
-        return db
+        return await PAYMENTS_DB.items_async()
 
 @app.get("/api/events")
 async def sse_events():
@@ -1059,3 +1246,64 @@ async def sse_events():
             yield f"data: {json.dumps(payload)}\n\n"
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus exposition format health and usage metrics endpoint."""
+    global METRICS_METRICS_REQUESTS
+    METRICS_METRICS_REQUESTS += 1
+
+    import resource
+    import sys
+
+    # Process RSS Memory
+    try:
+        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, maxrss is in bytes; on Linux, it is in kilobytes
+        if sys.platform != "darwin":
+            max_rss *= 1024
+    except Exception:
+        max_rss = 0
+
+    # CPU Process Time
+    try:
+        cpu_time = time.process_time()
+    except Exception:
+        cpu_time = 0.0
+
+    # Uptime
+    uptime = time.time() - SERVER_START_TIME
+
+    # Payments db stats
+    try:
+        payments = await PAYMENTS_DB.items_async()
+        pending = sum(1 for p in payments.values() if p.get("status") == "pending")
+        verified = sum(1 for p in payments.values() if p.get("status") == "verified")
+    except Exception:
+        pending, verified = 0, 0
+
+    metrics_str = f"""# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total {cpu_time:.6f}
+
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes {max_rss}
+
+# HELP crypcodile_uptime_seconds Uptime of the Crypcodile API Server in seconds.
+# TYPE crypcodile_uptime_seconds gauge
+crypcodile_uptime_seconds {uptime:.2f}
+
+# HELP crypcodile_api_requests_total Total number of API requests received.
+# TYPE crypcodile_api_requests_total counter
+crypcodile_api_requests_total{{method="GET",endpoint="/api/v1/market-data"}} {METRICS_MARKET_DATA_REQUESTS}
+crypcodile_api_requests_total{{method="GET",endpoint="/"}} {METRICS_DASHBOARD_REQUESTS}
+crypcodile_api_requests_total{{method="GET",endpoint="/metrics"}} {METRICS_METRICS_REQUESTS}
+
+# HELP crypcodile_payments_total Total number of payment transactions by status.
+# TYPE crypcodile_payments_total counter
+crypcodile_payments_total{{status="pending"}} {pending}
+crypcodile_payments_total{{status="verified"}} {verified}
+"""
+    return Response(content=metrics_str, media_type="text/plain")

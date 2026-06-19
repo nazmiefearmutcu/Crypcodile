@@ -163,10 +163,7 @@ class BinanceConnector(Connector):
         else:
             url = f"{self.rest_url}/dapi/v1/exchangeInfo"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                resp.raise_for_status()
-                data: dict[str, Any] = await resp.json()
+        data = await self.http_get(url)
 
         instruments: list[Instrument] = []
         for item in data.get("symbols", []):

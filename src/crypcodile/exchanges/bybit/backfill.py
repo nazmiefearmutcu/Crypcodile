@@ -345,19 +345,17 @@ async def _live_fetch_trades(  # pragma: no cover
     cursor: str | None,
     *,
     rest_base: str = REST_BASE,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one trades page from the Bybit V5 REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {"symbol": symbol, "category": category, "limit": limit}
     if cursor:
         params["cursor"] = cursor
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/market/recent-trade"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-    return data
+
+    url = f"{rest_base}/market/recent-trade"
+    return await http_get_helper(url, params=params, session=session)
 
 
 async def _live_fetch_funding(  # pragma: no cover
@@ -369,9 +367,10 @@ async def _live_fetch_funding(  # pragma: no cover
     cursor: str | None = None,
     *,
     rest_base: str = REST_BASE,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one funding history page from the Bybit V5 REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {
         "symbol": symbol,
@@ -382,12 +381,9 @@ async def _live_fetch_funding(  # pragma: no cover
     }
     if cursor:
         params["cursor"] = cursor
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/market/funding/history"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-    return data
+
+    url = f"{rest_base}/market/funding/history"
+    return await http_get_helper(url, params=params, session=session)
 
 
 async def _live_fetch_open_interest(  # pragma: no cover
@@ -400,9 +396,10 @@ async def _live_fetch_open_interest(  # pragma: no cover
     cursor: str | None = None,
     *,
     rest_base: str = REST_BASE,
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one open interest history page from the Bybit V5 REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     # Bybit intervalTime accepts "5min","15min","30min","1h","4h","1d"
     if interval_min < 15:
@@ -428,12 +425,9 @@ async def _live_fetch_open_interest(  # pragma: no cover
     }
     if cursor:
         params["cursor"] = cursor
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/market/open-interest"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-    return data
+
+    url = f"{rest_base}/market/open-interest"
+    return await http_get_helper(url, params=params, session=session)
 
 
 def make_live_backfill(rest_base: str = REST_BASE) -> BybitBackfill:  # pragma: no cover

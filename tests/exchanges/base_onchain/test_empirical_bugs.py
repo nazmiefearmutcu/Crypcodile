@@ -186,7 +186,7 @@ async def test_api_server_double_spend_replay() -> None:
         })
         res_pay1 = await get_market_data("cbBTC-USDC", response1, payment_signature=sig_payload1)
         assert res_pay1["status"] == "success"
-        assert PAYMENTS_DB[pid1]["status"] == "paid"
+        assert PAYMENTS_DB[pid1]["status"] == "spent"
         
         # Verify second payment using the exact same tx_hash
         sig_payload2 = json.dumps({

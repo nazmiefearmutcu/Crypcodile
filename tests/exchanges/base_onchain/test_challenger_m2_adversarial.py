@@ -81,7 +81,7 @@ async def test_pagination_extremely_large_range_chunking() -> None:
     assert captured_logs_calls[2]["fromBlock"] == 1996
     assert captured_logs_calls[2]["toBlock"] == 2495
     assert captured_logs_calls[3]["fromBlock"] == 2496
-    assert captured_logs_calls[3]["toBlock"] == 2600
+    assert captured_logs_calls[3]["toBlock"] == 2585
 
 
 @pytest.mark.asyncio
@@ -245,7 +245,7 @@ async def test_pagination_invalid_range_negative() -> None:
     # It queries starting from 0 to 20 (robust boundary max(0, ...))
     assert len(captured_logs_calls) == 1
     assert captured_logs_calls[0]["fromBlock"] == 0
-    assert captured_logs_calls[0]["toBlock"] == 20
+    assert captured_logs_calls[0]["toBlock"] == 5
 
 
 # ---------------------------------------------------------

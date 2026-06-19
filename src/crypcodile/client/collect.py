@@ -90,6 +90,26 @@ async def collect(
         await sink.close()
         return
 
+    # Check if target sink is a ParquetSink and spin up compactor
+    compactor = None
+    try:
+        from crypcodile.store.parquet_sink import ParquetSink
+        from crypcodile.store.compactor import ParquetCompactor
+        
+        target_sink = sink
+        while hasattr(target_sink, "target"):
+            target_sink = getattr(target_sink, "target")
+            
+        if isinstance(target_sink, ParquetSink):
+            compactor = ParquetCompactor(
+                data_dir=target_sink._data_dir,
+                min_age_seconds=10.0,
+                poll_interval=30.0
+            )
+            compactor.start()
+    except Exception as e:
+        log.warning("Could not initialize ParquetCompactor service: %s", e)
+
     _cancelled = False
     try:
         async with asyncio.TaskGroup() as tg:
@@ -104,6 +124,11 @@ async def collect(
         for exc in eg.exceptions:
             log.error("Unexpected group-level exception from collect(): %s", exc, exc_info=True)
     finally:
+        if compactor:
+            try:
+                await compactor.stop()
+            except Exception as e:
+                log.warning("Error stopping ParquetCompactor service: %s", e)
         await sink.close()
 
     if _cancelled:

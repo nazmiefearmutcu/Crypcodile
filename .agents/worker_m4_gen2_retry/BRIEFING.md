@@ -32,14 +32,14 @@ Retry build and release of Crypcodile v0.1.039
 - /Users/nazmi/Crypcodile/.agents/worker_m4_gen2_retry/progress.md — Progress tracker
 
 ## Change Tracker
-- **Files modified**: None
-- **Build status**: TBD
-- **Pending issues**: TBD
+- **Files modified**: pyproject.toml (added build exclusion rules for hatch build targets)
+- **Build status**: pass
+- **Pending issues**: git push main --tags blocked by sandbox
 
 ## Quality Status
-- **Build/test result**: TBD
-- **Lint status**: TBD
-- **Tests added/modified**: TBD
+- **Build/test result**: pass
+- **Lint status**: none
+- **Tests added/modified**: none
 
 ## Loaded Skills
 - **Source**: /Users/nazmi/.gemini/config/plugins/science/skills/uv/SKILL.md

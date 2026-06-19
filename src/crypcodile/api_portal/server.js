@@ -2,6 +2,7 @@ import { express, cors, dotenv, uuidv4 } from './libs.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ethers } from 'ethers';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -53,11 +54,13 @@ let sseClients = [];
 
 // Helper to broadcast to SSE
 function broadcastSSE(eventData) {
-  sseClients.forEach(client => {
+  sseClients = sseClients.filter(client => {
     try {
       client.write(`data: ${JSON.stringify(eventData)}\n\n`);
+      return true;
     } catch (err) {
-      // client connection closed or failed
+      // client connection closed or failed, remove it
+      return false;
     }
   });
 }
@@ -241,14 +244,22 @@ app.get('/api/gated-data', (req, res) => {
     return res.status(400).json({ error: "Invalid Payment ID" });
   }
 
+  if (existingPayment.status === 'verified') {
+    return res.json({
+      status: 'success',
+      data: 'Premium dark-themed gated content unlocked! Welcome to the premium Crypcodile x402 Micropayments portal.',
+      payment: existingPayment
+    });
+  }
+
   // Signature replay and reuse prevention
   if (processedSignatures.has(paymentSignatureHeader)) {
-    const originalPaymentId = processedSignatures.get(paymentSignatureHeader);
-    if (originalPaymentId !== paymentIdHeader) {
-      return res.status(400).json({ error: "Signature already processed" });
-    }
-  } else {
-    processedSignatures.set(paymentSignatureHeader, paymentIdHeader);
+    return res.status(400).json({ error: "Signature already processed" });
+  }
+  processedSignatures.set(paymentSignatureHeader, paymentIdHeader);
+  if (processedSignatures.size > 1000) {
+    const oldestKey = processedSignatures.keys().next().value;
+    processedSignatures.delete(oldestKey);
   }
 
   // Start verification stages and broadcast to SSE
@@ -361,6 +372,11 @@ app.get('/api/events', (req, res) => {
   })}\n\n`);
 
   sseClients.push(res);
+
+  res.on('error', (err) => {
+    // Suppress crash on write failures
+    sseClients = sseClients.filter(c => c !== res);
+  });
 
   req.on('close', () => {
     sseClients = sseClients.filter(c => c !== res);

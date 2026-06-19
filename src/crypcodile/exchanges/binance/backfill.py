@@ -352,9 +352,10 @@ async def _live_fetch_aggtrades(  # pragma: no cover
     limit: int,
     *,
     rest_base: str = "https://api.binance.com/api/v3",
+    session: aiohttp.ClientSession | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch one aggTrades page from the Binance REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {"symbol": symbol, "limit": limit}
     if from_id is not None:
@@ -364,12 +365,8 @@ async def _live_fetch_aggtrades(  # pragma: no cover
     if end_time_ms is not None:
         params["endTime"] = end_time_ms
 
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/aggTrades"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: list[dict[str, Any]] = await resp.json()
-    return data
+    url = f"{rest_base}/aggTrades"
+    return await http_get_helper(url, params=params, session=session)
 
 
 async def _live_fetch_klines(  # pragma: no cover
@@ -380,9 +377,10 @@ async def _live_fetch_klines(  # pragma: no cover
     limit: int,
     *,
     rest_base: str = "https://api.binance.com/api/v3",
+    session: aiohttp.ClientSession | None = None,
 ) -> list[list[Any]]:
     """Fetch one klines page from the Binance REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": limit}
     if start_time_ms is not None:
@@ -390,28 +388,21 @@ async def _live_fetch_klines(  # pragma: no cover
     if end_time_ms is not None:
         params["endTime"] = end_time_ms
 
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/klines"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: list[list[Any]] = await resp.json()
-    return data
+    url = f"{rest_base}/klines"
+    return await http_get_helper(url, params=params, session=session)
 
 
 async def _live_fetch_open_interest(  # pragma: no cover
     symbol: str,
     *,
     rest_base: str = "https://fapi.binance.com/fapi/v1",
+    session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch current open interest from the Binance USDⓂ REST API."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/openInterest"
-        async with session.get(url, params={"symbol": symbol}) as resp:
-            resp.raise_for_status()
-            data: dict[str, Any] = await resp.json()
-    return data
+    url = f"{rest_base}/openInterest"
+    return await http_get_helper(url, params={"symbol": symbol}, session=session)
 
 
 async def _live_fetch_open_interest_hist(  # pragma: no cover
@@ -422,9 +413,10 @@ async def _live_fetch_open_interest_hist(  # pragma: no cover
     limit: int,
     *,
     rest_base: str = "https://fapi.binance.com",
+    session: aiohttp.ClientSession | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch historical open interest from the Binance futures data endpoint."""
-    import aiohttp
+    from crypcodile.exchanges.base import http_get_helper
 
     params: dict[str, Any] = {"symbol": symbol, "period": period, "limit": limit}
     if start_time_ms is not None:
@@ -432,12 +424,8 @@ async def _live_fetch_open_interest_hist(  # pragma: no cover
     if end_time_ms is not None:
         params["endTime"] = end_time_ms
 
-    async with aiohttp.ClientSession() as session:
-        url = f"{rest_base}/futures/data/openInterestHist"
-        async with session.get(url, params=params) as resp:
-            resp.raise_for_status()
-            data: list[dict[str, Any]] = await resp.json()
-    return data
+    url = f"{rest_base}/futures/data/openInterestHist"
+    return await http_get_helper(url, params=params, session=session)
 
 
 def make_live_backfill(  # pragma: no cover

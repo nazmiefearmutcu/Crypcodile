@@ -57,8 +57,215 @@ _NS_PER_DAY: float = 86_400.0 * 1e9
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal helpers & Calibration math (Task 4)
 # ---------------------------------------------------------------------------
+
+import numpy as np
+
+class CubicSpline:
+    """Natural cubic spline interpolation in pure Python/NumPy."""
+    def __init__(self, x: list[float], y: list[float]) -> None:
+        self.x = np.array(x, dtype=float)
+        self.y = np.array(y, dtype=float)
+        n = len(x) - 1
+        h = np.diff(self.x)
+
+        # Set up tridiagonal system for second derivatives (natural boundary conditions)
+        A = np.zeros((n + 1, n + 1))
+        B = np.zeros(n + 1)
+
+        A[0, 0] = 1.0
+        A[n, n] = 1.0
+
+        for i in range(1, n):
+            A[i, i-1] = h[i-1] / 6.0
+            A[i, i] = (h[i-1] + h[i]) / 3.0
+            A[i, i+1] = h[i] / 6.0
+            B[i] = (self.y[i+1] - self.y[i]) / h[i] - (self.y[i] - self.y[i-1]) / h[i-1]
+
+        self.M = np.linalg.solve(A, B)
+
+    def __call__(self, val: float) -> float:
+        if val <= self.x[0]:
+            return float(self.y[0])
+        if val >= self.x[-1]:
+            return float(self.y[-1])
+
+        idx = np.searchsorted(self.x, val) - 1
+        h = self.x[idx+1] - self.x[idx]
+
+        tmp1 = self.M[idx] * (self.x[idx+1] - val)**3 / (6.0 * h)
+        tmp2 = self.M[idx+1] * (val - self.x[idx])**3 / (6.0 * h)
+        tmp3 = (self.y[idx] - self.M[idx] * h**2 / 6.0) * (self.x[idx+1] - val) / h
+        tmp4 = (self.y[idx+1] - self.M[idx+1] * h**2 / 6.0) * (val - self.x[idx]) / h
+
+        return float(tmp1 + tmp2 + tmp3 + tmp4)
+
+
+def sabr_vol(
+    k: float,
+    f: float,
+    t: float,
+    alpha: float,
+    beta: float,
+    rho: float,
+    nu: float
+) -> float:
+    """Standard SABR implied volatility approximation formula."""
+    if f <= 0.0 or k <= 0.0:
+        return 0.0
+    if abs(f - k) < 1e-6:
+        # ATM formula
+        one_minus_beta = 1.0 - beta
+        num = alpha
+        den = (f ** one_minus_beta)
+        factor = 1.0 + (
+            (one_minus_beta ** 2 / 24.0) * (alpha ** 2 / (f ** (2.0 * one_minus_beta))) +
+            (0.25 * rho * beta * nu * alpha / (f ** one_minus_beta)) +
+            ((2.0 - 3.0 * rho ** 2) / 24.0) * (nu ** 2)
+        ) * t
+        return (num / den) * factor
+
+    one_minus_beta = 1.0 - beta
+    log_fk = math.log(f / k)
+    fk_power = (f * k) ** (one_minus_beta / 2.0)
+
+    z = (nu / alpha) * fk_power * log_fk
+
+    # x(z) definition
+    temp = 1.0 - 2.0 * rho * z + z * z
+    if temp <= 0.0:
+        val = 0.0
+    else:
+        val = math.sqrt(temp)
+
+    num_xz = val + z - rho
+    if num_xz <= 0.0 or abs(1.0 - rho) < 1e-9:
+        xz = z
+    else:
+        xz = math.log(num_xz / (1.0 - rho))
+
+    den_base = fk_power * (
+        1.0 + (one_minus_beta ** 2 / 24.0) * (log_fk ** 2) +
+        (one_minus_beta ** 4 / 1920.0) * (log_fk ** 4)
+    )
+    z_over_xz = 1.0 if abs(xz) < 1e-6 else (z / xz)
+
+    term3 = 1.0 + (
+        (one_minus_beta ** 2 / 24.0) * (alpha ** 2 / ((f * k) ** one_minus_beta)) +
+        (0.25 * rho * beta * nu * alpha / fk_power) +
+        ((2.0 - 3.0 * rho ** 2) / 24.0) * (nu ** 2)
+    ) * t
+
+    return (alpha / den_base) * z_over_xz * term3
+
+
+def line_search(func: Any, low: float, high: float, steps: int = 30) -> float:
+    """1D grid optimizer helper for parameter calibration."""
+    best_val = low
+    best_loss = float("inf")
+    for i in range(steps + 1):
+        val = low + (high - low) * (i / steps)
+        loss = func(val)
+        if loss < best_loss:
+            best_loss = loss
+            best_val = val
+    return best_val
+
+
+def calibrate_sabr(
+    strikes: list[float],
+    ivs: list[float],
+    forward: float,
+    t_years: float,
+    beta: float = 0.5
+) -> tuple[float, float, float]:
+    """Calibrate SABR model parameters (alpha, rho, nu) to the given IV skew."""
+    valid_data = [(k, iv) for k, iv in zip(strikes, ivs) if iv is not None and math.isfinite(iv) and iv > 0.0]
+    if len(valid_data) < 2:
+        return 0.4 * (forward ** (1.0 - beta)), 0.0, 0.1
+
+    closest_idx = min(range(len(valid_data)), key=lambda i: abs(valid_data[i][0] - forward))
+    atm_iv = valid_data[closest_idx][1]
+
+    # Initial guesses
+    alpha = atm_iv * (forward ** (1.0 - beta))
+    rho = 0.0
+    nu = 0.5
+
+    def loss_func(a: float, r: float, n: float) -> float:
+        loss = 0.0
+        for k, iv in valid_data:
+            model_iv = sabr_vol(k, forward, t_years, a, beta, r, n)
+            loss += (model_iv - iv) ** 2
+        return loss
+
+    # Perform coordinate descent coordinate search
+    for _ in range(5):
+        alpha = line_search(lambda a: loss_func(a, rho, nu), 1e-3, 5.0, steps=20)
+        rho = line_search(lambda r: loss_func(alpha, r, nu), -0.95, 0.95, steps=20)
+        nu = line_search(lambda n: loss_func(alpha, rho, n), 1e-3, 5.0, steps=20)
+
+    return alpha, rho, nu
+
+
+def fit_volatility_skew(
+    strikes: list[float],
+    ivs: list[float],
+    forward: float,
+    t_years: float,
+    target_strikes: list[float],
+    method: str = "sabr"
+) -> list[float | None]:
+    """Fit a volatility skew model to market IVs and interpolate at target strikes."""
+    valid_data = [(k, iv) for k, iv in zip(strikes, ivs) if iv is not None and math.isfinite(iv) and iv > 0.0]
+    if not valid_data or t_years <= 0.0:
+        return [None] * len(target_strikes)
+
+    if method.lower() == "sabr":
+        if len(valid_data) < 2:
+            atm_iv = valid_data[0][1]
+            return [atm_iv] * len(target_strikes)
+
+        valid_strikes = [d[0] for d in valid_data]
+        valid_ivs = [d[1] for d in valid_data]
+        alpha, rho, nu = calibrate_sabr(valid_strikes, valid_ivs, forward, t_years)
+
+        fitted = []
+        for k in target_strikes:
+            try:
+                fitted.append(sabr_vol(k, forward, t_years, alpha, 0.5, rho, nu))
+            except Exception:
+                fitted.append(None)
+        return fitted
+
+    elif method.lower() == "spline":
+        if len(valid_data) < 3:
+            atm_iv = valid_data[0][1]
+            return [atm_iv] * len(target_strikes)
+
+        valid_strikes = [d[0] for d in valid_data]
+        valid_ivs = [d[1] for d in valid_data]
+
+        sorted_valid = sorted(zip(valid_strikes, valid_ivs), key=lambda x: x[0])
+        unique_strikes: list[float] = []
+        unique_ivs: list[float] = []
+        for s, iv in sorted_valid:
+            if not unique_strikes or unique_strikes[-1] != s:
+                unique_strikes.append(s)
+                unique_ivs.append(iv)
+
+        if len(unique_strikes) < 3:
+            return [unique_ivs[0]] * len(target_strikes)
+
+        try:
+            spline = CubicSpline(unique_strikes, unique_ivs)
+            return [spline(k) for k in target_strikes]
+        except Exception:
+            return [None] * len(target_strikes)
+
+    else:
+        return [valid_data[0][1]] * len(target_strikes)
 
 
 def _snapshot(raw: pl.DataFrame, at_ns: int) -> pl.DataFrame:
@@ -153,6 +360,7 @@ def iv_surface(
     underlying: str,
     at_ns: int,
     rate: float = 0.0,
+    fit_method: str = "sabr",
 ) -> pl.DataFrame:
     """Return the implied-vol surface snapshot at ``at_ns``.
 
@@ -165,6 +373,7 @@ def iv_surface(
         underlying: Underlying asset identifier, e.g. ``"BTC"``.
         at_ns:      Snapshot instant (nanoseconds UTC).
         rate:       Continuous risk-free rate used in the IV solver (default 0.0).
+        fit_method: Calibration/fitting model, either "sabr" or "spline" (default "sabr").
 
     Returns:
         A Polars DataFrame with columns:
@@ -175,6 +384,7 @@ def iv_surface(
         moneyness  Float64    ``strike / underlying_price``.
         opt_type   Utf8       ``"C"`` or ``"P"`` (matching ``OptType`` enum values).
         iv         Float64    Implied volatility (NULL when unavailable).
+        fitted_iv  Float64    Volatility fitted using SABR or Spline model.
         source     Utf8       One of ``"mark_iv"``, ``"computed"``, ``"unavailable"``.
         =========  =========  =======================================================
 
@@ -204,12 +414,59 @@ def iv_surface(
     if len(snap) == 0:
         return pl.DataFrame()
 
-    # Build output rows.
+    # 1. Resolve raw IVs and build data structures for fitting
+    # We calibrate and fit per-expiry
+    fitted_iv_map = {}
+    expiries = set(snap["expiry"].to_list())
+
+    for expiry in expiries:
+        exp_df = snap.filter(pl.col("expiry") == expiry)
+        if len(exp_df) == 0:
+            continue
+
+        # Get forward/underlying price
+        underlying_prices = [p for p in exp_df["underlying_price"].to_list() if p is not None and math.isfinite(p) and p > 0.0]
+        forward = underlying_prices[0] if underlying_prices else 100.0
+
+        t_years = (expiry - at_ns) / _NS_PER_YEAR
+
+        strikes = []
+        ivs = []
+        keys = []
+
+        for row in exp_df.iter_rows(named=True):
+            strike = float(row["strike"])
+            opt_type_str = str(row["opt_type"])
+            mark_iv_val = float(row["mark_iv"]) if row.get("mark_iv") is not None else None
+            mark_price_val = float(row["mark_price"]) if row.get("mark_price") is not None else None
+
+            iv, _ = _resolve_iv(
+                underlying_price=forward,
+                strike=strike,
+                expiry=expiry,
+                at_ns=at_ns,
+                opt_type_str=opt_type_str,
+                mark_iv=mark_iv_val,
+                mark_price=mark_price_val,
+                rate=rate,
+            )
+
+            strikes.append(strike)
+            ivs.append(iv)
+            keys.append((strike, opt_type_str))
+
+        # Perform volatility skew fitting for this expiry
+        fitted_vols = fit_volatility_skew(strikes, ivs, forward, t_years, strikes, method=fit_method)
+        for (strike, opt_type_str), f_vol in zip(keys, fitted_vols):
+            fitted_iv_map[(expiry, strike, opt_type_str)] = f_vol
+
+    # 2. Build output rows
     out_expiry: list[int] = []
     out_strike: list[float] = []
     out_moneyness: list[float] = []
     out_opt_type: list[str] = []
     out_iv: list[float | None] = []
+    out_fitted_iv: list[float | None] = []
     out_source: list[str] = []
 
     for row in snap.iter_rows(named=True):
@@ -249,11 +506,14 @@ def iv_surface(
             else float("nan")
         )
 
+        f_iv = fitted_iv_map.get((expiry, strike, opt_type_str))
+
         out_expiry.append(expiry)
         out_strike.append(strike)
         out_moneyness.append(moneyness)
         out_opt_type.append(opt_type_str)
         out_iv.append(iv)
+        out_fitted_iv.append(f_iv)
         out_source.append(source)
 
     return pl.DataFrame(
@@ -263,6 +523,7 @@ def iv_surface(
             "moneyness": pl.Series(out_moneyness, dtype=pl.Float64),
             "opt_type": pl.Series(out_opt_type, dtype=pl.Utf8),
             "iv": pl.Series(out_iv, dtype=pl.Float64),
+            "fitted_iv": pl.Series(out_fitted_iv, dtype=pl.Float64),
             "source": pl.Series(out_source, dtype=pl.Utf8),
         }
     )
@@ -279,8 +540,9 @@ def vol_skew(
     expiry_ns: int,
     at_ns: int,
     rate: float = 0.0,
+    fit_method: str = "sabr",
 ) -> pl.DataFrame:
-    """Return per-strike IV and delta for a single expiry, ordered by strike.
+    """Return per-strike IV, delta, and fitted_iv for a single expiry, ordered by strike.
 
     Args:
         catalog:    A :class:`~crypcodile.store.catalog.Catalog` instance.
@@ -288,6 +550,7 @@ def vol_skew(
         expiry_ns:  Expiry filter (nanoseconds UTC).
         at_ns:      Snapshot instant (nanoseconds UTC).
         rate:       Continuous risk-free rate (default 0.0).
+        fit_method: Calibration/fitting model, either "sabr" or "spline" (default "sabr").
 
     Returns:
         A Polars DataFrame with columns:
@@ -297,13 +560,14 @@ def vol_skew(
         moneyness  Float64    ``strike / underlying_price``.
         opt_type   Utf8       ``"C"`` or ``"P"``.
         iv         Float64    Implied volatility (NULL when unavailable).
+        fitted_iv  Float64    Volatility fitted using SABR or Spline model.
         delta      Float64    Option delta (NULL when iv is unavailable).
         =========  =========  =======================================================
 
         Ordered by ``strike`` ascending.  Returns ``pl.DataFrame()`` when empty.
     """
     # Get the full surface snapshot first.
-    surface = iv_surface(catalog, underlying, at_ns, rate=rate)
+    surface = iv_surface(catalog, underlying, at_ns, rate=rate, fit_method=fit_method)
     if len(surface) == 0:
         return pl.DataFrame()
 
@@ -338,6 +602,7 @@ def vol_skew(
     out_moneyness: list[float] = []
     out_opt_type: list[str] = []
     out_iv: list[float | None] = []
+    out_fitted_iv: list[float | None] = []
     out_delta: list[float | None] = []
 
     for row in skew.sort("strike").iter_rows(named=True):
@@ -345,6 +610,7 @@ def vol_skew(
         moneyness = float(row["moneyness"])
         opt_type_str = str(row["opt_type"])
         iv = row["iv"]  # float or None
+        f_iv = row.get("fitted_iv")
 
         delta: float | None = None
         if iv is not None and underlying_price is not None and t_years > 0.0:
@@ -367,6 +633,7 @@ def vol_skew(
         out_moneyness.append(moneyness)
         out_opt_type.append(opt_type_str)
         out_iv.append(iv)
+        out_fitted_iv.append(f_iv)
         out_delta.append(delta)
 
     if not out_strike:
@@ -378,6 +645,7 @@ def vol_skew(
             "moneyness": pl.Series(out_moneyness, dtype=pl.Float64),
             "opt_type": pl.Series(out_opt_type, dtype=pl.Utf8),
             "iv": pl.Series(out_iv, dtype=pl.Float64),
+            "fitted_iv": pl.Series(out_fitted_iv, dtype=pl.Float64),
             "delta": pl.Series(out_delta, dtype=pl.Float64),
         }
     )

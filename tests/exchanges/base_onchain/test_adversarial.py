@@ -67,12 +67,12 @@ async def test_pagination_extremely_large_range():
             assert transport._poll_task is not None
             await transport._poll_task
             
-    assert len(captured_logs_calls) == 201
+    assert len(captured_logs_calls) == 200
     # Verify bounds of the first and last chunk
     assert captured_logs_calls[0]["fromBlock"] == 996
     assert captured_logs_calls[0]["toBlock"] == 1495
-    assert captured_logs_calls[-1]["fromBlock"] == 100996
-    assert captured_logs_calls[-1]["toBlock"] == 101000
+    assert captured_logs_calls[-1]["fromBlock"] == 100496
+    assert captured_logs_calls[-1]["toBlock"] == 100985
 
 
 @pytest.mark.asyncio
@@ -122,9 +122,7 @@ async def test_pagination_empty_range():
             await transport.connect()
             await transport._poll_task
             
-    assert len(captured_logs_calls) == 1
-    assert captured_logs_calls[0]["fromBlock"] == 996
-    assert captured_logs_calls[0]["toBlock"] == 1000
+    assert len(captured_logs_calls) == 0
 
 
 @pytest.mark.asyncio

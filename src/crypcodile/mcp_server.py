@@ -14,15 +14,17 @@ class AsyncWeb3(web3.AsyncWeb3):
     async def __aenter__(self) -> AsyncWeb3:
         return self
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        disconnect_fn = getattr(self.provider, "disconnect", None)
-        if disconnect_fn is not None:
-            import inspect
-            try:
-                res = disconnect_fn()
-                if inspect.isawaitable(res):
-                    await res
-            except Exception:
-                pass
+        try:
+            provider = getattr(self, "provider", None)
+            if provider is not None:
+                disconnect_fn = getattr(provider, "disconnect", None)
+                if disconnect_fn is not None:
+                    import inspect
+                    res = disconnect_fn()
+                    if inspect.isawaitable(res):
+                        await res
+        except (AttributeError, Exception):
+            pass
 
 
 from crypcodile import __version__
@@ -92,6 +94,63 @@ FACTORY_AERO_ABI = [{
     "stateMutability": "view", "type": "function"
 }]
 
+def _get_rpc_urls() -> list[str]:
+    urls_str = os.getenv("BASE_RPC_URLS", "")
+    if urls_str:
+        return [u.strip() for u in urls_str.split(",") if u.strip()]
+    fallback = os.getenv("BASE_RPC_URL", "https://base-rpc.publicnode.com")
+    return [fallback]
+
+import random
+
+async def execute_with_retry_and_failover(rpc_url_arg: str, callback: Any) -> Any:
+    """
+    Executes a callback that takes an AsyncWeb3 instance.
+    If the call fails due to connection or rate limit errors,
+    retries with exponential backoff and failover to other RPC URLs.
+    """
+    if rpc_url_arg == DEFAULT_RPC_URL:
+        urls = _get_rpc_urls()
+    else:
+        pool_urls = _get_rpc_urls()
+        urls = [rpc_url_arg] + [u for u in pool_urls if u != rpc_url_arg]
+
+    if not urls:
+        urls = [DEFAULT_RPC_URL]
+
+    max_attempts_per_url = 3
+    base_delay = 0.5
+    max_delay = 5.0
+    last_exception = None
+
+    for url in urls:
+        for attempt in range(max_attempts_per_url):
+            try:
+                async with AsyncWeb3(AsyncHTTPProvider(url)) as w3:
+                    return await callback(w3)
+            except Exception as e:
+                err_str = str(e).lower()
+                is_retryable = "429" in err_str or "rate limit" in err_str or any(
+                    kw in err_str for kw in [
+                        "connection", "timeout", "connect", "refused", "disconnected",
+                        "502", "503", "504", "http status", "http error", "status code 429"
+                    ]
+                )
+                if not is_retryable:
+                    raise e
+                
+                last_exception = e
+                delay = min(max_delay, base_delay * (2 ** attempt))
+                delay = delay * random.uniform(0.5, 1.5)
+                sys.stderr.write(
+                    f"RPC error on {url} (attempt {attempt + 1}/{max_attempts_per_url}): {e}. "
+                    f"Retrying in {delay:.2f}s...\n"
+                )
+                sys.stderr.flush()
+                await asyncio.sleep(delay)
+
+    raise last_exception if last_exception else Exception("RPC failover exhausted without success")
+
 async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict[str, Any]:
     """Helper to fetch price and reserve stats from Base mainnet."""
     try:
@@ -103,88 +162,89 @@ async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict
     if not spec:
         return {"error": f"Symbol {symbol} not supported. Supported: {list(POOL_SPECS.keys())}"}
     
-    try:
-        async with AsyncWeb3(AsyncHTTPProvider(rpc_url)) as w3:
-            t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
-            t1_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token1"])])
+    async def query_price(w3: AsyncWeb3) -> dict[str, Any]:
+        t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
+        t1_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token1"])])
+        
+        # 1. Resolve pool address
+        if spec["type"] == "uniswap_v3":
+            sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr], key=lambda x: int(x, 16))
+            factory = w3.eth.contract(
+                address=AsyncWeb3.to_checksum_address(FACTORIES["uniswap_v3"]),
+                abi=FACTORY_V3_ABI
+            )
+            pool_addr = await factory.functions.getPool(
+                sorted_t0, sorted_t1, int(spec["fee"])
+            ).call()
+        else:
+            factory = w3.eth.contract(
+                address=AsyncWeb3.to_checksum_address(FACTORIES["aerodrome"]),
+                abi=FACTORY_AERO_ABI
+            )
+            pool_addr = await factory.functions.getPool(
+                t0_addr, t1_addr, bool(spec["stable"])
+            ).call()
             
-            # 1. Resolve pool address
-            if spec["type"] == "uniswap_v3":
-                sorted_t0, sorted_t1 = sorted([t0_addr, t1_addr])
-                factory = w3.eth.contract(
-                    address=AsyncWeb3.to_checksum_address(FACTORIES["uniswap_v3"]),
-                    abi=FACTORY_V3_ABI
-                )
-                pool_addr = await factory.functions.getPool(
-                    sorted_t0, sorted_t1, int(spec["fee"])
-                ).call()
-            else:
-                factory = w3.eth.contract(
-                    address=AsyncWeb3.to_checksum_address(FACTORIES["aerodrome"]),
-                    abi=FACTORY_AERO_ABI
-                )
-                pool_addr = await factory.functions.getPool(
-                    t0_addr, t1_addr, bool(spec["stable"])
-                ).call()
-                
-            if pool_addr == "0x0000000000000000000000000000000000000000":
-                return {"error": f"Pool for {symbol} not found on Base mainnet."}
-                
-            # 2. Query pool state
-            price = 0.0
-            reserve0 = 0.0
-            reserve1 = 0.0
-            is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
+        if pool_addr == "0x0000000000000000000000000000000000000000":
+            return {"error": f"Pool for {symbol} not found on Base mainnet."}
             
-            if spec["type"] == "uniswap_v3":
-                pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V3_ABI)
-                slot0 = await pool_contract.functions.slot0().call()
-                liquidity = await pool_contract.functions.liquidity().call()
-                sqrtPriceX96 = slot0[0]
-                price_ratio = (sqrtPriceX96 / (2**96)) ** 2
-                
-                dec_diff = int(spec["decimals0"]) - int(spec["decimals1"])
-                if not is_flipped:
-                    price = price_ratio * (10 ** dec_diff)
-                else:
-                    price = (1.0 / price_ratio) * (10 ** dec_diff) if price_ratio > 0 else 0.0
-                
-                # Calculate virtual reserves
-                sqrtP = sqrtPriceX96 / (2**96)
-                x_virtual = liquidity / sqrtP if sqrtP > 0 else 0
-                y_virtual = liquidity * sqrtP
-                
-                if not is_flipped:
-                    reserve0 = x_virtual / (10 ** int(spec["decimals0"]))
-                    reserve1 = y_virtual / (10 ** int(spec["decimals1"]))
-                else:
-                    reserve0 = y_virtual / (10 ** int(spec["decimals0"]))
-                    reserve1 = x_virtual / (10 ** int(spec["decimals1"]))
+        # 2. Query pool state
+        price = 0.0
+        reserve0 = 0.0
+        reserve1 = 0.0
+        is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
+        
+        if spec["type"] == "uniswap_v3":
+            pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V3_ABI)
+            slot0 = await pool_contract.functions.slot0().call()
+            liquidity = await pool_contract.functions.liquidity().call()
+            sqrtPriceX96 = slot0[0]
+            price_ratio = (sqrtPriceX96 / (2**96)) ** 2
+            
+            dec_diff = int(spec["decimals0"]) - int(spec["decimals1"])
+            if not is_flipped:
+                price = price_ratio * (10 ** dec_diff)
             else:
-                pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V2_ABI)
-                res = await pool_contract.functions.getReserves().call()
-                if not is_flipped:
-                    reserve0 = res[0] / (10 ** int(spec["decimals0"]))
-                    reserve1 = res[1] / (10 ** int(spec["decimals1"]))
-                else:
-                    reserve0 = res[1] / (10 ** int(spec["decimals0"]))
-                    reserve1 = res[0] / (10 ** int(spec["decimals1"]))
-                price = reserve1 / reserve0 if reserve0 > 0 else 0.0
-                
-            import inspect
-            block_num = w3.eth.block_number
-            if inspect.isawaitable(block_num):
-                block_num = await block_num
-            return {
-                "symbol": symbol,
-                "pool_address": pool_addr,
-                "price": price,
-                "reserve0": reserve0,
-                "reserve1": reserve1,
-                "pool_type": spec["type"],
-                "block": block_num
-            }
+                price = (1.0 / price_ratio) * (10 ** dec_diff) if price_ratio > 0 else 0.0
+            
+            # Calculate virtual reserves
+            sqrtP = sqrtPriceX96 / (2**96)
+            x_virtual = liquidity / sqrtP if sqrtP > 0 else 0
+            y_virtual = liquidity * sqrtP
+            
+            if not is_flipped:
+                reserve0 = x_virtual / (10 ** int(spec["decimals0"]))
+                reserve1 = y_virtual / (10 ** int(spec["decimals1"]))
+            else:
+                reserve0 = y_virtual / (10 ** int(spec["decimals0"]))
+                reserve1 = x_virtual / (10 ** int(spec["decimals1"]))
+        else:
+            pool_contract = w3.eth.contract(address=pool_addr, abi=POOL_V2_ABI)
+            res = await pool_contract.functions.getReserves().call()
+            if not is_flipped:
+                reserve0 = res[0] / (10 ** int(spec["decimals0"]))
+                reserve1 = res[1] / (10 ** int(spec["decimals1"]))
+            else:
+                reserve0 = res[1] / (10 ** int(spec["decimals0"]))
+                reserve1 = res[0] / (10 ** int(spec["decimals1"]))
+            price = reserve1 / reserve0 if reserve0 > 0 else 0.0
+            
+        import inspect
+        block_num = w3.eth.block_number
+        if inspect.isawaitable(block_num):
+            block_num = await block_num
+        return {
+            "symbol": symbol,
+            "pool_address": pool_addr,
+            "price": price,
+            "reserve0": reserve0,
+            "reserve1": reserve1,
+            "pool_type": spec["type"],
+            "block": block_num
+        }
 
+    try:
+        return await execute_with_retry_and_failover(rpc_url, query_price)
     except Exception as e:
         return {"error": f"Failed fetching pool state: {e}"}
 
@@ -200,66 +260,68 @@ async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) 
     if not spec:
         return {"error": f"Symbol {symbol} not supported."}
         
+    async def query_volume(w3: AsyncWeb3) -> dict[str, Any]:
+        t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
+        t1_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token1"])])
+        pool_addr = state_res["pool_address"]
+        is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
+        
+        latest_block = await w3.eth.block_number
+        from_block = max(0, latest_block - 1800) # ~1h of blocks
+        
+        swap_topic = (
+            "0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daEE5297F6e85"
+            if spec["type"] == "uniswap_v3"
+            else "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
+        )
+        
+        logs = await w3.eth.get_logs({
+            "address": pool_addr,
+            "topics": [swap_topic],
+            "fromBlock": from_block,
+            "toBlock": latest_block
+        })
+        
+        volume_1h_base = 0.0
+        volume_1h_quote = 0.0
+        
+        for lg in logs:
+            data = lg["data"]
+            if spec["type"] == "uniswap_v3":
+                amount0 = int.from_bytes(data[0:32], byteorder='big', signed=True)
+                amount1 = int.from_bytes(data[32:64], byteorder='big', signed=True)
+                
+                if not is_flipped:
+                    abs_base = abs(amount0) / (10 ** int(spec["decimals0"]))
+                    abs_quote = abs(amount1) / (10 ** int(spec["decimals1"]))
+                else:
+                    abs_base = abs(amount1) / (10 ** int(spec["decimals0"]))
+                    abs_quote = abs(amount0) / (10 ** int(spec["decimals1"]))
+            else: # aerodrome_v2
+                amt0_in = int.from_bytes(data[0:32], byteorder='big', signed=False)
+                amt1_in = int.from_bytes(data[32:64], byteorder='big', signed=False)
+                amt0_out = int.from_bytes(data[64:96], byteorder='big', signed=False)
+                amt1_out = int.from_bytes(data[96:128], byteorder='big', signed=False)
+                
+                if not is_flipped:
+                    abs_base = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** int(spec["decimals0"]))
+                    abs_quote = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** int(spec["decimals1"]))
+                else:
+                    abs_base = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** int(spec["decimals0"]))
+                    abs_quote = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** int(spec["decimals1"]))
+            
+            volume_1h_base += abs_base
+            volume_1h_quote += abs_quote
+            
+        res = dict(state_res)
+        res["volume_1h_base"] = volume_1h_base
+        res["volume_1h_quote"] = volume_1h_quote
+        res["volume_1h_timeframe_blocks"] = latest_block - from_block
+        res["num_swaps_1h"] = len(logs)
+        return res
+
     try:
-        async with AsyncWeb3(AsyncHTTPProvider(rpc_url)) as w3:
-            t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
-            t1_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token1"])])
-            pool_addr = state_res["pool_address"]
-            is_flipped = int(t1_addr, 16) < int(t0_addr, 16)
-            
-            latest_block = await w3.eth.block_number
-            from_block = max(0, latest_block - 1800) # ~1h of blocks
-            
-            swap_topic = (
-                "0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daEE5297F6e85"
-                if spec["type"] == "uniswap_v3"
-                else "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
-            )
-            
-            logs = await w3.eth.get_logs({
-                "address": pool_addr,
-                "topics": [swap_topic],
-                "fromBlock": from_block,
-                "toBlock": latest_block
-            })
-            
-            volume_1h_base = 0.0
-            volume_1h_quote = 0.0
-            
-            for lg in logs:
-                data = lg["data"]
-                if spec["type"] == "uniswap_v3":
-                    amount0 = int.from_bytes(data[0:32], byteorder='big', signed=True)
-                    amount1 = int.from_bytes(data[32:64], byteorder='big', signed=True)
-                    
-                    if not is_flipped:
-                        abs_base = abs(amount0) / (10 ** int(spec["decimals0"]))
-                        abs_quote = abs(amount1) / (10 ** int(spec["decimals1"]))
-                    else:
-                        abs_base = abs(amount1) / (10 ** int(spec["decimals0"]))
-                        abs_quote = abs(amount0) / (10 ** int(spec["decimals1"]))
-                else: # aerodrome_v2
-                    amt0_in = int.from_bytes(data[0:32], byteorder='big', signed=False)
-                    amt1_in = int.from_bytes(data[32:64], byteorder='big', signed=False)
-                    amt0_out = int.from_bytes(data[64:96], byteorder='big', signed=False)
-                    amt1_out = int.from_bytes(data[96:128], byteorder='big', signed=False)
-                    
-                    if not is_flipped:
-                        abs_base = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** int(spec["decimals0"]))
-                        abs_quote = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** int(spec["decimals1"]))
-                    else:
-                        abs_base = (amt1_in if amt1_in > 0 else amt1_out) / (10 ** int(spec["decimals0"]))
-                        abs_quote = (amt0_in if amt0_in > 0 else amt0_out) / (10 ** int(spec["decimals1"]))
-                
-                volume_1h_base += abs_base
-                volume_1h_quote += abs_quote
-                
-            state_res["volume_1h_base"] = volume_1h_base
-            state_res["volume_1h_quote"] = volume_1h_quote
-            state_res["volume_1h_timeframe_blocks"] = latest_block - from_block
-            state_res["num_swaps_1h"] = len(logs)
-            
-            return state_res
+        return await execute_with_retry_and_failover(rpc_url, query_volume)
     except Exception as e:
         return {"error": f"Failed fetching 1h volume: {e}"}
 
@@ -354,6 +416,12 @@ TOOLS = [
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
     """Run the MCP JSON-RPC loop over stdin/stdout."""
+    import logging
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, force=True)
+    for handler in logging.root.handlers:
+        if getattr(handler, "stream", None) is sys.stdout:
+            handler.stream = sys.stderr
+
     client = CrypcodileClient(data_dir=data_dir)
     loop = asyncio.get_event_loop()
     reader = asyncio.StreamReader()

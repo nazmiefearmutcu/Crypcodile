@@ -250,21 +250,9 @@ async def test_list_instruments_calls_full_cartesian_product() -> None:
     # Track every (currency, kind) pair that was requested.
     requested_pairs: list[tuple[str, str]] = []
 
-    # Build a mock aiohttp response that returns the fixture JSON.
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json = AsyncMock(return_value=fixture_data)
-    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-    mock_response.__aexit__ = AsyncMock(return_value=False)
-
-    def fake_get(url: str, params: dict[str, str]) -> Any:
+    async def fake_http_get(url: str, params: dict[str, str], **kwargs: Any) -> Any:
         requested_pairs.append((params["currency"], params["kind"]))
-        return mock_response
-
-    mock_session = MagicMock()
-    mock_session.get = fake_get
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+        return fixture_data
 
     registry = InstrumentRegistry()
     sink = _MemSink()
@@ -275,9 +263,7 @@ async def test_list_instruments_calls_full_cartesian_product() -> None:
         registry=registry,
     )
 
-    with patch("crypcodile.exchanges.deribit.connector.aiohttp.ClientSession") as mock_cls:
-        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(conn, "http_get", new=fake_http_get):
         instruments = await conn.list_instruments()
 
     # Verify currencies covered

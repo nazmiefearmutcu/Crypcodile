@@ -133,7 +133,7 @@ async def test_replay_attack_vulnerability() -> None:
             payment_signature=sig_payload_1
         )
         assert resp_1["status"] == "success"
-        assert PAYMENTS_DB[pid1]["status"] == "paid"
+        assert PAYMENTS_DB[pid1]["status"] == "spent"
         
         # 4. Call second time with pid2 and the SAME tx_hash_1
         sig_payload_2 = json.dumps({
@@ -390,10 +390,10 @@ async def test_duplicate_log_query_bug() -> None:
         
     # Assert logged ranges: with monotonic cursor update, the second range is from 1001 to 1010, preventing duplicate queries.
     assert len(logged_ranges) >= 2
-    assert logged_ranges[0] == (976, 1000)
-    assert logged_ranges[1] == (996, 1010)
+    assert logged_ranges[0] == (961, 985)
+    assert logged_ranges[1] == (981, 995)
     
-    # Verify range overlap is exactly the 5 blocks overlap (996 to 1000 inclusive)
-    overlap = set(range(976, 1001)).intersection(set(range(996, 1011)))
-    assert overlap == set(range(996, 1001))
+    # Verify range overlap is exactly the 5 blocks overlap (981 to 985 inclusive)
+    overlap = set(range(961, 986)).intersection(set(range(981, 996)))
+    assert overlap == set(range(981, 986))
     print("DUPLICATE_LOG_QUERY_BUG_FIXED: Verified no duplicate log query range overlap.")

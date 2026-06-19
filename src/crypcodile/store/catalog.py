@@ -76,11 +76,12 @@ class Catalog:
     def scan(
         self,
         channel: str,
-        symbol: str,
+        symbol: str | list[str],
         start_ns: int,
         end_ns: int,
+        limit: int | None = None,
     ) -> pl.DataFrame:
-        """Return rows for a single symbol within a nanosecond time range.
+        """Return rows for a single or multiple symbols within a nanosecond time range.
 
         Partition pruning is applied by narrowing the glob **before** the
         ``WHERE`` clause — only date partitions that overlap ``[start_ns,
@@ -88,9 +89,10 @@ class Catalog:
 
         Args:
             channel: Channel name, e.g. ``"trade"``, ``"book_snapshot"``.
-            symbol: Canonical symbol string, e.g. ``"deribit:BTC-PERPETUAL"``.
+            symbol: Canonical symbol string or list of symbol strings.
             start_ns: Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
             end_ns: Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+            limit: Optional maximum number of rows to retrieve.
 
         Returns:
             A Polars DataFrame ordered by ``local_ts``, potentially empty if
@@ -114,6 +116,19 @@ class Catalog:
         # DuckDB does not support ? parameters for read_parquet() path arguments.
         paths_literal = ", ".join(f"'{p.replace(chr(39), chr(39) * 2)}'" for p in unique_globs)
 
+        if isinstance(symbol, str):
+            symbol_filter = "symbol = ?"
+            params = [symbol, start_ns, end_ns]
+        else:
+            symbols_list = list(symbol)
+            if not symbols_list:
+                return pl.DataFrame()
+            placeholders = ", ".join("?" for _ in symbols_list)
+            symbol_filter = f"symbol IN ({placeholders})"
+            params = symbols_list + [start_ns, end_ns]
+
+        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+
         # Use parameterized query to avoid SQL injection on the symbol value.
         # start_ns and end_ns are ints (no injection risk) but kept as parameters
         # for consistency and to let DuckDB optimise them as typed literals.
@@ -124,12 +139,13 @@ class Catalog:
                 hive_partitioning => true,
                 union_by_name => true
             )
-            WHERE symbol = ?
+            WHERE {symbol_filter}
               AND local_ts >= ?
               AND local_ts <= ?
             ORDER BY local_ts
+            {limit_clause}
         """
-        result = self._conn.execute(sql, [symbol, start_ns, end_ns])  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        result = self._conn.execute(sql, params)  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
         df = result.pl()
         # Normalise: return a bare schemaless DataFrame when no rows match so
         # both empty-result paths have the same shape (consistent contract).
