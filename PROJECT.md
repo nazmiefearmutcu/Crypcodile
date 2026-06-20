@@ -1,19 +1,34 @@
-# Project: Crypcodile CLI Terminal Commands Audit and Repair
+# Project: Bookmap Visualizer CLI & Interactive Shell Command
 
 ## Architecture
-The Crypcodile CLI exposes all trading, analytics, and utility functions of the library through a unified terminal interface. This audit ensures all CLI commands are correct, robust against empty/malformed data, handle exceptions gracefully, and implement proper input validation and interactive prompt safety.
+The Bookmap visualizer runs as a PyQt6 GUI application. It is spawned by a new CLI command (`bookmap`) registered in `src/crypcodile/cli.py` (which also makes it available in the interactive `crypcodile shell`).
+To prevent blocking user input in the interactive shell or the CLI prompt, the GUI window runs in a separate thread or process.
+The application consumes two data sources:
+1. Historical Data: Queried from the local Parquet data lake using the `Catalog` utility (DuckDB views).
+2. Live Data Stream: Real-time `BookDelta` and `Trade` events received by subscribing to the live exchange connector.
+
+The GUI itself comprises:
+- Depth Heatmap: Displays order book size (liquidity) at various price levels over a rolling time window.
+- Cumulative Delta Line Chart: Shows running cumulative volume delta (buys - sells).
+- L2 Depth Profile: Vertical sidebar showing current bids and asks depth.
+- Trade Bubbles: Circles overlaid on the price chart whose sizes reflect trade volume and colors reflect the execution side (buy/sell).
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | CLI Codebase Audit & Scan | Code scan of `src/crypcodile/cli.py`, identify bugs, input validation gaps, missing features, interactive prompt vulnerabilities. | None | DONE (verified by Conv IDs: 9e332248-4a39-49f2-bb9c-73492fb72722, c4f9d073-ec8a-4588-ac36-28e5c7dc32f4, faf52198-585a-4dd3-9e52-e740b8b3403c) |
-| 2 | CLI Command Implementation & Repair | Fix identified bugs, add input validation, fix interactive prompt handling in non-interactive/invalid states, resolve empty data lake crashes. | M1 | DONE (verified by Conv ID: 0fd4c9fb-e5ea-434a-8d32-559facbc9f67) |
-| 3 | Test Verification | Add new unit tests covering the repaired CLI commands and verify that all 776 Python and 117 Node.js tests pass cleanly. | M2 | DONE (verified by Conv IDs: ae97f70e-1d4e-4f73-8b85-978d604589c3, 2fce62d8-1ead-4af9-a73a-f3796a0b1a6f, 75838d20-877d-4b91-80e5-43aae656d690, af84e4eb-3ea7-4324-ba11-fc6c2ce0e764, 87619cc4-c9f9-4c27-a8b0-48c178422256) |
-| 4 | Build & Package Release | Bump version to `0.1.039`, update `CHANGELOG.md`, run `uv build`, git commit, tag as `v0.1.039`, and push to remote origin. | M3 | DONE (local package built, committed, and tagged. Remote push pending sandbox bypass) |
+| 1 | Exploration & Environment Verification | Verify PyQt6 package availability, Parquet schemas, and data flow. | None | DONE (verified by Conv ID: 007671a8-d99a-444b-8654-a090431075e5) |
+| 2 | PyQt6 Bookmap Window Development | Implement the native PyQt6 visual components (Heatmap, Cumulative Delta, L2 depth, Trade bubbles) with dark theme. | M1 | DONE (verified by Conv ID: 50a34f1d-8f53-44b1-a215-4fecb094196f) |
+| 3 | CLI & Interactive Shell Command | Register `bookmap` command in `cli.py`, load historical Parquet data, stream live events, and run in separate thread/process. | M2 | DONE (verified by Conv ID: fda6b22d-0f58-4af6-81a3-154f53375566) |
+| 4 | Programmatic Verification & Unit Tests | Write `tests/test_bookmap.py` using pytest/pytest-qt, and ensure existing test suite passes cleanly. | M3 | DONE (verified by Conv ID: fda6b22d-0f58-4af6-81a3-154f53375566) |
+
+## Interface Contracts
+### CLI ↔ GUI Thread/Process
+- When `crypcodile bookmap --symbol <symbol> --historical-hours <hours>` is executed:
+  - The CLI thread queries historical snapshot/delta/trade records from `Catalog`.
+  - It launches a separate thread or process running the PyQt6 application, passing the historical data.
+  - It establishes a live subscription stream for `BookDelta` and `Trade` events, sending them via a thread-safe queue/channel to the GUI thread for real-time visualization updates.
 
 ## Code Layout
-- `src/crypcodile/cli.py`: The entry point for the CLI, defining all commands (query, catalog, export, replay, collect, funding-apr, basis, iv-surface, term-structure, mcp, update, shell).
-- `tests/`: Directory containing Python unit tests (e.g. `tests/test_cli.py` or new CLI-focused tests).
-- `tests/e2e.test.js`: JS E2E test suite.
-- `pyproject.toml` and `src/crypcodile/__init__.py`: Package metadata and version definitions.
-- `CHANGELOG.md`: Project change log.
+- `src/crypcodile/cli.py`: Registry for the `bookmap` command.
+- `src/crypcodile/gui/bookmap_window.py`: PyQt6 GUI implementation.
+- `tests/test_bookmap.py`: Unit and integration tests for the bookmap visualizer.

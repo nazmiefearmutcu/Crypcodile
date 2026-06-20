@@ -2171,8 +2171,258 @@ def update(
 
 
 # ---------------------------------------------------------------------------
+# bookmap
+# ---------------------------------------------------------------------------
+
+from crypcodile.sink.base import Sink
+
+class QueueSink(Sink):
+    """A sink that routes normalized records into a multiprocessing/thread-safe queue."""
+    def __init__(self, queue: Any) -> None:
+        self.queue = queue
+
+    async def put(self, record: Any) -> None:
+        self.queue.put(record)
+
+    async def flush(self) -> None:
+        pass
+
+
+class TaskDoneQueueWrapper:
+    """Wraps a multiprocessing.Queue to provide a no-op task_done() method."""
+    def __init__(self, q: Any) -> None:
+        self.q = q
+
+    def put(self, item: Any, block: bool = True, timeout: float | None = None) -> None:
+        self.q.put(item, block, timeout)
+
+    def put_nowait(self, item: Any) -> None:
+        self.q.put_nowait(item)
+
+    def get(self, block: bool = True, timeout: float | None = None) -> Any:
+        return self.q.get(block, timeout)
+
+    def get_nowait(self) -> Any:
+        return self.q.get_nowait()
+
+    def empty(self) -> bool:
+        return self.q.empty()
+
+    def task_done(self) -> None:
+        # multiprocessing.Queue lacks task_done(); this wrapper prevents errors.
+        pass
+
+
+def run_bookmap_gui(queue: Any, historical_events: list[dict]) -> None:
+    """Target function for the multiprocessing GUI process."""
+    import sys
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from crypcodile.gui.bookmap_window import BookmapWindow
+    except ImportError as e:
+        sys.stderr.write(f"GUI dependencies not available: {e}\n")
+        sys.stderr.flush()
+        return
+
+    app = QApplication(sys.argv)
+    wrapped = TaskDoneQueueWrapper(queue)
+    win = BookmapWindow(queue=wrapped)
+    if historical_events:
+        win.load_historical_data(historical_events)
+    win.show()
+    sys.exit(app.exec())
+
+
+def run_live_feeder(exchange: str, symbol_raw: str, queue: Any) -> None:
+    """Target function for the background live feed thread."""
+    import asyncio
+    from crypcodile.exchanges.factory import make_connector
+    from crypcodile.instruments.registry import InstrumentRegistry
+    from crypcodile.client.collect import collect as collect_live
+    from crypcodile.ingest.transport import AiohttpWsTransport
+
+    registry = InstrumentRegistry()
+    sink = QueueSink(queue)
+    try:
+        connector = make_connector(
+            exchange=exchange,
+            symbols=[symbol_raw],
+            channels=["book_delta", "trade"],
+            out=sink,
+            registry=registry,
+        )
+    except Exception as exc:
+        import sys
+        sys.stderr.write(f"Error creating connector: {exc}\n")
+        sys.stderr.flush()
+        return
+
+    if connector.transport is None:
+        connector.transport = AiohttpWsTransport(connector.ws_url)
+
+    try:
+        asyncio.run(collect_live([connector], sink))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    except Exception as e:
+        import sys
+        sys.stderr.write(f"Feeder thread exception: {e}\n")
+        sys.stderr.flush()
+
+
+@app.command()
+def bookmap(
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Canonical symbol, e.g. deribit:BTC-PERPETUAL."),
+    ] = None,
+    historical_hours: Annotated[
+        float,
+        typer.Option("--historical-hours", help="Number of historical hours to load."),
+    ] = 2.0,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Launch the PyQt6 Bookmap visualizer with historical data and live updates."""
+    import time
+    import polars as pl
+    import multiprocessing
+    import threading
+    from crypcodile.store.catalog import Catalog
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # Interactive mode
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(data_dir, channel="book_snapshot")
+            if selected_symbols:
+                symbol = selected_symbols[0]
+
+        if not symbol:
+            symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="book_snapshot")
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if ":" not in symbol:
+        typer.echo(f"Error: Symbol '{symbol}' is not in canonical format (exchange:symbol).", err=True)
+        raise typer.Exit(code=1)
+
+    parts = symbol.split(":", 1)
+    exchange = parts[0]
+    raw_symbol = parts[1]
+    if exchange == "binance-spot":
+        exchange = "binance"
+    elif exchange == "bybit-spot":
+        exchange = "bybit"
+
+    catalog = Catalog(data_dir)
+
+    # Determine end_ns based on max database timestamp or fallback to current time
+    end_ns = time.time_ns()
+    try:
+        max_df = catalog.query(
+            "SELECT max(local_ts) as max_t FROM book_snapshot WHERE symbol = ?",
+            params=[symbol]
+        )
+        if len(max_df) > 0 and max_df["max_t"][0] is not None:
+            end_ns = int(max_df["max_t"][0])
+    except Exception:
+        try:
+            max_df = catalog.query(
+                "SELECT max(local_ts) as max_t FROM trade WHERE symbol = ?",
+                params=[symbol]
+            )
+            if len(max_df) > 0 and max_df["max_t"][0] is not None:
+                end_ns = int(max_df["max_t"][0])
+        except Exception:
+            pass
+
+    start_ns = end_ns - int(historical_hours * 3600 * 1_000_000_000)
+
+    typer.echo(f"Querying historical data for {symbol}...")
+    try:
+        snap_df = catalog.scan("book_snapshot", symbol, start_ns, end_ns)
+    except Exception:
+        snap_df = pl.DataFrame()
+
+    try:
+        delta_df = catalog.scan("book_delta", symbol, start_ns, end_ns)
+    except Exception:
+        delta_df = pl.DataFrame()
+
+    try:
+        trade_df = catalog.scan("trade", symbol, start_ns, end_ns)
+    except Exception:
+        trade_df = pl.DataFrame()
+
+    # Convert and normalize historical data
+    events = []
+
+    def df_to_list(df, channel_name):
+        if df.is_empty():
+            return []
+        rows = df.to_dicts()
+        for r in rows:
+            r["channel"] = channel_name
+        return rows
+
+    events.extend(df_to_list(snap_df, "book_snapshot"))
+    events.extend(df_to_list(delta_df, "book_delta"))
+    events.extend(df_to_list(trade_df, "trade"))
+
+    for r in events:
+        if r.get("channel") in ("book_snapshot", "book_delta"):
+            for side in ("bids", "asks"):
+                original = r.get(side)
+                normalized = []
+                if original:
+                    for item in original:
+                        if isinstance(item, dict):
+                            price = item.get("price")
+                            amount = item.get("amount") if item.get("amount") is not None else item.get("size")
+                            if price is not None and amount is not None:
+                                normalized.append((float(price), float(amount)))
+                        elif isinstance(item, (list, tuple)):
+                            normalized.append((float(item[0]), float(item[1])))
+                r[side] = normalized
+
+    events.sort(key=lambda x: x.get("local_ts") or 0)
+
+    # Initialize multiprocessing Queue and start GUI process
+    queue = multiprocessing.Queue()
+    gui_process = multiprocessing.Process(
+        target=run_bookmap_gui,
+        args=(queue, events),
+        daemon=True
+    )
+    gui_process.start()
+
+    # Start live feed connector thread
+    feeder_thread = threading.Thread(
+        target=run_live_feeder,
+        args=(exchange, raw_symbol, queue),
+        daemon=True
+    )
+    feeder_thread.start()
+
+    typer.echo(f"Launched bookmap visualizer process and subscription thread for {symbol}.")
+
+
+# ---------------------------------------------------------------------------
 # shell
 # ---------------------------------------------------------------------------
+
 
 
 @app.command()

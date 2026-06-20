@@ -12,3 +12,4 @@ def configure_payments_env(tmp_path):
         del os.environ["PAYMENTS_FILE"]
     if "CUSTOM_POOLS_IPC_FILE" in os.environ:
         del os.environ["CUSTOM_POOLS_IPC_FILE"]
+
