@@ -43,7 +43,7 @@ Crypcodile pioneers this integration via its natively embedded **Model Context P
 uv run crypcodile mcp --data-dir data
 ```
 
-## Analytics
+## 4. Analytics & Derivatives Research
 
 Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing optimized implementations for derivatives research and CLI commands like `funding_apr` and `iv_surface`:
 
@@ -51,7 +51,29 @@ Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing opt
 *   **Volatility Surfaces (`volsurface.py`):** Multi-dimensional implied volatility (IV) surface generation and interpolation across maturities (exposed via `iv_surface` command).
 *   **Perpetual Basis (`funding.py`, `basis.py`):** Real-time funding rate aggregation (exposed via `funding_apr` command) and spot/perp basis analytics.
 
-## 5. Installation & Quick Start
+## 5. Bookmap Visualizer (Order Book Depth & Cumulative Delta)
+
+Crypcodile features a high-performance, macOS-optimized native desktop GUI visualizer built with `PyQt6` and `pyqtgraph`. It allows quantitative researchers to visually analyze market microstructures and order book dynamics in real-time, resembling the industry-standard Bookmap interface.
+
+### Key Features
+*   **Order Book Depth Heatmap**: Price vs. Time rolling grid representation of historical and live limit order book liquidity, color-coded using a log-scale colormap.
+*   **Cumulative Delta Line Chart**: Real-time tracking of buyer-initiated vs. seller-initiated trading volume imbalances.
+*   **Vertical L2 Depth Profile Sidebar**: Live vertical representation of bid/ask depth distributions across price levels (Y-linked to the price chart).
+*   **Trade Bubbles Overlay**: Renders transaction executions on the price chart as semi-transparent neon green (buy) and bright red (sell) circles, with the radius proportional to trade size.
+*   **Non-Blocking Integration**: Running the command inside the interactive `crypcodile shell` launches the visualizer as an independent background subprocess, allowing developers to continue running shell queries concurrently.
+
+### Usage
+Launch the visualizer by specifying the symbol and the amount of historical catalog data to load:
+```bash
+# Launch directly from the command line
+crypcodile bookmap --symbol deribit:BTC-PERPETUAL --historical-hours 2.0
+
+# Or inside the interactive shell
+crypcodile shell
+crypcodile> bookmap --symbol deribit:BTC-PERPETUAL --historical-hours 1.0
+```
+
+## 6. Installation & Quick Start
 
 Crypcodile requires Python 3.12+. We recommend using `uv` for high-performance dependency management.
 
@@ -106,7 +128,7 @@ if __name__ == "__main__":
 
 *(Additional production-ready implementation architectures, including Farcaster Frame backends and interactive Dashboards, are available in the `examples/` directory).*
 
-## 6. Testing & Reliability Guarantee
+## 7. Testing & Reliability Guarantee
 
 Financial data infrastructure fails at the edge cases. Crypcodile is hardened by a rigorous, multi-tiered test suite exceeding standard unit testing:
 
@@ -121,10 +143,10 @@ uv sync
 pytest tests/ -v
 ```
 
-## 7. Contributing
+## 8. Contributing
 
 We welcome pull requests from the quantitative research and Ethereum L2 developer communities. Please review `CHALLENGE_REPORT.md` for context on current architectural trade-offs and `CHANGELOG.md` for recent version iterations. Ensure all adversarial and E2E test suites pass prior to submission.
 
-## 8. License
+## 9. License
 
 Crypcodile is distributed under the [Apache-2.0 License](LICENSE).
