@@ -1,35 +1,54 @@
 # Original User Request
 
-## 2026-06-14T14:05:21Z
+## Follow-up — 2026-06-20T15:39:37Z
 
-You are the Project Orchestrator for the Crypcodile repository preparation project.
-Your identity: teamwork_preview_orchestrator
-Your working directory: /Users/nazmi/Crypcodile/.agents/orchestrator
-Your task is defined in the original request at /Users/nazmi/Crypcodile/.agents/ORIGINAL_REQUEST.md.
+Extend the Crypcodile CLI and its interactive shell with three new analytics commands that leverage the existing data lake: a Slippage Estimator, an Order Flow Imbalance (OFI) calculator, and a Whale/Liquidation Alert tracker. Ensure all commands are fully functional, integrated with autocomplete, and covered by unit tests.
 
-Specifically, you must:
-1. Decompose the project into milestones.
-2. Complete the Base on-chain connector, tests with mocks, showcase example, and PyPI readiness.
-3. Coordinate specialists (such as explorers, implementers, reviewers) to implement and verify the changes.
-4. Maintain `plan.md` and `progress.md` in your working directory (/Users/nazmi/Crypcodile/.agents/orchestrator) and update them regularly.
-5. Notify the Sentinel (parent agent) when all milestones are complete and you claim victory.
+## Requirements
 
-Please start by reading the original user request and initializing your planning. Report back with your initial plan.
+### R1. Execution Slippage Estimator (`slippage` Command)
+Add a command `slippage` to the CLI and shell:
+- Command: `crypcodile slippage --symbol <symbol> --side <buy|sell> --size <amount>`
+- It must query the latest order book depth snapshot (`book_snapshot`) from the data lake for the symbol.
+- It must walk the bids (for sells) or asks (for buys) to calculate the Volume Weighted Average Price (VWAP) for the given size, comparing it to the best bid/ask to output:
+  - Expected execution price (average fill price)
+  - Absolute slippage (USD)
+  - Percentage slippage (%)
 
-## 2026-06-18T20:41:01+03:00
+### R2. Order Flow Imbalance (`ofi` Command)
+Add a command `ofi` to the CLI and shell:
+- Command: `crypcodile ofi --symbol <symbol> --interval <duration>` (e.g., `1m`, `5m`)
+- It must calculate the Order Flow Imbalance (OFI) index over time-binned intervals using historical `book_delta` or `book_snapshot` records.
+- OFI tracks the supply/demand pressure changes at the best bid and ask levels. The output must display a tabular timeseries showing:
+  - Timestamp
+  - Best Bid / Best Ask
+  - OFI metric value (indicating net buy/sell pressure)
 
-You are the Project Orchestrator for the Crypcodile CLI terminal commands audit and repair.
-Your working directory is /Users/nazmi/Crypcodile/.agents/orchestrator.
-Your mission is to audit, identify, and resolve any missing features, bugs, or inconsistencies across all Crypcodile CLI terminal commands (query, catalog, export, replay, collect, funding-apr, basis, iv-surface, term-structure, mcp, update, shell).
+### R3. Whale & Liquidation Alert Tracker (`whale-alerts` Command)
+Add a command `whale-alerts` to the CLI and shell:
+- Command: `crypcodile whale-alerts --symbol <symbol> --min-usd <value>`
+- It must query the `trade` and `liquidation` tables for the given symbol.
+- It must filter and print all trade executions and liquidations that exceed the specified USD threshold, showing:
+  - Event Time (UTC)
+  - Event Type (Trade vs Liquidation)
+  - Price & Amount (USD Value)
+  - Execution Side (Buy/Sell)
 
-Follow the instructions in ORIGINAL_REQUEST.md at the workspace root, which lists requirements:
-- R1: Comprehensive CLI Audit & Repair (code scan of cli.py, input validation, interactive prompt safety).
-- R2: Test Verification & Code Cleanliness (new tests, existing Python and Node.js tests passing).
-- R3: Build & Package Release (bump version to 0.1.039, update CHANGELOG.md, build, tag, push).
+### R4. Shell Integration & Unit Testing
+- Register all three commands inside `src/crypcodile/cli.py` so they are fully accessible via the standalone CLI and the interactive `crypcodile shell` (with symbol autocomplete).
+- Provide comprehensive automated tests under `tests/` verifying command arguments, data filtering, and calculation correctness.
 
-Please create your planning documents (e.g. plan.md) and record progress in progress.md in your working directory. Let me know when you have started.
+## Acceptance Criteria
 
-## 2026-06-18T21:30:24+03:00
+### CLI & Shell Integration
+- [ ] Running `crypcodile shell` lists `slippage`, `ofi`, and `whale-alerts` as valid commands in the help/completion list.
+- [ ] Commands support interactive symbol selection and autocomplete suggestions from the catalog.
 
-Resume work at /Users/nazmi/Crypcodile/.agents/orchestrator. Read handoff.md, BRIEFING.md, ORIGINAL_REQUEST.md, and progress.md for current state.
-Your parent is e80ccd9b-39ed-4be6-8047-1cdcfec7a9fb — use this ID for all escalation and status reporting (send_message).
+### Correctness of Logic
+- [ ] The `slippage` command correctly calculates average fill price and slippage percentages, failing gracefully if the requested size exceeds the total order book depth.
+- [ ] The `ofi` command aggregates changes correctly and outputs the timeseries.
+- [ ] The `whale-alerts` command correctly filters and displays only events exceeding the USD value threshold.
+
+### Code Quality and Verification
+- [ ] All tests run and pass cleanly under `pytest`.
+- [ ] No regression of existing tests.

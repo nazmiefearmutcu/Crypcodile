@@ -4,6 +4,14 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.041] - 2026-06-20
+### Added
+- **Execution Slippage Estimator (`slippage` command)**: Added a command to walk bid/ask depth levels and compute Expected Execution Price (VWAP), Absolute Slippage (USD), and Percentage Slippage (%) from book snapshots.
+- **Order Flow Imbalance (`ofi` command)**: Introduced a command calculating time-binned Order Flow Imbalance (OFI) metrics from historical bids/asks changes.
+- **Whale Alerts Tracker (`whale-alerts` command)**: Added a tracker to filter and display trades and liquidations exceeding a USD threshold.
+- **CLI & Shell Integration**: Integrated all three commands into the interactive `crypcodile shell` with symbol autocomplete support.
+- **Unit Testing**: Implemented complete testing coverage for the new commands under `tests/analytics/test_analytics_new.py`.
+
 ## [0.1.040] - 2026-06-20
 ### Added
 - **PyQt6 Bookmap Visualizer**: Introduced a high-performance native macOS graphical window showcasing log-scale order book depth heatmap, cumulative volume delta, vertical L2 depth profile sidebar, and volume-weighted trade bubble overlays.

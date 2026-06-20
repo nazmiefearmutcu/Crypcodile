@@ -233,6 +233,50 @@ class CrypcodileClient:
 
         return _funding_apr(self._catalog, symbol, start_ns, end_ns)
 
+    def estimate_slippage(
+        self,
+        symbol: str,
+        side: str,
+        size: float,
+    ) -> pl.DataFrame:
+        """Estimate execution slippage for a given symbol and size.
+
+        Thin wrapper over :func:`crypcodile.analytics.slippage.estimate_slippage`.
+        """
+        from crypcodile.analytics.slippage import estimate_slippage as _estimate_slippage
+
+        return _estimate_slippage(self._catalog, symbol, side, size)
+
+    def calculate_ofi(
+        self,
+        symbol: str,
+        start_ns: int,
+        end_ns: int,
+        interval: str,
+    ) -> pl.DataFrame:
+        """Calculate Order Flow Imbalance (OFI) index over time-binned intervals.
+
+        Thin wrapper over :func:`crypcodile.analytics.ofi.calculate_ofi`.
+        """
+        from crypcodile.analytics.ofi import calculate_ofi as _calculate_ofi
+
+        return _calculate_ofi(self._catalog, symbol, start_ns, end_ns, interval)
+
+    def track_whale_alerts(
+        self,
+        symbol: str,
+        start_ns: int,
+        end_ns: int,
+        min_usd: float,
+    ) -> pl.DataFrame:
+        """Query and filter trades and liquidations exceeding a USD threshold.
+
+        Thin wrapper over :func:`crypcodile.analytics.whale.track_whale_alerts`.
+        """
+        from crypcodile.analytics.whale import track_whale_alerts as _track_whale_alerts
+
+        return _track_whale_alerts(self._catalog, symbol, start_ns, end_ns, min_usd)
+
     def spot_future_basis(
         self,
         future_symbol: str,

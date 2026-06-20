@@ -43,7 +43,7 @@ Crypcodile pioneers this integration via its natively embedded **Model Context P
 uv run crypcodile mcp --data-dir data
 ```
 
-## 4. Analytics & Derivatives Research
+## Analytics
 
 Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing optimized implementations for derivatives research and CLI commands like `funding_apr` and `iv_surface`:
 

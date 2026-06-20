@@ -1953,6 +1953,302 @@ def term_structure_cmd(
 
 
 # ---------------------------------------------------------------------------
+# slippage (Task R1)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="slippage")
+def slippage_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Canonical symbol, e.g. deribit:BTC-PERPETUAL."),
+    ] = None,
+    side: Annotated[
+        str | None,
+        typer.Option("--side", help="Execution side (buy or sell)."),
+    ] = None,
+    size: Annotated[
+        float | None,
+        typer.Option("--size", help="Base asset execution size."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Estimate execution slippage for a given symbol and size using the latest book snapshot."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if not side:
+            typer.echo("Error: side is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if size is None:
+            typer.echo("Error: size is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # Interactive
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(data_dir, channel="book_snapshot")
+            if selected_symbols:
+                symbol = selected_symbols[0]
+
+        if not symbol:
+            symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="book_snapshot")
+
+        if not side:
+            side = typer.prompt("Side (buy/sell)", default="buy")
+
+        if size is None:
+            size = typer.prompt("Size", type=float)
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if not side:
+        typer.echo("Error: Side is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if size is None:
+        typer.echo("Error: Size is required.", err=True)
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.estimate_slippage(symbol, side, size)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No slippage data calculated.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# ofi (Task R2)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="ofi")
+def ofi_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Canonical symbol, e.g. deribit:BTC-PERPETUAL."),
+    ] = None,
+    start: Annotated[
+        int | None,
+        typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
+    ] = None,
+    end: Annotated[
+        int | None,
+        typer.Option("--end", help="End of time range (nanoseconds UTC)."),
+    ] = None,
+    interval: Annotated[
+        str | None,
+        typer.Option("--interval", help="Time bin interval duration, e.g. 1s, 5m, 1h."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Calculate Order Flow Imbalance (OFI) index over time-binned intervals."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if start is None:
+            start = 0
+        if end is None:
+            end = 9999999999999999999
+        if not interval:
+            interval = "1m"
+    else:
+        # Interactive
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(data_dir, channel="book_snapshot")
+            if selected_symbols:
+                symbol = selected_symbols[0]
+
+        if not symbol:
+            symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="book_snapshot")
+
+        if start is None or end is None:
+            resolved_start, resolved_end = prompt_time_range_helper(
+                data_dir, "book_snapshot", [symbol] if symbol else None, default_start=0, default_end=9999999999999999999
+            )
+            if start is None:
+                start = resolved_start
+            if end is None:
+                end = resolved_end
+
+        if not interval:
+            interval = typer.prompt("Interval (e.g. 1s, 1m, 5m)", default="1m")
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if not interval:
+        typer.echo("Error: Interval is required.", err=True)
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_ofi(symbol, start, end, interval)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No historical snapshots found for the given criteria.")
+        raise typer.Exit(code=0)
+
+    import datetime
+    import polars as pl
+    formatted_rows = []
+    for r in df.to_dicts():
+        ts = r["timestamp"]
+        try:
+            dt = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC)
+            dt_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            dt_str = "Invalid timestamp"
+        formatted_rows.append({
+            "timestamp": dt_str,
+            "best_bid": r["best_bid"],
+            "best_ask": r["best_ask"],
+            "ofi": r["ofi"]
+        })
+    df_formatted = pl.DataFrame(formatted_rows)
+    typer.echo(df_formatted)
+
+
+# ---------------------------------------------------------------------------
+# whale-alerts (Task R3)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="whale-alerts")
+def whale_alerts_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Canonical symbol, e.g. deribit:BTC-PERPETUAL."),
+    ] = None,
+    start: Annotated[
+        int | None,
+        typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
+    ] = None,
+    end: Annotated[
+        int | None,
+        typer.Option("--end", help="End of time range (nanoseconds UTC)."),
+    ] = None,
+    min_usd: Annotated[
+        float | None,
+        typer.Option("--min-usd", help="Minimum USD value threshold (price * amount)."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Track whale executions and liquidation alerts exceeding a USD value threshold."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+        if start is None:
+            start = 0
+        if end is None:
+            end = 9999999999999999999
+        if min_usd is None:
+            min_usd = 100000.0
+    else:
+        # Interactive
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(data_dir, channel="trade")
+            if selected_symbols:
+                symbol = selected_symbols[0]
+
+        if not symbol:
+            symbol = prompt_symbol("Symbol (e.g. BTC)", data_dir, channel="trade")
+
+        if start is None or end is None:
+            resolved_start, resolved_end = prompt_time_range_helper(
+                data_dir, "trade", [symbol] if symbol else None, default_start=0, default_end=9999999999999999999
+            )
+            if start is None:
+                start = resolved_start
+            if end is None:
+                end = resolved_end
+
+        if min_usd is None:
+            min_usd = typer.prompt("Min USD Value threshold", default=100000.0, type=float)
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "trade")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if min_usd is None:
+        typer.echo("Error: Min USD threshold is required.", err=True)
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.track_whale_alerts(symbol, start, end, min_usd)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No whale or liquidation alerts found.")
+        raise typer.Exit(code=0)
+
+    import datetime
+    import polars as pl
+    formatted_rows = []
+    for r in df.to_dicts():
+        ts = r["timestamp"]
+        try:
+            dt = datetime.datetime.fromtimestamp(ts // 1_000_000_000, tz=datetime.UTC)
+            dt_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            dt_str = "Invalid timestamp"
+        formatted_rows.append({
+            "event_time": dt_str,
+            "event_type": r["event_type"],
+            "price": r["price"],
+            "amount": r["amount"],
+            "usd_value": r["usd_value"],
+            "side": r["side"]
+        })
+    df_formatted = pl.DataFrame(formatted_rows)
+    typer.echo(df_formatted)
+
+
+# ---------------------------------------------------------------------------
 # mcp (Model Context Protocol Server)
 # ---------------------------------------------------------------------------
 
