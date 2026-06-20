@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.040] - 2026-06-20
+### Added
+- **PyQt6 Bookmap Visualizer**: Introduced a high-performance native macOS graphical window showcasing log-scale order book depth heatmap, cumulative volume delta, vertical L2 depth profile sidebar, and volume-weighted trade bubble overlays.
+- **Visual CLI Command & Shell Integration**: Integrated `bookmap` command to the main Crypcodile CLI and interactive prompt shell, running non-blocking background visual processes using multiprocessing and thread-safe WebSocket connections.
+- **GUI and CLI Unit Testing**: Added automated unit tests under `tests/test_bookmap.py` and `tests/gui/test_bookmap_window.py` verifying data ingestion, layout integrity, and GUI event loop execution.
+
 ## [0.1.039] - 2026-06-18
 ### Changed
 - **Query piped multiline**: Enabled non-interactive queries to read from stdin.
