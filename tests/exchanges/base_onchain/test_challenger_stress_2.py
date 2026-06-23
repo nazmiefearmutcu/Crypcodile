@@ -162,8 +162,11 @@ async def test_pool_resolution_retry() -> None:
         
         # Connect and run two loops
         await transport.connect()
-        # Sleep to let it run at least 2 iterations
-        await asyncio.sleep(0.05)
+        # Wait dynamically for the queue to receive the update message
+        for _ in range(100):
+            if not transport._queue.empty():
+                break
+            await asyncio.sleep(0.01)
         await transport.close()
         
         # It should have called getPool at least twice (one initial failure, one retry)

@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.042] - 2026-06-23
+### Added
+- **Base L2 Ecosystem Integrations**: Integrated asset registry, DEX pool event listeners, OP stack standardization, L1/L2 gas schemas, resilient async web3 client, BNS resolution, Farcaster sentiment correlation, smart wallet tagging, and Seamless/Aave lending logs.
+- **Advanced On-Chain Ingest Engine**: Rust log decoder, dynamic basescan/sourcify ABI registry caching, node recovery rollback buffers, and MEV sandwich filter.
+- **Advanced Analytics & Modeling**: Options Greeks solver, Lyra options chain builder, GMX/Synthetix position tracker, Open Interest aggregator, basis analyzer, and XGBoost funding rate predictor.
+
 ## [0.1.041] - 2026-06-20
 ### Added
 - **Execution Slippage Estimator (`slippage` command)**: Added a command to walk bid/ask depth levels and compute Expected Execution Price (VWAP), Absolute Slippage (USD), and Percentage Slippage (%) from book snapshots.

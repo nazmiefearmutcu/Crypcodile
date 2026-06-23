@@ -39,7 +39,132 @@ from crypcodile.store.catalog import Catalog
 __all__ = [
     "perp_basis",
     "spot_future_basis",
+    "spot_perp_basis",
 ]
+
+
+# ---------------------------------------------------------------------------
+# spot_perp_basis
+# ---------------------------------------------------------------------------
+
+
+def spot_perp_basis(
+    catalog: Catalog,
+    spot_symbol: str,
+    perp_symbol: str,
+    start_ns: int,
+    end_ns: int,
+) -> pl.DataFrame:
+    """Return spot-perp basis by ASOF joining spot Trades with perpetual mark prices.
+
+    For each perp ticker from `derivative_ticker`, it is paired with the nearest
+    prior spot trade from `trade` whose `local_ts <= ticker.local_ts`.
+
+    Args:
+        catalog:      A :class:`~crypcodile.store.catalog.Catalog` instance.
+        spot_symbol:  Canonical symbol for the spot leg (e.g. ``"deribit:BTC-SPOT"``).
+        perp_symbol:  Canonical symbol for the perpetual contract (e.g. ``"deribit:BTC-PERPETUAL"``).
+        start_ns:     Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+        end_ns:       Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+
+    Returns:
+        A Polars DataFrame ordered by ``local_ts`` ascending with columns:
+        [local_ts, spot_price, perp_price, basis, basis_pct]
+    """
+
+    perp_df = catalog.scan("derivative_ticker", perp_symbol, start_ns, end_ns)
+    if len(perp_df) == 0:
+        return pl.DataFrame()
+
+    # Try to scan trade first
+    spot_df = catalog.scan("trade", spot_symbol, start_ns, end_ns)
+    if len(spot_df) > 0 and "price" in spot_df.columns:
+        spot_df = spot_df.select(["local_ts", "price"]).rename({"price": "spot_price"})
+    else:
+        # Fallback to book_snapshot
+        try:
+            book_df = catalog.scan("book_snapshot", spot_symbol, start_ns, end_ns)
+            if len(book_df) > 0:
+                from crypcodile.store.rows import _coerce_levels_from_row
+                prices = []
+                ts_list = []
+                for row in book_df.iter_rows(named=True):
+                    bids = _coerce_levels_from_row(row.get("bids"))
+                    asks = _coerce_levels_from_row(row.get("asks"))
+                    if bids and asks:
+                        best_bid = bids[0][0]
+                        best_ask = asks[0][0]
+                        prices.append((best_bid + best_ask) / 2.0)
+                        ts_list.append(row["local_ts"])
+                spot_df = pl.DataFrame({"local_ts": ts_list, "spot_price": prices})
+            else:
+                spot_df = pl.DataFrame()
+        except Exception:
+            spot_df = pl.DataFrame()
+
+    if len(perp_df) == 0 or len(spot_df) == 0:
+        return pl.DataFrame()
+
+    if "mark_price" not in perp_df.columns or "spot_price" not in spot_df.columns:
+        return pl.DataFrame()
+
+    perp_df = perp_df.select(["local_ts", "mark_price"]).rename({"mark_price": "perp_price"})
+
+    # Filter out null or zero prices
+    perp_df = perp_df.filter(pl.col("perp_price").is_not_null() & (pl.col("perp_price") > 0.0))
+    spot_df = spot_df.filter(pl.col("spot_price").is_not_null() & (pl.col("spot_price") > 0.0))
+
+    if len(perp_df) == 0 or len(spot_df) == 0:
+        return pl.DataFrame()
+
+    conn = catalog.connection
+    try:
+        conn.register("_spot_perp_perp", perp_df)
+        conn.register("_spot_perp_spot", spot_df)
+
+        sql = """
+            SELECT
+                p.local_ts                          AS local_ts,
+                s.spot_price                        AS spot_price,
+                p.perp_price                        AS perp_price,
+                p.perp_price - s.spot_price         AS basis,
+                (p.perp_price - s.spot_price)
+                    / s.spot_price                  AS basis_pct
+            FROM _spot_perp_perp p
+            ASOF JOIN _spot_perp_spot s
+                ON p.local_ts >= s.local_ts
+            WHERE s.spot_price > 0
+            ORDER BY p.local_ts
+        """
+        result = conn.execute(sql)
+        df: pl.DataFrame = result.pl()
+    except (duckdb.CatalogException, duckdb.IOException, duckdb.BinderException):
+        return pl.DataFrame()
+    finally:
+        try:
+            conn.unregister("_spot_perp_perp")
+        except Exception:
+            pass
+        try:
+            conn.unregister("_spot_perp_spot")
+        except Exception:
+            pass
+
+    if len(df) == 0:
+        return pl.DataFrame()
+
+    df = df.with_columns(
+        [
+            pl.col("local_ts").cast(pl.Int64),
+            pl.col("spot_price").cast(pl.Float64),
+            pl.col("perp_price").cast(pl.Float64),
+            pl.col("basis").cast(pl.Float64),
+            pl.col("basis_pct").cast(pl.Float64),
+        ]
+    )
+
+    return df
+
 
 
 # ---------------------------------------------------------------------------

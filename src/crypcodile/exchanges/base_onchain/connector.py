@@ -20,6 +20,14 @@ from crypcodile.schema.records import Record
 from crypcodile.sink.base import Sink
 
 from .normalize import normalize_onchain_update
+from .asset_registry import AssetRegistry
+from .smart_wallet import CoinbaseSmartWalletDetector
+
+smart_wallet_detector = CoinbaseSmartWalletDetector()
+
+# Lending topics & pool addresses
+RESERVE_DATA_UPDATED_TOPIC = "0x804c9d53b43c501f114c036a6e2e28a5ff6b2512f45856488d0426d400e95cb5"
+LIQUIDATION_CALL_TOPIC = "0xe41d8df5aeb3812fd567b454174378f89ff89100868f029671d1824ef78c902c"
 
 log = logging.getLogger(__name__)
 
@@ -250,6 +258,14 @@ TOKENS = IPCDict("TOKENS", {
     "WETH": "0x4200000000000000000000000000000000000006",
 })
 
+try:
+    _registry = AssetRegistry()
+    for k, v in _registry.cache.items():
+        if k not in TOKENS:
+            TOKENS[k] = v["address"]
+except Exception as e:
+    log.warning(f"Failed to merge tokens from AssetRegistry: {e}")
+
 # Pool specifications for the supported symbols
 POOL_SPECS = IPCDict("POOL_SPECS", {
     "AERO-USDC": {
@@ -400,8 +416,10 @@ class BaseOnchainTransport:
         rpc_url: str | list[str],
         symbols: list[str],
         poll_interval: float = 5.0,
-        custom_pools: dict[str, dict[str, Any]] | None = None
+        custom_pools: dict[str, dict[str, Any]] | None = None,
+        exchange: str = "base_onchain"
     ) -> None:
+        self.exchange = exchange
         if isinstance(rpc_url, list):
             self.rpc_urls = rpc_url
         elif isinstance(rpc_url, str) and "," in rpc_url:
@@ -415,10 +433,18 @@ class BaseOnchainTransport:
         self._connected = False
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._poll_task: asyncio.Task[None] | None = None
-        self._last_blocks: dict[str, int] = {}
-        self._block_cache: dict[int, int] = {}
-        self._seen_logs: set[tuple[str, int]] = set()
+        self._last_blocks = {}
+        self._block_cache = {}
+        self._seen_logs = set()
         _register_custom_pools(custom_pools)
+
+        from crypcodile.ingest.sync_recovery import SyncRecovery
+        from crypcodile.ingest.rollback_manager import RollbackManager
+        state_dir = os.path.expanduser("~/.crypcodile/sync_state")
+        os.makedirs(state_dir, exist_ok=True)
+        self.sync_recovery = SyncRecovery(os.path.join(state_dir, "base_onchain.json"))
+        self.rollback_manager = RollbackManager(max_depth=100)
+
 
     @property
     def active_rpc_url(self) -> str:
@@ -522,7 +548,7 @@ class BaseOnchainTransport:
                     res = func
                 
                 while inspect.isawaitable(res):
-                    res = await res
+                    res = await asyncio.wait_for(res, timeout=5.0)
                 return res
             except Exception as e:
                 if deterministic_exceptions and isinstance(e, deterministic_exceptions):
@@ -772,6 +798,33 @@ class BaseOnchainTransport:
                     tip_block = await self._get_block_number(w3)
                     lag = 0 if ("127.0.0.1" in self.active_rpc_url or "localhost" in self.active_rpc_url) else 15
                     current_block = max(0, tip_block - lag)
+
+                    # Rollback / reorg detection
+                    try:
+                        blk = await self._call_with_retry(w3.eth.get_block, current_block)
+                        blk_hash = blk["hash"].hex() if hasattr(blk["hash"], "hex") else str(blk["hash"])
+                        parent_hash = blk["parentHash"].hex() if hasattr(blk["parentHash"], "hex") else str(blk["parentHash"])
+                        
+                        fork_point = self.rollback_manager.process_block(current_block, blk_hash, parent_hash, [])
+                        if fork_point is not None:
+                            log.warning(f"Reorg detected at block {current_block}. Rolling back tracking to block {fork_point - 1}.")
+                            for s in self.symbols:
+                                self._last_blocks[s] = max(0, fork_point - 1)
+                                self.sync_recovery.save_last_block(s, max(0, fork_point - 1))
+                            if hasattr(self, "_last_lending_block"):
+                                self._last_lending_block = max(0, fork_point - 1)
+                                self.sync_recovery.save_last_block("lending", max(0, fork_point - 1))
+                            if hasattr(self, "_last_limit_order_block"):
+                                self._last_limit_order_block = max(0, fork_point - 1)
+                                self.sync_recovery.save_last_block("limit_orders", max(0, fork_point - 1))
+                            current_block = max(0, fork_point - 1)
+                    except Exception as reorg_err:
+                        log.debug(f"Failed to check reorg: {reorg_err}")
+
+                    # Load lending block recovery
+                    if not hasattr(self, "_last_lending_block"):
+                        saved_lend = self.sync_recovery.get_last_block("lending")
+                        self._last_lending_block = saved_lend if saved_lend is not None else max(0, current_block - 20)
                     
                     async def poll_single_pool(sym: str, pool: dict[str, Any]) -> None:
                         spec = pool["spec"]
@@ -785,7 +838,11 @@ class BaseOnchainTransport:
                         swaps = []
                         
                         if sym not in self._last_blocks:
-                            self._last_blocks[sym] = max(0, current_block - 20)
+                            saved_block = self.sync_recovery.get_last_block(sym)
+                            if saved_block is not None:
+                                self._last_blocks[sym] = saved_block
+                            else:
+                                self._last_blocks[sym] = max(0, current_block - 20)
                         
                         async def fetch_state() -> dict[str, Any]:
                             if spec["type"] == "uniswap_v3":
@@ -835,7 +892,7 @@ class BaseOnchainTransport:
                                 res_val = await self._call_with_retry(contract.functions.getReserves().call)
                                 return {"reserves": res_val}
 
-                        async def fetch_logs() -> list[Any]:
+                        async def fetch_logs() -> tuple[list[Any], int, Exception | None]:
                             swap_topic = (
                                 SWAP_TOPIC_V3 if spec["type"] == "uniswap_v3"
                                 else SWAP_TOPIC_V2
@@ -845,32 +902,35 @@ class BaseOnchainTransport:
                             end_block = current_block
                             
                             logs_list = []
+                            last_block = start_block - 1
                             if start_block <= end_block:
                                 chunk_size = 500
                                 for from_b in range(start_block, end_block + 1, chunk_size):
                                     to_b = min(from_b + chunk_size - 1, end_block)
-                                    chunk_logs = await self._call_with_retry(
-                                        w3.eth.get_logs,
-                                        {
-                                            "address": addr,
-                                            "fromBlock": from_b,
-                                            "toBlock": to_b,
-                                            "topics": [swap_topic]
-                                        }
-                                    )
-                                    logs_list.extend(chunk_logs)
-                                    self._last_blocks[sym] = to_b
-                            return logs_list
+                                    try:
+                                        chunk_logs = await self._call_with_retry(
+                                            w3.eth.get_logs,
+                                            {
+                                                "address": addr,
+                                                "fromBlock": from_b,
+                                                "toBlock": to_b,
+                                                "topics": [swap_topic]
+                                            }
+                                        )
+                                        logs_list.extend(chunk_logs)
+                                        last_block = to_b
+                                    except Exception as e:
+                                        return logs_list, max(self._last_blocks[sym], last_block), e
+                            return logs_list, end_block, None
 
-                        initial_last_block = self._last_blocks[sym]
+                        state_task = asyncio.create_task(fetch_state())
+                        logs_task = asyncio.create_task(fetch_logs())
                         try:
-                            state_task = asyncio.create_task(fetch_state())
-                            logs_task = asyncio.create_task(fetch_logs())
                             try:
                                 await asyncio.gather(state_task, logs_task)
                                 state_res = state_task.result()
-                                logs = logs_task.result()
-                            except BaseException as e:
+                                logs, last_block, logs_err = logs_task.result()
+                            except BaseException:
                                 for task in (state_task, logs_task):
                                     if not task.done():
                                         task.cancel()
@@ -879,15 +939,6 @@ class BaseOnchainTransport:
                                         await task
                                     except BaseException:
                                         pass
-                                state_failed = False
-                                if state_task.done() and not state_task.cancelled():
-                                    try:
-                                        if state_task.exception() is not None:
-                                            state_failed = True
-                                    except Exception:
-                                        pass
-                                if state_failed:
-                                    self._last_blocks[sym] = initial_last_block
                                 raise
                             
                             if spec["type"] == "uniswap_v3":
@@ -942,6 +993,51 @@ class BaseOnchainTransport:
                                     continue
                                     
                                 ts = await self._get_block_timestamp(w3, lg["blockNumber"])
+
+                                l1_gas_fee = None
+                                l2_gas_fee = None
+                                gas_price = None
+                                sender = None
+                                is_sw = None
+                                try:
+                                    receipt = await self._call_with_retry(w3.eth.get_transaction_receipt, tx_hash)
+                                    if receipt is not None:
+                                        if "mock" in type(receipt).__name__.lower():
+                                            receipt = None
+                                    
+                                    if receipt is not None:
+                                        l1_fee_raw = receipt.get("l1Fee")
+                                        if l1_fee_raw is not None:
+                                            if isinstance(l1_fee_raw, str) and l1_fee_raw.startswith("0x"):
+                                                l1_gas_fee = float(int(l1_fee_raw, 16))
+                                            else:
+                                                l1_gas_fee = float(l1_fee_raw)
+                                        
+                                        gas_used = receipt.get("gasUsed")
+                                        eff_gas_price = receipt.get("effectiveGasPrice")
+                                        if gas_used is not None and eff_gas_price is not None:
+                                            if isinstance(gas_used, str) and gas_used.startswith("0x"):
+                                                gas_used = int(gas_used, 16)
+                                            if isinstance(eff_gas_price, str) and eff_gas_price.startswith("0x"):
+                                                eff_gas_price = int(eff_gas_price, 16)
+                                            
+                                            l2_gas_fee = float(gas_used) * float(eff_gas_price)
+                                            gas_price = float(eff_gas_price)
+                                        
+                                        sender = receipt.get("from")
+                                    
+                                    if not sender:
+                                        tx = await self._call_with_retry(w3.eth.get_transaction, tx_hash)
+                                        if tx is not None:
+                                            if "mock" in type(tx).__name__.lower():
+                                                tx = None
+                                        if tx is not None:
+                                            sender = tx.get("from")
+                                    
+                                    if sender:
+                                        is_sw = await smart_wallet_detector.is_smart_wallet(w3, sender)
+                                except Exception as e:
+                                    log.debug(f"Failed to fetch gas metrics / sender for tx {tx_hash}: {e}")
                                 
                                 if spec["type"] == "uniswap_v3":
                                     amount0 = int.from_bytes(
@@ -971,7 +1067,12 @@ class BaseOnchainTransport:
                                         "timestamp": ts,
                                         "price": sw_price,
                                         "amount": abs_base,
-                                        "is_buy": is_buy
+                                        "is_buy": is_buy,
+                                        "l1_gas_fee": l1_gas_fee,
+                                        "l2_gas_fee": l2_gas_fee,
+                                        "gas_price": gas_price,
+                                        "sender": sender,
+                                        "is_smart_wallet": is_sw,
                                     })
                                 else: # aerodrome_v2
                                     amt0_in = int.from_bytes(
@@ -1019,7 +1120,12 @@ class BaseOnchainTransport:
                                         "timestamp": ts,
                                         "price": sw_price,
                                         "amount": amt_base,
-                                        "is_buy": is_buy
+                                        "is_buy": is_buy,
+                                        "l1_gas_fee": l1_gas_fee,
+                                        "l2_gas_fee": l2_gas_fee,
+                                        "gas_price": gas_price,
+                                        "sender": sender,
+                                        "is_smart_wallet": is_sw,
                                     })
                                 new_seen_log_keys.append(log_key)
                             
@@ -1052,7 +1158,10 @@ class BaseOnchainTransport:
                                 self._seen_logs.add(lk)
                             if len(self._seen_logs) > 5000:
                                 self._seen_logs = set(list(self._seen_logs)[2500:])
-                            self._last_blocks[sym] = max(self._last_blocks[sym], current_block)
+                            self._last_blocks[sym] = max(self._last_blocks[sym], last_block)
+                            self.sync_recovery.save_last_block(sym, self._last_blocks[sym])
+                            if logs_err is not None:
+                                raise logs_err
                         except Exception as e:
                             log.error(f"base_onchain: Error polling pool data for {sym}: {e}")
                             raise
@@ -1067,6 +1176,178 @@ class BaseOnchainTransport:
                         for res_err in results:
                             if isinstance(res_err, Exception):
                                 log.error(f"base_onchain: Error polling pool concurrently: {res_err}")
+
+                    # Run Aave/Seamless lending log polling
+                    if not hasattr(self, "_last_lending_block"):
+                        self._last_lending_block = max(0, current_block - 20)
+                    
+                    lending_start_block = max(0, self._last_lending_block + 1)
+                    lending_end_block = current_block
+                    if lending_start_block <= lending_end_block:
+                        lending_addresses = [
+                            AsyncWeb3.to_checksum_address("0xA238Dd80C259697C8390c76420315873AB4F66C5"),
+                            AsyncWeb3.to_checksum_address("0x8FA4c96570F4D0860A7C93f0b2fB58416d860d5b")
+                        ]
+                        for l_addr in lending_addresses:
+                            try:
+                                for topic in [RESERVE_DATA_UPDATED_TOPIC, LIQUIDATION_CALL_TOPIC]:
+                                    l_logs = await self._call_with_retry(
+                                        w3.eth.get_logs,
+                                        {
+                                            "address": l_addr,
+                                            "fromBlock": lending_start_block,
+                                            "toBlock": lending_end_block,
+                                            "topics": [topic]
+                                        }
+                                    )
+                                    for lg in l_logs:
+                                        tx_hash = lg["transactionHash"].hex()
+                                        log_idx = lg["logIndex"]
+                                        log_key = (tx_hash, log_idx)
+                                        if log_key in self._seen_logs:
+                                            continue
+                                        
+                                        block_num = lg["blockNumber"]
+                                        ts = await self._get_block_timestamp(w3, block_num)
+                                        
+                                        if topic == RESERVE_DATA_UPDATED_TOPIC:
+                                            reserve_addr = "0x" + lg["topics"][1].hex()[-40:]
+                                            d_bytes = lg["data"]
+                                            liq_rate = int.from_bytes(d_bytes[0:32], "big") / 1e27
+                                            stable_rate = int.from_bytes(d_bytes[32:64], "big") / 1e27
+                                            var_rate = int.from_bytes(d_bytes[64:96], "big") / 1e27
+                                            liq_idx = int.from_bytes(d_bytes[96:128], "big")
+                                            var_idx = int.from_bytes(d_bytes[128:160], "big")
+                                            
+                                            pool_name = "AAVE_V3" if l_addr == lending_addresses[0] else "SEAMLESS"
+                                            update_msg = {
+                                                "type": "lending_update",
+                                                "event": "ReserveDataUpdated",
+                                                "exchange": self.exchange,
+                                                "pool": pool_name,
+                                                "block": block_num,
+                                                "timestamp": ts,
+                                                "reserve": reserve_addr,
+                                                "liquidity_rate": float(liq_rate),
+                                                "stable_borrow_rate": float(stable_rate),
+                                                "variable_borrow_rate": float(var_rate),
+                                                "liquidity_index": int(liq_idx),
+                                                "variable_borrow_index": int(var_idx)
+                                            }
+                                            await self._queue.put(json.dumps(update_msg).encode())
+                                            
+                                        elif topic == LIQUIDATION_CALL_TOPIC:
+                                            col_asset = "0x" + lg["topics"][1].hex()[-40:]
+                                            debt_asset = "0x" + lg["topics"][2].hex()[-40:]
+                                            user = "0x" + lg["topics"][3].hex()[-40:]
+                                            
+                                            d_bytes = lg["data"]
+                                            debt_cover = int.from_bytes(d_bytes[0:32], "big")
+                                            col_amount = int.from_bytes(d_bytes[32:64], "big")
+                                            liquidator = "0x" + d_bytes[64:96][-20:].hex()
+                                            receive_a = bool(int.from_bytes(d_bytes[96:128], "big"))
+                                            
+                                            pool_name = "AAVE_V3" if l_addr == lending_addresses[0] else "SEAMLESS"
+                                            update_msg = {
+                                                "type": "lending_update",
+                                                "event": "LiquidationCall",
+                                                "exchange": self.exchange,
+                                                "pool": pool_name,
+                                                "block": block_num,
+                                                "timestamp": ts,
+                                                "collateral_asset": col_asset,
+                                                "debt_asset": debt_asset,
+                                                "user": user,
+                                                "debt_to_cover": float(debt_cover),
+                                                "liquidated_collateral_amount": float(col_amount),
+                                                "liquidator": liquidator,
+                                                "receive_a_token": receive_a
+                                            }
+                                            await self._queue.put(json.dumps(update_msg).encode())
+                                        
+                                        self._seen_logs.add(log_key)
+                            except Exception as lending_err:
+                                log.debug(f"Failed to poll/decode lending logs for {l_addr}: {lending_err}")
+                        self._last_lending_block = lending_end_block
+                        self.sync_recovery.save_last_block("lending", self._last_lending_block)
+
+                    # Poll for 1inch and 0x limit orders
+                    if not hasattr(self, "_last_limit_order_block"):
+                        saved_limit = self.sync_recovery.get_last_block("limit_orders")
+                        self._last_limit_order_block = saved_limit if saved_limit is not None else max(0, current_block - 20)
+                    
+                    limit_start_block = max(0, self._last_limit_order_block + 1)
+                    limit_end_block = current_block
+                    if limit_start_block <= limit_end_block:
+                        from crypcodile.exchanges.base_onchain.limit_orders import (
+                            ONEINCH_ORDER_FILLED_TOPIC, ZEROX_LIMIT_ORDER_FILLED_TOPIC,
+                            decode_1inch_order_filled, decode_0x_limit_order_filled
+                        )
+                        limit_protocols = {
+                            "0x1111111254fb6c44bac0bed2854e76f90643097d": "1inch",
+                            "0xdef1c0ded9bec7f1a1670819833240f027b25eff": "0x",
+                            "0xDef1C0ded9bec7F1a1670819833240f027b25EfF": "0x",
+                        }
+                        for addr, proto in limit_protocols.items():
+                            try:
+                                topic = ONEINCH_ORDER_FILLED_TOPIC if proto == "1inch" else ZEROX_LIMIT_ORDER_FILLED_TOPIC
+                                ch_logs = await self._call_with_retry(
+                                    w3.eth.get_logs,
+                                    {
+                                        "address": AsyncWeb3.to_checksum_address(addr),
+                                        "fromBlock": limit_start_block,
+                                        "toBlock": limit_end_block,
+                                        "topics": [topic]
+                                    }
+                                )
+                                for lg in ch_logs:
+                                    tx_hash = lg["transactionHash"].hex()
+                                    log_idx = lg["logIndex"]
+                                    log_key = (tx_hash, log_idx)
+                                    if log_key in self._seen_logs:
+                                        continue
+                                    
+                                    topics_str = [t.hex() if isinstance(t, bytes) else str(t) for t in lg["topics"]]
+                                    data_str = lg["data"].hex() if isinstance(lg["data"], bytes) else str(lg["data"])
+                                    
+                                    receipt = None
+                                    if proto == "1inch":
+                                        try:
+                                            receipt = await self._call_with_retry(w3.eth.get_transaction_receipt, tx_hash)
+                                        except Exception:
+                                            pass
+                                            
+                                    if proto == "1inch":
+                                        decoded = decode_1inch_order_filled(topics_str, data_str, receipt)
+                                    else:
+                                        decoded = decode_0x_limit_order_filled(topics_str, data_str)
+                                        
+                                    ts = await self._get_block_timestamp(w3, lg["blockNumber"])
+                                    
+                                    update_msg = {
+                                        "type": "limit_order_fill_update",
+                                        "exchange": self.exchange,
+                                        "symbol": f"limit_order:{proto}",
+                                        "symbol_raw": proto,
+                                        "exchange_ts": ts * 1_000_000_000,
+                                        "timestamp": ts,
+                                        "tx_hash": tx_hash,
+                                        "log_index": log_idx,
+                                        "protocol": proto,
+                                        "maker": decoded["maker"],
+                                        "taker": decoded["taker"],
+                                        "maker_token": decoded["maker_token"],
+                                        "taker_token": decoded["taker_token"],
+                                        "maker_amount": decoded["maker_amount"],
+                                        "taker_amount": decoded["taker_amount"],
+                                        "order_hash": decoded["order_hash"],
+                                    }
+                                    await self._queue.put(json.dumps(update_msg).encode())
+                                    self._seen_logs.add(log_key)
+                            except Exception as limit_err:
+                                log.debug(f"Failed to poll limit order logs for {addr}: {limit_err}")
+                        self._last_limit_order_block = limit_end_block
+                        self.sync_recovery.save_last_block("limit_orders", self._last_limit_order_block)
                     
                 except Exception as e:
                     log.error(f"base_onchain: Error polling pool data: {e}")
@@ -1105,11 +1386,64 @@ class BaseOnchainConnector(Connector):
         super().__init__(symbols=symbols, channels=channels, out=out, registry=registry)
         rpc_url = os.getenv("BASE_RPC_URL", DEFAULT_RPC_URL)
         _register_custom_pools(custom_pools)
-        self.transport = BaseOnchainTransport(rpc_url, symbols, custom_pools=custom_pools)
+        self.transport = BaseOnchainTransport(rpc_url, symbols, custom_pools=custom_pools, exchange=self.name)
 
     def normalize(self, msg: object, local_ts: int) -> Iterable[Record]:
-        if isinstance(msg, dict) and msg.get("type") == "onchain_update":
-            yield from normalize_onchain_update(msg, local_ts)
+        if isinstance(msg, dict):
+            m_type = msg.get("type")
+            if m_type == "onchain_update":
+                yield from normalize_onchain_update(msg, local_ts, exchange=self.name)
+            elif m_type == "limit_order_fill_update":
+                from crypcodile.schema.records import LimitOrderFill
+                yield LimitOrderFill(
+                    exchange=msg["exchange"],
+                    symbol=msg["symbol"],
+                    symbol_raw=msg["symbol_raw"],
+                    exchange_ts=msg["exchange_ts"],
+                    local_ts=local_ts,
+                    tx_hash=msg["tx_hash"],
+                    log_index=msg["log_index"],
+                    protocol=msg["protocol"],
+                    maker=msg["maker"],
+                    taker=msg["taker"],
+                    maker_token=msg["maker_token"],
+                    taker_token=msg["taker_token"],
+                    maker_amount=msg["maker_amount"],
+                    taker_amount=msg["taker_amount"],
+                    order_hash=msg["order_hash"],
+                )
+            elif m_type == "lending_update":
+                from crypcodile.schema.records import ReserveDataUpdated, LiquidationCall
+                evt = msg.get("event")
+                if evt == "ReserveDataUpdated":
+                    yield ReserveDataUpdated(
+                        exchange=msg["exchange"],
+                        symbol=f"lending:{msg['pool']}",
+                        symbol_raw=msg["pool"],
+                        exchange_ts=msg["timestamp"] * 1_000_000_000,
+                        local_ts=local_ts,
+                        reserve=msg["reserve"],
+                        liquidity_rate=msg["liquidity_rate"],
+                        stable_borrow_rate=msg["stable_borrow_rate"],
+                        variable_borrow_rate=msg["variable_borrow_rate"],
+                        liquidity_index=msg["liquidity_index"],
+                        variable_borrow_index=msg["variable_borrow_index"]
+                    )
+                elif evt == "LiquidationCall":
+                    yield LiquidationCall(
+                        exchange=msg["exchange"],
+                        symbol=f"lending:{msg['pool']}",
+                        symbol_raw=msg["pool"],
+                        exchange_ts=msg["timestamp"] * 1_000_000_000,
+                        local_ts=local_ts,
+                        collateral_asset=msg["collateral_asset"],
+                        debt_asset=msg["debt_asset"],
+                        user=msg["user"],
+                        debt_to_cover=msg["debt_to_cover"],
+                        liquidated_collateral_amount=msg["liquidated_collateral_amount"],
+                        liquidator=msg["liquidator"],
+                        receive_a_token=msg["receive_a_token"]
+                    )
 
     async def list_instruments(self) -> list[Instrument]:
         custom_ticks = {
@@ -1138,8 +1472,8 @@ class BaseOnchainConnector(Connector):
                 
             instruments.append(
                 Instrument(
-                    canonical=f"base_onchain:{sym}",
-                    exchange="base_onchain",
+                    canonical=f"{self.name}:{sym}",
+                    exchange=self.name,
                     symbol_raw=sym,
                     kind=Kind.SPOT,
                     base=spec["token0"],

@@ -325,7 +325,8 @@ class LagMockEth:
         return {"timestamp": 1600000000}
         
     async def get_logs(self, filter_params):
-        self.parent.logged_ranges.append((filter_params["fromBlock"], filter_params["toBlock"]))
+        if filter_params.get("address") == "0xMockPoolAddress":
+            self.parent.logged_ranges.append((filter_params["fromBlock"], filter_params["toBlock"]))
         return []
 
 class DummyMockContract:

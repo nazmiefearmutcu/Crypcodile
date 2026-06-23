@@ -1,3 +1,0 @@
-src/crypcodile/api_server.py:38: error: Function is missing a return type annotation  [no-untyped-def]
-src/crypcodile/api_server.py:123: error: Function is missing a return type annotation  [no-untyped-def]
-Found 2 errors in 1 file (checked 65 source files)

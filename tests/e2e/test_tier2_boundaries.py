@@ -140,7 +140,10 @@ async def test_t2_huge_pagination_split(mock_rpc) -> None:
     transport._last_blocks["cbBTC-USDC"] = 1000
     await transport.connect()
     try:
-        await asyncio.sleep(0.3)
+        for _ in range(100):
+            if transport._last_blocks.get("cbBTC-USDC", 0) >= 2500:
+                break
+            await asyncio.sleep(0.05)
     finally:
         await transport.close()
         
@@ -148,8 +151,12 @@ async def test_t2_huge_pagination_split(mock_rpc) -> None:
         async with session.get(f"{rpc_url}/control/history") as resp:
             history = (await resp.json())["history"]
             
-    get_logs_calls = [r for r in history if r["method"] == "eth_getLogs"]
-    assert len(get_logs_calls) >= 3 # 1500 blocks divided by 500 size -> at least 3 calls
+    get_logs_calls = [
+        r for r in history
+        if r["method"] == "eth_getLogs"
+        and "0x0000000000000000000000000000000000000001" in str(r.get("params", []))
+    ]
+    assert len(get_logs_calls) == 4 # 1500 blocks divided by 500 size (plus 5 overlap) -> 4 calls
 
 # 6. Connection drop during initialization
 @pytest.mark.asyncio

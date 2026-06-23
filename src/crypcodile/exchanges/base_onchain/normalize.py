@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 
 EXCHANGE = "base_onchain"
 
-def normalize_onchain_update(msg: dict[str, Any], local_ts: int) -> Iterable[Record]:
+def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str = EXCHANGE) -> Iterable[Record]:
     """Normalize on-chain pool updates.
     
     The input msg has the structure:
@@ -40,8 +40,8 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int) -> Iterable[Rec
             raise ValueError(f"Invalid swap numeric value: {e}") from e
             
         yield Trade(
-            exchange=EXCHANGE,
-            symbol=f"{EXCHANGE}:{pool_name}",
+            exchange=exchange,
+            symbol=f"{exchange}:{pool_name}",
             symbol_raw=pool_name,
             exchange_ts=sw["timestamp"] * 1_000_000_000, # convert sec to ns
             local_ts=local_ts,
@@ -49,6 +49,11 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int) -> Iterable[Rec
             price=sw["price"],
             amount=sw["amount"],
             side=Side.BUY if sw["is_buy"] else Side.SELL,
+            l1_gas_fee=sw.get("l1_gas_fee"),
+            l2_gas_fee=sw.get("l2_gas_fee"),
+            gas_price=sw.get("gas_price"),
+            sender=sw.get("sender"),
+            is_smart_wallet=sw.get("is_smart_wallet"),
         )
         
     # 2. Parse state into BookSnapshot and BookTicker
@@ -278,8 +283,8 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int) -> Iterable[Rec
     ask_px, ask_sz = asks[0]
     
     yield BookTicker(
-        exchange=EXCHANGE,
-        symbol=f"{EXCHANGE}:{pool_name}",
+        exchange=exchange,
+        symbol=f"{exchange}:{pool_name}",
         symbol_raw=pool_name,
         exchange_ts=msg["timestamp"] * 1_000_000_000,
         local_ts=local_ts,
@@ -291,8 +296,8 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int) -> Iterable[Rec
     )
     
     yield BookSnapshot(
-        exchange=EXCHANGE,
-        symbol=f"{EXCHANGE}:{pool_name}",
+        exchange=exchange,
+        symbol=f"{exchange}:{pool_name}",
         symbol_raw=pool_name,
         exchange_ts=msg["timestamp"] * 1_000_000_000,
         local_ts=local_ts,

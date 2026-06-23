@@ -495,7 +495,9 @@ async def test_log_pagination_chunking() -> None:
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
             return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return 2100

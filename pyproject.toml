@@ -1,6 +1,6 @@
 [project]
 name = "crypcodile"
-version = "0.1.041"
+version = "0.1.042"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,6 +22,9 @@ dependencies = [
     "prompt-toolkit>=3.0",
     "PyQt6>=6.0.0",
     "pyqtgraph>=0.13.0",
+    "scipy>=1.10.0",
+    "matplotlib>=3.7.0",
+    "xgboost>=1.7.0",
 ]
 
 
@@ -85,4 +88,11 @@ exclude = [
   "/test_run_details.txt",
   "/uv",
 ]
+
+[tool.maturin]
+python-source = "src"
+manifest-path = "src/crypcodile/log_decoder/Cargo.toml"
+module-name = "crypcodile.log_decoder._rust_decoder"
+features = ["pyo3/extension-module"]
+
 

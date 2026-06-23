@@ -33,3 +33,24 @@ data/
 .env
 .env.*
 !.env.example
+
+# Swarm agents
+.agents/
+
+# Local databases / IPC files
+.custom_pools_ipc.json
+.custom_pools_ipc.json.lock
+.payments_db.json
+
+# Scratch scripts
+test_debug.py
+test_overflow_error.py
+test_verify.py
+verify_cli_robustness.py
+verify_sub1.py
+
+# Temporary folders
+tmp/
+tmp_pytest/
+tmp_pytest_stress/
+tmp_test_run/

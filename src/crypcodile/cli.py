@@ -2716,6 +2716,36 @@ def bookmap(
 
 
 # ---------------------------------------------------------------------------
+# gas-tracker
+# ---------------------------------------------------------------------------
+
+@app.command(name="gas-tracker")
+def gas_tracker() -> None:
+    """Launch the PyQt6 real-time Gas Tracker widget."""
+    import sys
+    try:
+        from PyQt6.QtWidgets import QApplication, QMainWindow
+        from crypcodile.gui.widgets.gas_tracker import GasTrackerWidget
+    except ImportError as e:
+        typer.echo(f"GUI dependencies not available: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    app_qt = QApplication.instance()
+    if app_qt is None:
+        app_qt = QApplication(sys.argv)
+    
+    win = QMainWindow()
+    win.setWindowTitle("Crypcodile Gas Tracker")
+    widget = GasTrackerWidget()
+    win.setCentralWidget(widget)
+    win.resize(800, 400)
+    win.show()
+    
+    if "pytest" not in sys.modules:
+        sys.exit(app_qt.exec())
+
+
+# ---------------------------------------------------------------------------
 # shell
 # ---------------------------------------------------------------------------
 

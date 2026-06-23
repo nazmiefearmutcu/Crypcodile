@@ -35,7 +35,7 @@ When ``t_years <= 0`` the option is expired:
 from __future__ import annotations
 
 import math
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from crypcodile.schema.enums import OptType
 
@@ -46,6 +46,9 @@ __all__ = [
     "implied_vol",
     "norm_cdf",
     "norm_pdf",
+    "GreeksSolverAdapter",
+    "PureMathGreeksSolverAdapter",
+    "SciPyGreeksSolverAdapter",
 ]
 
 # ---------------------------------------------------------------------------
@@ -259,60 +262,258 @@ def implied_vol(
         Implied vol as a float, or ``None`` if no-arb bounds are violated
         or the solver does not converge.
     """
-    # --- expired guard ---
-    if t_years <= 0:
-        return None
+    try:
+        # --- expired guard ---
+        if t_years <= 0:
+            return None
 
-    D = math.exp(-rate * t_years)
+        D = math.exp(-rate * t_years)
 
-    # --- no-arb bounds ---
-    if opt_type == OptType.CALL:
-        intrinsic = D * max(forward - strike, 0.0)
-        upper = D * forward
-    else:
-        intrinsic = D * max(strike - forward, 0.0)
-        upper = D * strike
-
-    if price <= intrinsic or price >= upper:
-        return None
-
-    # --- Newton-Raphson, seeded at vol=0.5 ---
-    vol = 0.5
-    for _ in range(_MAX_ITER):
-        p = bs_price(forward, strike, t_years, vol, opt_type, rate=rate)
-        diff = p - price
-        if abs(diff) < _TOL:
-            return vol
-        # vega = dP/dvol
-        v = bs_greeks(forward, strike, t_years, vol, opt_type, rate=rate).vega
-        if abs(v) < 1e-10:
-            # vega ≈ 0 → fall back to bisection
-            break
-        vol_new = vol - diff / v
-        if vol_new < _IV_MIN or vol_new > _IV_MAX:
-            # Newton stepped outside bounds → switch to bisection
-            break
-        vol = vol_new
-
-    # --- bisection fallback on [_IV_MIN, _IV_MAX] ---
-    lo, hi = _IV_MIN, _IV_MAX
-
-    p_lo = bs_price(forward, strike, t_years, lo, opt_type, rate=rate)
-    p_hi = bs_price(forward, strike, t_years, hi, opt_type, rate=rate)
-
-    # price must be bracketed
-    if not (p_lo <= price <= p_hi):
-        return None
-
-    for _ in range(_MAX_ITER):
-        mid = 0.5 * (lo + hi)
-        p_mid = bs_price(forward, strike, t_years, mid, opt_type, rate=rate)
-        if abs(p_mid - price) < _TOL:
-            return mid
-        if p_mid < price:
-            lo = mid
+        # --- no-arb bounds ---
+        if opt_type == OptType.CALL:
+            intrinsic = D * max(forward - strike, 0.0)
+            upper = D * forward
         else:
-            hi = mid
+            intrinsic = D * max(strike - forward, 0.0)
+            upper = D * strike
 
-    # Did not converge
-    return None
+        if price <= intrinsic or price >= upper:
+            return None
+
+        # --- Newton-Raphson, seeded at vol=0.5 ---
+        vol = 0.5
+        for _ in range(_MAX_ITER):
+            p = bs_price(forward, strike, t_years, vol, opt_type, rate=rate)
+            diff = p - price
+            if abs(diff) < _TOL:
+                return vol
+            # vega = dP/dvol
+            v = bs_greeks(forward, strike, t_years, vol, opt_type, rate=rate).vega
+            if abs(v) < 1e-10:
+                # vega ≈ 0 → fall back to bisection
+                break
+            vol_new = vol - diff / v
+            if vol_new < _IV_MIN or vol_new > _IV_MAX:
+                # Newton stepped outside bounds → switch to bisection
+                break
+            vol = vol_new
+
+        # --- bisection fallback on [_IV_MIN, _IV_MAX] ---
+        lo, hi = _IV_MIN, _IV_MAX
+
+        p_lo = bs_price(forward, strike, t_years, lo, opt_type, rate=rate)
+        p_hi = bs_price(forward, strike, t_years, hi, opt_type, rate=rate)
+
+        # price must be bracketed
+        if not (p_lo <= price <= p_hi):
+            return None
+
+        for _ in range(_MAX_ITER):
+            mid = 0.5 * (lo + hi)
+            p_mid = bs_price(forward, strike, t_years, mid, opt_type, rate=rate)
+            if abs(p_mid - price) < _TOL:
+                return mid
+            if p_mid < price:
+                lo = mid
+            else:
+                hi = mid
+
+        # Did not converge
+        return None
+    except (OverflowError, ZeroDivisionError, ValueError):
+        return None
+
+
+class GreeksSolverAdapter(Protocol):
+    """Protocol defining the standard interface for Black-76 Greeks and pricing solvers."""
+
+    def price(
+        self,
+        forward: float,
+        strike: float,
+        t_years: float,
+        vol: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> float:
+        """Calculate option price."""
+        ...
+
+    def greeks(
+        self,
+        forward: float,
+        strike: float,
+        t_years: float,
+        vol: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> Greeks:
+        """Calculate option Greeks."""
+        ...
+
+    def implied_vol(
+        self,
+        price: float,
+        forward: float,
+        strike: float,
+        t_years: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> float | None:
+        """Solve for implied volatility."""
+        ...
+
+
+class PureMathGreeksSolverAdapter(GreeksSolverAdapter):
+    """GreeksSolverAdapter implementation using the original pure math solver."""
+
+    def price(
+        self,
+        forward: float,
+        strike: float,
+        t_years: float,
+        vol: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> float:
+        return bs_price(forward, strike, t_years, vol, opt_type, rate=rate)
+
+    def greeks(
+        self,
+        forward: float,
+        strike: float,
+        t_years: float,
+        vol: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> Greeks:
+        return bs_greeks(forward, strike, t_years, vol, opt_type, rate=rate)
+
+    def implied_vol(
+        self,
+        price: float,
+        forward: float,
+        strike: float,
+        t_years: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> float | None:
+        try:
+            return implied_vol(price, forward, strike, t_years, opt_type, rate=rate)
+        except (OverflowError, ZeroDivisionError, ValueError):
+            return None
+
+
+class SciPyGreeksSolverAdapter(GreeksSolverAdapter):
+    """GreeksSolverAdapter implementation using the SciPy library for CDF/PDF and optimization."""
+
+    def price(
+        self,
+        forward: float,
+        strike: float,
+        t_years: float,
+        vol: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> float:
+        if vol < 0:
+            raise ValueError(f"vol must be >= 0, got {vol!r}")
+
+        D = math.exp(-rate * t_years) if t_years > 0 else 1.0
+
+        if t_years <= 0 or vol == 0.0:
+            if opt_type == OptType.CALL:
+                return D * max(forward - strike, 0.0)
+            else:
+                return D * max(strike - forward, 0.0)
+
+        import scipy.stats
+
+        sqrt_t = math.sqrt(t_years)
+        d1 = (math.log(forward / strike) + 0.5 * vol * vol * t_years) / (vol * sqrt_t)
+        d2 = d1 - vol * sqrt_t
+
+        if opt_type == OptType.CALL:
+            return D * (forward * scipy.stats.norm.cdf(d1) - strike * scipy.stats.norm.cdf(d2))
+        else:
+            return D * (strike * scipy.stats.norm.cdf(-d2) - forward * scipy.stats.norm.cdf(-d1))
+
+    def greeks(
+        self,
+        forward: float,
+        strike: float,
+        t_years: float,
+        vol: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> Greeks:
+        if vol < 0:
+            raise ValueError(f"vol must be >= 0, got {vol!r}")
+
+        if t_years <= 0 or vol == 0.0:
+            return Greeks(delta=0.0, gamma=0.0, vega=0.0, theta=0.0, rho=0.0)
+
+        import scipy.stats
+
+        D = math.exp(-rate * t_years)
+        sqrt_t = math.sqrt(t_years)
+        d1 = (math.log(forward / strike) + 0.5 * vol * vol * t_years) / (vol * sqrt_t)
+        nd1 = scipy.stats.norm.cdf(d1)
+        npd1 = scipy.stats.norm.pdf(d1)
+
+        if opt_type == OptType.CALL:
+            delta = D * nd1
+        else:
+            delta = -D * scipy.stats.norm.cdf(-d1)
+
+        gamma = D * npd1 / (forward * vol * sqrt_t)
+        vega = D * forward * npd1 * sqrt_t
+
+        price = self.price(forward, strike, t_years, vol, opt_type, rate=rate)
+        common_theta = -D * forward * npd1 * vol / (2.0 * sqrt_t)
+        theta = common_theta + rate * price
+        rho = -t_years * price
+
+        return Greeks(delta=delta, gamma=gamma, vega=vega, theta=theta, rho=rho)
+
+    def implied_vol(
+        self,
+        price: float,
+        forward: float,
+        strike: float,
+        t_years: float,
+        opt_type: OptType,
+        rate: float = 0.0,
+    ) -> float | None:
+        try:
+            if t_years <= 0:
+                return None
+
+            D = math.exp(-rate * t_years)
+            if opt_type == OptType.CALL:
+                intrinsic = D * max(forward - strike, 0.0)
+                upper = D * forward
+            else:
+                intrinsic = D * max(strike - forward, 0.0)
+                upper = D * strike
+
+            if price <= intrinsic or price >= upper:
+                return None
+
+            import scipy.optimize
+
+            def f(v: float) -> float:
+                return self.price(forward, strike, t_years, v, opt_type, rate) - price
+
+            lo, hi = 1e-6, 10.0
+            try:
+                f_lo = f(lo)
+                f_hi = f(hi)
+                if f_lo * f_hi > 0:
+                    return None
+                res = scipy.optimize.brentq(f, lo, hi, xtol=1e-6)
+                return float(res)
+            except Exception:
+                return None
+        except (OverflowError, ZeroDivisionError, ValueError):
+            return None

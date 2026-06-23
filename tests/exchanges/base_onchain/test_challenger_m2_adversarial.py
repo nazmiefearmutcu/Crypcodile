@@ -40,7 +40,9 @@ async def test_pagination_extremely_large_range_chunking() -> None:
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
             return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return 2600
@@ -102,11 +104,14 @@ async def test_pagination_error_loses_all_progress() -> None:
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
-            call_idx += 1
-            if call_idx == 3:  # Chunk 3 fails
-                raise ValueError("RPC Error: rate limit")
-            return [{"logIndex": call_idx, "data": b"\x00"*64, "transactionHash": MagicMock(hex=lambda: "0xhash"), "blockNumber": 1000}]
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
+                call_idx += 1
+                if call_idx == 3:  # Chunk 3 fails
+                    raise ValueError("RPC Error: rate limit")
+                return [{"logIndex": call_idx, "data": b"\x00"*64, "transactionHash": MagicMock(hex=lambda: "0xhash"), "blockNumber": 1000}]
+            return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return 2600
         if "slot0" in func_str or func_name == "slot0":
@@ -159,7 +164,9 @@ async def test_pagination_empty_range() -> None:
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
             return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return 995
@@ -210,7 +217,9 @@ async def test_pagination_invalid_range_negative() -> None:
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
             return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return 20
@@ -345,11 +354,15 @@ async def test_thundering_herd_concurrency() -> None:
     # This means the maximum separation between any two retries is only 0.5s.
     
     num_tasks = 50
-    delays = []
+    task_sleeps = {}
+    original_sleep = asyncio.sleep
     
     async def mock_sleep_record(delay):
-        delays.append(delay)
-        return
+        current_task = asyncio.current_task()
+        if current_task not in task_sleeps:
+            task_sleeps[current_task] = []
+        task_sleeps[current_task].append(delay)
+        await original_sleep(0)
         
     async def run_failing_task():
         attempt = 0
@@ -359,15 +372,15 @@ async def test_thundering_herd_concurrency() -> None:
             if attempt == 1:
                 raise ValueError("Failure")
             return "success"
-        with patch("asyncio.sleep", mock_sleep_record):
-            await transport._call_with_retry(fail_call, base_delay=1.0)
+        await transport._call_with_retry(fail_call, base_delay=1.0)
 
 
-    # Run the tasks concurrently
-    await asyncio.gather(*(run_failing_task() for _ in range(num_tasks)))
+    # Run the tasks concurrently with global sleep patch
+    with patch("asyncio.sleep", mock_sleep_record):
+        await asyncio.gather(*(run_failing_task() for _ in range(num_tasks)))
     
     # We only care about the first attempt retry sleeps
-    first_retry_sleeps = delays[:num_tasks]
+    first_retry_sleeps = [sleeps[0] for sleeps in task_sleeps.values() if sleeps]
     assert len(first_retry_sleeps) == num_tasks
     
     # Assert all delays are within [0.5, 1.0]

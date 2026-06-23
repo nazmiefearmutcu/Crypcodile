@@ -30,6 +30,9 @@ from crypcodile.schema.records import (
     OptionsChain,
     Record,
     Trade,
+    FarcasterCorrelation,
+    ReserveDataUpdated,
+    LiquidationCall,
 )
 
 
@@ -146,6 +149,11 @@ def from_row(row: dict[str, Any]) -> Record:
             amount=float(d["amount"]),
             side=Side(d["side"]),
             liquidation=d.get("liquidation"),
+            l1_gas_fee=float(d["l1_gas_fee"]) if d.get("l1_gas_fee") is not None else None,
+            l2_gas_fee=float(d["l2_gas_fee"]) if d.get("l2_gas_fee") is not None else None,
+            gas_price=float(d["gas_price"]) if d.get("gas_price") is not None else None,
+            sender=d.get("sender"),
+            is_smart_wallet=bool(d["is_smart_wallet"]) if d.get("is_smart_wallet") is not None else None,
         )
     if channel == "book_snapshot":
         return BookSnapshot(
@@ -279,5 +287,45 @@ def from_row(row: dict[str, Any]) -> Record:
             buy_volume=float(d.get("buy_volume") or 0.0),
             sell_volume=float(d.get("sell_volume") or 0.0),
             num_trades=d.get("num_trades"),
+        )
+    if channel == "farcaster_correlation":
+        return FarcasterCorrelation(
+            exchange=d["exchange"],
+            symbol=d["symbol"],
+            symbol_raw=d["symbol_raw"],
+            exchange_ts=d.get("exchange_ts"),
+            local_ts=int(d["local_ts"]),
+            mentions_24h=int(d["mentions_24h"]),
+            dev_activity_score=float(d["dev_activity_score"]),
+            trending_rank=int(d["trending_rank"]),
+        )
+    if channel == "reserve_data_updated":
+        return ReserveDataUpdated(
+            exchange=d["exchange"],
+            symbol=d["symbol"],
+            symbol_raw=d["symbol_raw"],
+            exchange_ts=d.get("exchange_ts"),
+            local_ts=int(d["local_ts"]),
+            reserve=d["reserve"],
+            liquidity_rate=float(d["liquidity_rate"]),
+            stable_borrow_rate=float(d["stable_borrow_rate"]),
+            variable_borrow_rate=float(d["variable_borrow_rate"]),
+            liquidity_index=int(d["liquidity_index"]),
+            variable_borrow_index=int(d["variable_borrow_index"]),
+        )
+    if channel == "liquidation_call":
+        return LiquidationCall(
+            exchange=d["exchange"],
+            symbol=d["symbol"],
+            symbol_raw=d["symbol_raw"],
+            exchange_ts=d.get("exchange_ts"),
+            local_ts=int(d["local_ts"]),
+            collateral_asset=d["collateral_asset"],
+            debt_asset=d["debt_asset"],
+            user=d["user"],
+            debt_to_cover=float(d["debt_to_cover"]),
+            liquidated_collateral_amount=float(d["liquidated_collateral_amount"]),
+            liquidator=d["liquidator"],
+            receive_a_token=bool(d["receive_a_token"]),
         )
     raise ValueError(f"Unknown channel tag: {channel!r}")

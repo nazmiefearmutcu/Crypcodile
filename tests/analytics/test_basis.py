@@ -21,7 +21,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crypcodile.analytics.basis import perp_basis, spot_future_basis
+from crypcodile.analytics.basis import perp_basis, spot_future_basis, spot_perp_basis
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import DerivativeTicker, Trade
 from crypcodile.store.catalog import Catalog
@@ -464,3 +464,54 @@ def test_spot_future_basis_expired_annualized_returns_none_or_zero(
         assert v is None or v == 0.0, (
             f"annualized_pct={v!r} for expired/same-ts row — expected None or 0.0"
         )
+
+
+# ---------------------------------------------------------------------------
+# spot_perp_basis tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def spot_perp_lake(tmp_path: Path) -> Path:
+    """Write spot Trades and derivative tickers to a temp lake."""
+    records: list[object] = [
+        # Spot: t=1000 px=100, t=3000 px=102
+        _make_trade(_T1, _SPOT_SYMBOL, 100.0),
+        _make_trade(_T3, _SPOT_SYMBOL, 102.0),
+        # Perp Tickers: t=2000 mark=101.5 index=101.0, t=4000 mark=104.5 index=104.0
+        _make_derivative_ticker(_T2, 101.5, 101.0),
+        _make_derivative_ticker(_T4, 104.5, 104.0),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+    return tmp_path
+
+
+@pytest.fixture()
+def spot_perp_catalog(spot_perp_lake: Path) -> Catalog:
+    return Catalog(spot_perp_lake)
+
+
+def test_spot_perp_basis(spot_perp_catalog: Catalog) -> None:
+    df = spot_perp_basis(spot_perp_catalog, _SPOT_SYMBOL, _PERP_SYMBOL, _T1, _T4)
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 2
+
+    required = {"local_ts", "spot_price", "perp_price", "basis", "basis_pct"}
+    assert required.issubset(set(df.columns))
+
+    # Row 0: t=2000, perp_price=101.5, spot_price=100.0 (asof prior), basis=1.5, basis_pct=0.015
+    row0 = df.row(0, named=True)
+    assert row0["local_ts"] == _T2
+    assert abs(row0["perp_price"] - 101.5) < 1e-9
+    assert abs(row0["spot_price"] - 100.0) < 1e-9
+    assert abs(row0["basis"] - 1.5) < 1e-9
+    assert abs(row0["basis_pct"] - 0.015) < 1e-9
+
+    # Row 1: t=4000, perp_price=104.5, spot_price=102.0 (asof prior), basis=2.5, basis_pct=2.5/102
+    row1 = df.row(1, named=True)
+    assert row1["local_ts"] == _T4
+    assert abs(row1["perp_price"] - 104.5) < 1e-9
+    assert abs(row1["spot_price"] - 102.0) < 1e-9
+    assert abs(row1["basis"] - 2.5) < 1e-9
+    assert abs(row1["basis_pct"] - (2.5 / 102.0)) < 1e-9
+

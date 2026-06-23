@@ -252,3 +252,50 @@ Add a new CLI command to `src/crypcodile/cli.py` (e.g., `bookmap` or similar nam
 ### Tests and Code Quality
 - [ ] All newly added tests pass cleanly under the project's pytest environment (`pytest tests/`).
 - [ ] Existing project tests under `tests/` continue to pass without regression.
+
+## Follow-up — 2026-06-23T09:56:42Z
+
+Implement the missing Base L2 integrations, on-chain data collection pipeline, and advanced analytics models for the Crypcodile repository to resolve all gaps detailed in the Base Builder Grants Gap Analysis & Roadmap.
+
+Working directory: `/Users/nazmi/Crypcodile`
+Integrity mode: development
+
+## Requirements
+
+### R1. Base L2 Ecosystem Integrations
+Enhance the repository with ecosystem-level integrations:
+- **Asset Registry**: Track top 100 Base-native tokens (including AERO, DEGEN, BRETT) with contract addresses.
+- **DEX Pool Listeners**: Implement event listeners/pollers for Uniswap V3 and Aerodrome (classic & Slipstream).
+- **Bridge Flow Ingestion**: Capture `DepositInitiated` and `WithdrawalInitiated` logs from OP Portal/ERC-20 bridge contracts.
+- **L2 Gas Schema**: Extend DuckDB/Parquet schemas to model `l1_gas_fee`, `l2_gas_fee`, and `gas_price`.
+- **Resilient RPC client**: Async, load-balanced, and rate-limited client multiplexing between QuickNode, Alchemy, and Ankr.
+- **Farcaster Social Correlation**: Extract trending tokens and developer activity (using Neynar/Hub APIs with mock fallbacks).
+- **Other integrations**: Stablecoin peg deviation filters, block-by-block memecoin liquidity depth, sequencer block latency, ShowMe gas tracker widget, Coinbase Smart Wallet sender tag, cached BNS address resolver, Superchain OP Stack standardization, Base Sepolia faucet-mock stream, and Seamless/Aave lending logs (`ReserveDataUpdated`/`LiquidationCall`).
+
+### R2. Advanced On-Chain Ingest & Ingestion Engine
+Ensure production-grade log and trace parsing:
+- **High-Performance Decoding**: Implement a Rust/pyo3 log decoder module with a pure-Python fallback.
+- **ABI Caching**: Dynamic `ABIRegistry` caching contract ABIs from Basescan/Sourcify.
+- **Transaction Tracing**: Identify flashloans, reentrancy anomalies, and internal swaps using trace analysis.
+- **MEV Sandwich Filter**: Polars window functions to detect MEV activity.
+- **Node Disconnection & Reorg Recovery**: Disk-persisted block tracker (`SyncRecovery`) and block re-org buffer (`RollbackManager`).
+- **Other Ingest Features**: Limit orders (1inch/0x), rebase token balanceOf validation, failed txn revert reason parser, and Proof of Reserve (PoR) syncing.
+
+### R3. Advanced Analytics & Modeling
+Complete derivatives, perpetuls, and machine learning models:
+- **Derivatives**: Options chain builder (Derive/Lyra), Black-Scholes Greeks solver adapters, and 3D IV surface visualizer.
+- **Perpetuals**: Synthetix/GMX position tracking, Open Interest aggregation table, and spot-perp onchain-offchain basis analyzer.
+- **Machine Learning**: XGBoost model for next-period funding rate predictions (with heuristic fallback).
+- **Sentiment & Risk**: Chaos Score updates, Whale transfer trackers, Smart Money tracking, price impact simulator API, lending LTV/health factor stress test, and gas-to-volatility correlation.
+
+## Acceptance Criteria
+
+### Test Pass & Ingestion Integrity
+- [ ] Every new module and class has automated unit/integration test cases under `tests/` using mock web3 providers/RPCs.
+- [ ] Running `uv run pytest -k "not test_bookmap_window"` passes cleanly without regressions (PyQt6 window tests excluded due to headless CI/CD/agent environment).
+- [ ] DuckDB tables correctly store the new schema fields and allow standard querying.
+- [ ] The CLI commands remain fully functional and compatible with the new metrics.
+
+### Package & Build Validation
+- [ ] Running `uv build` in `/Users/nazmi/Crypcodile` succeeds cleanly.
+

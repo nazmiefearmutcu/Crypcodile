@@ -2,16 +2,45 @@
 
 **Deterministic Market Data Infrastructure for Quantitative Research and Autonomous Agents**
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.013-blue.svg)](https://pypi.org/project/crypcodile/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.042-blue.svg)](https://pypi.org/project/crypcodile/)
 [![Python Supported](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-## Overview
+---
 
-**Crypcodile** is an open-source, high-performance market data engineering framework. It provides a deterministic pipeline for ingesting, normalizing, resampling, and storing fragmented cryptocurrency market data across both centralized limit order books (CLOBs) and decentralized automated market makers (AMMs).
+## 🔵 Built for the Base Ecosystem & AI Agents
 
-Designed for quantitative researchers, algorithmic traders, and autonomous AI agents, Crypcodile abstracts the underlying complexities of RPC node management, WebSocket state reconciliation, and schema fragmentation into a unified, mathematically rigorous interface.
+Crypcodile serves as critical public-goods infrastructure for the **Base L2 network** and the **AI/Agentic Web3 economy**. It decouples RPC node data polling and WebSocket streams from schema standardization, allowing quant researchers and autonomous AI systems to interact with Base DEXs (Uniswap V3 and Aerodrome Finance) and centralized limit order books (CLOBs) in a single, mathematically rigorous framework.
+
+### 🐊 Core Base & AI Capabilities:
+1. **🤖 Model Context Protocol (MCP) Server**: Natively hosts an MCP server, allowing AI agents (via environments like Cursor, Claude Desktop, or custom agentic frameworks) to execute deterministic, read-only queries against live Base market data without price hallucinations.
+2. **⚡ Native Base On-chain Ingest**: Standardizes Base RPC node event logs for DEX swaps and reserves (Uniswap V3 & Aerodrome Finance) directly to unified time-series schemas.
+3. **💬 Farcaster Frame Integration**: Provides a fully functional Farcaster Frame server (`examples/farcaster_frame.py`) yielding real-time Base market snapshots on Warpcast.
+4. **🛡️ Swarm-Hardened Core**: Built and secured by an autonomous multi-agent AI swarm (Auditors, Challengers, Implementers, Reviewers).
+
+---
+
+### 🤖 AI Agentic Query Example (MCP Tool)
+
+**AI Agent Prompt:**
+> "What is the current slippage and whale positioning on Aerodrome for DEGEN/WETH?"
+
+**Crypcodile MCP response:**
+```json
+{
+  "symbol": "DEGEN-WETH",
+  "pool_address": "0xc9034c3e7f40f1cdd08ce8339178ef8a5fc2f71e",
+  "current_price": "0.00000284 WETH",
+  "volume_1h_quote": "$124,532.18",
+  "reserve0": "3,485,210.50 DEGEN",
+  "reserve1": "9.89 WETH",
+  "block": 15432901,
+  "num_swaps_1h": 142,
+  "whale_sentiment": "Bullish (Net Flow: +$42,500)",
+  "estimated_slippage_10_eth": "0.18%"
+}
+```
 
 ---
 
@@ -26,9 +55,7 @@ Crypcodile is built around a robust, modular pipeline designed to handle degrade
 
 ## 2. Base Ecosystem & L2 Integration
 
-With the `v0.1.013` release, Crypcodile serves as critical public-goods infrastructure for the **Base L2 network**. 
-
-Historically, comparing CeFi order book states with DeFi on-chain states required maintaining disparate codebases. Crypcodile unifies this paradigm. The `BaseOnchainConnector` directly queries Base RPC nodes, extracts DEX swap and liquidity events (e.g., from Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
+With the `v0.1.042` release, Crypcodile unifies the comparison of CeFi order book states with DeFi on-chain states. Historically, doing so required maintaining disparate codebases. The `BaseOnchainConnector` queries Base RPC nodes, extracts DEX swap and liquidity events (Uniswap V3 and Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
 
 This unified approach enables quantitative developers to seamlessly execute cross-venue arbitrage detection, on-chain momentum tracking, and aggregated volume analytics—treating smart contract state identically to centralized exchange APIs.
 
@@ -36,14 +63,14 @@ This unified approach enables quantitative developers to seamlessly execute cros
 
 As autonomous systems increasingly participate in on-chain ecosystems, standardizing how Large Language Models interact with market data is critical. 
 
-Crypcodile pioneers this integration via its natively embedded **Model Context Protocol (MCP) Server** (`src/crypcodile/mcp_server.py`). This allows AI agents (via environments like Cursor, Claude Desktop, or custom agentic frameworks) to execute deterministic, read-only queries against live market data, evaluate option implied volatility surfaces, and fetch Base on-chain metrics without writing custom RPC extraction logic or hallucinating pricing data.
+Crypcodile pioneers this integration via its natively embedded **Model Context Protocol (MCP) Server** (`src/crypcodile/mcp_server.py`). This allows AI agents to execute deterministic, read-only queries against live market data, evaluate option implied volatility surfaces, and fetch Base on-chain metrics without writing custom RPC extraction logic.
 
 ```bash
 # Initialize the MCP server for agentic consumption
 uv run crypcodile mcp --data-dir data
 ```
 
-## Analytics
+## 4. Analytics
 
 Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing optimized implementations for derivatives research and CLI commands like `funding_apr` and `iv_surface`:
 
@@ -53,16 +80,8 @@ Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing opt
 
 ## 5. Bookmap Visualizer (Order Book Depth & Cumulative Delta)
 
-Crypcodile features a high-performance, macOS-optimized native desktop GUI visualizer built with `PyQt6` and `pyqtgraph`. It allows quantitative researchers to visually analyze market microstructures and order book dynamics in real-time, resembling the industry-standard Bookmap interface.
+Crypcodile features a high-performance, macOS-optimized native desktop GUI visualizer built with `PyQt6` and `pyqtgraph`. It allows quantitative researchers to visually analyze market microstructures and order book dynamics in real-time.
 
-### Key Features
-*   **Order Book Depth Heatmap**: Price vs. Time rolling grid representation of historical and live limit order book liquidity, color-coded using a log-scale colormap.
-*   **Cumulative Delta Line Chart**: Real-time tracking of buyer-initiated vs. seller-initiated trading volume imbalances.
-*   **Vertical L2 Depth Profile Sidebar**: Live vertical representation of bid/ask depth distributions across price levels (Y-linked to the price chart).
-*   **Trade Bubbles Overlay**: Renders transaction executions on the price chart as semi-transparent neon green (buy) and bright red (sell) circles, with the radius proportional to trade size.
-*   **Non-Blocking Integration**: Running the command inside the interactive `crypcodile shell` launches the visualizer as an independent background subprocess, allowing developers to continue running shell queries concurrently.
-
-### Usage
 Launch the visualizer by specifying the symbol and the amount of historical catalog data to load:
 ```bash
 # Launch directly from the command line
@@ -77,9 +96,7 @@ crypcodile> bookmap --symbol deribit:BTC-PERPETUAL --historical-hours 1.0
 
 Crypcodile requires Python 3.12+. We recommend using `uv` for high-performance dependency management.
 
-### Quick Script Installation (Recommended)
-
-You can install the Crypcodile CLI globally inside an isolated virtual environment with a single copy-pasteable command:
+### Quick Script Installation
 
 **macOS and Linux:**
 ```bash
@@ -91,8 +108,6 @@ curl -sSL https://raw.githubusercontent.com/nazmiefearmutcu/Crypcodile/main/inst
 powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/nazmiefearmutcu/Crypcodile/main/install.ps1 | iex"
 ```
 
-*Note: The installer automatically creates an isolated virtual environment, installs all dependencies, and configures the `crypcodile` command in your PATH.*
-
 ### Standard Package Installation
 
 ```bash
@@ -101,32 +116,24 @@ pip install crypcodile
 uv pip install crypcodile
 ```
 
-### Example: Normalizing Base On-Chain Data
+### 🔵 Base Developer Quickstart
+To get started tracking Base Whales in less than 10 lines of Python, see our [Base Developer Quickstart](docs/base_quickstart.md).
 
-The following demonstrates instantiating a client to extract and query normalized trade events from the Base ecosystem, outputting directly to a Pandas DataFrame for downstream statistical analysis.
+---
 
-```python
-import pandas as pd
-from crypcodile.client.client import CrypcodileClient
+## 🚀 1-Click Deployments (Live Public Demos)
 
-def analyze_base_liquidity():
-    # Instantiate the client pointing to your local Parquet data lake
-    client = CrypcodileClient(data_dir="data")
-    
-    # Query the latest 500 normalized trade events from Base on-chain DEXs
-    df = client.query(
-        "SELECT * FROM trade WHERE exchange = 'base_onchain' ORDER BY local_ts DESC LIMIT 500"
-    )
-    
-    # Export to Pandas DataFrame for downstream quant modeling
-    df_pandas = df.to_pandas()
-    print(df_pandas.describe())
+To make it easy for grant reviewers and developers to inspect Crypcodile's features live, we support instant cloud deployments of our dashboard and API portal:
 
-if __name__ == "__main__":
-    analyze_base_liquidity()
-```
+### 1. Streamlit Live DEX Dashboard
+Visualize live swap volumes, liquidity depth, and price feeds streaming directly from Aerodrome and Uniswap V3 on Base.
+- **Deploy instructions**: Import the project into [Streamlit Community Cloud](https://streamlit.io/cloud) and set the entry file to [examples/base_dashboard.py](examples/base_dashboard.py).
 
-*(Additional production-ready implementation architectures, including Farcaster Frame backends and interactive Dashboards, are available in the `examples/` directory).*
+### 2. Node.js Micropayment-Gated API Portal
+Inspect our micropayment architecture for on-chain services.
+- **Vercel**: The `api_portal` contains a pre-configured [vercel.json](src/crypcodile/api_portal/vercel.json) file. Link the repo, select the `src/crypcodile/api_portal/` folder as the root directory, and deploy in one click.
+
+---
 
 ## 7. Testing & Reliability Guarantee
 

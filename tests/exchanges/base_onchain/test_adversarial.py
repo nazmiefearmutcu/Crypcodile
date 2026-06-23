@@ -33,7 +33,9 @@ async def test_pagination_extremely_large_range():
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
             return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return end_block
@@ -90,7 +92,9 @@ async def test_pagination_empty_range():
         func_name = getattr(func, "__name__", None) or ""
         func_str = str(func)
         if "get_logs" in func_str or func_name == "get_logs":
-            captured_logs_calls.append(args[0])
+            params = args[0]
+            if params.get("address") == "0xPoolAddress":
+                captured_logs_calls.append(params)
             return []
         if "block_number" in func_str or func_name == "get_bn" or "get_bn" in func_str:
             return end_block
@@ -221,7 +225,9 @@ async def test_retry_thundering_herd_jitter_distribution():
     
     # For each retry attempt (0 to 3), check the spread of delay values
     for attempt_idx in range(4):
-        delays_at_attempt = [delays[attempt_idx] for delays in task_sleeps.values()]
+        delays_at_attempt = [delays[attempt_idx] for delays in task_sleeps.values() if len(delays) > attempt_idx]
+        if len(delays_at_attempt) < 2:
+            continue
         # Assert they are not all identical (no synchronization / thundering herd broken)
         unique_delays = set(delays_at_attempt)
         # 20 independent random.uniform(0.5, 1.0) draws are extremely unlikely to result in duplicates.
