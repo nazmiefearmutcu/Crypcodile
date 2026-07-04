@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Mocking PyQt6 & pyqtgraph if not present to allow running tests inside sandboxed environment
 try:
     import PyQt6
     import pyqtgraph
@@ -13,7 +12,6 @@ try:
 except ImportError:
     HAS_GUI_LIBS = False
     
-    # Create real dummy classes to avoid MagicMock inheritance issues
     class DummyQWidget:
         def __init__(self, *args, **kwargs):
             pass
@@ -28,7 +26,6 @@ except ImportError:
         def setWindowTitle(self, *args, **kwargs):
             pass
             
-    # Mock modules
     from unittest.mock import MagicMock
     import sys
     
@@ -42,18 +39,20 @@ except ImportError:
     sys.modules['PyQt6.QtWidgets'] = mock_qt.QtWidgets
     sys.modules['pyqtgraph'] = MagicMock()
 
-from crypcodile.gui.bookmap_window import BookmapWindow
+from crypcodile.gui.flowmap_window import FlowmapWindow
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import Trade, BookSnapshot, BookDelta
 
 
-def test_bookmap_window_logical_handling():
+def test_flowmap_window_logical_handling():
     """Test event handling and internal states without requiring a display."""
+    import os
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
     
-    # Patch update_plots to avoid comparison errors with MagicMock in viewRange
-    with patch.object(BookmapWindow, 'update_plots') as mock_update:
-        q = queue.Queue()
-        window = BookmapWindow(queue=q)
+    with patch.object(FlowmapWindow, 'update_plots') as mock_update:
+        window = FlowmapWindow(initial_symbol="binance-spot:BTCUSDT", data_dir="data")
         
         # Verify initial states
         assert window.cum_delta == 0.0
@@ -85,8 +84,8 @@ def test_bookmap_window_logical_handling():
             symbol_raw="BTCUSDT",
             exchange_ts=1700000000200000000,
             local_ts=1700000000200000000,
-            bids=[(99.0, 0.0), (98.5, 4.0)],  # remove 99.0, update 98.5
-            asks=[(101.0, 2.5)]               # update 101.0
+            bids=[(99.0, 0.0), (98.5, 4.0)],
+            asks=[(101.0, 2.5)]
         )
         window.handle_event(delta)
         
@@ -117,7 +116,7 @@ def test_bookmap_window_logical_handling():
 
 
 @pytest.mark.skipif(not HAS_GUI_LIBS, reason="PyQt6/pyqtgraph not installed")
-def test_bookmap_window_qt_render():
+def test_flowmap_window_qt_render():
     """Test rendering of plots when PyQt6 and pyqtgraph are installed."""
     import os
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -125,8 +124,7 @@ def test_bookmap_window_qt_render():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     
-    q = queue.Queue()
-    window = BookmapWindow(queue=q)
+    window = FlowmapWindow(initial_symbol="binance-spot:BTCUSDT", data_dir="data")
     
     # Send events
     snap = BookSnapshot(
@@ -142,7 +140,6 @@ def test_bookmap_window_qt_render():
     window.handle_event(snap)
     window.update_plots()
     
-    # Verify plot items exist
     assert window.price_plot is not None
     assert window.image_item is not None
     assert window.trade_scatter is not None

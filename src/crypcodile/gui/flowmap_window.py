@@ -1,67 +1,326 @@
 import math
 import queue
 import time
+import asyncio
 from collections import deque
-
 import numpy as np
 from PyQt6 import QtCore, QtWidgets
 import pyqtgraph as pg
 
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import BookDelta, BookSnapshot, Trade
+from crypcodile.store.catalog import Catalog
+from crypcodile.exchanges.factory import make_connector
+from crypcodile.instruments.registry import InstrumentRegistry
+from crypcodile.client.collect import collect as collect_live
+from crypcodile.ingest.transport import AiohttpWsTransport
+from crypcodile.sink.base import Sink
+
+class IngestQueueSink(Sink):
+    """A sink that routes normalized records into a thread-safe queue."""
+    def __init__(self, queue_obj) -> None:
+        self.queue_obj = queue_obj
+
+    async def put(self, record) -> None:
+        self.queue_obj.put(record)
+
+    async def flush(self) -> None:
+        pass
 
 
-class BookmapWindow(QtWidgets.QMainWindow):
-    """
-    A responsive, dark-themed PyQt6 window for order book depth and trade visualization.
-    Displays:
-    - Order Book Depth Heatmap (rolling price-vs-time grid using pg.ImageItem)
-    - Cumulative Delta Line Chart (running volume delta)
-    - L2 Depth Profile (vertical sidebar showing horizontal bids & asks bars)
-    - Trade Bubbles (overlay scatter plot scaled by volume, colored by side)
-    
-    Supports initial historical loading and live queue-based streaming updates.
-    """
-    
-    def __init__(self, queue: queue.Queue | None = None, parent: QtWidgets.QWidget | None = None):
+class LiveFeederThread(QtCore.QThread):
+    """Background thread running asyncio event loop to stream live events via connector."""
+    def __init__(self, exchange: str, symbol_raw: str, queue_obj):
+        super().__init__()
+        self.exchange = exchange
+        self.symbol_raw = symbol_raw
+        self.queue_obj = queue_obj
+        self.loop = None
+        self.running = True
+
+    def run(self):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        registry = InstrumentRegistry()
+        sink = IngestQueueSink(self.queue_obj)
+        
+        try:
+            connector = make_connector(
+                exchange=self.exchange,
+                symbols=[self.symbol_raw],
+                channels=["book_delta", "trade"],
+                out=sink,
+                registry=registry,
+            )
+            if connector.transport is None:
+                connector.transport = AiohttpWsTransport(connector.ws_url)
+                
+            async def run_collect():
+                await collect_live([connector], sink)
+                
+            self.loop.run_until_complete(run_collect())
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            import sys
+            sys.stderr.write(f"Feeder thread exception: {e}\n")
+            sys.stderr.flush()
+
+    def stop(self):
+        self.running = False
+        if self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.cancel_all_tasks)
+
+    def cancel_all_tasks(self):
+        for task in asyncio.all_tasks(self.loop):
+            task.cancel()
+        self.loop.stop()
+
+
+class HistoricalLoaderThread(QtCore.QThread):
+    """Background thread to query DuckDB historical data without freezing the GUI."""
+    loaded = QtCore.pyqtSignal(list)
+
+    def __init__(self, data_dir: str, symbol: str, historical_hours: float):
+        super().__init__()
+        self.data_dir = data_dir
+        self.symbol = symbol
+        self.historical_hours = historical_hours
+
+    def run(self):
+        try:
+            import polars as pl
+            catalog = Catalog(self.data_dir)
+            end_ns = int(time.time_ns())
+            
+            try:
+                max_df = catalog.query(
+                    f"SELECT max(local_ts) as max_t FROM trade WHERE symbol = '{self.symbol}'"
+                )
+                if len(max_df) > 0 and max_df["max_t"][0] is not None:
+                    end_ns = int(max_df["max_t"][0])
+            except Exception:
+                pass
+
+            start_ns = end_ns - int(self.historical_hours * 3600 * 1_000_000_000)
+
+            try:
+                snap_df = catalog.scan("book_snapshot", self.symbol, start_ns, end_ns)
+            except Exception:
+                snap_df = pl.DataFrame()
+
+            try:
+                delta_df = catalog.scan("book_delta", self.symbol, start_ns, end_ns)
+            except Exception:
+                delta_df = pl.DataFrame()
+
+            try:
+                trade_df = catalog.scan("trade", self.symbol, start_ns, end_ns)
+            except Exception:
+                trade_df = pl.DataFrame()
+
+            events = []
+
+            def df_to_list(df, channel_name):
+                if df.is_empty():
+                    return []
+                rows = df.to_dicts()
+                for r in rows:
+                    r["channel"] = channel_name
+                return rows
+
+            events.extend(df_to_list(snap_df, "book_snapshot"))
+            events.extend(df_to_list(delta_df, "book_delta"))
+            events.extend(df_to_list(trade_df, "trade"))
+
+            for r in events:
+                if r.get("channel") in ("book_snapshot", "book_delta"):
+                    for side in ("bids", "asks"):
+                        original = r.get(side)
+                        normalized = []
+                        if original:
+                            for item in original:
+                                if isinstance(item, dict):
+                                    price = item.get("price")
+                                    amount = item.get("amount") if item.get("amount") is not None else item.get("size")
+                                    if price is not None and amount is not None:
+                                        normalized.append((float(price), float(amount)))
+                                elif isinstance(item, (list, tuple)):
+                                    normalized.append((float(item[0]), float(item[1])))
+                        r[side] = normalized
+
+            events.sort(key=lambda x: x.get("local_ts") or 0)
+            self.loaded.emit(events)
+        except Exception as e:
+            import sys
+            sys.stderr.write(f"Error in HistoricalLoaderThread: {e}\n")
+            sys.stderr.flush()
+            self.loaded.emit([])
+
+
+class SuggestionPopup(QtWidgets.QFrame):
+    """Binance-like custom autocomplete popup supporting category tabs and instant search filtering."""
+    selected = QtCore.pyqtSignal(str)
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Crypcodile Bookmap Visualizer")
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QtWidgets.QFrame.Shadow.Raised)
+        self.setStyleSheet("""
+            SuggestionPopup {
+                background-color: #1A1A1A;
+                border: 1px solid #333333;
+                border-radius: 6px;
+            }
+            QTabBar::tab {
+                background-color: #222222;
+                color: #888888;
+                padding: 6px 12px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: #1A1A1A;
+                color: #00BFFF;
+                border-bottom: 2px solid #00BFFF;
+            }
+            QListWidget {
+                background-color: #1A1A1A;
+                border: none;
+                color: #E0E0E0;
+            }
+            QListWidget::item {
+                padding: 8px 12px;
+                border-bottom: 1px solid #252525;
+            }
+            QListWidget::item:hover {
+                background-color: #2D2D2D;
+            }
+            QListWidget::item:selected {
+                background-color: #00BFFF;
+                color: #121212;
+            }
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Tabs
+        self.tab_bar = QtWidgets.QTabBar(self)
+        self.tab_bar.addTab("All")
+        self.tab_bar.addTab("Spot")
+        self.tab_bar.addTab("Perp/Futures")
+        self.tab_bar.currentChanged.connect(self.filter_items)
+        layout.addWidget(self.tab_bar)
+
+        # List
+        self.list_widget = QtWidgets.QListWidget(self)
+        self.list_widget.itemClicked.connect(self.on_item_clicked)
+        layout.addWidget(self.list_widget)
+
+        self.all_symbols = []
+        self.current_filter_text = ""
+
+    def set_symbols(self, symbols):
+        self.all_symbols = symbols
+        self.filter_items()
+
+    def filter_text(self, text):
+        self.current_filter_text = text.lower()
+        self.filter_items()
+
+    def filter_items(self):
+        self.list_widget.clear()
+        tab_idx = self.tab_bar.currentIndex()
+        
+        category_filter = None
+        if tab_idx == 1:
+            category_filter = "spot"
+        elif tab_idx == 2:
+            category_filter = "perp"
+
+        for item in self.all_symbols:
+            symbol = item["symbol"]
+            display = item["display"]
+            category = item["category"]
+
+            if category_filter and category != category_filter:
+                continue
+
+            if self.current_filter_text and self.current_filter_text not in display.lower() and self.current_filter_text not in symbol.lower():
+                continue
+
+            list_item = QtWidgets.QListWidgetItem(display)
+            list_item.setData(QtCore.Qt.ItemDataRole.UserRole, symbol)
+            self.list_widget.addItem(list_item)
+
+    def on_item_clicked(self, item):
+        symbol = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        self.selected.emit(symbol)
+        self.hide()
+
+
+class FlowmapWindow(QtWidgets.QMainWindow):
+    """
+    A responsive, dark-themed PyQt6 window for order book depth and trade flow visualization.
+    Integrates Binance-like search suggestions, dynamic symbol switching, background historical data
+    queries, and self-contained WebSocket streaming.
+    """
+    
+    def __init__(self, initial_symbol: str, data_dir: str, historical_hours: float = 2.0, parent: QtWidgets.QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Crypcodile Flowmap Visualizer")
         self.resize(1200, 800)
         
-        # Queue streaming
-        self.queue = queue
+        self.symbol = initial_symbol
+        self.data_dir = data_dir
+        self.historical_hours = historical_hours
         
         # State data structures
-        self.current_bids = {}  # price -> size
-        self.current_asks = {}  # price -> size
+        self.current_bids = {}
+        self.current_asks = {}
         self._updating_plots = False
         self.y_range_initialized = False
         self.x_range_initialized = False
         self.auto_scroll = True
         self.sensitivity = 50
         
-        # Time-binned order book history for linear X-axis heatmap
-        self.time_resolution_s = 0.2  # 200ms per heatmap column
-        self.max_history_len = 1000  # maximum column bins
+        self.time_resolution_s = 0.2
+        self.max_history_len = 1000
         self.book_history = deque(maxlen=self.max_history_len)
-        
-        # Trade and cumulative delta history
         self.trade_history = []
         self.delta_history = []
         self.cum_delta = 0.0
         
-        # Heatmap resolution configuration
         self.num_price_bins = 200
-        self.default_price_range = 50.0  # default vertical window size if not set
+        self.default_price_range = 50.0
+        
+        # Background loading and streaming threads
+        self.historical_loader = None
+        self.feeder_thread = None
+        
+        # Event queue
+        self.event_queue = queue.Queue()
         
         self.init_ui()
         
-        # If queue is provided, start polling immediately
-        if self.queue is not None:
-            self.start_streaming(self.queue)
+        # Load suggestions and symbols list
+        suggestions = self.get_all_suggestions()
+        self.suggestion_popup.set_symbols(suggestions)
+        
+        # Load initial symbol data
+        self.set_symbol(self.symbol)
+        
+        # Setup batch processing timer
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.process_queue)
+        self.timer.start(100)
 
     def init_ui(self):
-        # Set dark-themed application stylesheet
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #121212;
@@ -73,12 +332,10 @@ class BookmapWindow(QtWidgets.QMainWindow):
             }
         """)
         
-        # Set pyqtgraph global config for dark mode
         pg.setConfigOption('background', '#121212')
         pg.setConfigOption('foreground', '#E0E0E0')
         pg.setConfigOption('antialias', True)
         
-        # Main layout container to host control panel and graphics widget
         main_container = QtWidgets.QWidget(self)
         self.setCentralWidget(main_container)
         main_layout = QtWidgets.QVBoxLayout(main_container)
@@ -88,7 +345,27 @@ class BookmapWindow(QtWidgets.QMainWindow):
         # 0. Control Panel layout
         control_panel = QtWidgets.QHBoxLayout()
         
-        # Heatmap Sensitivity Slider
+        # Binance-like search bar
+        self.search_input = QtWidgets.QLineEdit(self)
+        self.search_input.setPlaceholderText("Search Symbol (e.g. BTCUSDT)...")
+        self.search_input.setFixedWidth(250)
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1E1E1E;
+                border: 1px solid #333333;
+                border-radius: 4px;
+                padding: 6px 10px;
+                color: #E0E0E0;
+                font-size: 10pt;
+            }
+            QLineEdit:focus {
+                border-color: #00BFFF;
+            }
+        """)
+        self.search_input.textChanged.connect(self.on_search_text_changed)
+        self.search_input.selectionChanged.connect(self.show_suggestion_popup)
+        
+        # Sensitivity Slider
         self.sens_label = QtWidgets.QLabel("Heatmap Sensitivity: 50%", self)
         self.sens_label.setStyleSheet("font-weight: bold; color: #E0E0E0;")
         
@@ -96,7 +373,7 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.sens_slider.setMinimum(1)
         self.sens_slider.setMaximum(100)
         self.sens_slider.setValue(50)
-        self.sens_slider.setFixedWidth(200)
+        self.sens_slider.setFixedWidth(150)
         self.sens_slider.setStyleSheet("""
             QSlider::groove:horizontal {
                 border: 1px solid #333333;
@@ -112,10 +389,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 margin: -3px 0;
                 border-radius: 7px;
             }
-            QSlider::handle:horizontal:hover {
-                background: #00DFFF;
-                border-color: #00DFFF;
-            }
         """)
         self.sens_slider.valueChanged.connect(self.on_sensitivity_changed)
         
@@ -125,6 +398,9 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.scroll_checkbox.setStyleSheet("font-weight: bold; color: #E0E0E0;")
         self.scroll_checkbox.stateChanged.connect(self.on_scroll_checkbox_changed)
         
+        control_panel.addWidget(QtWidgets.QLabel("Symbol:", self))
+        control_panel.addWidget(self.search_input)
+        control_panel.addSpacing(20)
         control_panel.addWidget(self.sens_label)
         control_panel.addWidget(self.sens_slider)
         control_panel.addSpacing(20)
@@ -141,7 +417,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.price_plot = self.central_widget.addPlot(row=0, col=0)
         self.price_plot.setTitle("Order Book Heatmap & Trades", color='#E0E0E0', size='12pt')
         self.price_plot.showGrid(x=True, y=True, alpha=0.15)
-        # Hide X-axis numbers on top plot (delta plot directly beneath shares X axis)
         self.price_plot.getAxis('bottom').setStyle(showValues=False)
         self.price_plot.getAxis('left').setLabel("Price", color='#E0E0E0')
         
@@ -150,14 +425,13 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.price_plot.addItem(self.image_item)
         
         # Heatmap Lookup Table (Colormap)
-        # Gradient: Dark Grey -> Blue -> Magenta -> Orange -> Yellow/White
         pos = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
         color = np.array([
             [18, 18, 18, 255],     # Dark grey background
             [0, 100, 255, 255],    # Cool blue
             [255, 0, 128, 255],    # Purple/magenta
             [255, 150, 0, 255],    # Warm orange
-            [255, 255, 200, 255]   # Soft yellow/white for highest liquidity
+            [255, 255, 200, 255]   # Soft yellow/white
         ], dtype=np.ubyte)
         cmap = pg.ColorMap(pos, color)
         lut = cmap.getLookupTable(start=0.0, stop=1.0, nPts=256)
@@ -167,15 +441,13 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.trade_scatter = pg.ScatterPlotItem(pxMode=True)
         self.price_plot.addItem(self.trade_scatter)
         
-        # 2. Vertical L2 Depth Profile Sidebar (linked to price plot Y-axis)
+        # 2. Vertical L2 Depth Profile Sidebar
         self.depth_plot = self.central_widget.addPlot(row=0, col=1)
         self.depth_plot.setTitle("L2 Depth Profile", color='#E0E0E0', size='12pt')
         self.depth_plot.showGrid(x=True, y=True, alpha=0.15)
-        # Hide left axis numbers since it is Y-linked to the price plot
         self.depth_plot.getAxis('left').setStyle(showValues=False)
         self.depth_plot.getAxis('bottom').setLabel("Size", color='#E0E0E0')
         
-        # Horizontal bars for Bids (Green) and Asks (Red)
         self.bids_bar = pg.BarGraphItem(
             x0=[], y=[], height=[], width=[],
             brush=pg.mkBrush(0, 200, 100, 160), pen=None
@@ -187,51 +459,63 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.depth_plot.addItem(self.bids_bar)
         self.depth_plot.addItem(self.asks_bar)
         
-        # 3. Cumulative Delta Chart (linked to price plot X-axis)
-        # Use DateAxisItem for nice human-readable timestamps on the X-axis
+        # 3. Cumulative Delta Chart
         self.delta_plot = self.central_widget.addPlot(
             row=1, col=0,
             axisItems={'bottom': pg.DateAxisItem(orientation='bottom')}
         )
         self.delta_plot.setTitle("Cumulative Delta", color='#E0E0E0', size='10pt')
         self.delta_plot.showGrid(x=True, y=True, alpha=0.15)
-        self.delta_plot.getAxis('bottom').setLabel("Time", color='#E0E0E0')
         self.delta_plot.getAxis('left').setLabel("Cum Delta", color='#E0E0E0')
         
-        # Cumulative Delta Line Curve
         self.delta_curve = pg.PlotDataItem(pen=pg.mkPen('#00BFFF', width=2))
         self.delta_plot.addItem(self.delta_curve)
         
-        # Layout styling & stretching
         self.central_widget.ci.layout.setColumnStretchFactor(0, 5)
         self.central_widget.ci.layout.setColumnStretchFactor(1, 1)
         self.central_widget.ci.layout.setRowStretchFactor(0, 4)
         self.central_widget.ci.layout.setRowStretchFactor(1, 1)
         
-        # Synchronize viewport scaling/panning
         self.delta_plot.setXLink(self.price_plot)
         self.depth_plot.setYLink(self.price_plot)
         
-        # Disable auto-range to prevent layout calculation loops
         self.price_plot.enableAutoRange(enable=False)
         self.delta_plot.enableAutoRange(enable=False)
         self.depth_plot.enableAutoRange(enable=False)
         
-        # Connect view range changes to update plots dynamically
-        # (e.g. recalculate heatmap price bins when zooming in/out)
         self.price_plot.sigYRangeChanged.connect(self.on_view_changed)
         self.price_plot.sigXRangeChanged.connect(self.on_view_changed)
+
+        # Suggestion Popup
+        self.suggestion_popup = SuggestionPopup(self)
+        self.suggestion_popup.selected.connect(self.set_symbol)
+        self.suggestion_popup.hide()
+
+    def show_suggestion_popup(self):
+        pos = self.search_input.mapTo(self, QtCore.QPoint(0, self.search_input.height()))
+        self.suggestion_popup.setGeometry(pos.x(), pos.y(), self.search_input.width() + 100, 250)
+        self.suggestion_popup.show()
+        self.suggestion_popup.raise_()
+
+    def on_search_text_changed(self, text):
+        if self.suggestion_popup.isHidden():
+            self.show_suggestion_popup()
+        self.suggestion_popup.filter_text(text)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if hasattr(self, "suggestion_popup") and self.suggestion_popup.isVisible():
+            pos = event.position().toPoint()
+            if not self.suggestion_popup.geometry().contains(pos) and not self.search_input.geometry().contains(pos):
+                self.suggestion_popup.hide()
 
     def on_view_changed(self):
         if getattr(self, "_updating_plots", False):
             return
             
-        # Detect if user panned away from the live edge
         if self.book_history:
             latest_ts = self.book_history[-1]['timestamp']
             x_range = self.price_plot.viewRange()[0]
-            # If the right edge of the viewport is more than 3 seconds behind the latest timestamp,
-            # assume the user panned away and disable auto-scroll
             if latest_ts - x_range[1] > 3.0:
                 if self.auto_scroll:
                     self.auto_scroll = False
@@ -256,9 +540,64 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.auto_scroll = (state == 2 or state == QtCore.Qt.CheckState.Checked.value or bool(state))
         self.update_plots()
 
+    def set_symbol(self, new_symbol: str):
+        """Dynamically switches the visualizer to inspect a new symbol."""
+        if not new_symbol or ":" not in new_symbol:
+            return
+            
+        self.symbol = new_symbol
+        self.setWindowTitle(f"Crypcodile Flowmap Visualizer - [{self.symbol}]")
+        self.search_input.setText(self.symbol)
+        
+        # Stop existing threads
+        if self.feeder_thread:
+            self.feeder_thread.stop()
+            self.feeder_thread.wait()
+            self.feeder_thread = None
+            
+        # Clear queue and data
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+            except queue.Empty:
+                break
+                
+        self.current_bids.clear()
+        self.current_asks.clear()
+        self.book_history.clear()
+        self.trade_history.clear()
+        self.delta_history.clear()
+        self.cum_delta = 0.0
+        
+        self.x_range_initialized = False
+        self.y_range_initialized = False
+        
+        self.price_plot.setTitle(f"Loading {self.symbol}...", color='#FFA500')
+        
+        # Query new historical data asynchronously
+        self.historical_loader = HistoricalLoaderThread(self.data_dir, self.symbol, self.historical_hours)
+        self.historical_loader.loaded.connect(self.on_historical_data_loaded)
+        self.historical_loader.start()
+
+    def on_historical_data_loaded(self, events):
+        self.price_plot.setTitle(f"Order Book Heatmap & Trades [{self.symbol}]", color='#E0E0E0', size='12pt')
+        
+        # Load historical data
+        for event in events:
+            self.handle_event(event)
+            
+        self.update_plots()
+        
+        # Split symbol for raw live ingestion
+        parts = self.symbol.split(":", 1)
+        exchange = parts[0]
+        symbol_raw = parts[1]
+        
+        # Start new live feeder thread
+        self.feeder_thread = LiveFeederThread(exchange, symbol_raw, self.event_queue)
+        self.feeder_thread.start()
+
     def handle_event(self, event):
-        """Processes a single normalized event or dict representation."""
-        # Detect event type and extract data
         is_dict = isinstance(event, dict)
         channel = event.get('channel') if is_dict else getattr(event, 'channel', None)
         if channel is None:
@@ -286,7 +625,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 if sz > 0:
                     self.current_asks[px] = sz
             
-            # Trim to prevent memory/CPU growth
             if len(self.current_bids) > 200:
                 sorted_bid_prices = sorted(self.current_bids.keys(), reverse=True)[:200]
                 self.current_bids = {px: self.current_bids[px] for px in sorted_bid_prices}
@@ -317,7 +655,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 else:
                     self.current_asks[px] = sz
             
-            # Trim to prevent memory/CPU growth
             if len(self.current_bids) > 200:
                 sorted_bid_prices = sorted(self.current_bids.keys(), reverse=True)[:200]
                 self.current_bids = {px: self.current_bids[px] for px in sorted_bid_prices}
@@ -330,35 +667,29 @@ class BookmapWindow(QtWidgets.QMainWindow):
             self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
             
         elif channel == 'trade' or isinstance(event, Trade):
-            if is_dict:
-                px = event.get('price', 0.0)
-                sz = event.get('amount', 0.0)
-                side = event.get('side', 'buy')
-            else:
-                px = getattr(event, 'price', 0.0)
-                sz = getattr(event, 'amount', 0.0)
-                side = getattr(event, 'side', 'buy')
-            
-            if hasattr(side, 'value'):
-                side_str = side.value
-            else:
-                side_str = str(side).lower()
-                
-            if side_str == 'buy':
-                self.cum_delta += sz
-            elif side_str == 'sell':
-                self.cum_delta -= sz
-                
             ts = self._extract_timestamp(event)
+            if is_dict:
+                price = float(event.get('price', 0.0))
+                amount = float(event.get('amount', 0.0))
+                side = event.get('side')
+            else:
+                price = float(getattr(event, 'price', 0.0))
+                amount = float(getattr(event, 'amount', 0.0))
+                side = getattr(event, 'side', None)
+                
             self.trade_history.append({
                 'timestamp': ts,
-                'price': px,
-                'amount': sz,
-                'side': side_str
+                'price': price,
+                'amount': amount,
+                'side': side
             })
             if len(self.trade_history) > 1000:
                 self.trade_history.pop(0)
                 
+            val = Side.BUY if isinstance(side, Side) else side
+            sign = 1.0 if (val == Side.BUY or str(val).lower() == "buy") else -1.0
+            self.cum_delta += amount * sign
+            
             self.delta_history.append((ts, self.cum_delta))
             if len(self.delta_history) > 1000:
                 self.delta_history.pop(0)
@@ -393,7 +724,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 'mid': mid
             })
         elif bin_ts > self.book_history[-1]['timestamp']:
-            # Fill time gaps linearly to keep the horizontal space uniform
             last_ts = self.book_history[-1]['timestamp']
             gap_bins = round((bin_ts - last_ts) / self.time_resolution_s) - 1
             for i in range(gap_bins):
@@ -411,7 +741,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 'mid': mid
             })
         else:
-            # Accumulate/overwrite changes in current active time bin
             self.book_history[-1]['bids'] = dict(bids)
             self.book_history[-1]['asks'] = dict(asks)
             self.book_history[-1]['mid'] = mid
@@ -422,7 +751,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
             
         self._updating_plots = True
         try:
-            # Query view Range from plots
             x_range = self.price_plot.viewRange()[0]
             y_range = self.price_plot.viewRange()[1]
             
@@ -432,14 +760,12 @@ class BookmapWindow(QtWidgets.QMainWindow):
             p_min, p_max = y_range[0], y_range[1]
             t_min, t_max = x_range[0], x_range[1]
             
-            # Initial setup of coordinate scale if not yet initialized
             if not self.y_range_initialized:
                 p_min = mid - self.default_price_range / 2
                 p_max = mid + self.default_price_range / 2
                 self.price_plot.setYRange(p_min, p_max, padding=0)
                 self.y_range_initialized = True
             elif getattr(self, "auto_scroll", True):
-                # Auto-center Y range if the mid price moves close to the edges of the viewport
                 margin = (p_max - p_min) * 0.15
                 if mid < p_min + margin or mid > p_max - margin:
                     center_y = mid
@@ -449,7 +775,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                     self.price_plot.setYRange(p_min, p_max, padding=0)
                 
             if getattr(self, "auto_scroll", True):
-                # Auto-scroll X range to show the latest data
                 view_width = t_max - t_min if (self.x_range_initialized and t_max > t_min) else 60.0
                 t_max = latest_state['timestamp']
                 t_min = t_max - view_width
@@ -461,7 +786,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 bin_width = 1.0
                 
             # 1. Update Heatmap
-            # Filter history to states within or adjacent to visible viewport
             visible_states = [
                 s for s in self.book_history
                 if t_min - 5 <= s['timestamp'] <= t_max + 5
@@ -484,9 +808,8 @@ class BookmapWindow(QtWidgets.QMainWindow):
                         if 0 <= bin_idx < self.num_price_bins:
                             grid[i, bin_idx] += size
                             
-            grid = np.log1p(grid)  # Compresses depth variations log-scale
+            grid = np.log1p(grid)
             
-            # Apply heatmap sensitivity contrast limits
             max_val = grid.max() if grid.size > 0 else 1.0
             if max_val <= 0:
                 max_val = 1.0
@@ -529,19 +852,19 @@ class BookmapWindow(QtWidgets.QMainWindow):
             max_vol = volumes.max()
             if max_vol == 0:
                 max_vol = 1.0
-            # Scale bubble size range [6px, 30px]
-            sizes = 6 + 24 * (np.sqrt(volumes) / np.sqrt(max_vol))
+            sizes = 5 + (volumes / max_vol) * 20
         else:
-            sizes = []
+            sizes = [10] * len(visible_trades)
             
         brushes = []
         for t in visible_trades:
-            if t['side'] == 'buy' or t['side'] == Side.BUY:
-                brushes.append(pg.mkBrush(0, 255, 100, 160))   # semi-transparent neon green
+            val = Side.BUY if isinstance(t['side'], Side) else t['side']
+            if val == Side.BUY or str(val).lower() == "buy":
+                brushes.append(pg.mkBrush(0, 220, 120, 180))
             else:
-                brushes.append(pg.mkBrush(255, 50, 50, 160))    # semi-transparent bright red
+                brushes.append(pg.mkBrush(240, 60, 60, 180))
                 
-        self.trade_scatter.setData(x=x, y=y, size=sizes, brush=brushes, pen=pg.mkPen(None))
+        self.trade_scatter.setData(x=x, y=y, size=sizes, brush=brushes, pen=None)
 
     def update_depth_profile(self, p_min: float, p_max: float, bin_width: float):
         if not self.book_history:
@@ -549,6 +872,7 @@ class BookmapWindow(QtWidgets.QMainWindow):
             
         latest_state = self.book_history[-1]
         
+        bin_centers = np.linspace(p_min + bin_width/2, p_max - bin_width/2, self.num_price_bins)
         bids_bins = np.zeros(self.num_price_bins)
         asks_bins = np.zeros(self.num_price_bins)
         
@@ -564,10 +888,8 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 if 0 <= bin_idx < self.num_price_bins:
                     asks_bins[bin_idx] += size
                     
-        bin_centers = p_min + (np.arange(self.num_price_bins) + 0.5) * bin_width
-        bar_heights = np.ones(self.num_price_bins) * bin_width
+        bar_heights = bin_width * 0.8
         
-        # Update horizontal bars using x0 start boundaries
         self.bids_bar.setOpts(
             x0=np.zeros(self.num_price_bins),
             y=bin_centers,
@@ -585,7 +907,6 @@ class BookmapWindow(QtWidgets.QMainWindow):
             pen=pg.mkPen(None)
         )
         
-        # Re-scale L2 depth plot's X axis (Volume size) to fit the book profile
         max_depth = max(bids_bins.max(), asks_bins.max())
         if max_depth > 0:
             self.depth_plot.setXRange(0, max_depth * 1.1, padding=0)
@@ -600,120 +921,77 @@ class BookmapWindow(QtWidgets.QMainWindow):
         y = [p[1] for p in visible_points]
         self.delta_curve.setData(x=x, y=y)
 
-    def load_historical_data(self, events: list):
-        """Populates charts with initial database/file snapshots and trades."""
-        for event in events:
-            self.handle_event(event)
-        self.update_plots()
+    def load_catalog_symbols(self):
+        try:
+            catalog = Catalog(self.data_dir)
+            tables = ["trade", "book_snapshot", "book_delta"]
+            db_symbols = set()
+            for t in tables:
+                try:
+                    df = catalog.query(f"SELECT DISTINCT symbol FROM {t}")
+                    for sym in df["symbol"].to_list():
+                        if sym:
+                            db_symbols.add(sym)
+                except Exception:
+                    pass
+            return list(db_symbols)
+        except Exception:
+            return []
 
-    def start_streaming(self, event_queue: queue.Queue):
-        """Subscribes and polls live websocket events from the queue thread-safely."""
-        self.queue = event_queue
-        self.timer = QtCore.QTimer(self)
-        self.timer.timeout.connect(self.process_queue)
-        self.timer.start(100)  # poll every 100ms
+    def get_all_suggestions(self):
+        popular_bases = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT"]
+        exchanges = [
+            ("binance-spot", "spot"),
+            ("binance-usdm", "perp"),
+            ("bybit-perp", "perp"),
+            ("okx-perp", "perp"),
+            ("hyperliquid-perp", "perp")
+        ]
+        
+        suggestions = []
+        seen = set()
+        
+        for base in popular_bases:
+            usdt_pair = f"{base}USDT"
+            for exch, cat in exchanges:
+                canonical = f"{exch}:{usdt_pair}"
+                if canonical not in seen:
+                    suggestions.append({
+                        "symbol": canonical,
+                        "display": f"{usdt_pair} ({exch.upper()})",
+                        "category": cat
+                    })
+                    seen.add(canonical)
+
+        db_symbols = self.load_catalog_symbols()
+        for sym in db_symbols:
+            if sym not in seen:
+                parts = sym.split(":", 1)
+                exch = parts[0] if len(parts) > 1 else ""
+                cat = "spot" if "spot" in exch else "perp"
+                suggestions.append({
+                    "symbol": sym,
+                    "display": f"{parts[1] if len(parts) > 1 else sym} ({exch.upper()})",
+                    "category": cat
+                })
+                seen.add(sym)
+                
+        return suggestions
 
     def process_queue(self):
-        """Reads all items in the queue and updates charts in batch."""
-        if self.queue is None:
-            return
-            
-        import sys
-        import traceback
         has_updates = False
-        try:
-            while not self.queue.empty():
-                try:
-                    event = self.queue.get_nowait()
-                    self.handle_event(event)
-                    has_updates = True
-                    self.queue.task_done()
-                except queue.Empty:
-                    break
-        except Exception as e:
-            sys.stderr.write(f"Error in process_queue loop: {e}\n")
-            traceback.print_exc(file=sys.stderr)
-            sys.stderr.flush()
-                
-        if has_updates:
+        while not self.event_queue.empty():
             try:
-                self.update_plots()
-            except Exception as e:
-                sys.stderr.write(f"Error in update_plots: {e}\n")
-                traceback.print_exc(file=sys.stderr)
-                sys.stderr.flush()
+                event = self.event_queue.get_nowait()
+                self.handle_event(event)
+                has_updates = True
+            except queue.Empty:
+                break
+        if has_updates:
+            self.update_plots()
 
-
-if __name__ == "__main__":
-    # Launch demonstration window with live simulated market depth and trades
-    import random
-    import sys
-    import threading
-    
-    app = QtWidgets.QApplication(sys.argv)
-    q = queue.Queue()
-    
-    win = BookmapWindow(queue=q)
-    win.show()
-    
-    def feeder():
-        mid = 50000.0
-        ts_ns = int(time.time() * 1e9)
-        
-        # Initial depth snapshots
-        bids = [(mid - i * 5.0, random.uniform(1.0, 15.0)) for i in range(50)]
-        asks = [(mid + i * 5.0, random.uniform(1.0, 15.0)) for i in range(50)]
-        
-        q.put({
-            'channel': 'book_snapshot',
-            'local_ts': ts_ns,
-            'bids': bids,
-            'asks': asks
-        })
-        time.sleep(1.0)
-        
-        # Streaming live updates
-        while True:
-            time.sleep(random.uniform(0.02, 0.1))
-            ts_ns = int(time.time() * 1e9)
-            
-            # Event 1: trade bubble
-            if random.random() < 0.25:
-                trade_p = mid + random.uniform(-15.0, 15.0)
-                trade_sz = random.uniform(0.1, 5.0)
-                side = 'buy' if random.random() < 0.52 else 'sell'
-                q.put({
-                    'channel': 'trade',
-                    'local_ts': ts_ns,
-                    'price': trade_p,
-                    'amount': trade_sz,
-                    'side': side
-                })
-                
-            # Event 2: delta updates
-            delta_bids = [
-                (mid - random.randint(0, 49) * 5.0, random.uniform(0.0, 20.0))
-                for _ in range(5)
-            ]
-            delta_asks = [
-                (mid + random.randint(0, 49) * 5.0, random.uniform(0.0, 20.0))
-                for _ in range(5)
-            ]
-            # randomly delete a level
-            if random.random() < 0.2:
-                delta_bids.append((mid - 10.0, 0.0))
-                
-            q.put({
-                'channel': 'book_delta',
-                'local_ts': ts_ns,
-                'bids': delta_bids,
-                'asks': delta_asks
-            })
-            
-            # slowly shift mid price
-            mid += random.uniform(-2.0, 2.0)
-
-    t = threading.Thread(target=feeder, daemon=True)
-    t.start()
-    
-    sys.exit(app.exec())
+    def closeEvent(self, event):
+        if self.feeder_thread:
+            self.feeder_thread.stop()
+            self.feeder_thread.wait()
+        super().closeEvent(event)

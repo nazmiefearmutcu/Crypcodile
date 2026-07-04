@@ -1,3 +1,3 @@
-from crypcodile.gui.bookmap_window import BookmapWindow
+from crypcodile.gui.flowmap_window import FlowmapWindow
 
-__all__ = ["BookmapWindow"]
+__all__ = ["FlowmapWindow"]
