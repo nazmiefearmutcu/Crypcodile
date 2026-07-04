@@ -38,6 +38,7 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.y_range_initialized = False
         self.x_range_initialized = False
         self.auto_scroll = True
+        self.sensitivity = 50
         
         # Time-binned order book history for linear X-axis heatmap
         self.time_resolution_s = 0.2  # 200ms per heatmap column
@@ -77,9 +78,64 @@ class BookmapWindow(QtWidgets.QMainWindow):
         pg.setConfigOption('foreground', '#E0E0E0')
         pg.setConfigOption('antialias', True)
         
+        # Main layout container to host control panel and graphics widget
+        main_container = QtWidgets.QWidget(self)
+        self.setCentralWidget(main_container)
+        main_layout = QtWidgets.QVBoxLayout(main_container)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(5)
+        
+        # 0. Control Panel layout
+        control_panel = QtWidgets.QHBoxLayout()
+        
+        # Heatmap Sensitivity Slider
+        self.sens_label = QtWidgets.QLabel("Heatmap Sensitivity: 50%", self)
+        self.sens_label.setStyleSheet("font-weight: bold; color: #E0E0E0;")
+        
+        self.sens_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, self)
+        self.sens_slider.setMinimum(1)
+        self.sens_slider.setMaximum(100)
+        self.sens_slider.setValue(50)
+        self.sens_slider.setFixedWidth(200)
+        self.sens_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #333333;
+                height: 8px;
+                background: #222222;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #00BFFF;
+                border: 1px solid #00BFFF;
+                width: 14px;
+                height: 14px;
+                margin: -3px 0;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #00DFFF;
+                border-color: #00DFFF;
+            }
+        """)
+        self.sens_slider.valueChanged.connect(self.on_sensitivity_changed)
+        
+        # Auto-Scroll Checkbox
+        self.scroll_checkbox = QtWidgets.QCheckBox("Auto-Scroll", self)
+        self.scroll_checkbox.setChecked(True)
+        self.scroll_checkbox.setStyleSheet("font-weight: bold; color: #E0E0E0;")
+        self.scroll_checkbox.stateChanged.connect(self.on_scroll_checkbox_changed)
+        
+        control_panel.addWidget(self.sens_label)
+        control_panel.addWidget(self.sens_slider)
+        control_panel.addSpacing(20)
+        control_panel.addWidget(self.scroll_checkbox)
+        control_panel.addStretch(1)
+        
+        main_layout.addLayout(control_panel)
+        
         # Central layout widget
         self.central_widget = pg.GraphicsLayoutWidget(parent=self)
-        self.setCentralWidget(self.central_widget)
+        main_layout.addWidget(self.central_widget)
         
         # 1. Main Price Plot (Heatmap & Trade Bubbles)
         self.price_plot = self.central_widget.addPlot(row=0, col=0)
@@ -177,10 +233,27 @@ class BookmapWindow(QtWidgets.QMainWindow):
             # If the right edge of the viewport is more than 3 seconds behind the latest timestamp,
             # assume the user panned away and disable auto-scroll
             if latest_ts - x_range[1] > 3.0:
-                self.auto_scroll = False
+                if self.auto_scroll:
+                    self.auto_scroll = False
+                    self.scroll_checkbox.blockSignals(True)
+                    self.scroll_checkbox.setChecked(False)
+                    self.scroll_checkbox.blockSignals(False)
             else:
-                self.auto_scroll = True
+                if not self.auto_scroll:
+                    self.auto_scroll = True
+                    self.scroll_checkbox.blockSignals(True)
+                    self.scroll_checkbox.setChecked(True)
+                    self.scroll_checkbox.blockSignals(False)
                 
+        self.update_plots()
+
+    def on_sensitivity_changed(self, value):
+        self.sensitivity = value
+        self.sens_label.setText(f"Heatmap Sensitivity: {value}%")
+        self.update_plots()
+
+    def on_scroll_checkbox_changed(self, state):
+        self.auto_scroll = (state == 2 or state == QtCore.Qt.CheckState.Checked.value or bool(state))
         self.update_plots()
 
     def handle_event(self, event):
@@ -413,7 +486,18 @@ class BookmapWindow(QtWidgets.QMainWindow):
                             
             grid = np.log1p(grid)  # Compresses depth variations log-scale
             
-            self.image_item.setImage(grid, autoLevels=True)
+            # Apply heatmap sensitivity contrast limits
+            max_val = grid.max() if grid.size > 0 else 1.0
+            if max_val <= 0:
+                max_val = 1.0
+                
+            sensitivity = getattr(self, "sensitivity", 50)
+            threshold = max_val * (50.0 / float(sensitivity))
+            if threshold <= 0:
+                threshold = 1.0
+                
+            self.image_item.setImage(grid, autoLevels=False)
+            self.image_item.setLevels((0.0, threshold))
             t_start = visible_states[0]['timestamp']
             t_end = visible_states[-1]['timestamp']
             rect_w = max(t_end - t_start, self.time_resolution_s)
