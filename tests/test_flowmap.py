@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from crypcodile.cli import app, TaskDoneQueueWrapper
+from crypcodile.cli import app
 
 
 def test_flowmap_help() -> None:
@@ -25,22 +25,6 @@ def test_flowmap_missing_symbol_non_interactive() -> None:
         result = runner.invoke(app, ["flowmap"])
         assert result.exit_code != 0
         assert "Error: symbol is required" in result.output
-
-
-def test_task_done_queue_wrapper() -> None:
-    """Verify that TaskDoneQueueWrapper behaves as a safe queue wrapper with task_done."""
-    mock_q = MagicMock()
-    wrapper = TaskDoneQueueWrapper(mock_q)
-
-    mock_q.get_nowait.return_value = "item4"
-    assert wrapper.get_nowait() == "item4"
-    mock_q.get_nowait.assert_called_once()
-
-    mock_q.empty.return_value = True
-    assert wrapper.empty() is True
-    mock_q.empty.assert_called_once()
-
-    wrapper.task_done()
 
 
 @patch("multiprocessing.Process")

@@ -51,7 +51,8 @@ def test_flowmap_window_logical_handling():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     
-    with patch.object(FlowmapWindow, 'update_plots') as mock_update:
+    with patch.object(FlowmapWindow, 'update_plots') as mock_update, \
+         patch('crypcodile.gui.flowmap_window.HistoricalLoaderThread.start') as mock_loader_start:
         window = FlowmapWindow(initial_symbol="binance-spot:BTCUSDT", data_dir="data")
         
         # Verify initial states
@@ -124,7 +125,8 @@ def test_flowmap_window_qt_render():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     
-    window = FlowmapWindow(initial_symbol="binance-spot:BTCUSDT", data_dir="data")
+    with patch('crypcodile.gui.flowmap_window.HistoricalLoaderThread.start') as mock_loader_start:
+        window = FlowmapWindow(initial_symbol="binance-spot:BTCUSDT", data_dir="data")
     
     # Send events
     snap = BookSnapshot(

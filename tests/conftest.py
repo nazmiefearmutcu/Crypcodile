@@ -3,6 +3,9 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
+# Force Qt offscreen platform for headless tests run in CI/CLI environments
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
 # Safeguard against xgboost C-library loading failures on macOS
 try:
     import xgboost

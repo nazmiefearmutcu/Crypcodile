@@ -2521,17 +2521,6 @@ def update(
 # flowmap
 # ---------------------------------------------------------------------------
 
-class TaskDoneQueueWrapper:
-    """Wraps a multiprocessing.Queue to provide a no-op task_done() method."""
-    def __init__(self, q: Any) -> None:
-        self.q = q
-    def empty(self) -> bool:
-        return self.q.empty()
-    def get_nowait(self) -> Any:
-        return self.q.get_nowait()
-    def task_done(self) -> None:
-        pass
-
 
 def run_flowmap_gui(initial_symbol: str, data_dir: str, historical_hours: float) -> None:
     """Target function for the multiprocessing GUI process."""
