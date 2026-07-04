@@ -32,7 +32,17 @@ class LiveFeederThread(QtCore.QThread):
     """Background thread running asyncio event loop to stream live events via connector."""
     def __init__(self, exchange: str, symbol_raw: str, queue_obj):
         super().__init__()
-        self.exchange = exchange
+        # Map canonical/catalog exchange names to factory connector names
+        ex = exchange.lower()
+        if ex.startswith("binance"):
+            self.exchange = "binance"
+        elif ex.startswith("bybit"):
+            self.exchange = "bybit"
+        elif ex.startswith("okx"):
+            self.exchange = "okx"
+        else:
+            self.exchange = ex
+            
         self.symbol_raw = symbol_raw
         self.queue_obj = queue_obj
         self.loop = None
@@ -639,20 +649,19 @@ class FlowmapWindow(QtWidgets.QMainWindow):
             # Prevent excessive level accumulation (AI-slop sorting optimization)
             if len(self.current_bids) > 400:
                 mid = self._calculate_mid()
-                self.current_bids = {px: sz for px, sz in self.current_bids.items() if px >= mid * 0.8}
+                if mid is not None:
+                    self.current_bids = {px: sz for px, sz in self.current_bids.items() if px >= mid * 0.8}
             if len(self.current_asks) > 400:
                 mid = self._calculate_mid()
-                self.current_asks = {px: sz for px, sz in self.current_asks.items() if px <= mid * 1.2}
+                if mid is not None:
+                    self.current_asks = {px: sz for px, sz in self.current_asks.items() if px <= mid * 1.2}
                     
             ts = self._extract_timestamp(event)
             mid = self._calculate_mid()
-            self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
+            if mid is not None:
+                self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
             
         elif channel == 'book_delta' or isinstance(event, BookDelta):
-            # Safe catalog fallback: drop deltas before the initial snapshot establishes base pricing
-            if not self.current_bids and not self.current_asks:
-                return
-                
             if is_dict:
                 bids_list = event.get('bids') or []
                 asks_list = event.get('asks') or []
@@ -674,14 +683,17 @@ class FlowmapWindow(QtWidgets.QMainWindow):
             # Prevent excessive level accumulation (AI-slop sorting optimization)
             if len(self.current_bids) > 400:
                 mid = self._calculate_mid()
-                self.current_bids = {px: sz for px, sz in self.current_bids.items() if px >= mid * 0.8}
+                if mid is not None:
+                    self.current_bids = {px: sz for px, sz in self.current_bids.items() if px >= mid * 0.8}
             if len(self.current_asks) > 400:
                 mid = self._calculate_mid()
-                self.current_asks = {px: sz for px, sz in self.current_asks.items() if px <= mid * 1.2}
+                if mid is not None:
+                    self.current_asks = {px: sz for px, sz in self.current_asks.items() if px <= mid * 1.2}
                     
             ts = self._extract_timestamp(event)
             mid = self._calculate_mid()
-            self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
+            if mid is not None:
+                self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
             
         elif channel == 'trade' or isinstance(event, Trade):
             ts = self._extract_timestamp(event)
@@ -720,7 +732,7 @@ class FlowmapWindow(QtWidgets.QMainWindow):
             return float(local_ts) / 1e9
         return time.time()
 
-    def _calculate_mid(self) -> float:
+    def _calculate_mid(self) -> float | None:
         best_bid = max(self.current_bids.keys()) if self.current_bids else None
         best_ask = min(self.current_asks.keys()) if self.current_asks else None
         if best_bid is not None and best_ask is not None:
@@ -729,7 +741,7 @@ class FlowmapWindow(QtWidgets.QMainWindow):
             return best_bid
         elif best_ask is not None:
             return best_ask
-        return 100.0
+        return None
 
     def _add_to_book_history(self, ts: float, bids: dict, asks: dict, mid: float):
         bin_ts = math.floor(ts / self.time_resolution_s) * self.time_resolution_s

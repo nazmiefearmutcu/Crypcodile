@@ -15,10 +15,11 @@ class GasTrackerWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.gas_price_history = []
         self.timestamps = []
+        self.start_time = time.time()
         self.init_ui()
 
         # Simple timer to update mock data if not updated externally
-        self.timer = QtCore.QTimer()
+        self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._generate_mock_update)
         self.timer.start(1000) # update every second
 
@@ -140,7 +141,7 @@ class GasTrackerWidget(QtWidgets.QWidget):
 
         # Update plot
         self.gas_price_history.append(gwei_price)
-        self.timestamps.append(len(self.gas_price_history))
+        self.timestamps.append(time.time() - self.start_time)
 
         # Limit history length
         if len(self.gas_price_history) > 60:

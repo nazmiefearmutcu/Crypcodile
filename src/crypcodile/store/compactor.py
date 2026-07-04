@@ -149,16 +149,38 @@ class ParquetCompactor:
                     row_group_size=250_000,
                 )
 
-                # Remove original files
+                # Rename original files to hide them from DuckDB globs during transaction
+                old_files = []
                 for f in files:
                     try:
-                        f.unlink(missing_ok=True)
+                        old_f = f.with_name(f.name.replace("part-", "old-"))
+                        f.rename(old_f)
+                        old_files.append(old_f)
                     except Exception as err:
-                        log.error(f"Failed to delete original file {f}: {err}")
+                        log.error(f"Failed to hide original file {f} during compaction: {err}")
 
                 # Rename to final compacted file (starts with part- so DuckDB reads it)
                 compacted_file = bucket_dir / f"part-compacted-{uuid.uuid4().hex}.parquet"
-                temp_file.rename(compacted_file)
+                try:
+                    temp_file.rename(compacted_file)
+                except Exception as err:
+                    log.error(f"Failed to rename temp file to final compacted file: {err}")
+                    # Recovery: rename old files back to original part- filenames
+                    for old_f in old_files:
+                        try:
+                            orig_f = old_f.with_name(old_f.name.replace("old-", "part-"))
+                            old_f.rename(orig_f)
+                        except Exception:
+                            pass
+                    raise
+
+                # Safely delete original old files now that transaction is completed
+                for old_f in old_files:
+                    try:
+                        old_f.unlink(missing_ok=True)
+                    except Exception as err:
+                        log.error(f"Failed to delete backup file {old_f}: {err}")
+
                 log.info(f"Compacted to {compacted_file.name} (rows: {len(combined_df)})")
             except Exception as e:
                 log.error(f"Failed compaction for {bucket_dir}: {e}")
