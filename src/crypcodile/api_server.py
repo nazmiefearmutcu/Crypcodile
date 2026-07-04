@@ -762,7 +762,7 @@ async def save_payments_db(db: dict[str, dict[str, Any]]) -> None:
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _save_db_file, db)
 
-@app.get("/api/v1/market-data")
+@app.api_route("/api/v1/market-data", methods=["GET", "POST"])
 async def get_market_data(
     symbol: str,
     response: Response,
@@ -1252,8 +1252,9 @@ async def sse_events():
 class PriceImpactPayload(BaseModel):
     symbol: str
     side: str
-    amount: float | None = None
-    size: float | None = None
+    amount: float | str | None = None
+    size: float | str | None = None
+    size_unit: str | None = None
 
 
 def _get_api_catalog() -> Catalog:
@@ -1278,8 +1279,22 @@ def _get_api_catalog() -> Catalog:
 async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, Any]]:
     """Simulate execution slippage and price impact for a given order size."""
     size = payload.size if payload.size is not None else payload.amount
-    if size is None or size <= 0:
+    if size is None:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero.")
+    
+    # Validate size string or float value
+    if isinstance(size, str):
+        try:
+            from crypcodile.analytics.slippage import parse_size_input
+            val, _ = parse_size_input(size)
+            if val <= 0:
+                raise ValueError
+        except Exception:
+            raise HTTPException(status_code=400, detail="Amount must be greater than zero and a valid numeric format.")
+    else:
+        if size <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be greater than zero.")
+
     if payload.side.lower() not in ("buy", "sell"):
         raise HTTPException(status_code=400, detail="Side must be 'buy' or 'sell'.")
 
@@ -1327,7 +1342,8 @@ async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, A
             catalog=catalog,
             symbol=payload.symbol,
             side=payload.side,
-            size=size
+            size=size,
+            size_unit=payload.size_unit
         )
         if df.is_empty():
             raise HTTPException(status_code=404, detail="No result from slippage estimation.")

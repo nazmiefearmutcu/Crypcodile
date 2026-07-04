@@ -332,7 +332,7 @@ def prompt_time_range_helper(
         elif fallback == 9999999999999999999:
             fallback_str = "latest / infinity"
             
-        typer.echo(f"⚠️  Invalid date format '{val}'. Using default: {fallback_str}", err=True)
+        typer.echo(f"Warning: Invalid date format '{val}'. Using default: {fallback_str}", err=True)
         return fallback
 
     start_input = typer.prompt(start_prompt, default="").strip()
@@ -475,7 +475,7 @@ def normalize_user_symbol(exchange: str, symbol: str) -> str:
             return s_upper.replace("-PERP", "-PERPETUAL")
         return s_upper
         
-    if exchange in ("binance", "bybit"):
+    if exchange in ("binance", "bybit", "binance-spot", "bybit-spot", "binance-usdm"):
         if s_upper in ("BTC", "ETH", "SOL"):
             return f"{s_upper}USDT"
         return s_upper
@@ -526,60 +526,99 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
             pass
         return all_registered
 
+    # Categorize channel type
+    target_channels = []
+    if channels:
+        if isinstance(channels, str):
+            target_channels = [channels]
+        else:
+            target_channels = list(channels)
+    is_derivative = any(ch in ("derivative_ticker", "funding", "open_interest", "liquidation") for ch in target_channels)
+    is_options = any(ch in ("options_chain",) for ch in target_channels)
+
+    def find_match(candidates_set: set[str], sym_clean: str) -> str | None:
+        # 1. Exact match
+        if sym_clean in candidates_set:
+            return sym_clean
+            
+        candidates_list = sorted(list(candidates_set))
+        
+        # 2. Case-insensitive exact match
+        lower_sym = sym_clean.lower()
+        for reg in candidates_list:
+            if reg.lower() == lower_sym:
+                return reg
+                
+        # 3. Prefix-less match (e.g., "BTC-PERPETUAL" matching "deribit:BTC-PERPETUAL")
+        for reg in candidates_list:
+            if ":" in reg:
+                parts = reg.split(":", 1)
+                if parts[1].lower() == lower_sym:
+                    return reg
+                    
+        # 4. Fuzzy substring match (e.g., "btc" matching "deribit:BTC-PERPETUAL")
+        matches = []
+        for reg in candidates_list:
+            if lower_sym in reg.lower():
+                matches.append(reg)
+        if len(matches) >= 1:
+            return matches[0]
+            
+        return None
+
     resolved = []
     for sym in symbols_input:
         sym_clean = sym.strip()
         if not sym_clean:
             continue
             
-        # Fast path: if the input is already in canonical format (e.g. exchange:symbol)
-        # we can bypass checking the DB entirely to avoid slow startup queries.
+        # If the input contains a colon, it has exchange:symbol structure.
+        # We normalize the raw symbol part using normalize_user_symbol.
         if ":" in sym_clean:
-            resolved.append(sym_clean)
+            parts = sym_clean.split(":", 1)
+            exc = parts[0]
+            raw = parts[1]
+            normalized_raw = normalize_user_symbol(exc, raw)
+            resolved.append(f"{exc}:{normalized_raw}")
             continue
             
         reg_symbols_set = get_registered()
         
-        # 1. Exact match in registered symbols
-        if sym_clean in reg_symbols_set:
-            resolved.append(sym_clean)
+        # First, try to match against registered database symbols
+        match = find_match(reg_symbols_set, sym_clean)
+        if match is not None:
+            resolved.append(match)
             continue
             
-        reg_symbols = sorted(list(reg_symbols_set))
-        
-        # 2. Case-insensitive exact match
+        # Second, try to match against COMMON_DEFAULT_SYMBOLS
+        candidate_defaults = COMMON_DEFAULT_SYMBOLS
+        if is_derivative:
+            candidate_defaults = [s for s in COMMON_DEFAULT_SYMBOLS if not s.startswith("binance-spot:") and not s.startswith("coinbase:") and not s.startswith("bybit-spot:") and not s.startswith("base_onchain:")]
+        elif is_options:
+            candidate_defaults = []
+
+        match = find_match(set(candidate_defaults), sym_clean)
+        if match is not None:
+            resolved.append(match)
+            continue
+            
+        # Third, if still no match, guess the exchange and normalize the symbol
+        guessed_exchange = "binance-spot"
+        if is_derivative:
+            guessed_exchange = "binance-usdm"
+        elif is_options:
+            guessed_exchange = "deribit"
+
         lower_sym = sym_clean.lower()
-        matched = False
-        for reg in reg_symbols:
-            if reg.lower() == lower_sym:
-                resolved.append(reg)
-                matched = True
-                break
-        if matched:
-            continue
+        if "perp" in lower_sym or "perpetual" in lower_sym or lower_sym.endswith("-perp"):
+            guessed_exchange = "deribit"
             
-        # 3. Prefix-less match (e.g., "BTC-PERPETUAL" matching "deribit:BTC-PERPETUAL")
-        for reg in reg_symbols:
-            if ":" in reg:
-                parts = reg.split(":", 1)
-                if parts[1].lower() == lower_sym:
-                    resolved.append(reg)
-                    matched = True
-                    break
-        if matched:
-            continue
-
-        # 4. Fuzzy substring match (e.g., "btc" matching "deribit:BTC-PERPETUAL")
-        matches = []
-        for reg in reg_symbols:
-            if lower_sym in reg.lower():
-                matches.append(reg)
-        if len(matches) >= 1:
-            resolved.append(matches[0])
-            continue
-
-        # 5. Fallback to original
-        resolved.append(sym_clean)
+        normalized_raw = normalize_user_symbol(guessed_exchange, sym_clean)
+        if guessed_exchange in ("binance-spot", "binance-usdm") and not normalized_raw.endswith("USDT") and not normalized_raw.endswith("USD"):
+            if len(normalized_raw) <= 5:
+                normalized_raw = f"{normalized_raw}USDT"
+                
+        resolved.append(f"{guessed_exchange}:{normalized_raw}")
         
     return resolved
 
@@ -1219,7 +1258,7 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
         
         # Title & Subtitle
         title_text = Text()
-        title_text.append("🐊 CRYPCODILE LIVE DATA INGESTION PIPELINE 🐊\n", style="bold green")
+        title_text.append("CRYPCODILE LIVE DATA INGESTION PIPELINE\n", style="bold green")
         title_text.append("Real-time streaming crypto market data to local Parquet storage\n", style="dim white")
         
         # Pipeline Configuration Panel
@@ -1244,7 +1283,7 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
             rate = 0.0
             
         if time_since_last_msg > 10.0:
-            status_text = "[bold blink red]⚠️  STALE (Waiting for data...)[/]"
+            status_text = "[bold blink red]STALE (Waiting for data...)[/]"
             status_border = "red"
         else:
             status_text = "[bold green]● PIPELINE ACTIVE & STREAMING[/]"
@@ -1264,13 +1303,13 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
         perf_table.add_row("Write-buffer queue", f"[bold red]{buffered_count:,} rows[/]")
         
         # Arrange configuration and performance side-by-side inside panels
-        left_panel = Panel(config_table, title="[bold white]⚙️ Pipeline Config[/]", border_style="green")
-        right_panel = Panel(perf_table, title="[bold white]📊 System Performance[/]", border_style=status_border)
+        left_panel = Panel(config_table, title="[bold white]Pipeline Config[/]", border_style="green")
+        right_panel = Panel(perf_table, title="[bold white]System Performance[/]", border_style=status_border)
         
         header_columns = Columns([left_panel, right_panel], expand=True)
         
         # Active Data Streams Table
-        stats_table = Table(title="[bold white]📈 Active Market Data Streams[/]", border_style="green", expand=True)
+        stats_table = Table(title="[bold white]Active Market Data Streams[/]", border_style="green", expand=True)
         stats_table.add_column("Asset/Symbol", style="bold cyan", ratio=2)
         stats_table.add_column("Data Type (Channel)", style="bold yellow", ratio=2)
         stats_table.add_column("Messages Ingested", justify="right", style="green", ratio=2)
@@ -1307,7 +1346,7 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
                 
             stats_table.add_row(sym, ch, f"{count:,}", last_val_str, trend_str, sparkline)
             
-        footer_text = Text("\n💡 To view and query your historical local data, open a new terminal window and run: ", style="dim")
+        footer_text = Text("\nTo view and query your historical local data, open a new terminal window and run: ", style="dim")
         footer_text.append(f"crypcodile query \"SELECT * FROM {channels[0] if channels else 'trade'}\"", style="bold yellow")
         footer_text.append("\nPress ", style="dim")
         footer_text.append("Ctrl-C", style="bold red")
@@ -1794,6 +1833,7 @@ def iv_surface_cmd(
     ] = 0.0,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
+    """Solve options implied volatility surface at a given snapshot."""
     from crypcodile.client.client import CrypcodileClient
 
     if not is_interactive_stdin():
@@ -1813,13 +1853,13 @@ def iv_surface_cmd(
             if not snapshots:
                 underlyings = get_available_option_underlyings(data_dir)
                 if underlyings:
-                    typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                    typer.echo(f"Warning: No options snapshots found for underlying '{underlying}'.")
                     typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
                     snapshots = get_available_option_snapshots(data_dir, None)
                     if snapshots:
                         typer.echo("Here are the latest available options snapshots across all assets:")
                 else:
-                    typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
+                    typer.echo("Warning: No option data (options_chain channel) found in the database. Please collect options data first.")
             
             if snapshots:
                 import datetime
@@ -1904,13 +1944,13 @@ def term_structure_cmd(
             if not snapshots:
                 underlyings = get_available_option_underlyings(data_dir)
                 if underlyings:
-                    typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                    typer.echo(f"Warning: No options snapshots found for underlying '{underlying}'.")
                     typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
                     snapshots = get_available_option_snapshots(data_dir, None)
                     if snapshots:
                         typer.echo("Here are the latest available options snapshots across all assets:")
                 else:
-                    typer.echo("⚠️  No option data (options_chain channel) found in the database. Please collect options data first.")
+                    typer.echo("Warning: No option data (options_chain channel) found in the database. Please collect options data first.")
             
             if snapshots:
                 import datetime
@@ -1968,8 +2008,12 @@ def slippage_cmd(
         typer.Option("--side", help="Execution side (buy or sell)."),
     ] = None,
     size: Annotated[
-        float | None,
-        typer.Option("--size", help="Base asset execution size."),
+        str | None,
+        typer.Option("--size", help="Execution size (e.g. 1.5 BTC or 100 USDT)."),
+    ] = None,
+    size_unit: Annotated[
+        str | None,
+        typer.Option("--size-unit", help="Optional currency/asset unit for size."),
     ] = None,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
@@ -2002,7 +2046,14 @@ def slippage_cmd(
             side = typer.prompt("Side (buy/sell)", default="buy")
 
         if size is None:
-            size = typer.prompt("Size", type=float)
+            size = typer.prompt("Size (e.g. 100 or 100 USDT)")
+
+    if side:
+        side_lower = side.lower().strip()
+        if side_lower in ("b", "buy"):
+            side = "buy"
+        elif side_lower in ("s", "sell"):
+            side = "sell"
 
     if symbol:
         resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
@@ -2023,7 +2074,7 @@ def slippage_cmd(
 
     client = CrypcodileClient(data_dir=data_dir)
     try:
-        df = client.estimate_slippage(symbol, side, size)
+        df = client.estimate_slippage(symbol, side, size, size_unit)
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
@@ -2264,9 +2315,9 @@ def mcp(
     from crypcodile.mcp_server import serve_stdio
     
     if sys.stdin.isatty():
-        typer.echo("⚠️  Warning: MCP server is running on stdio and expects JSON-RPC input.", err=True)
-        typer.echo("👉 It is meant to be run by an AI client (like Claude Desktop), not run interactively.", err=True)
-        typer.echo("👉 Press Ctrl-C to exit.", err=True)
+        typer.echo("Warning: MCP server is running on stdio and expects JSON-RPC input.", err=True)
+        typer.echo("It is meant to be run by an AI client (like Claude Desktop), not run interactively.", err=True)
+        typer.echo("Press Ctrl-C to exit.", err=True)
 
     typer.echo("Starting Crypcodile MCP Server on stdio...", err=True)
     try:
@@ -2416,15 +2467,15 @@ def update(
                 is_newer = clean_latest != clean_current
 
         if not is_newer and not force:
-            typer.echo("✓ You are already on the latest version.", err=True)
+            typer.echo("You are already on the latest version.", err=True)
             return
         
         if force:
-            typer.echo(f"⟳ Force upgrading to {latest_version}...", err=True)
+            typer.echo(f"Force upgrading to {latest_version}...", err=True)
         else:
-            typer.echo(f"⟳ Upgrading to {latest_version}...", err=True)
+            typer.echo(f"Upgrading to {latest_version}...", err=True)
     else:
-        typer.echo("⟳ Could not check version. Proceeding with upgrade...", err=True)
+        typer.echo("Could not check version. Proceeding with upgrade...", err=True)
 
     use_uv = False
     try:
@@ -2455,14 +2506,14 @@ def update(
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             target_v = latest_version if latest_version else "latest"
-            typer.echo(f"✓ Successfully upgraded to {target_v}!", err=True)
+            typer.echo(f"Successfully upgraded to {target_v}!", err=True)
         else:
-            typer.echo("✗ Failed to upgrade Crypcodile.", err=True)
+            typer.echo("Failed to upgrade Crypcodile.", err=True)
             if result.stderr:
                 typer.echo(f"Details:\n{result.stderr}", err=True)
             raise typer.Exit(code=1)
     except Exception as e:
-        typer.echo(f"✗ Error upgrading Crypcodile: {e}", err=True)
+        typer.echo(f"Error upgrading Crypcodile: {e}", err=True)
         raise typer.Exit(code=1)
 
 
@@ -2863,16 +2914,7 @@ def shell() -> None:
 # Entry-point
 # ---------------------------------------------------------------------------
 
-LOGO_ART = r"""                    .-._   _ _ _ _ _ _ _ _
-         .-''-.__.-'00  '-' ' ' ' ' ' ' ' '-.
-         '.___ '    .   .--_'-' '-' '-' _'-' '._
-          V: V 'vv-'   '_   '.       .'  _..' '.'.
-            '=.____.=_.--'   :_.__.__:_   '.   : :
-                    (((____.-'        '-.  /   : :
-                                      (((-'\ .' /
-                                    _____..'  .'
-                                   '-._____.-'   
-   ____                               _ _ _ 
+LOGO_ART = r"""   ____                               _ _ _ 
   / ___|_ __ _   _ _ __   ___ ___  __| (_) | ___ 
  | |   | '__| | | | '_ \ / __/ _ \/ _` | | |/ _ \
  | |___| |  | |_| | |_) | (_| (_) | (_| | | |  __/

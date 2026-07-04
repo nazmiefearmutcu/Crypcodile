@@ -46,7 +46,8 @@ def _get_ipc_file() -> str:
 _ipc_executor = ThreadPoolExecutor(max_workers=1)
 _background_tasks = set()
 
-def _write_ipc_to_file(name: str, data_dict: dict[str, Any]) -> None:
+def _write_ipc_to_file(instance: IPCDict, data_dict: dict[str, Any]) -> None:
+    name = instance._name
     try:
         data = {}
         ipc_file = _get_ipc_file()
@@ -77,6 +78,12 @@ def _write_ipc_to_file(name: str, data_dict: dict[str, Any]) -> None:
                         tmp_f.flush()
                         os.fsync(tmp_f.fileno())
                     os.replace(tmp_file, ipc_file)
+                    
+                    try:
+                        stat = os.stat(ipc_file)
+                        instance._update_last_stat(stat.st_mtime, stat.st_size, ipc_file)
+                    except Exception:
+                        pass
             finally:
                 try:
                     fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
@@ -102,7 +109,14 @@ class IPCDict(dict[str, Any]):
         self._last_mtime = None
         self._last_size = None
         self._lock = threading.RLock()
+        self._in_write = False
         self._sync()
+
+    def _update_last_stat(self, mtime: float, size: int, ipc_file: str) -> None:
+        with self._lock:
+            self._last_mtime = mtime
+            self._last_size = size
+            self._last_ipc_file = ipc_file
 
     def _sync(self) -> None:
         current_file = _get_ipc_file()
@@ -179,10 +193,11 @@ class IPCDict(dict[str, Any]):
             return super().__contains__(key)
 
     def __getitem__(self, key: str) -> Any:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            self._sync()
+        if not getattr(self, "_in_write", False):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                self._sync()
         with self._lock:
             return super().__getitem__(key)
 
@@ -198,16 +213,20 @@ class IPCDict(dict[str, Any]):
 
     def _write_ipc(self) -> None:
         with self._lock:
-            data_copy = dict(self)
+            self._in_write = True
+            try:
+                data_copy = dict(self)
+            finally:
+                self._in_write = False
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(
-                asyncio.to_thread(_write_ipc_to_file, self._name, data_copy)
+                asyncio.to_thread(_write_ipc_to_file, self, data_copy)
             )
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
         except RuntimeError:
-            _ipc_executor.submit(_write_ipc_to_file, self._name, data_copy)
+            _ipc_executor.submit(_write_ipc_to_file, self, data_copy)
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._lock:

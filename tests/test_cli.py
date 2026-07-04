@@ -288,3 +288,16 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
         # funding-apr might exit 0 with "No funding data found." since trade is not funding channel.
         assert result.exit_code == 0, f"stdout:\n{result.output}"
         assert "No funding data found." in result.output or "deribit" in result.output or "0.0001" in result.output
+
+
+def test_resolve_input_symbols_different_channels(tmp_path: pathlib.Path) -> None:
+    from crypcodile.cli import resolve_input_symbols
+    
+    # 1. Resolve in derivative context (e.g. perp mode channels: derivative_ticker)
+    res_perp = resolve_input_symbols(tmp_path, ["btcusdt"], channels=["derivative_ticker", "ticker"])
+    assert res_perp == ["binance-usdm:BTCUSDT"]
+    
+    # 2. Resolve in spot context (e.g. spot channels: trade, ticker)
+    res_spot = resolve_input_symbols(tmp_path, ["btcusdt"], channels=["trade", "ticker"])
+    assert res_spot == ["binance-spot:BTCUSDT"]
+

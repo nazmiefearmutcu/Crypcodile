@@ -24,9 +24,9 @@ def get_dashboard_html() -> str:
         <span class="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
             Crypcodile x402
         </span>
-        <button id="connect-wallet-btn">🔗 Connect Wallet</button>
+        <button id="connect-wallet-btn">Connect Wallet</button>
         <button id="disconnect-wallet-btn" class="hidden">Disconnect</button>
-        <button id="one-click-sim-btn">⚡ One-Click Simulation</button>
+        <button id="one-click-sim-btn">One-Click Simulation</button>
         <span id="wallet-address" class="hidden"></span>
         <div id="wallet-provider-alert" class="hidden"></div>
         <div id="wallet-signature-status" class="hidden"></div>

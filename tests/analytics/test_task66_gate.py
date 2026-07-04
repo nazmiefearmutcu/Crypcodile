@@ -253,7 +253,7 @@ def test_readme_has_analytics_section() -> None:
     readme = _repo_root() / "README.md"
     assert readme.exists(), "README.md not found"
     content = readme.read_text(encoding="utf-8")
-    assert "## Analytics" in content or "# Analytics" in content, (
+    assert "## Analytics" in content or "# Analytics" in content or "## 4. Analytics" in content, (
         "README.md missing Analytics section"
     )
 

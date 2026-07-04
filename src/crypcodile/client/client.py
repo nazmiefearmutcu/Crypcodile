@@ -237,7 +237,8 @@ class CrypcodileClient:
         self,
         symbol: str,
         side: str,
-        size: float,
+        size: float | str,
+        size_unit: str | None = None,
     ) -> pl.DataFrame:
         """Estimate execution slippage for a given symbol and size.
 
@@ -245,7 +246,7 @@ class CrypcodileClient:
         """
         from crypcodile.analytics.slippage import estimate_slippage as _estimate_slippage
 
-        return _estimate_slippage(self._catalog, symbol, side, size)
+        return _estimate_slippage(self._catalog, symbol, side, size, size_unit)
 
     def calculate_ofi(
         self,

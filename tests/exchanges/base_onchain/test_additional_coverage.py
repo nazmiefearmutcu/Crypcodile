@@ -262,3 +262,36 @@ async def test_http_get_helper_429_retry() -> None:
         assert res == {"data": "ok"}
         assert call_count == 2
         mock_sleep.assert_called_with(0.05)
+
+
+# --- 9. Symbol Resolution with Empty Catalog/Fallback/Guesser ---
+def test_empty_catalog_symbol_resolution(tmp_path: Path) -> None:
+    """Verify resolve_input_symbols falls back to default symbols and guesses format when database is empty."""
+    with patch("crypcodile.store.catalog.Catalog") as mock_catalog_class:
+        mock_catalog = MagicMock()
+        mock_catalog._registered_channels = ["book_snapshot"]
+        import polars as pl
+        # Mock empty database query
+        mock_catalog.query.return_value = pl.DataFrame()
+        mock_catalog_class.return_value = mock_catalog
+
+        # Test case 1: Fuzzy match against COMMON_DEFAULT_SYMBOLS (lowercase "btc" -> "binance-spot:BTCUSDT")
+        resolved = resolve_input_symbols(tmp_path, ["btc"], ["book_snapshot"])
+        assert resolved == ["binance-spot:BTCUSDT"]
+
+        # Test case 2: Prefix-less match against COMMON_DEFAULT_SYMBOLS ("BTCUSDT" -> "binance-spot:BTCUSDT")
+        resolved = resolve_input_symbols(tmp_path, ["BTCUSDT"], ["book_snapshot"])
+        assert resolved == ["binance-spot:BTCUSDT"]
+
+        # Test case 3: Input with colon but needs normalization ("binance-spot:btc" -> "binance-spot:BTCUSDT")
+        resolved = resolve_input_symbols(tmp_path, ["binance-spot:btc"], ["book_snapshot"])
+        assert resolved == ["binance-spot:BTCUSDT"]
+
+        # Test case 4: Guessing exchange and normalizing suffix ("doge" -> "binance-spot:DOGEUSDT")
+        resolved = resolve_input_symbols(tmp_path, ["doge"], ["book_snapshot"])
+        assert resolved == ["binance-spot:DOGEUSDT"]
+
+        # Test case 5: Guessing exchange for derivatives ("btc-perp" -> "deribit:BTC-PERPETUAL")
+        resolved = resolve_input_symbols(tmp_path, ["btc-perp"], ["book_snapshot"])
+        assert resolved == ["deribit:BTC-PERPETUAL"]
+

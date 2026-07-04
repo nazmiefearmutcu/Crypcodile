@@ -196,7 +196,10 @@ app.post('/api/payments', (req, res) => {
 });
 
 // 4. Gated API Endpoint (x402 Micropayment Protocol Handshake)
-app.get('/api/gated-data', (req, res) => {
+const gatedDataHandler = (req, res) => {
+  if (req.method === 'POST' && req.headers['x-request-builder'] !== 'true') {
+    return res.status(404).json({ error: "Not Found" });
+  }
   const paymentIdHeader = req.headers['payment-id'];
   const paymentSenderHeader = req.headers['payment-sender'];
   const paymentSignatureHeader = req.headers['payment-signature'];
@@ -350,7 +353,10 @@ app.get('/api/gated-data', (req, res) => {
     data: 'Premium dark-themed gated content unlocked! Welcome to the premium Crypcodile x402 Micropayments portal.',
     payment
   });
-});
+};
+
+app.get('/api/gated-data', gatedDataHandler);
+app.post('/api/gated-data', gatedDataHandler);
 
 // 5. SSE Event Stream Endpoint
 app.get('/api/events', (req, res) => {

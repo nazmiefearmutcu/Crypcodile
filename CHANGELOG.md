@@ -4,6 +4,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.043] - 2026-07-04
+### Changed
+- **Resilient Symbol Resolution**: Fixed perpetual symbol resolution in `basis` and interactive `bookmap` commands when the database catalog is empty or lacks registered symbols.
+- **Context-Aware Mapping**: Improved `resolve_input_symbols` to differentiate derivative-only channels (like `derivative_ticker` and `funding`) from spot channels, resolving `btcusdt` to `binance-usdm:BTCUSDT` for derivatives and `binance-spot:BTCUSDT` for spot.
+- **Expanded Venue Support**: Normalized raw symbols for `binance-usdm` and `bybit` to support standard derivatives conventions.
+
 ## [0.1.042] - 2026-06-23
 ### Added
 - **Base L2 Ecosystem Integrations**: Integrated asset registry, DEX pool event listeners, OP stack standardization, L1/L2 gas schemas, resilient async web3 client, BNS resolution, Farcaster sentiment correlation, smart wallet tagging, and Seamless/Aave lending logs.

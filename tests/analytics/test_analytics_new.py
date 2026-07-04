@@ -101,6 +101,37 @@ def test_estimate_slippage_sell(slippage_lake: Path) -> None:
     assert pytest.approx(df["slippage_pct"][0]) == 0.5
 
 
+def test_estimate_slippage_shorthand_side(slippage_lake: Path) -> None:
+    catalog = Catalog(slippage_lake)
+    df_b = estimate_slippage(catalog, _SYMBOL, "b", 3.0)
+    assert df_b["side"][0] == "buy"
+    df_s = estimate_slippage(catalog, _SYMBOL, "s", 4.0)
+    assert df_s["side"][0] == "sell"
+
+
+def test_estimate_slippage_quote_denominated(slippage_lake: Path) -> None:
+    catalog = Catalog(slippage_lake)
+    # Buy 305.0 PERPETUAL (equivalent to 3.0 BTC)
+    df_buy = estimate_slippage(catalog, _SYMBOL, "buy", 305.0, "PERPETUAL")
+    assert df_buy["size_unit"][0] == "PERPETUAL"
+    assert df_buy["size"][0] == 305.0
+    assert pytest.approx(df_buy["expected_price"][0]) == 101.666667
+    assert pytest.approx(df_buy["slippage_usd"][0]) == 0.666667
+
+    # Also check string parsing format
+    df_str = estimate_slippage(catalog, _SYMBOL, "buy", "305.0 PERPETUAL")
+    assert df_str["size_unit"][0] == "PERPETUAL"
+    assert df_str["size"][0] == 305.0
+    assert pytest.approx(df_str["expected_price"][0]) == 101.666667
+
+    # Sell 398.0 PERPETUAL (equivalent to 4.0 BTC)
+    df_sell = estimate_slippage(catalog, _SYMBOL, "sell", "398.0 PERPETUAL")
+    assert df_sell["size_unit"][0] == "PERPETUAL"
+    assert df_sell["size"][0] == 398.0
+    assert pytest.approx(df_sell["expected_price"][0]) == 99.5
+    assert pytest.approx(df_sell["slippage_usd"][0]) == 0.5
+
+
 def test_estimate_slippage_exceeds_depth(slippage_lake: Path) -> None:
     catalog = Catalog(slippage_lake)
     with pytest.raises(ValueError, match="exceeds total order book depth"):

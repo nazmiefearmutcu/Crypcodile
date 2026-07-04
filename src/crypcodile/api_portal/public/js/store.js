@@ -6,9 +6,9 @@
 class GlobalStore {
     constructor() {
         const initialState = {
-            walletAddress: "0x7a97970C51812dc3A010C7d01b50e0d17dc79C8",
-            activeTxHash: "0x3cd58525b6a71391c5c9f2",
-            isConnected: true,
+            walletAddress: null,
+            activeTxHash: null,
+            isConnected: false,
             activePaymentId: null,
             activeFee: "0.10",
             activeRecipient: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
