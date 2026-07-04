@@ -549,11 +549,22 @@ class FlowmapWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"Crypcodile Flowmap Visualizer - [{self.symbol}]")
         self.search_input.setText(self.symbol)
         
-        # Stop existing threads
+        # Stop existing feeder thread
         if self.feeder_thread:
             self.feeder_thread.stop()
             self.feeder_thread.wait()
             self.feeder_thread = None
+            
+        # Cancel any active historical loader thread to prevent race conditions
+        if self.historical_loader:
+            try:
+                self.historical_loader.loaded.disconnect(self.on_historical_data_loaded)
+            except Exception:
+                pass
+            if self.historical_loader.isRunning():
+                self.historical_loader.terminate()
+                self.historical_loader.wait()
+            self.historical_loader = None
             
         # Clear queue and data
         while not self.event_queue.empty():
@@ -625,18 +636,23 @@ class FlowmapWindow(QtWidgets.QMainWindow):
                 if sz > 0:
                     self.current_asks[px] = sz
             
-            if len(self.current_bids) > 200:
-                sorted_bid_prices = sorted(self.current_bids.keys(), reverse=True)[:200]
-                self.current_bids = {px: self.current_bids[px] for px in sorted_bid_prices}
-            if len(self.current_asks) > 200:
-                sorted_ask_prices = sorted(self.current_asks.keys())[:200]
-                self.current_asks = {px: self.current_asks[px] for px in sorted_ask_prices}
+            # Prevent excessive level accumulation (AI-slop sorting optimization)
+            if len(self.current_bids) > 400:
+                mid = self._calculate_mid()
+                self.current_bids = {px: sz for px, sz in self.current_bids.items() if px >= mid * 0.8}
+            if len(self.current_asks) > 400:
+                mid = self._calculate_mid()
+                self.current_asks = {px: sz for px, sz in self.current_asks.items() if px <= mid * 1.2}
                     
             ts = self._extract_timestamp(event)
             mid = self._calculate_mid()
             self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
             
         elif channel == 'book_delta' or isinstance(event, BookDelta):
+            # Safe catalog fallback: drop deltas before the initial snapshot establishes base pricing
+            if not self.current_bids and not self.current_asks:
+                return
+                
             if is_dict:
                 bids_list = event.get('bids') or []
                 asks_list = event.get('asks') or []
@@ -655,12 +671,13 @@ class FlowmapWindow(QtWidgets.QMainWindow):
                 else:
                     self.current_asks[px] = sz
             
-            if len(self.current_bids) > 200:
-                sorted_bid_prices = sorted(self.current_bids.keys(), reverse=True)[:200]
-                self.current_bids = {px: self.current_bids[px] for px in sorted_bid_prices}
-            if len(self.current_asks) > 200:
-                sorted_ask_prices = sorted(self.current_asks.keys())[:200]
-                self.current_asks = {px: self.current_asks[px] for px in sorted_ask_prices}
+            # Prevent excessive level accumulation (AI-slop sorting optimization)
+            if len(self.current_bids) > 400:
+                mid = self._calculate_mid()
+                self.current_bids = {px: sz for px, sz in self.current_bids.items() if px >= mid * 0.8}
+            if len(self.current_asks) > 400:
+                mid = self._calculate_mid()
+                self.current_asks = {px: sz for px, sz in self.current_asks.items() if px <= mid * 1.2}
                     
             ts = self._extract_timestamp(event)
             mid = self._calculate_mid()
@@ -991,6 +1008,14 @@ class FlowmapWindow(QtWidgets.QMainWindow):
             self.update_plots()
 
     def closeEvent(self, event):
+        if self.historical_loader:
+            try:
+                self.historical_loader.loaded.disconnect(self.on_historical_data_loaded)
+            except Exception:
+                pass
+            if self.historical_loader.isRunning():
+                self.historical_loader.terminate()
+                self.historical_loader.wait()
         if self.feeder_thread:
             self.feeder_thread.stop()
             self.feeder_thread.wait()
