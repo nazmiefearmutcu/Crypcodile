@@ -35,6 +35,9 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.current_bids = {}  # price -> size
         self.current_asks = {}  # price -> size
         self._updating_plots = False
+        self.y_range_initialized = False
+        self.x_range_initialized = False
+        self.auto_scroll = True
         
         # Time-binned order book history for linear X-axis heatmap
         self.time_resolution_s = 0.2  # 200ms per heatmap column
@@ -166,6 +169,18 @@ class BookmapWindow(QtWidgets.QMainWindow):
     def on_view_changed(self):
         if getattr(self, "_updating_plots", False):
             return
+            
+        # Detect if user panned away from the live edge
+        if self.book_history:
+            latest_ts = self.book_history[-1]['timestamp']
+            x_range = self.price_plot.viewRange()[0]
+            # If the right edge of the viewport is more than 3 seconds behind the latest timestamp,
+            # assume the user panned away and disable auto-scroll
+            if latest_ts - x_range[1] > 3.0:
+                self.auto_scroll = False
+            else:
+                self.auto_scroll = True
+                
         self.update_plots()
 
     def handle_event(self, event):
@@ -345,17 +360,28 @@ class BookmapWindow(QtWidgets.QMainWindow):
             t_min, t_max = x_range[0], x_range[1]
             
             # Initial setup of coordinate scale if not yet initialized
-            if p_max <= p_min or p_min == 0 or p_max == 1:
+            if not self.y_range_initialized:
                 p_min = mid - self.default_price_range / 2
                 p_max = mid + self.default_price_range / 2
                 self.price_plot.setYRange(p_min, p_max, padding=0)
+                self.y_range_initialized = True
+            elif getattr(self, "auto_scroll", True):
+                # Auto-center Y range if the mid price moves close to the edges of the viewport
+                margin = (p_max - p_min) * 0.15
+                if mid < p_min + margin or mid > p_max - margin:
+                    center_y = mid
+                    half_height = (p_max - p_min) / 2.0
+                    p_min = center_y - half_height
+                    p_max = center_y + half_height
+                    self.price_plot.setYRange(p_min, p_max, padding=0)
                 
-            if t_max <= t_min or t_min == 0 or t_max == 1:
-                t_min = self.book_history[0]['timestamp']
+            if getattr(self, "auto_scroll", True):
+                # Auto-scroll X range to show the latest data
+                view_width = t_max - t_min if (self.x_range_initialized and t_max > t_min) else 60.0
                 t_max = latest_state['timestamp']
-                if t_max <= t_min:
-                    t_max = t_min + 60.0  # default 60s
+                t_min = t_max - view_width
                 self.price_plot.setXRange(t_min, t_max, padding=0)
+                self.x_range_initialized = True
                 
             bin_width = (p_max - p_min) / self.num_price_bins
             if bin_width <= 0:
