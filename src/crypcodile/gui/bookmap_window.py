@@ -34,6 +34,7 @@ class BookmapWindow(QtWidgets.QMainWindow):
         # State data structures
         self.current_bids = {}  # price -> size
         self.current_asks = {}  # price -> size
+        self._updating_plots = False
         
         # Time-binned order book history for linear X-axis heatmap
         self.time_resolution_s = 0.2  # 200ms per heatmap column
@@ -152,24 +153,41 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.delta_plot.setXLink(self.price_plot)
         self.depth_plot.setYLink(self.price_plot)
         
+        # Disable auto-range to prevent layout calculation loops
+        self.price_plot.enableAutoRange(enable=False)
+        self.delta_plot.enableAutoRange(enable=False)
+        self.depth_plot.enableAutoRange(enable=False)
+        
         # Connect view range changes to update plots dynamically
         # (e.g. recalculate heatmap price bins when zooming in/out)
         self.price_plot.sigYRangeChanged.connect(self.on_view_changed)
         self.price_plot.sigXRangeChanged.connect(self.on_view_changed)
 
     def on_view_changed(self):
+        if getattr(self, "_updating_plots", False):
+            return
         self.update_plots()
 
     def handle_event(self, event):
         """Processes a single normalized event or dict representation."""
         # Detect event type and extract data
-        channel = getattr(event, 'channel', None)
-        if channel is None and isinstance(event, dict):
-            channel = event.get('channel')
+        is_dict = isinstance(event, dict)
+        channel = event.get('channel') if is_dict else getattr(event, 'channel', None)
+        if channel is None:
+            if isinstance(event, BookSnapshot) or (is_dict and event.get('is_snapshot') is True):
+                channel = 'book_snapshot'
+            elif isinstance(event, BookDelta) or (is_dict and event.get('is_snapshot') is False):
+                channel = 'book_delta'
+            elif isinstance(event, Trade):
+                channel = 'trade'
             
         if channel == 'book_snapshot' or isinstance(event, BookSnapshot):
-            bids_list = getattr(event, 'bids', None) or event.get('bids', [])
-            asks_list = getattr(event, 'asks', None) or event.get('asks', [])
+            if is_dict:
+                bids_list = event.get('bids') or []
+                asks_list = event.get('asks') or []
+            else:
+                bids_list = getattr(event, 'bids', None) or []
+                asks_list = getattr(event, 'asks', None) or []
             
             self.current_bids.clear()
             self.current_asks.clear()
@@ -179,14 +197,26 @@ class BookmapWindow(QtWidgets.QMainWindow):
             for px, sz in asks_list:
                 if sz > 0:
                     self.current_asks[px] = sz
+            
+            # Trim to prevent memory/CPU growth
+            if len(self.current_bids) > 200:
+                sorted_bid_prices = sorted(self.current_bids.keys(), reverse=True)[:200]
+                self.current_bids = {px: self.current_bids[px] for px in sorted_bid_prices}
+            if len(self.current_asks) > 200:
+                sorted_ask_prices = sorted(self.current_asks.keys())[:200]
+                self.current_asks = {px: self.current_asks[px] for px in sorted_ask_prices}
                     
             ts = self._extract_timestamp(event)
             mid = self._calculate_mid()
             self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
             
         elif channel == 'book_delta' or isinstance(event, BookDelta):
-            bids_list = getattr(event, 'bids', None) or event.get('bids', [])
-            asks_list = getattr(event, 'asks', None) or event.get('asks', [])
+            if is_dict:
+                bids_list = event.get('bids') or []
+                asks_list = event.get('asks') or []
+            else:
+                bids_list = getattr(event, 'bids', None) or []
+                asks_list = getattr(event, 'asks', None) or []
             
             for px, sz in bids_list:
                 if sz == 0.0:
@@ -198,15 +228,28 @@ class BookmapWindow(QtWidgets.QMainWindow):
                     self.current_asks.pop(px, None)
                 else:
                     self.current_asks[px] = sz
+            
+            # Trim to prevent memory/CPU growth
+            if len(self.current_bids) > 200:
+                sorted_bid_prices = sorted(self.current_bids.keys(), reverse=True)[:200]
+                self.current_bids = {px: self.current_bids[px] for px in sorted_bid_prices}
+            if len(self.current_asks) > 200:
+                sorted_ask_prices = sorted(self.current_asks.keys())[:200]
+                self.current_asks = {px: self.current_asks[px] for px in sorted_ask_prices}
                     
             ts = self._extract_timestamp(event)
             mid = self._calculate_mid()
             self._add_to_book_history(ts, self.current_bids, self.current_asks, mid)
             
         elif channel == 'trade' or isinstance(event, Trade):
-            px = getattr(event, 'price', None) or event.get('price', 0.0)
-            sz = getattr(event, 'amount', None) or event.get('amount', 0.0)
-            side = getattr(event, 'side', None) or event.get('side', 'buy')
+            if is_dict:
+                px = event.get('price', 0.0)
+                sz = event.get('amount', 0.0)
+                side = event.get('side', 'buy')
+            else:
+                px = getattr(event, 'price', 0.0)
+                sz = getattr(event, 'amount', 0.0)
+                side = getattr(event, 'side', 'buy')
             
             if hasattr(side, 'value'):
                 side_str = side.value
@@ -233,9 +276,10 @@ class BookmapWindow(QtWidgets.QMainWindow):
                 self.delta_history.pop(0)
 
     def _extract_timestamp(self, event) -> float:
-        local_ts = getattr(event, 'local_ts', None)
-        if local_ts is None and isinstance(event, dict):
+        if isinstance(event, dict):
             local_ts = event.get('local_ts')
+        else:
+            local_ts = getattr(event, 'local_ts', None)
         if local_ts is not None:
             return float(local_ts) / 1e9
         return time.time()
@@ -288,13 +332,7 @@ class BookmapWindow(QtWidgets.QMainWindow):
         if not self.book_history:
             return
             
-        # Temporarily disconnect range signals to prevent loop feedback
-        try:
-            self.price_plot.sigYRangeChanged.disconnect(self.on_view_changed)
-            self.price_plot.sigXRangeChanged.disconnect(self.on_view_changed)
-        except TypeError:
-            pass
-            
+        self._updating_plots = True
         try:
             # Query view Range from plots
             x_range = self.price_plot.viewRange()[0]
@@ -365,9 +403,7 @@ class BookmapWindow(QtWidgets.QMainWindow):
             self.update_cumulative_delta(t_min, t_max)
             
         finally:
-            # Reconnect range signals
-            self.price_plot.sigYRangeChanged.connect(self.on_view_changed)
-            self.price_plot.sigXRangeChanged.connect(self.on_view_changed)
+            self._updating_plots = False
 
     def update_trade_bubbles(self, t_min: float, t_max: float):
         visible_trades = [t for t in self.trade_history if t_min - 5 <= t['timestamp'] <= t_max + 5]
@@ -465,25 +501,37 @@ class BookmapWindow(QtWidgets.QMainWindow):
         self.queue = event_queue
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.process_queue)
-        self.timer.start(30)  # poll every 30ms
+        self.timer.start(100)  # poll every 100ms
 
     def process_queue(self):
         """Reads all items in the queue and updates charts in batch."""
         if self.queue is None:
             return
             
+        import sys
+        import traceback
         has_updates = False
-        while not self.queue.empty():
-            try:
-                event = self.queue.get_nowait()
-                self.handle_event(event)
-                has_updates = True
-                self.queue.task_done()
-            except queue.Empty:
-                break
+        try:
+            while not self.queue.empty():
+                try:
+                    event = self.queue.get_nowait()
+                    self.handle_event(event)
+                    has_updates = True
+                    self.queue.task_done()
+                except queue.Empty:
+                    break
+        except Exception as e:
+            sys.stderr.write(f"Error in process_queue loop: {e}\n")
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
                 
         if has_updates:
-            self.update_plots()
+            try:
+                self.update_plots()
+            except Exception as e:
+                sys.stderr.write(f"Error in update_plots: {e}\n")
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
 
 
 if __name__ == "__main__":

@@ -2563,6 +2563,18 @@ class TaskDoneQueueWrapper:
 def run_bookmap_gui(queue: Any, historical_events: list[dict]) -> None:
     """Target function for the multiprocessing GUI process."""
     import sys
+    import faulthandler
+    import signal
+    try:
+        faulthandler.enable()
+        # On macOS SIGINFO (Ctrl+T) or SIGUSR1 can trigger dump
+        if hasattr(signal, "SIGUSR1"):
+            faulthandler.register(signal.SIGUSR1)
+        if hasattr(signal, "SIGINFO"):
+            faulthandler.register(signal.SIGINFO)
+    except Exception:
+        pass
+
     try:
         from PyQt6.QtWidgets import QApplication
         from crypcodile.gui.bookmap_window import BookmapWindow
@@ -2679,16 +2691,14 @@ def bookmap(
     end_ns = time.time_ns()
     try:
         max_df = catalog.query(
-            "SELECT max(local_ts) as max_t FROM book_snapshot WHERE symbol = ?",
-            params=[symbol]
+            f"SELECT max(local_ts) as max_t FROM book_snapshot WHERE symbol = '{symbol}'"
         )
         if len(max_df) > 0 and max_df["max_t"][0] is not None:
             end_ns = int(max_df["max_t"][0])
     except Exception:
         try:
             max_df = catalog.query(
-                "SELECT max(local_ts) as max_t FROM trade WHERE symbol = ?",
-                params=[symbol]
+                f"SELECT max(local_ts) as max_t FROM trade WHERE symbol = '{symbol}'"
             )
             if len(max_df) > 0 and max_df["max_t"][0] is not None:
                 end_ns = int(max_df["max_t"][0])
@@ -2745,7 +2755,6 @@ def bookmap(
                 r[side] = normalized
 
     events.sort(key=lambda x: x.get("local_ts") or 0)
-
     # Initialize multiprocessing Queue and start GUI process
     queue = multiprocessing.Queue()
     gui_process = multiprocessing.Process(
@@ -2764,8 +2773,11 @@ def bookmap(
     feeder_thread.start()
 
     typer.echo(f"Launched bookmap visualizer process and subscription thread for {symbol}.")
-
-
+    
+    try:
+        gui_process.join()
+    except (KeyboardInterrupt, SystemExit):
+        gui_process.terminate()
 # ---------------------------------------------------------------------------
 # gas-tracker
 # ---------------------------------------------------------------------------

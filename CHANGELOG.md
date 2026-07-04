@@ -4,6 +4,14 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.044] - 2026-07-04
+### Changed
+- **High-Performance GUI Event Loop**: Resolved infinite paint loops in PyQt6 Bookmap Visualizer caused by auto-range updates triggering recursive signal feedback. Added an update guard flag (`_updating_plots`) and disabled auto-range.
+- **Throttled Updates**: Decreased QTimer frame update rate to 100ms for lightweight CPU execution (CPU consumption reduced from 199% to 0.6%).
+- **Resilient Struct Ingestion**: Patched `msgspec.Struct` event property access in live WebSocket queue handlers to avoid `AttributeError` exceptions.
+- **Unbounded Memory Protection**: Added order book depth dictionary trimming to retain only the top 200 bid/ask levels, preventing memory and CPU load leaks.
+- **Blocked GUI Process**: Added `gui_process.join()` in CLI launcher to prevent immediate parent interpreter shutdown and thread pool failures.
+
 ## [0.1.043] - 2026-07-04
 ### Changed
 - **Resilient Symbol Resolution**: Fixed perpetual symbol resolution in `basis` and interactive `bookmap` commands when the database catalog is empty or lacks registered symbols.
