@@ -146,7 +146,7 @@ class HistoricalLoaderThread(QtCore.QThread):
                                     amount = item.get("amount") if item.get("amount") is not None else item.get("size")
                                     if price is not None and amount is not None:
                                         normalized.append((float(price), float(amount)))
-                                elif isinstance(item, (list, tuple)):
+                                elif isinstance(item, (list, tuple)) and len(item) >= 2:
                                     normalized.append((float(item[0]), float(item[1])))
                         r[side] = normalized
 
@@ -803,10 +803,13 @@ class FlowmapWindow(QtWidgets.QMainWindow):
                 bin_width = 1.0
                 
             # 1. Update Heatmap
-            visible_states = [
-                s for s in self.book_history
-                if t_min - 5 <= s['timestamp'] <= t_max + 5
-            ]
+            if math.isnan(t_min) or math.isnan(t_max):
+                visible_states = list(self.book_history)
+            else:
+                visible_states = [
+                    s for s in self.book_history
+                    if t_min - 5 <= s['timestamp'] <= t_max + 5
+                ]
             if not visible_states:
                 visible_states = list(self.book_history)
                 
@@ -1018,5 +1021,13 @@ class FlowmapWindow(QtWidgets.QMainWindow):
                 self.historical_loader.wait()
         if self.feeder_thread:
             self.feeder_thread.stop()
-            self.feeder_thread.wait()
+            if not self.feeder_thread.wait(1000):
+                self.feeder_thread.terminate()
+                self.feeder_thread.wait()
         super().closeEvent(event)
+
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            if hasattr(self, "suggestion_popup") and self.suggestion_popup.isVisible():
+                self.suggestion_popup.hide()
