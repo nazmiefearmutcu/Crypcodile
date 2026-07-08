@@ -2,7 +2,7 @@
 
 **Deterministic Market Data Infrastructure for Quantitative Research and Autonomous Agents**
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.042-blue.svg)](https://pypi.org/project/crypcodile/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.043-blue.svg)](https://pypi.org/project/crypcodile/)
 [![Python Supported](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -55,7 +55,7 @@ Crypcodile is built around a robust, modular pipeline designed to handle degrade
 
 ## 2. Base Ecosystem & L2 Integration
 
-With the `v0.1.042` release, Crypcodile unifies the comparison of CeFi order book states with DeFi on-chain states. Historically, doing so required maintaining disparate codebases. The `BaseOnchainConnector` queries Base RPC nodes, extracts DEX swap and liquidity events (Uniswap V3 and Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
+With the `v0.1.043` release, Crypcodile unifies the comparison of CeFi order book states with DeFi on-chain states. Historically, doing so required maintaining disparate codebases. The `BaseOnchainConnector` queries Base RPC nodes, extracts DEX swap and liquidity events (Uniswap V3 and Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
 
 This unified approach enables quantitative developers to seamlessly execute cross-venue arbitrage detection, on-chain momentum tracking, and aggregated volume analytics—treating smart contract state identically to centralized exchange APIs.
 
