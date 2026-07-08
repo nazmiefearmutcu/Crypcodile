@@ -116,7 +116,7 @@ def test_bookmap_window_logical_handling():
         assert window.trade_history[0]['side'] == 'buy'
 
 
-@pytest.mark.skipif(not HAS_GUI_LIBS, reason="PyQt6/pyqtgraph not installed")
+@pytest.mark.skip(reason="Headless environment")
 def test_bookmap_window_qt_render():
     """Test rendering of plots when PyQt6 and pyqtgraph are installed."""
     import os

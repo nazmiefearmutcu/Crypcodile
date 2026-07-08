@@ -424,116 +424,124 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
 
     client = CrypcodileClient(data_dir=data_dir)
     loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    
+    def read_line_sync() -> str:
+        return sys.stdin.readline()
 
-    while True:
-        line = await reader.readline()
-        if not line:
-            break
-        
-        try:
-            req = json.loads(line.decode())
-            if not isinstance(req, dict) or "method" not in req:
-                continue
+    try:
+        while True:
+            line_str = await loop.run_in_executor(None, read_line_sync)
+            if not line_str:
+                break
             
-            method = req["method"]
-            req_id = req.get("id")
-            
-            if method == "initialize":
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {
-                            "tools": {}
-                        },
-                        "serverInfo": {
-                            "name": "crypcodile-mcp",
-                            "version": __version__
+            try:
+                req = json.loads(line_str.strip())
+                if not isinstance(req, dict) or "method" not in req:
+                    continue
+                
+                method = req["method"]
+                req_id = req.get("id")
+                
+                if method == "initialize":
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {
+                                "tools": {}
+                            },
+                            "serverInfo": {
+                                "name": "crypcodile-mcp",
+                                "version": __version__
+                            }
                         }
                     }
-                }
-            elif method == "tools/list":
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "tools": TOOLS
+                elif method == "tools/list":
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "tools": TOOLS
+                        }
                     }
-                }
-            elif method == "tools/call":
-                params = req.get("params", {})
-                tool_name = params.get("name")
-                arguments = params.get("arguments", {})
-                
-                tool_result: Any = None
-                if tool_name == "get_base_market_data":
-                    pair = arguments.get("token_pair", "")
-                    tool_result = await get_base_market_data(pair)
-                elif tool_name == "get_onchain_price":
-                    sym = arguments.get("symbol", "")
-                    tool_result = await get_onchain_price(sym)
-                elif tool_name == "query_market_data":
-                    sql = arguments.get("sql", "")
-                    try:
-                        df = client.query(sql)
-                        # Convert polars/pandas DataFrame to dict list
-                        tool_result = (
-                            df.to_dicts() if hasattr(df, "to_dicts")
-                            else cast(Any, df).to_dict(orient="records")
-                        )
-                    except Exception as e:
-                        tool_result = {"error": f"SQL execution failed: {e}"}
-                elif tool_name == "get_funding_apr":
-                    sym = arguments.get("symbol", "")
-                    start = arguments.get("start", 0)
-                    end = arguments.get("end", 0)
-                    try:
-                        df = client.funding_apr(sym, start, end)
-                        tool_result = (
-                            df.to_dicts() if hasattr(df, "to_dicts")
-                            else cast(Any, df).to_dict(orient="records")
-                        )
-                    except Exception as e:
-                        tool_result = {"error": f"Funding APR analysis failed: {e}"}
+                elif method == "tools/call":
+                    params = req.get("params", {})
+                    tool_name = params.get("name")
+                    arguments = params.get("arguments", {})
+                    
+                    tool_result: Any = None
+                    if tool_name == "get_base_market_data":
+                        pair = arguments.get("token_pair", "")
+                        tool_result = await get_base_market_data(pair)
+                    elif tool_name == "get_onchain_price":
+                        sym = arguments.get("symbol", "")
+                        tool_result = await get_onchain_price(sym)
+                    elif tool_name == "query_market_data":
+                        sql = arguments.get("sql", "")
+                        try:
+                            df = client.query(sql)
+                            # Convert polars/pandas DataFrame to dict list
+                            tool_result = (
+                                df.to_dicts() if hasattr(df, "to_dicts")
+                                else cast(Any, df).to_dict(orient="records")
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"SQL execution failed: {e}"}
+                    elif tool_name == "get_funding_apr":
+                        sym = arguments.get("symbol", "")
+                        start = arguments.get("start", 0)
+                        end = arguments.get("end", 0)
+                        try:
+                            df = client.funding_apr(sym, start, end)
+                            tool_result = (
+                                df.to_dicts() if hasattr(df, "to_dicts")
+                                else cast(Any, df).to_dict(orient="records")
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"Funding APR analysis failed: {e}"}
+                    else:
+                        tool_result = {"error": f"Tool {tool_name} not found"}
+                    
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(tool_result, indent=2)
+                                }
+                            ]
+                        }
+                    }
                 else:
-                    tool_result = {"error": f"Tool {tool_name} not found"}
-                
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": json.dumps(tool_result, indent=2)
-                            }
-                        ]
+                    resp = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {
+                            "code": -32601,
+                            "message": f"Method {method} not found"
+                        }
                     }
-                }
-            else:
-                resp = {
+                    
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
+            except Exception as e:
+                err_resp = {
                     "jsonrpc": "2.0",
-                    "id": req_id,
                     "error": {
-                        "code": -32601,
-                        "message": f"Method {method} not found"
+                        "code": -32603,
+                        "message": f"Internal error: {e}",
+                        "data": traceback.format_exc()
                     }
                 }
-                
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
-        except Exception as e:
-            err_resp = {
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32603,
-                    "message": f"Internal error: {e}",
-                    "data": traceback.format_exc()
-                }
-            }
-            sys.stdout.write(json.dumps(err_resp) + "\n")
-            sys.stdout.flush()
+                sys.stdout.write(json.dumps(err_resp) + "\n")
+                sys.stdout.flush()
+    finally:
+        try:
+            await loop.shutdown_default_executor()
+        except Exception:
+            pass
+
+
