@@ -4,6 +4,13 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.043] - 2026-07-09
+### Added
+- **Technical Analysis Indicators Engine**: Implemented SMA, EMA, RSI, MACD, and Bollinger Bands calculated using high-performance Polars operations.
+- **CLI Subcommand (`indicators` command)**: Added a command to compute and display technical analysis indicators from resampled OHLCV bar data.
+- **Client Resampling Interface**: Added the `resample` method to `CrypcodileClient`.
+- **Unit Testing**: Implemented complete testing coverage for indicator calculations and CLI commands.
+
 ## [0.1.042] - 2026-06-23
 ### Added
 - **Base L2 Ecosystem Integrations**: Integrated asset registry, DEX pool event listeners, OP stack standardization, L1/L2 gas schemas, resilient async web3 client, BNS resolution, Farcaster sentiment correlation, smart wallet tagging, and Seamless/Aave lending logs.

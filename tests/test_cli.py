@@ -288,3 +288,34 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
         # funding-apr might exit 0 with "No funding data found." since trade is not funding channel.
         assert result.exit_code == 0, f"stdout:\n{result.output}"
         assert "No funding data found." in result.output or "deribit" in result.output or "0.0001" in result.output
+
+
+async def test_cli_indicators_exits_zero(tmp_path: pathlib.Path) -> None:
+    """``indicators`` calculates technical analysis indicators, exit code 0."""
+    from typer.testing import CliRunner
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "indicators",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--indicator",
+            "sma",
+            "--period",
+            "2",
+            "--interval",
+            "1s",
+            "--from",
+            str(_BASE_TS - 1),
+            "--to",
+            str(_BASE_TS + 1_000_000_000),
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "sma" in result.output
