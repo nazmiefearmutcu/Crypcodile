@@ -54,3 +54,7 @@ tmp/
 tmp_pytest/
 tmp_pytest_stress/
 tmp_test_run/
+
+# AI agent workspace files
+docs/superpowers/
+.ralph/
