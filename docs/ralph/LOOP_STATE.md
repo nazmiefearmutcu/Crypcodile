@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–37 COMPLETE. Continuous loop still active → Wave 38+.
+**Status:** Waves 1–38 COMPLETE. Continuous loop still active → Wave 39+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -284,7 +284,14 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 1 | Portal `detectBackend`: also probe `/api/v1/ready` (200 → Python) before `/api/v1/health` | DONE | dbe54574440bce876a12f5da0dbd66f1d9be467e |
 | 2 | Prefer `GET /api/v1/capabilities` `{rest, mcp_tools_hint}` hardcoded short free discovery lists (skip openapi-paths) | DONE | dbe54574440bce876a12f5da0dbd66f1d9be467e |
 
-## Next rotation ideas (Wave 38+)
+## Wave 38 — Feature (capabilities expand) + bug fix — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Expand `GET /api/v1/capabilities` `rest` (+ `mcp_tools_hint`) to free routes missing from short list (scan, basis suite, vol suite, pure risk, simulate-price-impact, …) | DONE | `44f1950f049a481723d3ba60f21b74e7f8a8bead` |
+| 2 | Fix lending-stress REST/MCP: non-finite HF → JSON `null` (Starlette rejects `inf`) | DONE | `44f1950f049a481723d3ba60f21b74e7f8a8bead` |
+
+## Next rotation ideas (Wave 39+)
 
 Priority candidates for the next cycles:
 
@@ -339,3 +346,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 35: REST `POST /api/v1/label-transfers`; blank watchlist key fix
 - Wave 36: REST `GET /api/v1/ready` k8s readiness (200/`ok` else 503); `/metrics` kept as-is
 - Wave 37: portal detectBackend `/api/v1/ready` probe; REST `GET /api/v1/capabilities` agent discovery
+- Wave 38: expand capabilities free rest/mcp lists; lending-stress JSON-safe null HF
