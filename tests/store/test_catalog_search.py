@@ -107,6 +107,35 @@ def test_list_channels_empty_partition_dirs_without_parquet(
     assert cat.list_channels() == ["funding", "trade"]
 
 
+def test_catalog_constructs_with_preexisting_empty_partitions(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Catalog() must not raise when empty channel dirs exist before init.
+
+    DuckDB ``read_parquet`` fails when the hive glob matches no parts;
+    ``_create_view`` must skip those channels so client/CLI construction
+    still succeeds. ``list_channels`` still discovers them; they are not
+    registered as views.
+    """
+    (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "exchange=deribit" / "channel=funding").mkdir(parents=True)
+
+    cat = Catalog(tmp_path)  # must not raise
+    assert cat.list_channels() == ["funding", "trade"]
+    assert cat._registered_channels == set()
+    # inventory over empty partitions is empty (stable schema).
+    inv = cat.inventory()
+    assert len(inv) == 0
+    assert list(inv.columns) == [
+        "exchange",
+        "channel",
+        "symbol",
+        "min_ts",
+        "max_ts",
+        "row_count",
+    ]
+
+
 async def test_list_channels_with_fixtures(tmp_path: pathlib.Path) -> None:
     """After writing trades + snapshots, both channels are listed sorted."""
     await _write_fixtures(tmp_path)

@@ -661,6 +661,12 @@ class Catalog:
 
         The glob covers all exchanges and all dates for that channel so that
         ``query("SELECT … FROM trade")`` works without extra parameters.
+
+        Empty partition directories (no ``part-*.parquet`` yet) are skipped
+        without raising: DuckDB ``read_parquet`` fails hard when the glob
+        matches nothing, which would otherwise break ``Catalog`` construction
+        / ``refresh_views`` when filesystem ``list_channels`` still discovers
+        those channels. The channel is not added to ``_registered_channels``.
         """
         glob_pattern = str(
             self._data_dir
@@ -670,6 +676,10 @@ class Catalog:
             / "bucket=*"
             / "part-*.parquet"
         )
+        # Avoid DuckDB "No files found" when only empty hive dirs exist.
+        if not _glob.glob(glob_pattern):
+            return
+
         # Escape embedded single quotes in the path so the SQL string literal
         # is valid even when data_dir or channel contains a single quote.
         # DuckDB does not support ? parameters for structural/path arguments
@@ -685,7 +695,11 @@ class Catalog:
                 union_by_name => true
             )
         """
-        self._conn.execute(sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        try:
+            self._conn.execute(sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        except Exception:
+            # Race: files vanished between glob check and execute, or corrupt.
+            return
         self._registered_channels.add(channel)
 
     def _build_date_globs(

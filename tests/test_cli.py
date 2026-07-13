@@ -133,6 +133,109 @@ def test_cli_catalog_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
     assert "No data found" in result.output
 
 
+def test_cli_catalog_lists_empty_partition_dirs(tmp_path: pathlib.Path) -> None:
+    """``catalog`` uses filesystem list_channels; empty partitions show 0 rows."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "exchange=deribit" / "channel=funding").mkdir(parents=True)
+    (tmp_path / "exchange=binance" / "channel=trade").mkdir(parents=True)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["catalog", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "trade" in result.output
+    assert "funding" in result.output
+    # No parquet → zero rows (not "No data found", not -1).
+    assert "No data found" not in result.output
+    lines = [ln for ln in result.output.splitlines() if "trade" in ln or "funding" in ln]
+    assert any(ln.strip().endswith("0") for ln in lines)
+
+
+async def test_cli_catalog_symbols_with_empty_partition_dirs(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog --symbols`` still inventories parquet data when empty dirs exist.
+
+    Filesystem ``list_channels`` discovers empty partitions; inventory / --symbols
+    must keep working and only report symbols backed by queryable views.
+    """
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    # Extra empty partition (no parquet) alongside real data.
+    (tmp_path / "exchange=binance" / "channel=liquidations").mkdir(parents=True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog", "--symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "row_count" in result.output
+    assert "trade" in result.output
+    # Empty liquidations partition has no symbols → must not invent rows.
+    assert "liquidations" not in result.output
+    assert "No data found" not in result.output
+
+
+def test_cli_catalog_symbols_empty_partitions_only(tmp_path: pathlib.Path) -> None:
+    """``catalog --symbols`` with only empty partitions → No data found."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog", "--symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No data found" in result.output
+
+
+def test_cli_catalog_uses_list_channels(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Default ``catalog`` delegates channel discovery to client.list_channels."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade", "funding"]
+    mock_client._catalog = MagicMock()
+    mock_client._catalog._registered_channels = set()  # no views → 0 rows
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            self._catalog = mock_client._catalog
+
+        def list_channels(self):
+            return mock_client.list_channels()
+
+        def inventory(self):
+            return mock_client.inventory()
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["catalog", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "trade" in result.output
+    assert "funding" in result.output
+    mock_client.list_channels.assert_called_once_with()
+
+
 # ---------------------------------------------------------------------------
 # catalog-summary command
 # ---------------------------------------------------------------------------

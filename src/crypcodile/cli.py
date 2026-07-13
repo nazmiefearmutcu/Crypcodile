@@ -3,7 +3,7 @@
 Commands
 --------
 query          -- Execute DuckDB SQL against the data lake; print result table.
-catalog        -- List all channels present in the data lake with row counts.
+catalog        -- List channels (filesystem list_channels) with row counts; --symbols inventory.
 catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
 search         -- Ranked symbol search over the data lake inventory.
 export         -- Export a channel x symbols x time range to a file.
@@ -831,7 +831,14 @@ def catalog(
 ) -> None:
     """List channels present in the data lake with their row counts.
 
-    Use ``--symbols`` to print a per-symbol inventory summary instead.
+    Channel discovery uses the filesystem ``list_channels`` walk
+    (``exchange=*/channel=*``), so empty partition directories appear even
+    before parquet parts exist. Row counts query registered DuckDB views;
+    unregistered / empty partitions report ``0``.
+
+    Use ``--symbols`` to print a per-symbol inventory summary instead
+    (inventory still requires queryable parquet/views; empty partitions
+    alone yield "No data found").
     """
     from crypcodile.client.client import CrypcodileClient
     from crypcodile.store.catalog import Catalog
@@ -842,6 +849,8 @@ def catalog(
     cat: Catalog = client._catalog
 
     if symbols:
+        # Inventory is DuckDB/view-backed (needs parquet). Empty partition
+        # dirs discovered by filesystem list_channels do not invent symbols.
         inv = client.inventory()
         if len(inv) == 0:
             typer.echo("No data found in: " + str(data_dir))
@@ -860,8 +869,8 @@ def catalog(
             )
         raise typer.Exit(code=0)
 
-    # Discover channels from the registered views.
-    channels: list[str] = sorted(cat._registered_channels)
+    # Filesystem discovery (parity with catalog-summary / REST / MCP).
+    channels: list[str] = client.list_channels()
 
     if not channels:
         typer.echo("No data found in: " + str(data_dir))
@@ -869,12 +878,18 @@ def catalog(
 
     typer.echo(f"{'channel':<24}  {'rows':>10}")
     typer.echo("-" * 36)
+    registered = set(cat._registered_channels)
     for ch in channels:
-        try:
-            row_df = cat.query(f'SELECT count(*) AS n FROM "{ch}"')
-            n = int(row_df["n"][0])
-        except Exception:
-            n = -1
+        if ch not in registered:
+            # Empty partition dir (no parquet → no DuckDB view).
+            n = 0
+        else:
+            try:
+                escaped = ch.replace('"', '""')
+                row_df = cat.query(f'SELECT count(*) AS n FROM "{escaped}"')
+                n = int(row_df["n"][0])
+            except Exception:
+                n = 0
         typer.echo(f"{ch:<24}  {n:>10,}")
 
 

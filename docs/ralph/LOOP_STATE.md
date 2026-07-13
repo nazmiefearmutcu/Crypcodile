@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–47 COMPLETE. Continuous loop still active → Wave 48+.
+**Status:** Waves 1–50 COMPLETE. Continuous loop still active → Wave 51+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -383,7 +383,16 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | CLI `catalog-summary` via client `list_channels` + `list_exchanges_on_disk` counts | DONE | `52ed26389b9bb4ff8fbd41b4c7569d78804ae010` |
 | 4 | Tests: special-char/symlink skips; CLI empty/data/delegate | DONE | `52ed26389b9bb4ff8fbd41b4c7569d78804ae010` |
 
-## Next rotation ideas (Wave 50+)
+## Wave 50 — Bug hunt (broad regression) + Feature (CLI catalog list_channels / --symbols) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog_search/catalog, compactor, parquet_sink, client search, json_safe, factory, binance/okx, cli, schema, sink, instruments, replay — green (no pre-existing failures) | DONE | baseline `231070a` |
+| 2 | CLI `catalog` uses filesystem `list_channels`; empty partitions → `0` rows; `--symbols` inventory still works with empty dirs coexisting | DONE | (this wave) |
+| 3 | Fix `_create_view` skip when no parquet (Catalog init no longer raises on empty hive dirs) | DONE | (this wave) |
+| 4 | Tests: empty partitions catalog listing; --symbols with/without data + empty dirs; construct-before-data Catalog; list_channels delegate | DONE | (this wave) |
+
+## Next rotation ideas (Wave 51+)
 
 Priority candidates for the next cycles:
 
@@ -452,3 +461,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 47: broad regression green (645→647 after +2 tests); REST `GET /api/v1/catalog/summary` agent discovery
 - Wave 48: MCP `catalog_summary` mirrors REST summary; README MCP discovery list updated
 - Wave 49: CLI `catalog-summary`; hive suffix special-char filtering on list_channels/exchanges walks
+- Wave 50: broad regression green (714→719 after +5 tests); CLI catalog filesystem list_channels; `_create_view` empty-partition skip; `--symbols` still inventories with empty dirs present
