@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–15 COMPLETE. Ready for Wave 16 (Feature).
+**Status:** Waves 1–16 COMPLETE. Ready for Wave 17 (Bug hunt).
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -134,16 +134,28 @@
 | 1 | Harden API server fixture and tier waits (e2e) | DONE | `c38d317` |
 | 2 | MCP open-interest tool | DONE | `4746678` |
 
-## Next rotation ideas (Wave 16+)
+## Wave 16 — Feature (portal + lake API + multi-collect + funding) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Implement lake catalog scan endpoint | DONE | `9189d62` |
+| 2 | Lake catalog inventory endpoint | DONE | `bcb26e2` |
+| 3 | MCP funding prediction tool | DONE | `6f06d78` |
+| 4 | Portal: detect Python backend when admin returns 404 | DONE | `0a183e1` |
+| 5 | Bounded read-only SQL / REST query endpoint | DONE | `d6b5e85` |
+| 6 | Register superchain connector in factory | DONE | `aaf7893` |
+| 7 | Multi-exchange collect CLI | DONE | `c8a22ae` |
+
+## Next rotation ideas (Wave 17+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
-2. **REST API lake read endpoints** — broader HTTP read surface beyond catalog list/search  
-3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-4. **Open-interest / funding CLI + API** — surface OI (and related derivatives metrics) beyond MCP  
-5. **Payment / portal polish** — remaining API portal UX and state edge cases  
-6. **MEV sandwich analytics surface** — wire remaining sandwich/MEV analytics to CLI/MCP if pure logic exists  
+2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
+3. **Open-interest CLI + API** — surface OI beyond MCP (funding MCP/CLI landed in wave 16)  
+4. **Payment / portal polish** — remaining API portal UX beyond backend detection  
+5. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
+6. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query as needed  
 
 ## Subagent policy
 
@@ -167,4 +179,5 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 13: atomic parquet parts, fail-loud payment DB, changelog 10–12
 - Wave 14: API exception detail, orderbook apply validation, NaN OHLCV drop, onchain cursor/seen-log
 - Wave 15: e2e fixture/tier hardening, MCP open-interest tool
-- **HEAD:** `4746678` — ready for Wave 16
+- Wave 16: portal detect, multi-exchange collect, REST query, superchain factory, inventory, funding MCP, catalog scan
+- **HEAD:** `c8a22ae` — ready for Wave 17

@@ -21,6 +21,13 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **CLI collect duration and max-reconnects**: Collect accepts duration and max-reconnects options for bounded runs and reconnect caps.
 - **Public `list_exchanges`**: Factory-registry-backed public exchange listing for CLI/API consumers.
 - **API lake catalog list and search**: Lake catalog list and search endpoints on the API.
+- **API lake catalog scan**: Wire `GET /api/v1/catalog/scan` to client scan with a hard row limit (10000).
+- **API lake catalog inventory**: Lake catalog inventory endpoint on the API.
+- **API bounded read-only SQL query**: Bounded read-only SQL / lake query endpoint for safe HTTP reads.
+- **MCP funding prediction tool**: Funding-rate prediction analytics available as an MCP tool.
+- **CLI funding-predict command**: Offline `funding-predict` CLI via rates or file (XGBoost when trainable, rolling-mean fallback).
+- **CLI multi-exchange collect**: Collect across multiple exchanges in a single CLI invocation.
+- **Superchain connector factory registration**: Register the superchain on-chain connector in the exchange factory registry.
 - **Dead-letter queue drain on collect stop**: Drain the ingest dead-letter queue when collect stops and emit a stop report.
 - **Book resync bridge (Binance)**: On depth sequence gaps, buffer live deltas, REST re-fetch `/depth`, and emit snapshot plus post-snapshot deltas via `OrderBookSync` + `BookResyncBridge`.
 - **Shared book-sync helpers**: Extracted `SyncResult`, `BookSyncMachine` protocol, and buffer filter for multi-venue resync.
@@ -43,6 +50,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **WebSocket connect session leak**: Close the aiohttp session when WebSocket connect fails.
 - **Binance book bridge bootstrap**: Register the book resync bridge only after a successful bootstrap.
 - **Whitespace-only catalog search**: Treat whitespace-only search queries as empty.
+- **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back through admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
 
 ### Changed
 - **CLI symbol resolution**: Resolve symbols via `client.resolve_symbols` for consistent catalog-backed lookup.
