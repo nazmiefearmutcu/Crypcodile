@@ -367,6 +367,73 @@ def handle_data_coverage(
     return matched.to_dicts()
 
 
+def handle_estimate_slippage(
+    client: CrypcodileClient,
+    symbol: str,
+    side: str,
+    size: float,
+) -> list[dict[str, Any]]:
+    """Estimate execution slippage; returns list of row dicts (empty → [])."""
+    df = client.estimate_slippage(symbol, side, size)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_calculate_ofi(
+    client: CrypcodileClient,
+    symbol: str,
+    start: int,
+    end: int,
+    interval: str,
+) -> list[dict[str, Any]]:
+    """Calculate OFI over time bins; returns list of row dicts (empty → [])."""
+    df = client.calculate_ofi(symbol, start, end, interval)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_track_whale_alerts(
+    client: CrypcodileClient,
+    symbol: str,
+    start: int,
+    end: int,
+    min_usd: float,
+) -> list[dict[str, Any]]:
+    """Track whale-sized trades/liquidations; returns list of row dicts (empty → [])."""
+    df = client.track_whale_alerts(symbol, start, end, min_usd)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_get_iv_surface(
+    client: CrypcodileClient,
+    underlying: str,
+    at: int,
+    rate: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Implied-vol surface snapshot; returns list of row dicts (empty → [])."""
+    df = client.iv_surface(underlying, at, rate=rate)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_get_term_structure(
+    client: CrypcodileClient,
+    underlying: str,
+    at: int,
+    rate: float = 0.0,
+) -> list[dict[str, Any]]:
+    """ATM IV term structure; returns list of row dicts (empty → [])."""
+    df = client.term_structure(underlying, at, rate=rate)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -516,6 +583,148 @@ TOOLS = [
             "required": ["symbol"],
         },
     },
+    {
+        "name": "estimate_slippage",
+        "description": (
+            "Estimate execution slippage for a market order of given size against "
+            "the latest book snapshot for a symbol. Returns mid, avg fill price, "
+            "and slippage metrics. Empty book → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "side": {
+                    "type": "string",
+                    "description": "Trade side: 'buy' or 'sell'.",
+                },
+                "size": {
+                    "type": "number",
+                    "description": "Order size in base units.",
+                },
+            },
+            "required": ["symbol", "side", "size"],
+        },
+    },
+    {
+        "name": "calculate_ofi",
+        "description": (
+            "Calculate Order Flow Imbalance (OFI) over time-binned intervals for "
+            "a symbol. Empty lake / no data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+                "interval": {
+                    "type": "string",
+                    "description": "Bin interval (e.g. '1m', '5m', '1h').",
+                },
+            },
+            "required": ["symbol", "start", "end", "interval"],
+        },
+    },
+    {
+        "name": "track_whale_alerts",
+        "description": (
+            "Query trades and liquidations exceeding a USD notional threshold "
+            "(whale alerts). Empty lake / no matches → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+                "min_usd": {
+                    "type": "number",
+                    "description": "Minimum USD notional to include.",
+                },
+            },
+            "required": ["symbol", "start", "end", "min_usd"],
+        },
+    },
+    {
+        "name": "get_iv_surface",
+        "description": (
+            "Return the implied-volatility surface snapshot for an underlying at "
+            "a given instant. Columns: expiry, strike, moneyness, opt_type, iv, "
+            "source. Empty options data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "underlying": {
+                    "type": "string",
+                    "description": "Underlying asset identifier (e.g. 'BTC').",
+                },
+                "at": {
+                    "type": "integer",
+                    "description": "Snapshot instant in nanoseconds UTC.",
+                },
+                "rate": {
+                    "type": "number",
+                    "description": "Continuous risk-free rate (default 0.0).",
+                },
+            },
+            "required": ["underlying", "at"],
+        },
+    },
+    {
+        "name": "get_term_structure",
+        "description": (
+            "Return the ATM implied-volatility term structure for an underlying "
+            "at a given instant. Columns: expiry, days_to_expiry, atm_strike, "
+            "atm_iv. Empty options data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "underlying": {
+                    "type": "string",
+                    "description": "Underlying asset identifier (e.g. 'BTC').",
+                },
+                "at": {
+                    "type": "integer",
+                    "description": "Snapshot instant in nanoseconds UTC.",
+                },
+                "rate": {
+                    "type": "number",
+                    "description": "Continuous risk-free rate (default 0.0).",
+                },
+            },
+            "required": ["underlying", "at"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -628,6 +837,58 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"data_coverage failed: {e}"}
+                    elif tool_name == "estimate_slippage":
+                        try:
+                            tool_result = handle_estimate_slippage(
+                                client,
+                                arguments.get("symbol", ""),
+                                arguments.get("side", ""),
+                                float(arguments.get("size", 0)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"estimate_slippage failed: {e}"}
+                    elif tool_name == "calculate_ofi":
+                        try:
+                            tool_result = handle_calculate_ofi(
+                                client,
+                                arguments.get("symbol", ""),
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                                arguments.get("interval", ""),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"calculate_ofi failed: {e}"}
+                    elif tool_name == "track_whale_alerts":
+                        try:
+                            tool_result = handle_track_whale_alerts(
+                                client,
+                                arguments.get("symbol", ""),
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                                float(arguments.get("min_usd", 0)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"track_whale_alerts failed: {e}"}
+                    elif tool_name == "get_iv_surface":
+                        try:
+                            tool_result = handle_get_iv_surface(
+                                client,
+                                arguments.get("underlying", ""),
+                                int(arguments.get("at", 0)),
+                                rate=float(arguments.get("rate", 0.0)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"get_iv_surface failed: {e}"}
+                    elif tool_name == "get_term_structure":
+                        try:
+                            tool_result = handle_get_term_structure(
+                                client,
+                                arguments.get("underlying", ""),
+                                int(arguments.get("at", 0)),
+                                rate=float(arguments.get("rate", 0.0)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"get_term_structure failed: {e}"}
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
                     
