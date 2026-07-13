@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–24 COMPLETE. Ready for Wave 25.
+**Status:** Waves 1–26 COMPLETE.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -200,7 +200,14 @@
 | 1 | REST `GET /api/v1/perp-basis` (symbol/start/end/limit → client.perp_basis); skip bulk `/export` | DONE | `275a9d2` |
 | 2 | MCP `label_transfers` wrapping pure `label_transfer_addresses` | DONE | `6ae47e3` |
 
-## Next rotation ideas (Wave 26+)
+## Wave 26 — Feature (spot-future-basis REST) + bugfix — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/spot-future-basis` (future/spot/start/end/limit → client.spot_future_basis) | DONE | `defd71e` |
+| 2 | Fix `Catalog.search_symbols` non-positive limit (Polars `head(-n)` trap) | DONE | `9a961d8` |
+
+## Next rotation ideas (Wave 27+)
 
 Priority candidates for the next cycles:
 
@@ -208,7 +215,7 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
-5. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query/open-interest as needed  
+5. **MCP `get_spot_future_basis`** — mirror REST/CLI third basis mode on MCP  
 6. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 ## Subagent policy
@@ -243,3 +250,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 23: REST risk-reversal (`vol_skew` → `risk_reversal_butterfly`)
 - Wave 24: REST data-coverage (`inventory` filter by symbol/channel); skip search alias
 - Wave 25: REST perp-basis (`client.perp_basis`); MCP `label_transfers`; skip bulk export HTTP
+- Wave 26: REST spot-future-basis (`client.spot_future_basis`); catalog search non-positive limit fix
