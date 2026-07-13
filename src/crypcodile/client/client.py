@@ -477,6 +477,21 @@ class CrypcodileClient:
 
         return _calculate_peg_deviation(self._catalog, symbol, threshold)
 
+    def calculate_sequencer_latency(
+        self,
+        exchange: str = "base_onchain",
+    ) -> pl.DataFrame:
+        """Measure sequencer production intervals and ingestion delay.
+
+        Thin wrapper over
+        :func:`crypcodile.analytics.sequencer_latency.calculate_sequencer_latency`.
+        """
+        from crypcodile.analytics.sequencer_latency import (
+            calculate_sequencer_latency as _calculate_sequencer_latency,
+        )
+
+        return _calculate_sequencer_latency(self._catalog, exchange)
+
     def spot_future_basis(
         self,
         future_symbol: str,

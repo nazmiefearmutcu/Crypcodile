@@ -17,6 +17,7 @@ vol-skew       -- Print per-strike IV and delta for a single expiry.
 risk-reversal  -- Print risk-reversal and butterfly from vol skew.
 open-interest  -- Aggregate open interest across exchanges from the lake.
 liquidity-depth -- Per-block bid/ask depth at ±1/2/5% from mid (book snapshots).
+sequencer-latency -- Sequencer production interval and ingestion delay (lake).
 peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
 chaos-score    -- Normalized [0, 100] chaos score from pure risk metrics.
 gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
@@ -54,6 +55,7 @@ Usage examples::
     crypcodile open-interest --symbol BTC --start 0 --end 9999999999999999999 \\
                             --data-dir /data
     crypcodile liquidity-depth --symbol base_onchain:DEGEN-WETH --data-dir /data
+    crypcodile sequencer-latency --exchange base_onchain --data-dir /data
     crypcodile peg-deviation --price 0.98 --threshold 0.01
     crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
     crypcodile chaos-score --volatility 0.05 --stablecoin-deviation 0.002 \\
@@ -2917,6 +2919,42 @@ def liquidity_depth_cmd(
 
     if len(df) == 0:
         typer.echo("No book snapshots found for the given symbol.")
+        raise typer.Exit(code=0)
+
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# sequencer-latency (block production interval + ingestion delay from lake)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="sequencer-latency")
+def sequencer_latency_cmd(
+    exchange: Annotated[
+        str,
+        typer.Option(
+            "--exchange",
+            help="Exchange name to measure (e.g. base_onchain).",
+        ),
+    ] = "base_onchain",
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Measure sequencer production intervals and local ingestion delay from the lake."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    exchange = (exchange or "").strip() or "base_onchain"
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_sequencer_latency(exchange)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No sequencer latency data found.")
         raise typer.Exit(code=0)
 
     typer.echo(df)
