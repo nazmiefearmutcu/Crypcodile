@@ -1413,6 +1413,19 @@ async def status() -> dict[str, Any]:
     return await _health_payload()
 
 
+@app.get("/api/v1/exchanges")
+async def exchanges() -> list[str]:
+    """List registered exchange connector names (read-only, no payment, no lake).
+
+    Returns the sorted factory registry via
+    :func:`crypcodile.exchanges.factory.list_exchanges`. Does not touch the
+    data lake or any network connectors.
+    """
+    from crypcodile.exchanges.factory import list_exchanges
+
+    return list_exchanges()
+
+
 @app.get("/api/v1/catalog/channels")
 async def catalog_list_channels() -> list[str]:
     """List data channels present in the local lake (read-only, no payment)."""

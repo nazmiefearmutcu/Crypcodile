@@ -4261,3 +4261,42 @@ def test_health_and_status_routes_registered() -> None:
     }
     assert ("/api/v1/health", ("GET",)) in paths
     assert ("/api/v1/status", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/exchanges — factory registry (no payment, no lake)
+# ---------------------------------------------------------------------------
+
+
+def test_exchanges_returns_factory_list() -> None:
+    """Endpoint mirrors list_exchanges() without touching the lake."""
+    from crypcodile.api_server import exchanges
+    from crypcodile.exchanges.factory import list_exchanges
+
+    with patch("crypcodile.api_server._get_lake_client") as mock_lake:
+        result = asyncio.run(exchanges())
+        mock_lake.assert_not_called()
+
+    assert result == list_exchanges()
+    assert result == sorted(result)
+    assert "binance" in result
+    assert "base_onchain" in result
+    assert "superchain" in result
+
+
+def test_exchanges_returns_copy_semantics() -> None:
+    """Mutating the response list must not corrupt subsequent calls."""
+    from crypcodile.api_server import exchanges
+
+    a = asyncio.run(exchanges())
+    a.append("not-an-exchange")
+    b = asyncio.run(exchanges())
+    assert "not-an-exchange" not in b
+
+
+def test_exchanges_route_registered() -> None:
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/exchanges", ("GET",)) in paths
