@@ -2596,6 +2596,143 @@ async def gas_vol(payload: GasVolPayload) -> dict[str, Any]:
     }
 
 
+class MevSandwichPayload(BaseModel):
+    """Body for ``POST /api/v1/mev-sandwich`` — pure offline trade sequence.
+
+    Each trade row should include ``block``, ``pool``, ``log_index``, ``sender``,
+    and ``is_buy`` (bool, 0/1, or common string forms). Extra columns are kept
+    through the detector and returned on the output rows.
+    """
+
+    trades: list[dict[str, Any]]
+
+
+@app.post("/api/v1/mev-sandwich")
+async def mev_sandwich(payload: MevSandwichPayload) -> list[dict[str, Any]]:
+    """Flag MEV sandwich legs in a pure JSON trade sequence (no lake, no payment).
+
+    Body::
+
+        {
+          "trades": [
+            {"block": 100, "pool": "AERO-USDC", "log_index": 10,
+             "sender": "0xattacker", "is_buy": true},
+            ...
+          ]
+        }
+
+    Wraps :func:`crypcodile.analytics.mev_sandwich.detect_sandwiches`. Returns
+    the same trade rows as dicts with an ``is_sandwich`` boolean flag. Empty
+    ``trades`` → ``[]`` (HTTP 200). Missing required columns → HTTP 400.
+    """
+    import polars as pl
+
+    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+
+    trades = payload.trades
+    if not isinstance(trades, list):
+        raise HTTPException(
+            status_code=400,
+            detail="trades must be a JSON array of row objects.",
+        )
+    if len(trades) == 0:
+        return []
+    if not all(isinstance(r, dict) for r in trades):
+        raise HTTPException(
+            status_code=400,
+            detail="trades rows must be objects.",
+        )
+
+    try:
+        df = pl.DataFrame(trades)
+        out = detect_sandwiches(df)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("MEV sandwich detection failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="MEV sandwich detection failed.",
+        ) from e
+
+    if len(out) == 0:
+        return []
+    return out.to_dicts()
+
+
+class SmartMoneyPayload(BaseModel):
+    """Body for ``POST /api/v1/smart-money`` — pure offline transfers + watchlist.
+
+    ``transfers`` rows accept ``from``/``to``/``usd_value``/``timestamp`` with
+    common aliases (``from_address``, ``amount``, ``local_ts``, …).
+    ``watchlist`` may be an addr→label map, a list of addresses, or nested
+    shapes accepted by
+    :func:`crypcodile.analytics.smart_money.normalize_watchlist`.
+    """
+
+    transfers: list[dict[str, Any]]
+    watchlist: dict[str, Any] | list[Any]
+
+
+@app.post("/api/v1/smart-money")
+async def smart_money(payload: SmartMoneyPayload) -> list[dict[str, Any]]:
+    """Summarize smart-money capital flows from pure JSON (no lake, no payment).
+
+    Body::
+
+        {
+          "transfers": [
+            {"from": "0xsmart", "to": "0xother", "usd_value": 100.0, "timestamp": 1},
+            ...
+          ],
+          "watchlist": {"0xsmart": "vitalik"}
+        }
+
+    Wraps :func:`crypcodile.analytics.smart_money.summarize_smart_money` after
+    :func:`~crypcodile.analytics.smart_money.normalize_watchlist`. Returns
+    per-address flow rows (``net_flow_usd``, ``total_volume_usd``, ``tx_count``,
+    ``last_active_ts``, optional ``label``) sorted by total volume. Empty
+    watchlist or no matching activity → ``[]`` (HTTP 200).
+    """
+    from crypcodile.analytics.smart_money import (
+        normalize_watchlist,
+        summarize_smart_money,
+    )
+
+    transfers = payload.transfers
+    watchlist = payload.watchlist
+
+    if not isinstance(transfers, list):
+        raise HTTPException(
+            status_code=400,
+            detail="transfers must be a JSON array of row objects.",
+        )
+    if not all(isinstance(r, dict) for r in transfers):
+        raise HTTPException(
+            status_code=400,
+            detail="transfers rows must be objects.",
+        )
+    if not isinstance(watchlist, (dict, list)):
+        raise HTTPException(
+            status_code=400,
+            detail="watchlist must be a JSON object or array of addresses.",
+        )
+
+    try:
+        labels = normalize_watchlist(watchlist)
+        if not labels:
+            return []
+        return summarize_smart_money(transfers, labels)
+    except TypeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Smart-money summary failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Smart-money summary failed.",
+        ) from e
+
+
 class QueryPayload(BaseModel):
     """Body for ``POST /api/v1/query`` — bounded read-only SQL against the lake."""
 

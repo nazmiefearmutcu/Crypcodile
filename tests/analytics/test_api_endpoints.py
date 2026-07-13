@@ -4148,6 +4148,280 @@ def test_gas_vol_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/mev-sandwich — pure offline sandwich flags (no lake, no payment)
+# ---------------------------------------------------------------------------
+
+_MEV_SANDWICH_TRADES = [
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 10,
+        "sender": "0xattacker",
+        "is_buy": True,
+    },
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 11,
+        "sender": "0xvictim",
+        "is_buy": True,
+    },
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 12,
+        "sender": "0xattacker",
+        "is_buy": False,
+    },
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 13,
+        "sender": "0xnormal",
+        "is_buy": True,
+    },
+]
+
+
+def test_mev_sandwich_detects_positive() -> None:
+    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+
+    rows = asyncio.run(mev_sandwich(MevSandwichPayload(trades=_MEV_SANDWICH_TRADES)))
+    assert len(rows) == 4
+    assert [r["is_sandwich"] for r in rows] == [True, True, True, False]
+
+
+def test_mev_sandwich_empty_trades() -> None:
+    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+
+    assert asyncio.run(mev_sandwich(MevSandwichPayload(trades=[]))) == []
+
+
+def test_mev_sandwich_no_pattern_across_blocks() -> None:
+    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+
+    trades = [
+        {
+            "block": 100,
+            "pool": "AERO-USDC",
+            "log_index": 10,
+            "sender": "0xattacker",
+            "is_buy": True,
+        },
+        {
+            "block": 101,
+            "pool": "AERO-USDC",
+            "log_index": 11,
+            "sender": "0xvictim",
+            "is_buy": True,
+        },
+        {
+            "block": 102,
+            "pool": "AERO-USDC",
+            "log_index": 12,
+            "sender": "0xattacker",
+            "is_buy": False,
+        },
+    ]
+    rows = asyncio.run(mev_sandwich(MevSandwichPayload(trades=trades)))
+    assert len(rows) == 3
+    assert not any(r["is_sandwich"] for r in rows)
+
+
+def test_mev_sandwich_matches_analytics() -> None:
+    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+
+    expected = detect_sandwiches(pl.DataFrame(_MEV_SANDWICH_TRADES)).to_dicts()
+    rows = asyncio.run(mev_sandwich(MevSandwichPayload(trades=_MEV_SANDWICH_TRADES)))
+    assert rows == expected
+
+
+def test_mev_sandwich_missing_cols_400() -> None:
+    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(mev_sandwich(MevSandwichPayload(trades=[{"block": 1}])))
+    assert ei.value.status_code == 400
+    assert "missing required columns" in str(ei.value.detail)
+
+
+def test_mev_sandwich_route_via_mock_client() -> None:
+    resp = client.post("/api/v1/mev-sandwich", json={"trades": _MEV_SANDWICH_TRADES})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 4
+    assert [r["is_sandwich"] for r in data] == [True, True, True, False]
+
+
+def test_mev_sandwich_route_missing_body_422() -> None:
+    resp = client.post("/api/v1/mev-sandwich", json={})
+    assert resp.status_code == 422
+
+
+def test_mev_sandwich_route_registered() -> None:
+    """Ensure FastAPI route table includes POST /api/v1/mev-sandwich."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/mev-sandwich", ("POST",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/smart-money — pure offline transfers+watchlist (no lake)
+# ---------------------------------------------------------------------------
+
+_SMART_ADDR = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B"
+_SMART_OTHER = "0x1111111111111111111111111111111111111111"
+_SMART_TRANSFERS = [
+    {
+        "from": _SMART_ADDR,
+        "to": _SMART_OTHER,
+        "usd_value": 100.0,
+        "timestamp": 1,
+    },
+    {
+        "from": _SMART_OTHER,
+        "to": _SMART_ADDR,
+        "usd_value": 40.0,
+        "timestamp": 2,
+    },
+]
+
+
+def test_smart_money_with_labels() -> None:
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    rows = asyncio.run(
+        smart_money(
+            SmartMoneyPayload(
+                transfers=_SMART_TRANSFERS,
+                watchlist={_SMART_ADDR: "vitalik"},
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["net_flow_usd"] == -60.0
+    assert rows[0]["total_volume_usd"] == 140.0
+    assert rows[0]["tx_count"] == 2
+    assert rows[0]["label"] == "vitalik"
+    assert rows[0]["last_active_ts"] == 2
+
+
+def test_smart_money_list_watchlist() -> None:
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    rows = asyncio.run(
+        smart_money(
+            SmartMoneyPayload(transfers=_SMART_TRANSFERS, watchlist=[_SMART_ADDR])
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["net_flow_usd"] == -60.0
+    assert rows[0]["label"] == _SMART_ADDR
+
+
+def test_smart_money_nested_watchlist() -> None:
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    rows = asyncio.run(
+        smart_money(
+            SmartMoneyPayload(
+                transfers=_SMART_TRANSFERS,
+                watchlist={"watchlist": {_SMART_ADDR: "mev-bot"}},
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["label"] == "mev-bot"
+
+
+def test_smart_money_empty_watchlist() -> None:
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    assert (
+        asyncio.run(
+            smart_money(SmartMoneyPayload(transfers=_SMART_TRANSFERS, watchlist={}))
+        )
+        == []
+    )
+    assert (
+        asyncio.run(
+            smart_money(SmartMoneyPayload(transfers=_SMART_TRANSFERS, watchlist=[]))
+        )
+        == []
+    )
+
+
+def test_smart_money_empty_transfers() -> None:
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    assert (
+        asyncio.run(
+            smart_money(
+                SmartMoneyPayload(
+                    transfers=[],
+                    watchlist={_SMART_ADDR: "x"},
+                )
+            )
+        )
+        == []
+    )
+
+
+def test_smart_money_matches_analytics() -> None:
+    from crypcodile.analytics.smart_money import summarize_smart_money
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    watchlist = {_SMART_ADDR: "vitalik"}
+    expected = summarize_smart_money(_SMART_TRANSFERS, watchlist)
+    rows = asyncio.run(
+        smart_money(
+            SmartMoneyPayload(transfers=_SMART_TRANSFERS, watchlist=watchlist)
+        )
+    )
+    assert rows == expected
+
+
+def test_smart_money_route_via_mock_client() -> None:
+    resp = client.post(
+        "/api/v1/smart-money",
+        json={
+            "transfers": _SMART_TRANSFERS,
+            "watchlist": {_SMART_ADDR: "vitalik"},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["net_flow_usd"] == -60.0
+    assert data[0]["label"] == "vitalik"
+
+
+def test_smart_money_route_missing_body_422() -> None:
+    resp = client.post("/api/v1/smart-money", json={})
+    assert resp.status_code == 422
+
+
+def test_smart_money_route_missing_watchlist_422() -> None:
+    resp = client.post(
+        "/api/v1/smart-money",
+        json={"transfers": _SMART_TRANSFERS},
+    )
+    assert resp.status_code == 422
+
+
+def test_smart_money_route_registered() -> None:
+    """Ensure FastAPI route table includes POST /api/v1/smart-money."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/smart-money", ("POST",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/data-coverage — inventory filter for one symbol (read-only)
 # ---------------------------------------------------------------------------
 
