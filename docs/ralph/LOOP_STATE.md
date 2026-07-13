@@ -264,7 +264,14 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 1 | REST `POST /api/v1/mev-sandwich` body `{trades: [...]}` → `detect_sandwiches` | DONE | `5cb3294` |
 | 2 | REST `POST /api/v1/smart-money` body `{transfers, watchlist}` → `summarize_smart_money` | DONE | `5cb3294` |
 
-## Next rotation ideas (Wave 35+)
+## Wave 35 — Feature (label-transfers pure REST) + bugfix — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `POST /api/v1/label-transfers` body `{transfers, watchlist, known_only?, min_usd?}` → `label_transfer_addresses` + filter | DONE | `7d005c98da2d6e4cbb340972d4df63e5d38becec` |
+| 2 | Drop blank/whitespace watchlist address keys; never label empty transfer sides | DONE | `7d005c98da2d6e4cbb340972d4df63e5d38becec` |
+
+## Next rotation ideas (Wave 36+)
 
 Priority candidates for the next cycles:
 
@@ -315,3 +322,5 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 31: MCP `get_spot_future_basis` (completes basis trio with perp + spot-perp)
 - Wave 32: REST `/api/v1/funding-predict`; OI symbol filter literal `str.contains`
 - Wave 33: REST `POST /api/v1/gas-vol` pure JSON gas/vol correlation
+- Wave 34: REST mev-sandwich + smart-money pure JSON bodies
+- Wave 35: REST `POST /api/v1/label-transfers`; blank watchlist key fix
