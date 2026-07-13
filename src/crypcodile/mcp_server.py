@@ -434,6 +434,36 @@ def handle_get_term_structure(
     return df.to_dicts()
 
 
+def handle_get_vol_skew(
+    client: CrypcodileClient,
+    underlying: str,
+    expiry_ns: int,
+    at: int,
+    rate: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Per-strike IV/delta skew for one expiry; returns list of row dicts (empty → [])."""
+    df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_get_risk_reversal(
+    client: CrypcodileClient,
+    underlying: str,
+    expiry_ns: int,
+    at: int,
+    rate: float = 0.0,
+    target_delta: float = 0.25,
+) -> dict[str, Any]:
+    """Risk-reversal and butterfly from vol skew at one expiry."""
+    skew_df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
+    if len(skew_df) == 0:
+        return {"risk_reversal": None, "butterfly": None}
+    rr, bf = client.risk_reversal_butterfly(skew_df, target_delta=target_delta)
+    return {"risk_reversal": rr, "butterfly": bf}
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -725,6 +755,69 @@ TOOLS = [
             "required": ["underlying", "at"],
         },
     },
+    {
+        "name": "get_vol_skew",
+        "description": (
+            "Return per-strike IV and delta (vol skew) for a single option expiry. "
+            "Columns: strike, moneyness, opt_type, iv, delta. Empty options data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "underlying": {
+                    "type": "string",
+                    "description": "Underlying asset identifier (e.g. 'BTC').",
+                },
+                "expiry_ns": {
+                    "type": "integer",
+                    "description": "Option expiry in nanoseconds UTC.",
+                },
+                "at": {
+                    "type": "integer",
+                    "description": "Snapshot instant in nanoseconds UTC.",
+                },
+                "rate": {
+                    "type": "number",
+                    "description": "Continuous risk-free rate (default 0.0).",
+                },
+            },
+            "required": ["underlying", "expiry_ns", "at"],
+        },
+    },
+    {
+        "name": "get_risk_reversal",
+        "description": (
+            "Compute risk-reversal and butterfly from the vol skew at a single "
+            "expiry (default 25-delta). Returns risk_reversal and butterfly "
+            "(null when unavailable)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "underlying": {
+                    "type": "string",
+                    "description": "Underlying asset identifier (e.g. 'BTC').",
+                },
+                "expiry_ns": {
+                    "type": "integer",
+                    "description": "Option expiry in nanoseconds UTC.",
+                },
+                "at": {
+                    "type": "integer",
+                    "description": "Snapshot instant in nanoseconds UTC.",
+                },
+                "rate": {
+                    "type": "number",
+                    "description": "Continuous risk-free rate (default 0.0).",
+                },
+                "target_delta": {
+                    "type": "number",
+                    "description": "Target absolute delta for RR/BF (default 0.25).",
+                },
+            },
+            "required": ["underlying", "expiry_ns", "at"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -914,6 +1007,31 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"get_term_structure failed: {e}"}
+                    elif tool_name == "get_vol_skew":
+                        try:
+                            tool_result = handle_get_vol_skew(
+                                client,
+                                arguments.get("underlying", ""),
+                                int(arguments.get("expiry_ns", 0)),
+                                int(arguments.get("at", 0)),
+                                rate=float(arguments.get("rate", 0.0)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"get_vol_skew failed: {e}"}
+                    elif tool_name == "get_risk_reversal":
+                        try:
+                            tool_result = handle_get_risk_reversal(
+                                client,
+                                arguments.get("underlying", ""),
+                                int(arguments.get("expiry_ns", 0)),
+                                int(arguments.get("at", 0)),
+                                rate=float(arguments.get("rate", 0.0)),
+                                target_delta=float(
+                                    arguments.get("target_delta", 0.25)
+                                ),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"get_risk_reversal failed: {e}"}
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
                     

@@ -1,4 +1,4 @@
-"""Unit tests for MCP analytics tool handlers (slippage, OFI, whale, IV surface).
+"""Unit tests for MCP analytics tool handlers (slippage, OFI, whale, IV, skew).
 
 Exercises pure handlers with mocked clients; no stdio / live lake required.
 """
@@ -15,7 +15,9 @@ from crypcodile.mcp_server import (
     handle_calculate_ofi,
     handle_estimate_slippage,
     handle_get_iv_surface,
+    handle_get_risk_reversal,
     handle_get_term_structure,
+    handle_get_vol_skew,
     handle_track_whale_alerts,
 )
 
@@ -25,6 +27,8 @@ _ANALYTICS_TOOLS = {
     "track_whale_alerts",
     "get_iv_surface",
     "get_term_structure",
+    "get_vol_skew",
+    "get_risk_reversal",
 }
 
 
@@ -135,6 +139,53 @@ def test_handle_get_term_structure_empty() -> None:
     assert handle_get_term_structure(client, "ETH", 0) == []
 
 
+def test_handle_get_vol_skew_returns_dicts() -> None:
+    client = MagicMock()
+    client.vol_skew.return_value = pl.DataFrame(
+        {"strike": [100.0], "iv": [0.55], "delta": [0.5]}
+    )
+    rows = handle_get_vol_skew(
+        client, "BTC", 1_700_100_000_000_000_000, 1_700_000_000_000_000_000, rate=0.01
+    )
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["iv"] == 0.55
+    client.vol_skew.assert_called_once_with(
+        "BTC", 1_700_100_000_000_000_000, 1_700_000_000_000_000_000, rate=0.01
+    )
+
+
+def test_handle_get_vol_skew_empty() -> None:
+    client = MagicMock()
+    client.vol_skew.return_value = pl.DataFrame()
+    assert handle_get_vol_skew(client, "BTC", 1, 0) == []
+
+
+def test_handle_get_risk_reversal_returns_dict() -> None:
+    client = MagicMock()
+    skew = pl.DataFrame({"strike": [100.0], "iv": [0.5], "delta": [0.5]})
+    client.vol_skew.return_value = skew
+    client.risk_reversal_butterfly.return_value = (0.02, 0.01)
+    result = handle_get_risk_reversal(
+        client, "BTC", 1_700_100_000_000_000_000, 1_700_000_000_000_000_000, rate=0.0
+    )
+    assert result == {"risk_reversal": 0.02, "butterfly": 0.01}
+    client.vol_skew.assert_called_once_with(
+        "BTC", 1_700_100_000_000_000_000, 1_700_000_000_000_000_000, rate=0.0
+    )
+    client.risk_reversal_butterfly.assert_called_once_with(skew, target_delta=0.25)
+
+
+def test_handle_get_risk_reversal_empty_skew() -> None:
+    client = MagicMock()
+    client.vol_skew.return_value = pl.DataFrame()
+    assert handle_get_risk_reversal(client, "BTC", 1, 0) == {
+        "risk_reversal": None,
+        "butterfly": None,
+    }
+    client.risk_reversal_butterfly.assert_not_called()
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -160,5 +211,15 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
     }
     assert set(by_name["get_term_structure"]["inputSchema"]["required"]) == {
         "underlying",
+        "at",
+    }
+    assert set(by_name["get_vol_skew"]["inputSchema"]["required"]) == {
+        "underlying",
+        "expiry_ns",
+        "at",
+    }
+    assert set(by_name["get_risk_reversal"]["inputSchema"]["required"]) == {
+        "underlying",
+        "expiry_ns",
         "at",
     }
