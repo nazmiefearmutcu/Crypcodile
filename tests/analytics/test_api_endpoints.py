@@ -330,7 +330,9 @@ def test_catalog_search_symbols_empty() -> None:
 
         result = asyncio.run(catalog_search_symbols(q="BTC", limit=20))
     assert result == []
-    mock_client.search_symbols.assert_called_once_with("BTC", limit=20)
+    mock_client.search_symbols.assert_called_once_with(
+        "BTC", channel=None, exchange=None, limit=20
+    )
 
 
 def test_catalog_search_symbols_returns_rows() -> None:
@@ -353,7 +355,9 @@ def test_catalog_search_symbols_returns_rows() -> None:
     assert len(result) == 1
     assert result[0]["symbol"] == "deribit:BTC-PERPETUAL"
     assert result[0]["exchange"] == "deribit"
-    mock_client.search_symbols.assert_called_once_with("BTC", limit=5)
+    mock_client.search_symbols.assert_called_once_with(
+        "BTC", channel=None, exchange=None, limit=5
+    )
 
 
 def test_catalog_search_clamps_limit_minimum() -> None:
@@ -373,7 +377,96 @@ def test_catalog_search_clamps_limit_minimum() -> None:
         from crypcodile.api_server import catalog_search_symbols
 
         asyncio.run(catalog_search_symbols(q="x", limit=0))
-    mock_client.search_symbols.assert_called_once_with("x", limit=1)
+    mock_client.search_symbols.assert_called_once_with(
+        "x", channel=None, exchange=None, limit=1
+    )
+
+
+def test_catalog_search_forwards_channel_and_exchange_filters() -> None:
+    """Optional channel/exchange query params are passed to the client."""
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = pl.DataFrame(
+        {
+            "symbol": ["binance:BTCUSDT"],
+            "exchange": ["binance"],
+            "channels": ["trade"],
+            "score": [60],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [5],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_search_symbols
+
+        result = asyncio.run(
+            catalog_search_symbols(
+                q="BTC",
+                channel="trade",
+                exchange="binance",
+                limit=10,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["exchange"] == "binance"
+    mock_client.search_symbols.assert_called_once_with(
+        "BTC", channel="trade", exchange="binance", limit=10
+    )
+
+
+def test_catalog_search_strips_empty_channel_exchange_filters() -> None:
+    """Whitespace-only channel/exchange are treated as no filter (None)."""
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = pl.DataFrame(
+        schema={
+            "symbol": pl.Utf8,
+            "exchange": pl.Utf8,
+            "channels": pl.Utf8,
+            "score": pl.Float64,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_search_symbols
+
+        asyncio.run(
+            catalog_search_symbols(q="ETH", channel="  ", exchange="", limit=5)
+        )
+    mock_client.search_symbols.assert_called_once_with(
+        "ETH", channel=None, exchange=None, limit=5
+    )
+
+
+def test_catalog_search_strips_padded_channel_exchange() -> None:
+    """Leading/trailing whitespace on filter strings is stripped."""
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = pl.DataFrame(
+        schema={
+            "symbol": pl.Utf8,
+            "exchange": pl.Utf8,
+            "channels": pl.Utf8,
+            "score": pl.Float64,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_search_symbols
+
+        asyncio.run(
+            catalog_search_symbols(
+                q="BTC",
+                channel="  book_snapshot  ",
+                exchange="  deribit  ",
+                limit=3,
+            )
+        )
+    mock_client.search_symbols.assert_called_once_with(
+        "BTC", channel="book_snapshot", exchange="deribit", limit=3
+    )
 
 
 def test_catalog_inventory_empty_lake(tmp_path, monkeypatch) -> None:

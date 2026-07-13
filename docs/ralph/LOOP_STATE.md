@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–50 COMPLETE. Continuous loop still active → Wave 51+.
+**Status:** Waves 1–51 COMPLETE. Continuous loop still active → Wave 52+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -392,7 +392,14 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | Fix `_create_view` skip when no parquet (Catalog init no longer raises on empty hive dirs) | DONE | `6c65a1818487827aaca33f27ffcda63ef449462f` |
 | 4 | Tests: empty partitions catalog listing; --symbols with/without data + empty dirs; construct-before-data Catalog; list_channels delegate | DONE | `6c65a1818487827aaca33f27ffcda63ef449462f` |
 
-## Next rotation ideas (Wave 51+)
+## Wave 51 — Feature (API catalog/search channel + exchange filters) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/catalog/search` optional `channel` + `exchange` query filters (strip empty → no filter; forward to client) | DONE | TBD |
+| 2 | Tests: forwards filters; strips empty/padded filters; existing search tests updated for kwargs | DONE | TBD |
+
+## Next rotation ideas (Wave 52+)
 
 Priority candidates for the next cycles:
 
@@ -400,6 +407,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **CLI catalog-dates** — surface `list_dates` on CLI (REST + MCP already exist)  
+6. **MCP search_symbols exchange filter** — REST/Catalog/CLI support exchange; MCP only has channel  
 
 
 
@@ -462,3 +471,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 48: MCP `catalog_summary` mirrors REST summary; README MCP discovery list updated
 - Wave 49: CLI `catalog-summary`; hive suffix special-char filtering on list_channels/exchanges walks
 - Wave 50: broad regression green (714→719 after +5 tests); CLI catalog filesystem list_channels; `_create_view` empty-partition skip; `--symbols` still inventories with empty dirs present
+- Wave 51: REST `GET /api/v1/catalog/search` optional `channel`/`exchange` filters (parity with CLI search / Catalog.search_symbols)

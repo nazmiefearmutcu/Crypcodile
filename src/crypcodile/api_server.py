@@ -1624,12 +1624,25 @@ async def catalog_list_dates(channel: str = "") -> list[str]:
 
 
 @app.get("/api/v1/catalog/search")
-async def catalog_search_symbols(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
-    """Ranked symbol search over the local lake (read-only, no payment)."""
+async def catalog_search_symbols(
+    q: str = "",
+    channel: str = "",
+    exchange: str = "",
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Ranked symbol search over the local lake (read-only, no payment).
+
+    Optional ``channel`` and ``exchange`` query filters narrow the inventory
+    before ranking (same contract as CLI ``search`` /
+    :meth:`Catalog.search_symbols`). Empty or whitespace-only filter strings
+    are treated as no filter.
+    """
     if limit < 1:
         limit = 1
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
     client = _get_lake_client()
-    df = client.search_symbols(q, limit=limit)
+    df = client.search_symbols(q, channel=ch, exchange=ex, limit=limit)
     if len(df) == 0:
         return []
     return _json_safe_records(df.to_dicts())
