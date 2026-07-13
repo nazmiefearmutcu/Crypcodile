@@ -39,6 +39,9 @@ class ParquetCompactor:
         self.poll_interval = poll_interval
         self._running = False
         self._task: asyncio.Task[None] | None = None
+        # Serialize concurrent compact() calls and let stop() await in-flight work.
+        self._compact_lock = asyncio.Lock()
+        self._inflight: asyncio.Future[Any] | None = None
 
     def start(self) -> None:
         """Start the background compaction loop."""
@@ -48,17 +51,29 @@ class ParquetCompactor:
             log.info("ParquetCompactor service started.")
 
     async def stop(self) -> None:
-        """Stop the background compaction loop."""
-        if self._running:
-            self._running = False
-            if self._task:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
-                self._task = None
-            log.info("ParquetCompactor service stopped.")
+        """Stop the background compaction loop and wait for in-flight compact work."""
+        if not self._running and self._task is None and self._inflight is None:
+            return
+
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+        # Await any in-flight compact/executor work so we never leave half-done state.
+        inflight = self._inflight
+        if inflight is not None and not inflight.done():
+            try:
+                await inflight
+            except Exception:
+                # Compact errors are already logged inside compact/_compact_sync.
+                pass
+
+        log.info("ParquetCompactor service stopped.")
 
     async def _run_loop(self) -> None:
         while self._running:
@@ -76,8 +91,16 @@ class ParquetCompactor:
         if not self.data_dir.exists():
             return
 
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._compact_sync)
+        async with self._compact_lock:
+            loop = asyncio.get_running_loop()
+            # Track the executor Future so stop() can await in-flight work.
+            fut = loop.run_in_executor(None, self._compact_sync)
+            self._inflight = fut
+            try:
+                await fut
+            finally:
+                if self._inflight is fut:
+                    self._inflight = None
 
     def _compact_sync(self) -> None:
         if not self.data_dir.exists():
@@ -86,7 +109,7 @@ class ParquetCompactor:
         now = time.time()
         # Find all leaf directories: exchange=*/channel=*/date=*/bucket=*
         bucket_dirs = list(self.data_dir.glob("exchange=*/channel=*/date=*/bucket=*"))
-        
+
         for bucket_dir in bucket_dirs:
             if not bucket_dir.is_dir():
                 continue
@@ -116,7 +139,7 @@ class ParquetCompactor:
             channel = None
             for parent in files[0].parents:
                 if parent.name.startswith("channel="):
-                    channel = parent.name[len("channel="):]
+                    channel = parent.name[len("channel=") :]
                     break
 
             if not channel:
@@ -124,6 +147,7 @@ class ParquetCompactor:
 
             log.info(f"Compacting {len(files)} files in {bucket_dir} for channel {channel}")
 
+            temp_file: Path | None = None
             try:
                 dfs = []
                 for f in files:
@@ -140,7 +164,7 @@ class ParquetCompactor:
 
                 combined_df = pl.concat(dfs)
 
-                # Write to temporary file
+                # Write to temporary file (not part-* so catalog won't see it mid-write)
                 temp_file = bucket_dir / f"temp-compact-{uuid.uuid4().hex}.parquet"
                 combined_df.write_parquet(
                     temp_file,
@@ -149,16 +173,29 @@ class ParquetCompactor:
                     row_group_size=250_000,
                 )
 
-                # Remove original files
+                # Atomic durability order: rename temp → final part-compacted-* FIRST,
+                # only then unlink originals. If rename fails/crash, originals remain.
+                compacted_file = bucket_dir / f"part-compacted-{uuid.uuid4().hex}.parquet"
+                temp_file.rename(compacted_file)
+                temp_file = None  # rename succeeded; no temp left to clean up
+                log.info(f"Compacted to {compacted_file.name} (rows: {len(combined_df)})")
+
+                # Only after durable compact file exists, remove source parts.
+                # Skip the compacted file itself if it were in `files` (it isn't —
+                # we rename after listing originals).
                 for f in files:
+                    if f.resolve() == compacted_file.resolve():
+                        continue
                     try:
                         f.unlink(missing_ok=True)
                     except Exception as err:
                         log.error(f"Failed to delete original file {f}: {err}")
-
-                # Rename to final compacted file (starts with part- so DuckDB reads it)
-                compacted_file = bucket_dir / f"part-compacted-{uuid.uuid4().hex}.parquet"
-                temp_file.rename(compacted_file)
-                log.info(f"Compacted to {compacted_file.name} (rows: {len(combined_df)})")
             except Exception as e:
                 log.error(f"Failed compaction for {bucket_dir}: {e}")
+                # On any failure after writing temp: clean up temp; never delete originals
+                # if compacted file is not durable.
+                if temp_file is not None:
+                    try:
+                        temp_file.unlink(missing_ok=True)
+                    except Exception as cleanup_err:
+                        log.error(f"Failed to clean up temp file {temp_file}: {cleanup_err}")
