@@ -14,6 +14,11 @@ def aggregate_open_interest(
 
     Queries the `open_interest` view, filters by symbols (substring match),
     and aligns the open interest data across exchanges with forward-filling.
+
+    OI is tracked per (exchange, symbol) so multiple symbols on the same
+    exchange at the same timestamp do not overwrite each other. Exchange
+    columns are the sum of that exchange's symbols; ``total_oi`` is the
+    sum across all (exchange, symbol) series.
     """
     try:
         catalog.refresh_views()
@@ -51,34 +56,41 @@ def aggregate_open_interest(
     if len(raw_df) == 0:
         return pl.DataFrame()
 
-    # Align across unique local_ts with forward-fill for each exchange
+    # Align across unique local_ts with forward-fill per (exchange, symbol)
     timestamps = sorted(raw_df["local_ts"].unique().to_list())
     exchanges = sorted(raw_df["exchange"].unique().to_list())
+    series_keys = sorted(
+        {
+            (row["exchange"], row["symbol"])
+            for row in raw_df.select(["exchange", "symbol"]).unique().iter_rows(named=True)
+        }
+    )
 
-    # Map for quick lookup of raw values: ts -> exchange -> open_interest
-    data_map: dict[int, dict[str, float]] = {}
+    # Map: ts -> (exchange, symbol) -> open_interest
+    data_map: dict[int, dict[tuple[str, str], float]] = {}
     for row in raw_df.iter_rows(named=True):
         ts = row["local_ts"]
-        exchange = row["exchange"]
+        key = (row["exchange"], row["symbol"])
         oi = float(row["open_interest"]) if row["open_interest"] is not None else 0.0
         if ts not in data_map:
             data_map[ts] = {}
-        data_map[ts][exchange] = oi
+        data_map[ts][key] = oi
 
-    last_seen = {exchange: 0.0 for exchange in exchanges}
+    last_seen: dict[tuple[str, str], float] = {key: 0.0 for key in series_keys}
     records = []
 
     for ts in timestamps:
         current_data = data_map.get(ts, {})
-        # Update last_seen with any new values
-        for exchange in exchanges:
-            if exchange in current_data:
-                last_seen[exchange] = current_data[exchange]
+        for key in series_keys:
+            if key in current_data:
+                last_seen[key] = current_data[key]
 
-        # Record state
-        record = {"local_ts": ts}
+        # Sum symbols per exchange, then total across exchanges
+        record: dict[str, float | int] = {"local_ts": ts}
         for exchange in exchanges:
-            record[exchange] = last_seen[exchange]
+            record[exchange] = sum(
+                last_seen[key] for key in series_keys if key[0] == exchange
+            )
         record["total_oi"] = sum(last_seen.values())
         records.append(record)
 

@@ -92,3 +92,34 @@ def test_oi_aggregator_unaligned(tmp_path: Path) -> None:
     assert row2["binance"] == 110.0
     assert row2["okx"] == 50.0
     assert row2["total_oi"] == 160.0
+
+
+def test_oi_aggregator_multi_symbol_same_exchange(tmp_path: Path) -> None:
+    """Multiple symbols on one exchange at the same ts must not overwrite."""
+    records = [
+        _make_oi(_T1, "binance", "binance:BTCUSDT", 100.0),
+        _make_oi(_T1, "binance", "binance:ETHUSDT", 40.0),
+        _make_oi(_T1, "okx", "okx:BTC-USDT-SWAP", 50.0),
+        _make_oi(_T2, "binance", "binance:BTCUSDT", 110.0),
+        # ETH not updated at T2 — forward-filled; must still contribute 40
+        _make_oi(_T2, "okx", "okx:BTC-USDT-SWAP", 60.0),
+        _make_oi(_T2, "okx", "okx:ETH-USDT-SWAP", 25.0),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+    catalog = Catalog(tmp_path)
+
+    df = aggregate_open_interest(catalog, None, _T1, _T2)
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 2
+
+    row0 = df.row(0, named=True)
+    assert row0["local_ts"] == _T1
+    assert row0["binance"] == 140.0  # 100 + 40, not overwrite
+    assert row0["okx"] == 50.0
+    assert row0["total_oi"] == 190.0
+
+    row1 = df.row(1, named=True)
+    assert row1["local_ts"] == _T2
+    assert row1["binance"] == 150.0  # 110 + 40 (ETH ffilled)
+    assert row1["okx"] == 85.0  # 60 + 25
+    assert row1["total_oi"] == 235.0
