@@ -171,7 +171,14 @@
 |---|------|--------|--------|
 | 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST /market/books) | DONE | `71fec44` |
 
-## Next rotation ideas (Wave 22+)
+## Wave 22 — Feature (vol-skew + lending-stress REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/vol-skew` (underlying/expiry_ns/at/rate/limit) | DONE | `fd92785` |
+| 2 | REST `GET /api/v1/lending-stress` pure CLI-matching query params | DONE | `fd92785` |
+
+## Next rotation ideas (Wave 23+)
 
 Priority candidates for the next cycles:
 
@@ -179,7 +186,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
-5. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query/open-interest as needed  
+5. **REST risk-reversal** — pair with vol-skew HTTP surface  
+6. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query/open-interest as needed  
 
 ## Subagent policy
 
@@ -209,3 +217,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 19: REST funding-apr / basis / indicators endpoints; MCP lending-stress / peg_deviation / MEV sandwich
 - Wave 20: REST OFI / whale-alerts / slippage endpoints
 - Wave 21: OKX book resync bridge (`OkxOrderBookSync` + REST `/market/books`)
+- Wave 22: REST vol-skew / lending-stress endpoints
