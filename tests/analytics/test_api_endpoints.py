@@ -296,8 +296,12 @@ def test_catalog_summary_empty_lake(tmp_path, monkeypatch) -> None:
 
 def test_catalog_summary_returns_lists_and_counts() -> None:
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
-    mock_client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
+    mock_client.catalog_summary.return_value = {
+        "channels": ["book_snapshot", "trade"],
+        "exchanges_on_disk": ["binance", "deribit"],
+        "exchange_count": 2,
+        "channel_count": 2,
+    }
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
         from crypcodile.api_server import catalog_summary
 
@@ -308,8 +312,9 @@ def test_catalog_summary_returns_lists_and_counts() -> None:
         "exchange_count": 2,
         "channel_count": 2,
     }
-    mock_client.list_channels.assert_called_once_with()
-    mock_client.list_exchanges_on_disk.assert_called_once_with()
+    mock_client.catalog_summary.assert_called_once_with()
+    mock_client.list_channels.assert_not_called()
+    mock_client.list_exchanges_on_disk.assert_not_called()
 
 
 def test_catalog_stats_empty_lake(tmp_path, monkeypatch) -> None:

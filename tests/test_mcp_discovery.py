@@ -207,22 +207,27 @@ async def test_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
 
 
 def test_catalog_summary_delegates_to_client() -> None:
-    """Handler wraps list_channels + list_exchanges_on_disk with counts."""
+    """Handler delegates to client.catalog_summary (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
 
     from crypcodile.mcp_server import handle_catalog_summary
 
     client = MagicMock()
-    client.list_channels.return_value = ["book_snapshot", "trade"]
-    client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
+    client.catalog_summary.return_value = {
+        "channels": ["book_snapshot", "trade"],
+        "exchanges_on_disk": ["binance", "deribit"],
+        "exchange_count": 2,
+        "channel_count": 2,
+    }
     assert handle_catalog_summary(client) == {
         "channels": ["book_snapshot", "trade"],
         "exchanges_on_disk": ["binance", "deribit"],
         "exchange_count": 2,
         "channel_count": 2,
     }
-    client.list_channels.assert_called_once_with()
-    client.list_exchanges_on_disk.assert_called_once_with()
+    client.catalog_summary.assert_called_once_with()
+    client.list_channels.assert_not_called()
+    client.list_exchanges_on_disk.assert_not_called()
 
 
 def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:

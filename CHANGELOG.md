@@ -27,6 +27,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Shared `crypcodile.util.json_safe`**: `json_safe_float` / `json_safe_records` extracted once and re-exported by `api_server` and `mcp_server` (dedupe of prior private copies).
 
 ### Changed
+- **Client catalog_summary DRY**: `CrypcodileClient.catalog_summary()` returns `{channels, exchanges_on_disk, exchange_count, channel_count}` (composes `list_channels` + `list_exchanges_on_disk`). REST `GET /api/v1/catalog/summary`, MCP `catalog_summary`, and CLI `catalog-summary` all delegate to this single method (one contract, no duplicated count logic).
 - **CLI catalog uses filesystem list_channels**: `crypcodile catalog` discovers channels via client `list_channels` (hive walk) so empty partition dirs appear with `0` rows; `catalog --symbols` remains inventory-backed (parquet/views only) and still works when empty partitions coexist with real data.
 - **Catalog.list_channels filesystem discovery**: walks hive `exchange=*/channel=*` without requiring DuckDB view registration, so empty partition dirs (no parquet yet) still appear in channel listings; `_refresh_views` skips empty / relative `channel=` suffixes.
 - **Hive partition suffix safety**: shared `_is_safe_hive_suffix` rejects path separators, null/control bytes, glob metacharacters (`* ? [ ]`), relative (`.`, `..`), empty, and leading/trailing whitespace suffixes in `list_channels`, `list_exchanges_on_disk`, `list_dates`, and `_refresh_views`. Channel dirs are resolve-checked under the lake root (symlink escape defence).

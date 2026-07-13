@@ -281,25 +281,26 @@ async def test_cli_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
 def test_cli_catalog_summary_uses_client_discovery(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """CLI delegates to client list_channels + list_exchanges_on_disk."""
+    """CLI delegates to client.catalog_summary (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
     from crypcodile.cli import app
 
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["trade"]
-    mock_client.list_exchanges_on_disk.return_value = ["deribit", "binance"]
+    mock_client.catalog_summary.return_value = {
+        "channels": ["trade"],
+        "exchanges_on_disk": ["binance", "deribit"],
+        "exchange_count": 2,
+        "channel_count": 1,
+    }
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def list_channels(self):
-            return mock_client.list_channels()
-
-        def list_exchanges_on_disk(self):
-            return mock_client.list_exchanges_on_disk()
+        def catalog_summary(self):
+            return mock_client.catalog_summary()
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -317,9 +318,8 @@ def test_cli_catalog_summary_uses_client_discovery(
     assert "channel_count:  1" in result.output
     assert "exchange_count: 2" in result.output
     assert "channels: trade" in result.output
-    assert "exchanges_on_disk: deribit, binance" in result.output
-    mock_client.list_channels.assert_called_once_with()
-    mock_client.list_exchanges_on_disk.assert_called_once_with()
+    assert "exchanges_on_disk: binance, deribit" in result.output
+    mock_client.catalog_summary.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

@@ -123,6 +123,50 @@ async def test_list_exchanges_on_disk_with_data(tmp_path: pathlib.Path) -> None:
     assert client.list_exchanges_on_disk() == ["deribit"]
 
 
+def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.catalog_summary() == {
+        "channels": [],
+        "exchanges_on_disk": [],
+        "exchange_count": 0,
+        "channel_count": 0,
+    }
+
+
+async def test_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.catalog_summary() == {
+        "channels": ["book_snapshot", "trade"],
+        "exchanges_on_disk": ["deribit"],
+        "exchange_count": 1,
+        "channel_count": 2,
+    }
+
+
+def test_catalog_summary_composes_list_methods(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """catalog_summary builds counts from list_channels + list_exchanges_on_disk."""
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    monkeypatch.setattr(client, "list_channels", lambda: ["trade", "funding"])
+    monkeypatch.setattr(
+        client, "list_exchanges_on_disk", lambda: ["binance", "deribit"]
+    )
+    assert client.catalog_summary() == {
+        "channels": ["trade", "funding"],
+        "exchanges_on_disk": ["binance", "deribit"],
+        "exchange_count": 2,
+        "channel_count": 2,
+    }
+
+
 def test_inventory_empty_schema(tmp_path: pathlib.Path) -> None:
     from crypcodile.client.client import CrypcodileClient
 

@@ -383,7 +383,8 @@ def handle_list_registered_exchanges() -> list[str]:
 def handle_catalog_summary(client: CrypcodileClient) -> dict[str, object]:
     """One-shot lake catalog summary for agent discovery.
 
-    Mirrors REST ``GET /api/v1/catalog/summary``::
+    Delegates to :meth:`CrypcodileClient.catalog_summary` (same contract as
+    REST ``GET /api/v1/catalog/summary`` and CLI ``catalog-summary``)::
 
         {
             "channels": [...],           # sorted channel ids
@@ -392,19 +393,10 @@ def handle_catalog_summary(client: CrypcodileClient) -> dict[str, object]:
             "channel_count": int,
         }
 
-    Combines :meth:`CrypcodileClient.list_channels` and
-    :meth:`CrypcodileClient.list_exchanges_on_disk` with counts. Empty lake
-    yields empty lists and zero counts. Distinct from factory connector
-    registry — ``exchanges_on_disk`` reflects hive partitions only.
+    Empty lake yields empty lists and zero counts. Distinct from factory
+    connector registry — ``exchanges_on_disk`` reflects hive partitions only.
     """
-    channels = client.list_channels()
-    exchanges_on_disk = client.list_exchanges_on_disk()
-    return {
-        "channels": channels,
-        "exchanges_on_disk": exchanges_on_disk,
-        "exchange_count": len(exchanges_on_disk),
-        "channel_count": len(channels),
-    }
+    return client.catalog_summary()
 
 
 def handle_catalog_stats(client: CrypcodileClient) -> dict[str, object]:
@@ -1134,10 +1126,10 @@ TOOLS = [
     {
         "name": "catalog_summary",
         "description": (
-            "One-shot lake catalog summary: channels, exchanges_on_disk, and "
-            "their counts (channel_count, exchange_count). Empty lake returns "
-            "empty lists and zero counts. Combines list_data_channels + "
-            "list_exchanges_on_disk for agent discovery without HTTP."
+            "One-shot lake catalog summary via client.catalog_summary: "
+            "channels, exchanges_on_disk, and their counts (channel_count, "
+            "exchange_count). Empty lake returns empty lists and zero counts. "
+            "Mirrors REST GET /api/v1/catalog/summary and CLI catalog-summary."
         ),
         "inputSchema": {
             "type": "object",

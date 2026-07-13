@@ -1590,7 +1590,7 @@ async def catalog_list_exchanges() -> list[str]:
 async def catalog_summary() -> dict[str, object]:
     """One-shot lake catalog summary for agent discovery (read-only, no payment).
 
-    Combines channel and on-disk exchange partition lists with counts::
+    Delegates to :meth:`CrypcodileClient.catalog_summary`::
 
         {
             "channels": [...],           # sorted channel ids
@@ -1601,17 +1601,10 @@ async def catalog_summary() -> dict[str, object]:
 
     Empty lake yields empty lists and zero counts. Distinct from
     ``GET /api/v1/exchanges`` (factory registry) — ``exchanges_on_disk``
-    reflects hive partitions only.
+    reflects hive partitions only. Shared with MCP ``catalog_summary``
+    and CLI ``catalog-summary``.
     """
-    client = _get_lake_client()
-    channels = client.list_channels()
-    exchanges_on_disk = client.list_exchanges_on_disk()
-    return {
-        "channels": channels,
-        "exchanges_on_disk": exchanges_on_disk,
-        "exchange_count": len(exchanges_on_disk),
-        "channel_count": len(channels),
-    }
+    return _get_lake_client().catalog_summary()
 
 
 @app.get("/api/v1/catalog/stats")

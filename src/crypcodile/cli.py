@@ -920,23 +920,22 @@ def catalog_summary(
 ) -> None:
     """Print one-shot lake catalog summary (channels + exchanges on disk).
 
-    Mirrors REST ``GET /api/v1/catalog/summary`` / MCP ``catalog_summary``:
-    channel list, on-disk hive exchange partitions, and counts. Uses the
-    client discovery façade (filesystem walks; empty partitions included).
-    Empty lake prints zero counts and empty lists; exit 0.
+    Delegates to :meth:`CrypcodileClient.catalog_summary` — same contract as
+    REST ``GET /api/v1/catalog/summary`` / MCP ``catalog_summary``:
+    channel list, on-disk hive exchange partitions, and counts (filesystem
+    walks; empty partitions included). Empty lake prints zero counts and
+    empty lists; exit 0.
     """
     from crypcodile.client.client import CrypcodileClient
 
     data_dir = resolve_data_dir(data_dir)
     client = CrypcodileClient(data_dir=data_dir)
+    summary = client.catalog_summary()
+    channels: list[str] = summary["channels"]  # type: ignore[assignment]
+    exchanges_on_disk: list[str] = summary["exchanges_on_disk"]  # type: ignore[assignment]
 
-    channels = client.list_channels()
-    exchanges_on_disk = client.list_exchanges_on_disk()
-    channel_count = len(channels)
-    exchange_count = len(exchanges_on_disk)
-
-    typer.echo(f"channel_count:  {channel_count}")
-    typer.echo(f"exchange_count: {exchange_count}")
+    typer.echo(f"channel_count:  {summary['channel_count']}")
+    typer.echo(f"exchange_count: {summary['exchange_count']}")
     typer.echo(
         "channels: "
         + (", ".join(channels) if channels else "(none)")

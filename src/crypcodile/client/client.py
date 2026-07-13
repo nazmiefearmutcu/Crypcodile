@@ -36,6 +36,9 @@ list_dates(channel)
 list_exchanges_on_disk()
     Sorted distinct exchange partition values present on disk (lake hive).
 
+catalog_summary()
+    One-shot lake summary dict: channels, exchanges_on_disk, counts.
+
 inventory(channel=None, exchange=None)
     Per-symbol coverage summary DataFrame.
 
@@ -177,6 +180,35 @@ class CrypcodileClient:
         (registered connectors vs on-disk hive partitions).
         """
         return self._catalog.list_exchanges_on_disk()
+
+    def catalog_summary(self) -> dict[str, object]:
+        """One-shot lake catalog summary for agent / CLI / REST discovery.
+
+        Combines :meth:`list_channels` and :meth:`list_exchanges_on_disk`
+        with counts::
+
+            {
+                "channels": [...],           # sorted channel ids
+                "exchanges_on_disk": [...],  # sorted hive exchange= suffixes
+                "exchange_count": int,
+                "channel_count": int,
+            }
+
+        Empty lake yields empty lists and zero counts. Distinct from
+        factory connector registry — ``exchanges_on_disk`` reflects hive
+        partitions only.
+
+        Shared by REST ``GET /api/v1/catalog/summary``, MCP
+        ``catalog_summary``, and CLI ``catalog-summary``.
+        """
+        channels = self.list_channels()
+        exchanges_on_disk = self.list_exchanges_on_disk()
+        return {
+            "channels": channels,
+            "exchanges_on_disk": exchanges_on_disk,
+            "exchange_count": len(exchanges_on_disk),
+            "channel_count": len(channels),
+        }
 
     def inventory(
         self,
