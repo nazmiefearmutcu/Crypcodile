@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–56 COMPLETE. Continuous loop still active → Wave 57+.
+**Status:** Waves 1–57 COMPLETE. Continuous loop still active → Wave 58+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -441,7 +441,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | CLI `data-coverage --symbol` optional `--channel` wrapping inventory exact-symbol filter (empty → `No coverage.`) | DONE | `5f38b0f` |
 | 3 | Tests: empty/data/comma/channel/strip/error/delegate for resolve-symbols; empty/data/channel/no-match/strip/delegate for data-coverage — **15 passed**; CLI+discovery regression green | DONE | `5f38b0f` |
 
-## Next rotation ideas (Wave 57+)
+## Wave 57 — Bug hunt (broad regression) + Feature (CLI search --exchange docs/tests) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **790 passed** (no pre-existing failures) | DONE | baseline `fe3e668` |
+| 2 | CLI `search`: document `--exchange` (module docstring, command help docstring, README example); strip empty/whitespace `--channel`/`--exchange` to `None` (parity with `catalog-symbols`) | DONE | (feat commit) |
+| 3 | Tests: `test_cli_search_exchange_filter` (hit/miss) + `test_cli_search_strips_exchange_filter`; post-feature critical suites **792 passed** (+2) | DONE | (feat commit) |
+
+## Next rotation ideas (Wave 58+)
 
 Priority candidates for the next cycles:
 
@@ -517,3 +525,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 54: CLI `catalog-dates` / `catalog-symbols` / `catalog-exchanges` (list_dates + inventory symbols + exchanges_on_disk; REST/MCP parity)
 - Wave 55: broad regression green (667→675 after +8 tests); MCP `resolve_symbols` (REST resolve-symbols parity for agents)
 - Wave 56: CLI `resolve-symbols` + `data-coverage` (REST/MCP discovery parity; 15 new tests)
+- Wave 57: broad regression green (790→792 after +2 tests); CLI search `--exchange` docs + strip + tests

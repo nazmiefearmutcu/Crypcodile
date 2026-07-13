@@ -854,6 +854,123 @@ async def test_cli_search_channel_filter(tmp_path: pathlib.Path) -> None:
     assert "trade" in result.output
 
 
+async def test_cli_search_exchange_filter(tmp_path: pathlib.Path) -> None:
+    """``search BTC --exchange deribit`` filters inventory by exchange."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    # Second venue so a wrong --exchange can miss while BTC still matches.
+    sink = ParquetSink(
+        data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999
+    )
+    await sink.put(
+        Trade(
+            exchange="binance",
+            symbol="binance:BTCUSDT",
+            symbol_raw="BTCUSDT",
+            exchange_ts=_BASE_TS,
+            local_ts=_BASE_TS,
+            id="binance-btc",
+            price=50_000.0,
+            amount=0.1,
+            side=Side.BUY,
+        )
+    )
+    await sink.flush()
+
+    runner = CliRunner()
+    ok = runner.invoke(
+        app,
+        [
+            "search",
+            "BTC",
+            "--exchange",
+            "deribit",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert ok.exit_code == 0, f"stdout:\n{ok.output}"
+    assert "deribit:BTC-PERPETUAL" in ok.output
+    assert "binance:BTCUSDT" not in ok.output
+
+    miss = runner.invoke(
+        app,
+        [
+            "search",
+            "BTC",
+            "--exchange",
+            "coinbase",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert miss.exit_code == 0, f"stdout:\n{miss.output}"
+    assert "No matches." in miss.output
+
+
+def test_cli_search_strips_exchange_filter(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Empty/whitespace --exchange treated as no filter (delegated strip)."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    search_df = pl.DataFrame(
+        {
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "exchange": ["deribit"],
+            "channels": ["trade"],
+            "score": [100],
+            "min_ts": [0],
+            "max_ts": [1],
+            "row_count": [1],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = search_df
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def search_symbols(self, q, *, channel=None, exchange=None, limit=20):
+            return mock_client.search_symbols(
+                q, channel=channel, exchange=exchange, limit=limit
+            )
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "BTC",
+            "--channel",
+            "   ",
+            "--exchange",
+            "",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    # Empty/whitespace filters stripped to None before client call.
+    mock_client.search_symbols.assert_called_once_with(
+        "BTC", channel=None, exchange=None, limit=20
+    )
+
+
 # ---------------------------------------------------------------------------
 # resolve-symbols command
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
 catalog-dates  -- List hive date= partitions for a channel (list_dates).
 catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
 catalog-exchanges -- List on-disk hive exchange= partitions.
-search         -- Ranked symbol search over the data lake inventory.
+search         -- Ranked symbol search over the data lake inventory (--channel / --exchange).
 resolve-symbols -- Resolve free-form symbols to canonical catalog ids.
 data-coverage  -- Inventory coverage rows for one symbol (optional channel).
 export         -- Export a channel x symbols x time range to a file.
@@ -42,7 +42,7 @@ Usage examples::
     crypcodile catalog-dates --channel trade --data-dir /data
     crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
     crypcodile catalog-exchanges --data-dir /data
-    crypcodile search BTC --data-dir /data
+    crypcodile search BTC --channel trade --exchange deribit --data-dir /data
     crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
     crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
@@ -1083,8 +1083,10 @@ def search(
 ) -> None:
     """Ranked symbol search over the data lake inventory.
 
-    Prints a table of matching symbols with score and coverage.  Empty
-    results print ``No matches.`` and exit 0.
+    Optional ``--channel`` and ``--exchange`` filters (empty/whitespace →
+    no filter) narrow inventory before ranking.  Prints a table of matching
+    symbols with score and coverage.  Empty results print ``No matches.``
+    and exit 0.
     """
     from crypcodile.client.client import CrypcodileClient
 
@@ -1098,9 +1100,12 @@ def search(
             typer.echo("Error: search query is required.", err=True)
             raise typer.Exit(code=1)
 
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+
     client = CrypcodileClient(data_dir=data_dir)
     df = client.search_symbols(
-        query, channel=channel, exchange=exchange, limit=limit
+        query, channel=ch, exchange=ex, limit=limit
     )
 
     if len(df) == 0:
