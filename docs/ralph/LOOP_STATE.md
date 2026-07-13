@@ -509,9 +509,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | `CrypcodileClient.list_symbols(channel=, exchange=)` — inventory distinct sorted symbols (strip empty filters); REST catalog/symbols + MCP list_symbols + CLI catalog-symbols wire to it | DONE | pending |
-| 2 | `CrypcodileClient.data_coverage(symbol, channel=)` — exact-symbol inventory filter (strip symbol/channel; empty symbol → empty DF); REST/MCP/CLI data-coverage wire to it | DONE | pending |
-| 3 | Tests: client unit + surface delegate for both; discovery regression | DONE | pending |
+| 1 | `CrypcodileClient.list_symbols(channel=, exchange=)` — inventory distinct sorted symbols (strip empty filters); REST catalog/symbols + MCP list_symbols + CLI catalog-symbols wire to it | DONE | `321148a` |
+| 2 | `CrypcodileClient.data_coverage(symbol, channel=)` — exact-symbol inventory filter (strip symbol/channel; empty symbol → empty DF); REST/MCP/CLI data-coverage wire to it | DONE | `321148a` |
+| 3 | Tests: client unit + surface delegate for both; discovery regression **866 passed** | DONE | `321148a` |
 
 ## Next rotation ideas (Wave 66+)
 
@@ -600,4 +600,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 62: broad regression green (839→846 after +7 tests); CLI `catalog-inventory` (REST inventory / MCP inventory_snapshot parity with channel/exchange filters)
 - Wave 63: Client `catalog_summary()` DRY — REST/MCP/CLI delegate; skip redundant inventory/coverage CLI aliases
 - Wave 64: Client `catalog_stats()` DRY — REST/MCP/CLI delegate; broad regression **854 passed**
-- Wave 65: Client `list_symbols()` + `data_coverage()` DRY — REST/MCP/CLI delegate for catalog/symbols and data-coverage
+- Wave 65: Client `list_symbols()` + `data_coverage()` DRY — REST/MCP/CLI delegate for catalog/symbols and data-coverage; **866 passed** (`321148a`)
