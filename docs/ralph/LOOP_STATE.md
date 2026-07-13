@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–28 COMPLETE. Continuous loop still active → Wave 29+.
+**Status:** Waves 1–29 COMPLETE. Continuous loop still active → Wave 30+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -221,7 +221,14 @@
 | 1 | REST `GET /api/v1/health` + `/api/v1/status` (`ok`, `__version__`, `lake_channels` count; no payment) | DONE | `63e879b` |
 | 2 | Fix `Catalog.inventory` empty/whitespace channel/exchange treated as no filter | DONE | `ed1f812` |
 
-## Next rotation ideas (Wave 29+)
+## Wave 29 — Hardening (portal detect) + feature (exchanges REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Portal `detectBackend`: treat `/api/v1/health` 200 as Python when catalog/metrics probes fail | DONE | `d1698dd` |
+| 2 | REST `GET /api/v1/exchanges` → `list_exchanges()` (free, no lake, no payment) | DONE | `24b1ef6` |
+
+## Next rotation ideas (Wave 30+)
 
 Priority candidates for the next cycles:
 
@@ -267,3 +274,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 26: REST spot-future-basis (`client.spot_future_basis`); catalog search non-positive limit fix
 - Wave 27: REST resolve-symbols; empty-channel resolve_symbols fix
 - Wave 28: REST health/status probe; catalog inventory empty filter fix
+- Wave 29: portal detectBackend health fallback; REST `/api/v1/exchanges`
