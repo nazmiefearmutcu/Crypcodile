@@ -420,10 +420,11 @@ async def get_transaction_receipt_with_failover(w3: AsyncWeb3, tx_hash: str) -> 
                 w3 = get_w3()
                 attempt += 1
                 if attempt >= max_attempts:
+                    log.error(f"RPC connection errors exceeded limit when getting receipt: {e}")
                     raise HTTPException(
                         status_code=500,
-                        detail=f"RPC connection errors exceeded limit: {e}"
-                    )
+                        detail="RPC connection errors exceeded limit."
+                    ) from e
                 await asyncio.sleep(0.5)
                 continue
                 
@@ -442,10 +443,11 @@ async def get_transaction_receipt_with_failover(w3: AsyncWeb3, tx_hash: str) -> 
                 log.warning(f"Transaction receipt not found yet. Retrying in {delay:.4f}s...")
                 await asyncio.sleep(delay)
             else:
+                log.error(f"Invalid transaction hash or format: {e}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid transaction hash or format: {e}"
-                )
+                    detail="Invalid transaction hash or format."
+                ) from e
 
 async def get_transaction_with_failover(w3: AsyncWeb3, tx_hash: str) -> Any:
     attempt = 0
@@ -466,10 +468,11 @@ async def get_transaction_with_failover(w3: AsyncWeb3, tx_hash: str) -> Any:
                 w3 = get_w3()
                 attempt += 1
                 if attempt >= max_attempts:
+                    log.error(f"RPC connection errors exceeded limit when fetching tx: {e}")
                     raise HTTPException(
                         status_code=500,
-                        detail=f"RPC connection errors exceeded limit when fetching tx: {e}"
-                    )
+                        detail="RPC connection errors exceeded limit when fetching tx."
+                    ) from e
                 await asyncio.sleep(0.5)
                 continue
                 
@@ -488,10 +491,11 @@ async def get_transaction_with_failover(w3: AsyncWeb3, tx_hash: str) -> Any:
                 log.warning(f"Transaction details not found yet. Retrying in {delay:.4f}s...")
                 await asyncio.sleep(delay)
             else:
+                log.error(f"Failed to verify transaction details: {e}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Failed to verify transaction details: {e}"
-                )
+                    detail="Failed to verify transaction details."
+                ) from e
 
 PAYMENTS_FILE = os.path.abspath(".payments_db.json")
 if "pytest" in sys.modules:
@@ -1099,7 +1103,7 @@ async def get_market_data(
             log.error(f"RPC connection/timeout error during verification: {e}")
             raise HTTPException(
                 status_code=502,
-                detail=f"Bad Gateway: RPC network or timeout error: {e}"
+                detail="Bad Gateway: RPC network or timeout error."
             ) from e
         log.error(f"Payment verification failed: {e}")
         raise HTTPException(
@@ -1123,7 +1127,11 @@ async def get_market_data(
     active_rpc = get_w3().provider.endpoint_uri
     data = await get_onchain_price(symbol, rpc_url=active_rpc)
     if "error" in data:
-        raise HTTPException(status_code=500, detail=data["error"])
+        log.error(f"On-chain price fetch failed for {symbol}: {data['error']}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch market data from upstream RPC.",
+        )
 
     # Set x402 success headers
     response.headers["Payment-Response"] = Web3.to_json({
@@ -1416,9 +1424,14 @@ async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, A
             raise HTTPException(status_code=404, detail="No result from slippage estimation.")
         return df.to_dicts()
     except ValueError as e:
+        # Client-facing ValueError messages are intentional validation feedback.
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error(f"Slippage estimation failed for {payload.symbol}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error during slippage estimation.",
+        ) from e
 
 
 @app.get("/metrics")
