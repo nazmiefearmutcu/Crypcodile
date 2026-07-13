@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–33 COMPLETE. Continuous loop still active → Wave 34+.
+**Status:** Waves 1–34 COMPLETE. Continuous loop still active → Wave 35+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
