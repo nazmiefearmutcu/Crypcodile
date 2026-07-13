@@ -6,6 +6,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-13
 ### Added
+- **API resolve-symbols endpoint**: `GET /api/v1/resolve-symbols` with comma-separated `symbols`, optional `channel`, and `ambiguous=error|first|all` wrapping `CrypcodileClient.resolve_symbols` (list of canonical symbols on success; ambiguous/no-match → 400; no payment).
 - **API spot-future-basis endpoint**: `GET /api/v1/spot-future-basis` with `future`/`spot`/`start`/`end`/`limit` wrapping `CrypcodileClient.spot_future_basis` (trade ASOF join; hard row limit 10000; no payment).
 - **API perp-basis endpoint**: `GET /api/v1/perp-basis` with `symbol`/`start`/`end`/`limit` wrapping `CrypcodileClient.perp_basis` (mark–index basis; hard row limit 10000; no payment). Skipped bulk `/api/v1/export` lake dump in favor of this bounded analytics surface.
 - **MCP label_transfers tool**: Pure offline transfer labeling via `label_transfer_addresses` (`transfers` + `watchlist`; optional `min_usd` / `known_only`).
@@ -59,6 +60,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **CLI spot-perp basis mode**: True spot–perp basis via `--spot X --perp Y` (ASOF join of spot vs perp mark); keep `--perp` alone as mark/index and `--future`/`--spot` as spot–future.
 
 ### Fixed
+- **resolve_symbols empty channel**: Empty / whitespace `channel` is treated as no filter (was falsely resolving nothing via inventory filter on unregistered `""`).
 - **Catalog search non-positive limit**: `Catalog.search_symbols` returns empty schema for `limit < 1` instead of Polars ``head(-n)`` (which drops the last *n* rows).
 - **Atomic parquet compact**: Compact uses rename-before-delete; in-flight work is awaited on stop; compact executor is awaited across start/stop cancel paths.
 - **Atomic parquet part writes**: Parquet part files written via temp path then atomic rename for crash-safe durability.
