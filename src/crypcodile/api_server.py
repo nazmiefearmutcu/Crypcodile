@@ -1673,18 +1673,13 @@ async def catalog_list_symbols(
 ) -> list[str]:
     """List distinct symbols from lake inventory (read-only, no payment).
 
-    Lighter than ``GET /api/v1/catalog/inventory``: returns only sorted unique
-    ``symbol`` values (no per-channel coverage rows). Optional ``channel`` and
-    ``exchange`` query filters narrow inventory first (empty/whitespace → no
-    filter). Empty lake or no match yields ``[]``.
+    Delegates to :meth:`CrypcodileClient.list_symbols`. Lighter than
+    ``GET /api/v1/catalog/inventory``: sorted unique ``symbol`` values only
+    (no per-channel coverage rows). Optional ``channel`` and ``exchange``
+    filters (empty/whitespace → no filter). Empty lake or no match yields
+    ``[]``. Shared with MCP ``list_symbols`` and CLI ``catalog-symbols``.
     """
-    client = _get_lake_client()
-    ch = (channel or "").strip() or None
-    ex = (exchange or "").strip() or None
-    df = client.inventory(channel=ch, exchange=ex)
-    if len(df) == 0:
-        return []
-    return sorted(df["symbol"].unique().to_list())
+    return _get_lake_client().list_symbols(channel=channel, exchange=exchange)
 
 
 @app.get("/api/v1/catalog/inventory")
@@ -1713,20 +1708,15 @@ async def data_coverage(
 ) -> list[dict[str, Any]]:
     """Return inventory coverage rows for one symbol (read-only, no payment).
 
-    Wraps lake inventory filtered to exact ``symbol`` match, with optional
-    ``channel``. Empty / whitespace-only symbol, empty lake, or no matching
-    rows yields ``[]``. Same contract as MCP ``data_coverage``.
+    Delegates to :meth:`CrypcodileClient.data_coverage` (exact ``symbol`` match
+    with optional ``channel``). Empty / whitespace-only symbol, empty lake, or
+    no matching rows yields ``[]``. Shared with MCP ``data_coverage`` and CLI
+    ``data-coverage``.
     """
-    symbol = (symbol or "").strip()
-    if not symbol:
-        return []
-    ch = (channel or "").strip() or None
-    client = _get_lake_client()
-    df = client.inventory(channel=ch)
+    df = _get_lake_client().data_coverage(symbol, channel=channel)
     if len(df) == 0:
         return []
-    matched = [row for row in df.to_dicts() if row.get("symbol") == symbol]
-    return _json_safe_records(matched)
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/resolve-symbols")

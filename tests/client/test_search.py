@@ -259,6 +259,216 @@ def test_catalog_stats_escapes_double_quotes_in_channel(
     assert 'FROM "odd""chan"' in calls[0]
 
 
+def test_list_symbols_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.list_symbols() == []
+
+
+async def test_list_symbols_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.list_symbols() == ["deribit:BTC-PERPETUAL"]
+
+
+async def test_list_symbols_channel_and_exchange_filters(
+    tmp_path: pathlib.Path,
+) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_multi(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.list_symbols(channel="trade") == [
+        "binance:BTCUSDT",
+        "deribit:BTC-PERPETUAL",
+        "deribit:ETH-PERPETUAL",
+    ]
+    assert client.list_symbols(exchange="deribit") == [
+        "deribit:BTC-PERPETUAL",
+        "deribit:ETH-PERPETUAL",
+    ]
+    assert client.list_symbols(exchange="binance") == ["binance:BTCUSDT"]
+    assert client.list_symbols(channel="no_such") == []
+
+
+def test_list_symbols_strips_empty_filters(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty/whitespace channel/exchange treated as no filter."""
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit", "binance"],
+            "channel": ["trade", "trade"],
+            "symbol": ["deribit:BTC-PERPETUAL", "binance:BTCUSDT"],
+            "min_ts": [1, 2],
+            "max_ts": [2, 3],
+            "row_count": [10, 7],
+        }
+    )
+    calls: list[tuple[str | None, str | None]] = []
+
+    def _inventory(
+        channel: str | None = None, exchange: str | None = None
+    ) -> pl.DataFrame:
+        calls.append((channel, exchange))
+        return inv
+
+    monkeypatch.setattr(client, "inventory", _inventory)
+    assert client.list_symbols(channel="  ", exchange="") == [
+        "binance:BTCUSDT",
+        "deribit:BTC-PERPETUAL",
+    ]
+    assert calls == [(None, None)]
+
+
+def test_list_symbols_strips_padded_filters(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    calls: list[tuple[str | None, str | None]] = []
+
+    def _inventory(
+        channel: str | None = None, exchange: str | None = None
+    ) -> pl.DataFrame:
+        calls.append((channel, exchange))
+        return inv
+
+    monkeypatch.setattr(client, "inventory", _inventory)
+    assert client.list_symbols(channel="  trade  ", exchange="  deribit  ") == [
+        "deribit:BTC-PERPETUAL"
+    ]
+    assert calls == [("trade", "deribit")]
+
+
+def test_data_coverage_empty_symbol(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    for blank in ("", "   ", None):  # type: ignore[arg-type]
+        df = client.data_coverage(blank)  # type: ignore[arg-type]
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == 0
+        assert df.columns == _INVENTORY_COLS
+
+
+def test_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    df = client.data_coverage("deribit:BTC-PERPETUAL")
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 0
+    assert df.columns == _INVENTORY_COLS
+
+
+async def test_data_coverage_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    df = client.data_coverage("deribit:BTC-PERPETUAL")
+    assert len(df) >= 2  # trade + book_snapshot
+    assert set(df["channel"].to_list()) >= {"trade", "book_snapshot"}
+    assert set(df["symbol"].to_list()) == {"deribit:BTC-PERPETUAL"}
+
+
+async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    df = client.data_coverage("deribit:BTC-PERPETUAL", channel="trade")
+    assert len(df) == 1
+    assert df["channel"][0] == "trade"
+    assert df["row_count"][0] == 3
+
+
+def test_data_coverage_strips_and_filters(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strips symbol/channel; exact symbol filter over inventory."""
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit", "deribit", "binance"],
+            "channel": ["trade", "book_snapshot", "trade"],
+            "symbol": [
+                "deribit:BTC-PERPETUAL",
+                "deribit:BTC-PERPETUAL",
+                "binance:BTCUSDT",
+            ],
+            "min_ts": [1, 2, 3],
+            "max_ts": [10, 20, 30],
+            "row_count": [5, 8, 99],
+        }
+    )
+    calls: list[str | None] = []
+
+    def _inventory(
+        channel: str | None = None, exchange: str | None = None
+    ) -> pl.DataFrame:
+        calls.append(channel)
+        return inv
+
+    monkeypatch.setattr(client, "inventory", _inventory)
+    df = client.data_coverage("  deribit:BTC-PERPETUAL  ", channel="  ")
+    assert len(df) == 2
+    assert set(df["channel"].to_list()) == {"trade", "book_snapshot"}
+    assert calls == [None]
+
+    calls.clear()
+    df2 = client.data_coverage("deribit:BTC-PERPETUAL", channel="  trade  ")
+    # inventory already channel-filtered in real path; mock returns full inv,
+    # so client still applies exact symbol match only (channel forwarded).
+    assert calls == ["trade"]
+    assert set(df2["symbol"].to_list()) == {"deribit:BTC-PERPETUAL"}
+
+
+def test_data_coverage_no_symbol_match(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    monkeypatch.setattr(
+        client,
+        "inventory",
+        lambda channel=None, exchange=None: pl.DataFrame(
+            {
+                "exchange": ["binance"],
+                "channel": ["trade"],
+                "symbol": ["binance:BTCUSDT"],
+                "min_ts": [1],
+                "max_ts": [2],
+                "row_count": [3],
+            }
+        ),
+    )
+    df = client.data_coverage("deribit:BTC-PERPETUAL")
+    assert len(df) == 0
+    assert df.columns == _INVENTORY_COLS
+
+
 def test_inventory_empty_schema(tmp_path: pathlib.Path) -> None:
     from crypcodile.client.client import CrypcodileClient
 

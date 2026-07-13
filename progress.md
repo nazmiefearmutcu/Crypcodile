@@ -6,6 +6,6 @@
 
 ## Ralph continuous-dev (0.1.044)
 
-On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 64: **`CrypcodileClient.catalog_stats()`** DRY — REST `GET /api/v1/catalog/stats`, MCP `catalog_stats`, and CLI `catalog-stats` all delegate to one client method (`list_channels` + `COUNT(*)` per channel; double-quote escape; fail → `-1`). Client empty/data/count/fail/escape + surface delegate tests (**21** catalog_stats); broad discovery regression **854 passed**. Remaining candidates: Bybit book resync, indicator CLI modes, portal polish, data-coverage exchange filter.
+On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 65: **`CrypcodileClient.list_symbols(channel=, exchange=)`** + **`CrypcodileClient.data_coverage(symbol, channel=)`** DRY — REST catalog/symbols + data-coverage, MCP `list_symbols` + `data_coverage`, and CLI `catalog-symbols` + `data-coverage` all delegate to single client methods. Remaining candidates: Bybit book resync, indicator CLI modes, portal polish, data-coverage exchange filter.
 
 See `docs/ralph/LOOP_STATE.md` for full wave tables and commits.

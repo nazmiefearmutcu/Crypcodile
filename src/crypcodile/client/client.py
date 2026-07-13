@@ -45,6 +45,12 @@ catalog_stats()
 inventory(channel=None, exchange=None)
     Per-symbol coverage summary DataFrame.
 
+list_symbols(channel=None, exchange=None)
+    Sorted distinct inventory symbols (lighter than inventory rows).
+
+data_coverage(symbol, channel=None)
+    Inventory coverage rows for one exact symbol.
+
 search_symbols(q, channel=None, exchange=None, limit=20)
     Ranked symbol search over the inventory.
 
@@ -267,6 +273,66 @@ class CrypcodileClient:
             exchange, channel, symbol, min_ts, max_ts, row_count
         """
         return self._catalog.inventory(channel=channel, exchange=exchange)
+
+    def list_symbols(
+        self,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> list[str]:
+        """Return sorted distinct symbols from lake inventory.
+
+        Lighter than :meth:`inventory`: symbol strings only (no per-channel
+        coverage rows). Optional *channel* and *exchange* filters narrow
+        inventory first; empty/whitespace values are treated as no filter.
+
+        Empty lake or no match → ``[]``.
+
+        Shared by REST ``GET /api/v1/catalog/symbols``, MCP ``list_symbols``,
+        and CLI ``catalog-symbols``.
+        """
+        ch = (channel or "").strip() or None
+        ex = (exchange or "").strip() or None
+        inv = self.inventory(channel=ch, exchange=ex)
+        if len(inv) == 0:
+            return []
+        return sorted(inv["symbol"].unique().to_list())
+
+    def data_coverage(
+        self,
+        symbol: str,
+        channel: str | None = None,
+    ) -> pl.DataFrame:
+        """Return inventory coverage rows for one exact *symbol*.
+
+        Filters :meth:`inventory` to rows whose ``symbol`` equals the stripped
+        *symbol*. Optional *channel* narrows inventory first; empty/whitespace
+        channel → no channel filter.
+
+        Empty / whitespace-only *symbol*, empty lake, or no match yields an
+        empty DataFrame with the stable inventory schema::
+
+            exchange, channel, symbol, min_ts, max_ts, row_count
+
+        Shared by REST ``GET /api/v1/data-coverage``, MCP ``data_coverage``,
+        and CLI ``data-coverage``.
+        """
+        symbol = (symbol or "").strip()
+        ch = (channel or "").strip() or None
+        if not symbol:
+            return pl.DataFrame(
+                schema={
+                    "exchange": pl.Utf8,
+                    "channel": pl.Utf8,
+                    "symbol": pl.Utf8,
+                    "min_ts": pl.Int64,
+                    "max_ts": pl.Int64,
+                    "row_count": pl.Int64,
+                }
+            )
+        inv = self.inventory(channel=ch)
+        if len(inv) == 0:
+            return inv
+        return inv.filter(pl.col("symbol") == symbol)
 
     def search_symbols(
         self,

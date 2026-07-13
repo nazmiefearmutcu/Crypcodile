@@ -450,6 +450,37 @@ async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
     assert rows[0]["row_count"] == 2
 
 
+def test_data_coverage_delegates_to_client() -> None:
+    """Handler delegates to client.data_coverage (shared REST/MCP/CLI contract)."""
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_data_coverage
+
+    client = MagicMock()
+    client.data_coverage.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    rows = handle_data_coverage(
+        client, "deribit:BTC-PERPETUAL", channel="trade"
+    )
+    assert len(rows) == 1
+    assert rows[0]["channel"] == "trade"
+    assert rows[0]["row_count"] == 10
+    client.data_coverage.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", channel="trade"
+    )
+    client.inventory.assert_not_called()
+
+
 def test_inventory_snapshot_empty_lake(tmp_path: pathlib.Path) -> None:
     from crypcodile.client.client import CrypcodileClient
     from crypcodile.mcp_server import handle_inventory_snapshot
@@ -550,82 +581,51 @@ async def test_list_symbols_exchange_filter(tmp_path: pathlib.Path) -> None:
 
 
 def test_list_symbols_strips_empty_filters() -> None:
-    """Empty/whitespace channel/exchange treated as no filter (REST parity)."""
+    """Empty/whitespace filters forwarded; client.list_symbols strips."""
     from unittest.mock import MagicMock
-
-    import polars as pl
 
     from crypcodile.mcp_server import handle_list_symbols
 
     client = MagicMock()
-    client.inventory.return_value = pl.DataFrame(
-        {
-            "exchange": ["deribit", "deribit", "binance"],
-            "channel": ["trade", "book_snapshot", "trade"],
-            "symbol": [
-                "deribit:BTC-PERPETUAL",
-                "deribit:BTC-PERPETUAL",
-                "binance:BTCUSDT",
-            ],
-            "min_ts": [1, 2, 3],
-            "max_ts": [2, 3, 4],
-            "row_count": [10, 5, 7],
-        }
-    )
+    client.list_symbols.return_value = [
+        "binance:BTCUSDT",
+        "deribit:BTC-PERPETUAL",
+    ]
     result = handle_list_symbols(client, channel="  ", exchange="")
     assert result == ["binance:BTCUSDT", "deribit:BTC-PERPETUAL"]
-    client.inventory.assert_called_once_with(channel=None, exchange=None)
+    client.list_symbols.assert_called_once_with(channel="  ", exchange="")
+    client.inventory.assert_not_called()
 
 
 def test_list_symbols_strips_padded_filters() -> None:
-    """Padded channel/exchange are stripped before inventory call."""
+    """Padded filters forwarded to client.list_symbols (strip lives there)."""
     from unittest.mock import MagicMock
-
-    import polars as pl
 
     from crypcodile.mcp_server import handle_list_symbols
 
     client = MagicMock()
-    client.inventory.return_value = pl.DataFrame(
-        {
-            "exchange": ["deribit"],
-            "channel": ["trade"],
-            "symbol": ["deribit:BTC-PERPETUAL"],
-            "min_ts": [1],
-            "max_ts": [2],
-            "row_count": [10],
-        }
-    )
+    client.list_symbols.return_value = ["deribit:BTC-PERPETUAL"]
     result = handle_list_symbols(
         client, channel="  trade  ", exchange="  deribit  "
     )
     assert result == ["deribit:BTC-PERPETUAL"]
-    client.inventory.assert_called_once_with(
-        channel="trade", exchange="deribit"
+    client.list_symbols.assert_called_once_with(
+        channel="  trade  ", exchange="  deribit  "
     )
+    client.inventory.assert_not_called()
 
 
-def test_list_symbols_delegates_to_inventory() -> None:
-    """Handler is a thin inventory → distinct sorted symbols wrapper."""
+def test_list_symbols_delegates_to_client() -> None:
+    """Handler delegates to client.list_symbols (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
-
-    import polars as pl
 
     from crypcodile.mcp_server import handle_list_symbols
 
     client = MagicMock()
-    client.inventory.return_value = pl.DataFrame(
-        schema={
-            "exchange": pl.Utf8,
-            "channel": pl.Utf8,
-            "symbol": pl.Utf8,
-            "min_ts": pl.Int64,
-            "max_ts": pl.Int64,
-            "row_count": pl.Int64,
-        }
-    )
+    client.list_symbols.return_value = []
     assert handle_list_symbols(client) == []
-    client.inventory.assert_called_once_with(channel=None, exchange=None)
+    client.list_symbols.assert_called_once_with(channel=None, exchange=None)
+    client.inventory.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

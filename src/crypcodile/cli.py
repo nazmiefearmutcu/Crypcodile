@@ -1045,25 +1045,18 @@ def catalog_symbols(
 ) -> None:
     """List distinct symbols present in the lake inventory.
 
-    Mirrors REST ``GET /api/v1/catalog/symbols`` / MCP ``list_symbols``:
-    optional ``--channel`` and ``--exchange`` filters (empty/whitespace →
-    no filter). Empty lake or no match prints ``No symbols.`` and exits 0.
-    Symbols are sorted, one per line. Lighter than ``catalog --symbols``
-    (symbol strings only, no per-channel coverage rows).
+    Delegates to :meth:`CrypcodileClient.list_symbols` — same contract as
+    REST ``GET /api/v1/catalog/symbols`` / MCP ``list_symbols``: optional
+    ``--channel`` and ``--exchange`` filters (empty/whitespace → no filter).
+    Empty lake or no match prints ``No symbols.`` and exits 0. Symbols are
+    sorted, one per line. Lighter than ``catalog --symbols`` (symbol strings
+    only, no per-channel coverage rows).
     """
     from crypcodile.client.client import CrypcodileClient
 
     data_dir = resolve_data_dir(data_dir)
-    ch = (channel or "").strip() or None
-    ex = (exchange or "").strip() or None
-
     client = CrypcodileClient(data_dir=data_dir)
-    inv = client.inventory(channel=ch, exchange=ex)
-    if len(inv) == 0:
-        typer.echo("No symbols.")
-        raise typer.Exit(code=0)
-
-    symbols = sorted(inv["symbol"].unique().to_list())
+    symbols = client.list_symbols(channel=channel, exchange=exchange)
     if not symbols:
         typer.echo("No symbols.")
         raise typer.Exit(code=0)
@@ -1330,12 +1323,12 @@ def data_coverage_cmd(
 ) -> None:
     """Print inventory coverage rows for one symbol.
 
-    Mirrors REST ``GET /api/v1/data-coverage`` / MCP ``data_coverage``:
-    lake inventory filtered to an exact ``symbol`` match, with optional
-    ``--channel`` (empty/whitespace → no filter). Empty / missing symbol
-    after strip exits non-zero. Empty lake or no match prints
-    ``No coverage.`` and exits 0. Columns match ``catalog --symbols``
-    inventory summary.
+    Delegates to :meth:`CrypcodileClient.data_coverage` — same contract as
+    REST ``GET /api/v1/data-coverage`` / MCP ``data_coverage``: lake inventory
+    filtered to an exact ``symbol`` match, with optional ``--channel``
+    (empty/whitespace → no filter). Empty / missing symbol after strip exits
+    non-zero. Empty lake or no match prints ``No coverage.`` and exits 0.
+    Columns match ``catalog --symbols`` inventory summary.
     """
     from crypcodile.client.client import CrypcodileClient
 
@@ -1348,17 +1341,8 @@ def data_coverage_cmd(
             typer.echo("Error: --symbol is required.", err=True)
             raise typer.Exit(code=1)
 
-    ch = (channel or "").strip() or None
-
-    import polars as pl
-
     client = CrypcodileClient(data_dir=data_dir)
-    inv = client.inventory(channel=ch)
-    if len(inv) == 0:
-        typer.echo("No coverage.")
-        raise typer.Exit(code=0)
-
-    matched = inv.filter(pl.col("symbol") == symbol)
+    matched = client.data_coverage(symbol, channel=channel)
     if len(matched) == 0:
         typer.echo("No coverage.")
         raise typer.Exit(code=0)

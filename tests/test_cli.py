@@ -748,32 +748,21 @@ async def test_cli_catalog_symbols_cmd_exchange_filter(
 def test_cli_catalog_symbols_cmd_strips_filters(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """Empty/whitespace --channel/--exchange treated as no filter."""
-    import polars as pl
+    """Empty/whitespace --channel/--exchange forwarded to client.list_symbols."""
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
     from crypcodile.cli import app
 
-    inv = pl.DataFrame(
-        {
-            "exchange": ["deribit"],
-            "channel": ["trade"],
-            "symbol": ["deribit:BTC-PERPETUAL"],
-            "min_ts": [0],
-            "max_ts": [1],
-            "row_count": [1],
-        }
-    )
     mock_client = MagicMock()
-    mock_client.inventory.return_value = inv
+    mock_client.list_symbols.return_value = ["deribit:BTC-PERPETUAL"]
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def inventory(self, channel=None, exchange=None):
-            return mock_client.inventory(channel=channel, exchange=exchange)
+        def list_symbols(self, channel=None, exchange=None):
+            return mock_client.list_symbols(channel=channel, exchange=exchange)
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -795,42 +784,33 @@ def test_cli_catalog_symbols_cmd_strips_filters(
     )
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert "deribit:BTC-PERPETUAL" in result.output
-    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+    # CLI forwards raw option values; strip lives in client.list_symbols.
+    mock_client.list_symbols.assert_called_once_with(
+        channel="   ", exchange=""
+    )
 
 
-def test_cli_catalog_symbols_cmd_uses_inventory(
+def test_cli_catalog_symbols_cmd_uses_list_symbols(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """CLI builds distinct sorted symbols from client.inventory."""
-    import polars as pl
+    """CLI delegates to client.list_symbols (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
     from crypcodile.cli import app
 
-    inv = pl.DataFrame(
-        {
-            "exchange": ["binance", "deribit", "deribit"],
-            "channel": ["trade", "trade", "funding"],
-            "symbol": [
-                "binance:BTCUSDT",
-                "deribit:BTC-PERPETUAL",
-                "deribit:BTC-PERPETUAL",
-            ],
-            "min_ts": [0, 0, 0],
-            "max_ts": [1, 1, 1],
-            "row_count": [1, 2, 3],
-        }
-    )
     mock_client = MagicMock()
-    mock_client.inventory.return_value = inv
+    mock_client.list_symbols.return_value = [
+        "binance:BTCUSDT",
+        "deribit:BTC-PERPETUAL",
+    ]
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def inventory(self, channel=None, exchange=None):
-            return mock_client.inventory(channel=channel, exchange=exchange)
+        def list_symbols(self, channel=None, exchange=None):
+            return mock_client.list_symbols(channel=channel, exchange=exchange)
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -852,9 +832,8 @@ def test_cli_catalog_symbols_cmd_uses_inventory(
     )
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
-    # Distinct + sorted.
     assert lines == ["binance:BTCUSDT", "deribit:BTC-PERPETUAL"]
-    mock_client.inventory.assert_called_once_with(
+    mock_client.list_symbols.assert_called_once_with(
         channel="trade", exchange="deribit"
     )
 
@@ -1838,14 +1817,14 @@ def test_cli_data_coverage_missing_symbol(tmp_path: pathlib.Path) -> None:
 def test_cli_data_coverage_strips_empty_channel(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """Whitespace --channel treated as no filter."""
+    """Whitespace --channel forwarded to client.data_coverage (strip lives there)."""
     import polars as pl
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
     from crypcodile.cli import app
 
-    inv = pl.DataFrame(
+    cov = pl.DataFrame(
         {
             "exchange": ["deribit"],
             "channel": ["trade"],
@@ -1856,14 +1835,14 @@ def test_cli_data_coverage_strips_empty_channel(
         }
     )
     mock_client = MagicMock()
-    mock_client.inventory.return_value = inv
+    mock_client.data_coverage.return_value = cov
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def inventory(self, **kwargs):  # noqa: ANN003
-            return mock_client.inventory(**kwargs)
+        def data_coverage(self, symbol, channel=None):  # noqa: ANN001
+            return mock_client.data_coverage(symbol, channel=channel)
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -1885,42 +1864,40 @@ def test_cli_data_coverage_strips_empty_channel(
     )
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert "deribit:BTC-PERPETUAL" in result.output
-    mock_client.inventory.assert_called_once_with(channel=None)
+    mock_client.data_coverage.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", channel="   "
+    )
 
 
-def test_cli_data_coverage_uses_inventory(
+def test_cli_data_coverage_uses_client(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """CLI filters client.inventory by exact symbol match."""
+    """CLI delegates to client.data_coverage (shared REST/MCP/CLI contract)."""
     import polars as pl
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
     from crypcodile.cli import app
 
-    inv = pl.DataFrame(
+    cov = pl.DataFrame(
         {
-            "exchange": ["deribit", "deribit", "binance"],
-            "channel": ["trade", "funding", "trade"],
-            "symbol": [
-                "deribit:BTC-PERPETUAL",
-                "deribit:BTC-PERPETUAL",
-                "binance:BTCUSDT",
-            ],
-            "min_ts": [0, 0, 0],
-            "max_ts": [1, 2, 3],
-            "row_count": [3, 1, 9],
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [0],
+            "max_ts": [1],
+            "row_count": [3],
         }
     )
     mock_client = MagicMock()
-    mock_client.inventory.return_value = inv
+    mock_client.data_coverage.return_value = cov
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def inventory(self, **kwargs):  # noqa: ANN003
-            return mock_client.inventory(**kwargs)
+        def data_coverage(self, symbol, channel=None):  # noqa: ANN001
+            return mock_client.data_coverage(symbol, channel=channel)
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -1943,7 +1920,9 @@ def test_cli_data_coverage_uses_inventory(
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert "deribit:BTC-PERPETUAL" in result.output
     assert "binance:BTCUSDT" not in result.output
-    mock_client.inventory.assert_called_once_with(channel="trade")
+    mock_client.data_coverage.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", channel="trade"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -444,15 +444,14 @@ def handle_data_coverage(
 ) -> list[dict[str, Any]]:
     """Return inventory coverage rows for *symbol* (and optional *channel*).
 
-    Empty lake / no match → ``[]``.
+    Delegates to :meth:`CrypcodileClient.data_coverage` (same contract as REST
+    ``GET /api/v1/data-coverage`` and CLI ``data-coverage``). Empty /
+    whitespace-only symbol, empty lake, or no match → ``[]``.
     """
-    inv = client.inventory(channel=channel)
-    if len(inv) == 0:
+    df = client.data_coverage(symbol, channel=channel)
+    if len(df) == 0:
         return []
-    matched = inv.filter(pl.col("symbol") == symbol)
-    if len(matched) == 0:
-        return []
-    return _json_safe_records(matched.to_dicts())
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_inventory_snapshot(
@@ -478,17 +477,13 @@ def handle_list_symbols(
 ) -> list[str]:
     """Return sorted distinct symbols from lake inventory.
 
-    Mirrors REST ``GET /api/v1/catalog/symbols``: optional *channel* and
-    *exchange* filters (empty/whitespace → no filter). Empty lake or no
-    match → ``[]``. Lighter than :func:`handle_inventory_snapshot` (symbol
-    strings only, no per-channel coverage rows).
+    Delegates to :meth:`CrypcodileClient.list_symbols` (same contract as REST
+    ``GET /api/v1/catalog/symbols`` and CLI ``catalog-symbols``): optional
+    *channel* and *exchange* filters (empty/whitespace → no filter). Empty
+    lake or no match → ``[]``. Lighter than :func:`handle_inventory_snapshot`
+    (symbol strings only, no per-channel coverage rows).
     """
-    ch = (channel or "").strip() or None
-    ex = (exchange or "").strip() or None
-    inv = client.inventory(channel=ch, exchange=ex)
-    if len(inv) == 0:
-        return []
-    return sorted(inv["symbol"].unique().to_list())
+    return client.list_symbols(channel=channel, exchange=exchange)
 
 
 def handle_resolve_symbols(
@@ -1166,9 +1161,11 @@ TOOLS = [
     {
         "name": "data_coverage",
         "description": (
-            "Return coverage inventory for a canonical symbol: exchange, channel, "
-            "min_ts, max_ts, row_count per channel. Empty lake or unknown symbol "
-            "returns []."
+            "Return coverage inventory for a canonical symbol via "
+            "client.data_coverage: exchange, channel, min_ts, max_ts, row_count "
+            "per channel. Optional channel filter (empty/whitespace → no filter). "
+            "Empty / blank symbol, empty lake, or unknown symbol returns []. "
+            "Mirrors REST GET /api/v1/data-coverage."
         ),
         "inputSchema": {
             "type": "object",
@@ -1212,10 +1209,10 @@ TOOLS = [
     {
         "name": "list_symbols",
         "description": (
-            "List distinct symbols present in the data lake inventory "
-            "(sorted). Lighter than inventory_snapshot: returns symbol "
-            "strings only. Optional channel and exchange filters "
-            "(empty/whitespace → no filter). Empty lake or no matches "
+            "List distinct symbols present in the data lake inventory via "
+            "client.list_symbols (sorted). Lighter than inventory_snapshot: "
+            "returns symbol strings only. Optional channel and exchange "
+            "filters (empty/whitespace → no filter). Empty lake or no matches "
             "returns []. Mirrors REST GET /api/v1/catalog/symbols."
         ),
         "inputSchema": {
