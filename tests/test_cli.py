@@ -783,6 +783,29 @@ def test_cli_catalog_exchanges_uses_client(
 # ---------------------------------------------------------------------------
 
 
+def test_cli_list_exchanges_in_main_help() -> None:
+    """``list-exchanges`` appears in top-level ``--help`` Commands listing.
+
+    Typer surfaces the registered command short help (function docstring);
+    the module docstring also documents the command for source readers.
+    """
+    from typer.testing import CliRunner
+
+    import crypcodile.cli as cli_mod
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "list-exchanges" in result.output
+    # Short help from command docstring (factory registry, not lake hive).
+    assert "factory" in result.output.lower() or "registered" in result.output.lower()
+    # Distinct from on-disk catalog listing.
+    assert "catalog-exchanges" in result.output
+    # Module docstring Commands list (wave 58 / 59 discovery surface).
+    assert "list-exchanges" in (cli_mod.__doc__ or "")
+
+
 def test_cli_list_exchanges_matches_factory() -> None:
     """``list-exchanges`` prints sorted factory registry names (no lake)."""
     from typer.testing import CliRunner

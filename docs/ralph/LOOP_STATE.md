@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–57 COMPLETE. Continuous loop still active → Wave 58+.
+**Status:** Waves 1–59 COMPLETE. Continuous loop still active → Wave 60+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -458,7 +458,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | Tests: CLI factory/delegate/distinct-from-catalog; MCP factory/delegate/distinct-from-on-disk; capabilities includes tool | DONE | `6c69d28` |
 | 4 | README/CHANGELOG/progress discovery surface docs | DONE | `6c69d28` |
 
-## Next rotation ideas (Wave 59+)
+## Wave 59 — Bug hunt (broad regression) + Feature (list-exchanges --help lock) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **798 passed** (no pre-existing failures) | DONE | baseline `6956c82` |
+| 2 | Ensure `list-exchanges` in CLI `--help` main Commands listing (already registered; module docstring Commands list present from wave 58; no CLI code change needed) | DONE | verified |
+| 3 | Test: `test_cli_list_exchanges_in_main_help` (top-level `--help` + module docstring); post-feature critical suites **799 passed** (+1) | DONE | PENDING_SHA |
+
+## Next rotation ideas (Wave 60+)
 
 Priority candidates for the next cycles:
 
@@ -536,3 +544,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 56: CLI `resolve-symbols` + `data-coverage` (REST/MCP discovery parity; 15 new tests)
 - Wave 57: broad regression green (790→792 after +2 tests); CLI search `--exchange` docs + strip + tests
 - Wave 58: CLI `list-exchanges` + MCP `list_registered_exchanges` (factory connector registry; ≠ lake on-disk)
+- Wave 59: broad regression green (798→799 after +1 test); list-exchanges `--help` main listing + module docstring lock
