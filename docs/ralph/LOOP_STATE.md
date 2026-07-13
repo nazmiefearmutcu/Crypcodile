@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–29 COMPLETE. Continuous loop still active → Wave 30+.
+**Status:** Waves 1–30 COMPLETE. Continuous loop still active → Wave 31+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -228,7 +228,15 @@
 | 1 | Portal `detectBackend`: treat `/api/v1/health` 200 as Python when catalog/metrics probes fail | DONE | `d1698dd` |
 | 2 | REST `GET /api/v1/exchanges` → `list_exchanges()` (free, no lake, no payment) | DONE | `24b1ef6` |
 
-## Next rotation ideas (Wave 30+)
+## Wave 30 — Bug hunt (derive ns, Aave HF, OKX/Bybit expiry) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Derive options: store timestamps in nanoseconds | DONE | `fd93b93` |
+| 2 | Aave health factor: treat HF zero as zero, not infinity | DONE | `5afd87b` |
+| 3 | OKX/Bybit options: parse expiry from symbol when instrument unregistered | DONE | `8fb0a7d` |
+
+## Next rotation ideas (Wave 31+)
 
 Priority candidates for the next cycles:
 
@@ -275,3 +283,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 27: REST resolve-symbols; empty-channel resolve_symbols fix
 - Wave 28: REST health/status probe; catalog inventory empty filter fix
 - Wave 29: portal detectBackend health fallback; REST `/api/v1/exchanges`
+- Wave 30: derive options ns timestamps; Aave HF zero≠∞; OKX/Bybit option expiry parse from symbol
