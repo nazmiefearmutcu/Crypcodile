@@ -1306,6 +1306,38 @@ def _get_api_catalog() -> Catalog:
     return Catalog(Path("test_data"))
 
 
+def _get_lake_client() -> Any:
+    """Build a CrypcodileClient for local lake discovery (read-only).
+
+    Data root from ``CRYPCODILE_DATA_DIR`` (default ``\"data\"``).
+    """
+    from pathlib import Path
+
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = os.getenv("CRYPCODILE_DATA_DIR", "data")
+    return CrypcodileClient(data_dir=Path(data_dir))
+
+
+@app.get("/api/v1/catalog/channels")
+async def catalog_list_channels() -> list[str]:
+    """List data channels present in the local lake (read-only, no payment)."""
+    client = _get_lake_client()
+    return client.list_channels()
+
+
+@app.get("/api/v1/catalog/search")
+async def catalog_search_symbols(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    """Ranked symbol search over the local lake (read-only, no payment)."""
+    if limit < 1:
+        limit = 1
+    client = _get_lake_client()
+    df = client.search_symbols(q, limit=limit)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 @app.post("/api/v1/simulate-price-impact")
 async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, Any]]:
     """Simulate execution slippage and price impact for a given order size."""

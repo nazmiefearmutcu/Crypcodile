@@ -162,3 +162,100 @@ def test_simulate_price_impact_estimation_error() -> None:
         )
         assert resp.status_code == 400
         assert "No book snapshots found" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Lake catalog discovery (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_list_channels_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_list_channels
+
+    result = asyncio.run(catalog_list_channels())
+    assert result == []
+
+
+def test_catalog_list_channels_returns_channels() -> None:
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_channels
+
+        result = asyncio.run(catalog_list_channels())
+    assert result == ["book_snapshot", "trade"]
+    mock_client.list_channels.assert_called_once_with()
+
+
+def test_catalog_search_symbols_empty() -> None:
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = pl.DataFrame(
+        schema={
+            "symbol": pl.Utf8,
+            "exchange": pl.Utf8,
+            "channels": pl.Utf8,
+            "score": pl.Float64,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_search_symbols
+
+        result = asyncio.run(catalog_search_symbols(q="BTC", limit=20))
+    assert result == []
+    mock_client.search_symbols.assert_called_once_with("BTC", limit=20)
+
+
+def test_catalog_search_symbols_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = pl.DataFrame(
+        {
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "exchange": ["deribit"],
+            "channels": ["trade"],
+            "score": [1.0],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_search_symbols
+
+        result = asyncio.run(catalog_search_symbols(q="BTC", limit=5))
+    assert len(result) == 1
+    assert result[0]["symbol"] == "deribit:BTC-PERPETUAL"
+    assert result[0]["exchange"] == "deribit"
+    mock_client.search_symbols.assert_called_once_with("BTC", limit=5)
+
+
+def test_catalog_search_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.search_symbols.return_value = pl.DataFrame(
+        schema={
+            "symbol": pl.Utf8,
+            "exchange": pl.Utf8,
+            "channels": pl.Utf8,
+            "score": pl.Float64,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_search_symbols
+
+        asyncio.run(catalog_search_symbols(q="x", limit=0))
+    mock_client.search_symbols.assert_called_once_with("x", limit=1)
+
+
+def test_get_lake_client_uses_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import _get_lake_client
+
+    client = _get_lake_client()
+    assert client._catalog._data_dir == tmp_path
+    assert client.list_channels() == []
