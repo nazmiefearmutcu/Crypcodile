@@ -16,6 +16,10 @@ from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
 from crypcodile.schema.enums import OptType
 from crypcodile.schema.records import OptionsChain, Record
 from crypcodile.sink.base import Sink
+from crypcodile.util.time import now_ns
+
+# Nanoseconds per year (for t_years from expiry_ns - local_ts).
+_NS_PER_YEAR: float = 365.25 * 86_400.0 * 1e9
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +102,8 @@ class DeriveConnector:
             log.error(f"Failed to query Derive markets: {e}")
             return []
 
-        local_ts = int(time.time() * 1000)
+        # Schema convention: local_ts / exchange_ts / expiry are nanoseconds UTC.
+        local_ts = now_ns()
         chains = []
 
         for market in markets_data:
@@ -106,7 +111,7 @@ class DeriveConnector:
             # 0: marketAddress (address)
             # 1: underlying (string)
             # 2: strike (uint256)
-            # 3: expiry (uint256)
+            # 3: expiry (uint256) — Unix seconds on-chain
             # 4: isCall (bool)
             # 5: price (uint256)
             # 6: iv (uint256)
@@ -120,7 +125,8 @@ class DeriveConnector:
                 continue
 
             strike = round(float(market[2]) / 1e18, 8)
-            expiry = int(market[3])
+            expiry_s = int(market[3])
+            expiry = expiry_s * 1_000_000_000  # store as nanoseconds
             is_call = market[4]
             opt_type = OptType.CALL if is_call else OptType.PUT
 
@@ -132,8 +138,8 @@ class DeriveConnector:
             ask_sz = round(float(market[10]) / 1e18, 8)
             open_interest = round(float(market[11]) / 1e18, 8)
 
-            # Calculate expiries in years for Greeks calculation
-            t_years = max(0.0, (expiry - (local_ts / 1000.0)) / (365.25 * 86400.0))
+            # Time to expiry in years (both timestamps are nanoseconds).
+            t_years = max(0.0, (expiry - local_ts) / _NS_PER_YEAR)
 
             delta = None
             gamma = None
@@ -159,8 +165,8 @@ class DeriveConnector:
                 except Exception as ex:
                     log.warning(f"Error computing Greeks for {underlying_symbol} {strike} {opt_type}: {ex}")
 
-            # naming conventions
-            expiry_date_str = time.strftime("%y%m%d", time.gmtime(expiry))
+            # naming conventions (gmtime expects seconds)
+            expiry_date_str = time.strftime("%y%m%d", time.gmtime(expiry_s))
             strike_str = str(int(strike))
             type_char = "C" if is_call else "P"
             symbol_raw = f"{underlying_symbol}-{expiry_date_str}-{strike_str}-{type_char}"

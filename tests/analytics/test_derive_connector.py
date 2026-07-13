@@ -95,12 +95,16 @@ def test_derive_connector_fetch_and_normalize() -> None:
 
     # Check results
     assert len(chains) == 2
+    expected_expiry_ns = mock_expiry * 1_000_000_000
     for chain in chains:
         assert isinstance(chain, OptionsChain)
         assert chain.exchange == "derive"
         assert chain.underlying == "BTC"
         assert chain.underlying_price == 60000.0
-        assert chain.expiry == mock_expiry
+        # expiry / local_ts / exchange_ts must be nanoseconds (not s or ms)
+        assert chain.expiry == expected_expiry_ns
+        assert chain.local_ts >= 1_000_000_000_000_000_000  # ~ns epoch magnitude
+        assert chain.exchange_ts == chain.local_ts
 
     # Verify first (Call) option values
     c_chain = [c for c in chains if c.opt_type == OptType.CALL][0]
@@ -165,6 +169,9 @@ def test_derive_connector_greeks_calculation() -> None:
 
     assert len(chains) == 1
     opt = chains[0]
+    # On-chain expiry is seconds; stored as nanoseconds for schema compatibility.
+    assert opt.expiry == mock_expiry * 1_000_000_000
+    assert opt.local_ts >= 1_000_000_000_000_000_000
     assert opt.delta is not None
     assert opt.gamma is not None
     assert opt.vega is not None
