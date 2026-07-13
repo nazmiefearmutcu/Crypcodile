@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–11 COMPLETE. Ready for Wave 12 (Feature).
+**Status:** Waves 1–15 COMPLETE. Ready for Wave 16 (Feature).
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -101,15 +101,49 @@
 | 1 | Multi-partition sink: re-buffer only unwritten partitions after partial flush | DONE | `cc51a71` |
 | 2 | Client/MCP technical indicators surface | DONE | `8aaf679` |
 
-## Next rotation ideas (Wave 12+)
+## Wave 12 — Feature (exchanges + collect + lending + MCP depth/seq) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Public `list_exchanges` from factory registry | DONE | `f5aadf7` |
+| 2 | CLI collect `--duration` and `--max-reconnects` | DONE | `ba09fdd` |
+| 3 | CLI lending-stress command | DONE | `4f3dc96` |
+| 4 | MCP liquidity-depth and sequencer-latency tools | DONE | `2ff6251` |
+
+## Wave 13 — Hardening (store + payments + changelog) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Atomic temp-rename for parquet part writes | DONE | `5059c95` |
+| 2 | Atomic fail-loud payment DB persistence | DONE | `eec2522` |
+| 3 | Changelog catch-up for waves 10–12 | DONE | `143c65e` |
+
+## Wave 14 — Bug hunt (API + replay + resample + onchain) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Reduce internal exception detail in HTTP responses | DONE | `742ac64` |
+| 2 | Validate orderbook price and amount on apply | DONE | `a608d45` |
+| 3 | Drop NaN price/amount trades from OHLCV bars | DONE | `7016780` |
+| 4 | Onchain: persist seen logs; advance cursors only on success | DONE | `c769bbc` |
+
+## Wave 15 — Hardening + feature (e2e + open interest) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Harden API server fixture and tier waits (e2e) | DONE | `c38d317` |
+| 2 | MCP open-interest tool | DONE | `4746678` |
+
+## Next rotation ideas (Wave 16+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
 2. **REST API lake read endpoints** — broader HTTP read surface beyond catalog list/search  
 3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-4. **MCP liquidity / sequencer tools** — expose depth and sequencer latency over MCP  
+4. **Open-interest / funding CLI + API** — surface OI (and related derivatives metrics) beyond MCP  
 5. **Payment / portal polish** — remaining API portal UX and state edge cases  
+6. **MEV sandwich analytics surface** — wire remaining sandwich/MEV analytics to CLI/MCP if pure logic exists  
 
 ## Subagent policy
 
@@ -129,4 +163,8 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 9: Bybit resync deferred note, whitespace search fix, changelog 7–9
 - Wave 10: API lake catalog endpoints, liquidity-depth, sequencer-latency, MCP basis tools
 - Wave 11: multi-partition partial-flush re-buffer, client/MCP indicators surface
-- **HEAD:** `8aaf679` — ready for Wave 12
+- Wave 12: list_exchanges, collect duration/max-reconnects, lending-stress, MCP depth/seq
+- Wave 13: atomic parquet parts, fail-loud payment DB, changelog 10–12
+- Wave 14: API exception detail, orderbook apply validation, NaN OHLCV drop, onchain cursor/seen-log
+- Wave 15: e2e fixture/tier hardening, MCP open-interest tool
+- **HEAD:** `4746678` — ready for Wave 16
