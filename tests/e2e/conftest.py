@@ -42,6 +42,7 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
         env["BASE_RPC_URL"] = rpc_url
         env["PYTHONPATH"] = os.path.abspath("src")
         env["PAYMENTS_FILE"] = str(payments_file)
+        env["ALLOW_SIMULATION"] = "true"
         
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hmac
 import json
 import logging
 import os
@@ -492,9 +493,9 @@ async def get_transaction_with_failover(w3: AsyncWeb3, tx_hash: str) -> Any:
                     detail=f"Failed to verify transaction details: {e}"
                 )
 
-PAYMENTS_FILE = "/Users/nazmi/Crypcodile/.payments_db.json"
+PAYMENTS_FILE = os.path.abspath(".payments_db.json")
 if "pytest" in sys.modules:
-    PAYMENTS_FILE = "/Users/nazmi/Crypcodile/.payments_db_test.json"
+    PAYMENTS_FILE = os.path.abspath(".payments_db_test.json")
     try:
         if os.path.exists(PAYMENTS_FILE):
             os.remove(PAYMENTS_FILE)
@@ -1088,19 +1089,24 @@ async def get_market_data(
             detail="Failed verifying payment signature: Invalid payment or signature format."
         ) from e
 
-    # 3. Retrieve and return live Base DEX pool data
+    # 3. CAS paid→spent under lock BEFORE serving (prevents concurrent double-serve)
+    async with db_lock:
+        record = await PAYMENTS_DB.get_async(pid)
+        if not record:
+            raise HTTPException(status_code=400, detail="Invalid or expired payment ID.")
+        if record.get("status") == "spent":
+            raise HTTPException(status_code=400, detail="Payment already spent.")
+        if record.get("status") != "paid":
+            raise HTTPException(status_code=400, detail="Payment not verified.")
+        record["status"] = "spent"
+        await PAYMENTS_DB.set_async(pid, record)
+
+    # 4. Retrieve and return live Base DEX pool data
     active_rpc = get_w3().provider.endpoint_uri
     data = await get_onchain_price(symbol, rpc_url=active_rpc)
     if "error" in data:
         raise HTTPException(status_code=500, detail=data["error"])
 
-    # Mark the payment as spent to prevent reuse of payment_id
-    async with db_lock:
-        record = await PAYMENTS_DB.get_async(pid)
-        if record:
-            record["status"] = "spent"
-            await PAYMENTS_DB.set_async(pid, record)
-        
     # Set x402 success headers
     response.headers["Payment-Response"] = Web3.to_json({
         "status": "success",
@@ -1132,11 +1138,8 @@ async def simulate_payment(payload: PaymentSignature, request: Request = None) -
     if rate_limiter.check_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Too Many Requests")
 
-    if not (os.getenv("ALLOW_SIMULATION", "true") == "true" or "pytest" in sys.modules):
-        raise HTTPException(
-            status_code=400,
-            detail="Simulation mode is disabled."
-        )
+    if os.getenv("ALLOW_SIMULATION", "false").lower() != "true":
+        raise HTTPException(status_code=400, detail="Simulation mode is disabled.")
 
     pid = payload.payment_id
     tx_hash = payload.tx_hash
@@ -1202,8 +1205,32 @@ async def simulate_payment(payload: PaymentSignature, request: Request = None) -
 
 
 @app.get("/api/v1/admin/payments", include_in_schema=False)
-async def get_all_payments():
-    """Return all simulated payments."""
+async def get_all_payments(
+    x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
+    authorization: str | None = Header(None),
+) -> dict[str, Any]:
+    """Return all payment records. Requires ADMIN_API_KEY via X-Admin-Key or Bearer."""
+    admin_key = os.getenv("ADMIN_API_KEY")
+    if not admin_key:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # When invoked outside FastAPI DI (unit tests), Header defaults may be
+    # Header() objects rather than None/str — only treat real strings as keys.
+    provided_key = x_admin_key if isinstance(x_admin_key, str) else None
+    if not provided_key and isinstance(authorization, str):
+        auth = authorization.strip()
+        if auth.lower().startswith("bearer "):
+            provided_key = auth[7:].strip()
+        else:
+            provided_key = auth
+
+    if (
+        not provided_key
+        or len(provided_key) != len(admin_key)
+        or not hmac.compare_digest(provided_key, admin_key)
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     async with db_lock:
         return await PAYMENTS_DB.items_async()
 

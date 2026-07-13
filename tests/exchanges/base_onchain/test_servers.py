@@ -306,6 +306,7 @@ async def test_mcp_server_serve_stdio(tmp_path) -> None:
              "symbol": "cbBTC-USDC",
              "price": 50000.0
          }
+         mock_connect.return_value = (MagicMock(), MagicMock())
          
          # Run serve_stdio with a temporary folder
          await serve_stdio(data_dir=tmp_path)
@@ -770,3 +771,165 @@ async def test_api_server_metrics_endpoint() -> None:
     
     from crypcodile.api_server import METRICS_METRICS_REQUESTS as new_count
     assert new_count == init_count + 1
+
+
+@pytest.mark.asyncio
+async def test_cas_concurrent_double_serve_prevention() -> None:
+    """CAS paid→spent under lock: only one concurrent serve may succeed per payment_id."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import db_lock
+
+    PAYMENTS_DB.clear()
+
+    private_key = "0x" + "3" * 64
+    account = Account.from_key(private_key)
+    pid = "cas-double-serve-pid"
+    tx_hash = "0xcas_double_serve_tx"
+
+    msg = encode_defunct(text=pid)
+    sig = account.sign_message(msg).signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+
+    async with db_lock:
+        await PAYMENTS_DB.set_async(pid, {
+            "status": "paid",
+            "symbol": "cbBTC-USDC",
+            "tx_hash": tx_hash,
+            "sender": account.address,
+            "signature": sig,
+            "price": "0.001",
+            "currency": "USDC",
+            "recipient": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        })
+
+    payment_sig_header = json.dumps({
+        "payment_id": pid,
+        "tx_hash": tx_hash,
+        "signature": sig,
+    })
+
+    serve_started = asyncio.Event()
+    release_serve = asyncio.Event()
+
+    async def slow_price(symbol, rpc_url=None):
+        serve_started.set()
+        await release_serve.wait()
+        return {"symbol": symbol, "price": 42000.0, "block": 1}
+
+    with patch("crypcodile.api_server.get_onchain_price", side_effect=slow_price):
+        t1 = asyncio.create_task(
+            get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        )
+        # Wait until first request has passed CAS and is serving
+        await asyncio.wait_for(serve_started.wait(), timeout=2.0)
+
+        # Second concurrent serve must fail — payment already spent by CAS
+        with pytest.raises(HTTPException) as exc_info:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Payment already spent."
+
+        release_serve.set()
+        resp1 = await t1
+        assert resp1["status"] == "success"
+        assert resp1["data"]["price"] == 42000.0
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_admin_payments_protection() -> None:
+    """Admin payments endpoint: 404 if unset, 401 if wrong key, 200 if correct."""
+    import os
+    from crypcodile.api_server import get_all_payments, db_lock
+
+    PAYMENTS_DB.clear()
+    async with db_lock:
+        await PAYMENTS_DB.set_async("admin-test-pid", {"status": "paid"})
+
+    prev_key = os.environ.get("ADMIN_API_KEY")
+    try:
+        # Unset ADMIN_API_KEY → 404
+        os.environ.pop("ADMIN_API_KEY", None)
+        with pytest.raises(HTTPException) as exc_404:
+            await get_all_payments()
+        assert exc_404.value.status_code == 404
+
+        # Set key, missing/wrong credentials → 401
+        os.environ["ADMIN_API_KEY"] = "super-secret-admin-key"
+
+        with pytest.raises(HTTPException) as exc_missing:
+            await get_all_payments()
+        assert exc_missing.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc_wrong:
+            await get_all_payments(x_admin_key="wrong-key")
+        assert exc_wrong.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc_wrong_bearer:
+            await get_all_payments(authorization="Bearer wrong-key")
+        assert exc_wrong_bearer.value.status_code == 401
+
+        # Correct X-Admin-Key → 200 / full DB
+        result = await get_all_payments(x_admin_key="super-secret-admin-key")
+        assert "admin-test-pid" in result
+        assert result["admin-test-pid"]["status"] == "paid"
+
+        # Correct Bearer token → 200
+        result_bearer = await get_all_payments(authorization="Bearer super-secret-admin-key")
+        assert "admin-test-pid" in result_bearer
+    finally:
+        if prev_key is None:
+            os.environ.pop("ADMIN_API_KEY", None)
+        else:
+            os.environ["ADMIN_API_KEY"] = prev_key
+
+
+@pytest.mark.asyncio
+async def test_simulate_payment_disabled_without_env() -> None:
+    """simulate_payment must reject when ALLOW_SIMULATION is not true."""
+    import os
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import PaymentSignature
+
+    prev_sim = os.environ.get("ALLOW_SIMULATION")
+    try:
+        os.environ["ALLOW_SIMULATION"] = "false"
+
+        private_key = "0x" + "4" * 64
+        account = Account.from_key(private_key)
+        pid = "sim-disabled-pid"
+        msg = encode_defunct(text=pid)
+        sig = account.sign_message(msg).signature.hex()
+        if not sig.startswith("0x"):
+            sig = "0x" + sig
+
+        payload = PaymentSignature(payment_id=pid, tx_hash="0xsim", signature=sig)
+        with pytest.raises(HTTPException) as exc_info:
+            await simulate_payment(payload)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Simulation mode is disabled."
+
+        # Also when unset (default false)
+        os.environ.pop("ALLOW_SIMULATION", None)
+        with pytest.raises(HTTPException) as exc_info2:
+            await simulate_payment(payload)
+        assert exc_info2.value.status_code == 400
+        assert exc_info2.value.detail == "Simulation mode is disabled."
+    finally:
+        if prev_sim is None:
+            os.environ.pop("ALLOW_SIMULATION", None)
+        else:
+            os.environ["ALLOW_SIMULATION"] = prev_sim

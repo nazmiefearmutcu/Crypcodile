@@ -56,11 +56,18 @@ def configure_payments_env(tmp_path):
     os.environ["PAYMENTS_FILE"] = str(temp_db)
     temp_ipc = tmp_path / "custom_pools_ipc.json"
     os.environ["CUSTOM_POOLS_IPC_FILE"] = str(temp_ipc)
+    # Enable payment simulation for unit/integration tests by default
+    prev_sim = os.environ.get("ALLOW_SIMULATION")
+    os.environ["ALLOW_SIMULATION"] = "true"
     yield
     if "PAYMENTS_FILE" in os.environ:
         del os.environ["PAYMENTS_FILE"]
     if "CUSTOM_POOLS_IPC_FILE" in os.environ:
         del os.environ["CUSTOM_POOLS_IPC_FILE"]
+    if prev_sim is None:
+        os.environ.pop("ALLOW_SIMULATION", None)
+    else:
+        os.environ["ALLOW_SIMULATION"] = prev_sim
 
 
 @pytest.fixture(autouse=True, scope="function")
