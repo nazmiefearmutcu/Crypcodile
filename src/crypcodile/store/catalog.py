@@ -258,10 +258,20 @@ class Catalog:
             max_ts: int
             row_count: int
 
-        Optionally filter by *channel* and/or *exchange*.
+        Optionally filter by *channel* and/or *exchange*. Empty or
+        whitespace-only filter strings are treated as no filter (same contract
+        as client ``resolve_symbols``), so ``channel=""`` does not falsely
+        empty the inventory.
         """
         self._refresh_views()
         empty = pl.DataFrame(schema=_INVENTORY_SCHEMA)
+
+        # Treat empty / whitespace filters as "no filter". A non-None channel
+        # that is not registered returns empty, so "" would otherwise yield [].
+        if isinstance(channel, str):
+            channel = channel.strip() or None
+        if isinstance(exchange, str):
+            exchange = exchange.strip() or None
 
         channels = sorted(self._registered_channels)
         if channel is not None:

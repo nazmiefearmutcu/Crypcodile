@@ -157,6 +157,18 @@ async def test_inventory_unknown_channel_empty(tmp_path: pathlib.Path) -> None:
     assert df.columns == _INVENTORY_COLS
 
 
+async def test_inventory_empty_channel_treated_as_none(tmp_path: pathlib.Path) -> None:
+    """Empty / whitespace channel must not filter inventory to nothing."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+    full = cat.inventory()
+    assert len(full) >= 1
+    assert len(cat.inventory(channel="")) == len(full)
+    assert len(cat.inventory(channel="   ")) == len(full)
+    assert len(cat.inventory(exchange="")) == len(full)
+    assert len(cat.inventory(exchange="  ")) == len(full)
+
+
 # ---------------------------------------------------------------------------
 # search_symbols
 # ---------------------------------------------------------------------------
