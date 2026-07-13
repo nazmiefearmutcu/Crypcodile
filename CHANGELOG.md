@@ -5,6 +5,10 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 ---
 
 ## [0.1.044] - 2026-07-14
+### Added
+- **MCP list_dates tool**: `list_dates` wraps `CrypcodileClient.list_dates(channel)` for hive `date=` partition discovery over MCP (strip empty channel → `[]`; listed in capabilities `mcp_tools_hint`).
+- **Shared `crypcodile.util.json_safe`**: `json_safe_float` / `json_safe_records` extracted once and re-exported by `api_server` and `mcp_server` (dedupe of prior private copies).
+
 ### Fixed
 - **MCP list[dict] DF JSON safety**: `_json_safe_records` on MCP handlers that return DataFrame row dicts (OFI, slippage, whale alerts, vol suite, basis trio, indicators, depth, sequencer latency, open interest, discovery search/coverage/inventory, MEV sandwiches, smart-money, label-transfers) plus inline `query_market_data` / `get_funding_apr` tools/call paths — NaN/±Inf floats encode as JSON `null` (parity with REST).
 - **API POST row-list JSON safety**: `_json_safe_records` applied to `POST /api/v1/simulate-price-impact`, `/smart-money`, and `/label-transfers` so NaN/±Inf floats in returned row dicts encode as JSON `null` (matches lake DF and pure-float REST boundaries).

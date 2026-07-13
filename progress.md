@@ -2,10 +2,10 @@
 
 - Last visited: 2026-07-14
 - Branch: `ralph/continuous-dev`
-- Status: Continuous loop Waves 1–43 COMPLETE (since `66b44af`). Version `0.1.044`.
+- Status: Continuous loop Waves 1–44 COMPLETE (since `66b44af`). Version `0.1.044`.
 
 ## Ralph continuous-dev (0.1.044)
 
-On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 43 added **catalog dates discovery**: `Catalog.list_dates` / client wrapper / `GET /api/v1/catalog/dates?channel=` listing distinct hive `date=` partitions from the filesystem (path-safe; capabilities listed). Wave 42 applied MCP `_json_safe_records` for REST parity. Remaining candidates: Bybit book resync, portal/payment polish, more indicator CLI modes, shared util dedupe for JSON-safe helpers.
+On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 44 added **MCP `list_dates`** (wraps `client.list_dates(channel)`; capabilities hint) and extracted shared **`crypcodile.util.json_safe`** (`json_safe_float` / `json_safe_records`) used by `api_server` and `mcp_server`. Wave 43 added catalog dates REST discovery. Remaining candidates: Bybit book resync, portal/payment polish, more indicator CLI modes.
 
 See `docs/ralph/LOOP_STATE.md` for full wave tables and commits.
