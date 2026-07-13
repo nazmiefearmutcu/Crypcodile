@@ -890,6 +890,7 @@ def search(
 
     data_dir = resolve_data_dir(data_dir)
 
+    query = query.strip()
     if not query:
         if is_interactive_stdin():
             query = typer.prompt("Search query").strip()

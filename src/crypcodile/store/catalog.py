@@ -305,12 +305,14 @@ class Catalog:
 
             symbol, exchange, channels, score, min_ts, max_ts, row_count
 
-        Ranking (see :func:`_score_symbol`).  Empty *q* returns an empty
-        DataFrame with the documented schema.  Multi-channel rows for the
-        same ``(symbol, exchange)`` are aggregated: channels joined with
-        commas, ``row_count`` summed, timestamps min/max'd, score max'd.
+        Ranking (see :func:`_score_symbol`).  Empty or whitespace-only *q*
+        returns an empty DataFrame with the documented schema.  Multi-channel
+        rows for the same ``(symbol, exchange)`` are aggregated: channels
+        joined with commas, ``row_count`` summed, timestamps min/max'd,
+        score max'd.
         """
         empty = pl.DataFrame(schema=_SEARCH_SCHEMA)
+        q = q.strip()
         if not q:
             return empty
 

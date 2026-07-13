@@ -215,6 +215,14 @@ def test_search_empty_q_returns_empty_schema(tmp_path: pathlib.Path) -> None:
     assert df.columns == _SEARCH_COLS
 
 
+def test_search_whitespace_only_q_returns_empty(tmp_path: pathlib.Path) -> None:
+    """Whitespace-only q is treated as empty."""
+    cat = Catalog(tmp_path)
+    df = cat.search_symbols("   ")
+    assert len(df) == 0
+    assert df.columns == _SEARCH_COLS
+
+
 async def test_search_empty_q_with_data_still_empty(tmp_path: pathlib.Path) -> None:
     await _write_fixtures(tmp_path)
     cat = Catalog(tmp_path)
