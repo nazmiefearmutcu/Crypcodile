@@ -47,8 +47,9 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
         
         # Wait for FastAPI to start
@@ -56,7 +57,7 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
         api_url = f"http://127.0.0.1:{port}"
         success = False
         
-        while time.time() - start_time < 5.0:
+        while time.time() - start_time < 60.0:
             if proc.poll() is not None:
                 # Server crashed (e.g. port collision), break to try next port
                 break
@@ -73,6 +74,11 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
             proc.wait()
             return
         else:
+            try:
+                stdout_data, stderr_data = proc.communicate(timeout=1.0)
+                print(f"\nAPI server startup failed on port {port}!\nSTDOUT:\n{stdout_data}\nSTDERR:\n{stderr_data}\n", file=sys.stderr)
+            except Exception as e:
+                print(f"Failed to read subprocess output: {e}", file=sys.stderr)
             try:
                 proc.terminate()
                 proc.wait()
@@ -120,6 +126,13 @@ async def clear_mock_rpc_state(mock_rpc):
                 await resp.text()
         except Exception:
             pass
+
+    # Reset BaseOnchainTransport POOL_SPECS and TOKENS to defaults
+    try:
+        from crypcodile.exchanges.base_onchain.connector import reset_to_defaults
+        reset_to_defaults()
+    except Exception:
+        pass
 
 
 def is_localhost_blocked() -> bool:

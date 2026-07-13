@@ -417,7 +417,10 @@ async def test_f3_pagination_check(mock_rpc) -> None:
     await transport.connect()
     
     try:
-        await asyncio.sleep(0.3)
+        for _ in range(300):
+            if transport._last_blocks.get("cbBTC-USDC", 0) >= 2000:
+                break
+            await asyncio.sleep(0.05)
     finally:
         await transport.close()
         
@@ -459,7 +462,10 @@ async def test_f3_pagination_boundaries(mock_rpc) -> None:
     t1._last_blocks["cbBTC-USDC"] = 1000
     await t1.connect()
     try:
-        await asyncio.sleep(0.3)
+        for _ in range(300):
+            if t1._last_blocks.get("cbBTC-USDC", 0) >= 1500:
+                break
+            await asyncio.sleep(0.05)
     finally:
         await t1.close()
         
@@ -484,7 +490,10 @@ async def test_f3_pagination_boundaries(mock_rpc) -> None:
     t2._last_blocks["cbBTC-USDC"] = 1000
     await t2.connect()
     try:
-        await asyncio.sleep(0.3)
+        for _ in range(300):
+            if t2._last_blocks.get("cbBTC-USDC", 0) >= 1501:
+                break
+            await asyncio.sleep(0.05)
     finally:
         await t2.close()
         
