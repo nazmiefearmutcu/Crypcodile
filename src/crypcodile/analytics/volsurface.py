@@ -424,9 +424,16 @@ def iv_surface(
         if len(exp_df) == 0:
             continue
 
-        # Get forward/underlying price
-        underlying_prices = [p for p in exp_df["underlying_price"].to_list() if p is not None and math.isfinite(p) and p > 0.0]
-        forward = underlying_prices[0] if underlying_prices else 100.0
+        # Get forward/underlying price. SABR/skew fit needs a real forward —
+        # do not invent one (e.g. 100); skip fit for this expiry when missing.
+        underlying_prices = [
+            p
+            for p in exp_df["underlying_price"].to_list()
+            if p is not None and math.isfinite(p) and p > 0.0
+        ]
+        if not underlying_prices:
+            continue
+        forward = underlying_prices[0]
 
         t_years = (expiry - at_ns) / _NS_PER_YEAR
 

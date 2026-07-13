@@ -435,3 +435,69 @@ def test_vol_skew_spline_fitting(options_catalog: Catalog) -> None:
 
     assert abs(row_90["fitted_iv"] - 0.5) < 1e-5
     assert abs(row_110["fitted_iv"] - 0.55) < 1e-5
+
+
+def test_iv_surface_skips_fit_when_underlying_price_missing(tmp_path: Path) -> None:
+    """When underlying_price is missing, skip skew fit (no forward=100 fallback).
+
+    Rows must still appear with mark_iv-based iv; fitted_iv must be null for
+    that expiry rather than a bogus SABR fit against an invented forward.
+    """
+    records: list[object] = [
+        OptionsChain(
+            exchange=_EXCHANGE,
+            symbol=f"{_SYMBOL_PREFIX}-90-E-C",
+            symbol_raw="BTC-90-E-C",
+            exchange_ts=_BASE_NS,
+            local_ts=_BASE_NS,
+            underlying=_UNDERLYING,
+            underlying_price=None,
+            strike=90.0,
+            expiry=_E1_NS,
+            opt_type=OptType.CALL,
+            mark_price=10.0,
+            mark_iv=0.5,
+        ),
+        OptionsChain(
+            exchange=_EXCHANGE,
+            symbol=f"{_SYMBOL_PREFIX}-100-E-C",
+            symbol_raw="BTC-100-E-C",
+            exchange_ts=_BASE_NS,
+            local_ts=_BASE_NS,
+            underlying=_UNDERLYING,
+            underlying_price=None,
+            strike=100.0,
+            expiry=_E1_NS,
+            opt_type=OptType.CALL,
+            mark_price=15.0,
+            mark_iv=0.45,
+        ),
+        OptionsChain(
+            exchange=_EXCHANGE,
+            symbol=f"{_SYMBOL_PREFIX}-110-E-C",
+            symbol_raw="BTC-110-E-C",
+            exchange_ts=_BASE_NS,
+            local_ts=_BASE_NS,
+            underlying=_UNDERLYING,
+            underlying_price=None,
+            strike=110.0,
+            expiry=_E1_NS,
+            opt_type=OptType.CALL,
+            mark_price=5.0,
+            mark_iv=0.55,
+        ),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+    catalog = Catalog(tmp_path)
+    df = iv_surface(catalog, _UNDERLYING, _AT_NS)
+
+    assert len(df) == 3
+    # mark_iv path still works without underlying_price
+    assert all(row["source"] == "mark_iv" for row in df.iter_rows(named=True))
+    assert all(row["iv"] is not None for row in df.iter_rows(named=True))
+    # Fit must be skipped — no invented forward=100.0
+    for row in df.iter_rows(named=True):
+        assert row["fitted_iv"] is None, (
+            f"strike={row['strike']}: expected fitted_iv=None when underlying "
+            f"missing, got {row['fitted_iv']}"
+        )
