@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–53 COMPLETE. Continuous loop still active → Wave 54+.
+**Status:** Waves 1–54 COMPLETE. Continuous loop still active → Wave 55+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -416,7 +416,16 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | Tests: empty/data/channel/exchange/strip/delegate; TOOLS schema; capabilities includes `list_symbols` | DONE | `3a240d2` |
 | 3 | Broad regression: mcp_discovery, mcp_analytics, api_endpoints, catalog, catalog_search, client search, json_safe, factory — **537 passed** | DONE | baseline `3a240d2` |
 
-## Next rotation ideas (Wave 54+)
+## Wave 54 — Feature (CLI catalog-dates / catalog-symbols / catalog-exchanges) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | CLI `catalog-dates --channel` via `client.list_dates` (strip; empty → No dates.; required channel) | DONE | `0c418c4` |
+| 2 | CLI `catalog-symbols` optional `--channel` / `--exchange` via inventory distinct sorted symbols | DONE | `0c418c4` |
+| 3 | CLI `catalog-exchanges` via `client.list_exchanges_on_disk` | DONE | `0c418c4` |
+| 4 | Tests: empty/data/filter/strip/delegate for all three; **16 passed** | DONE | `0c418c4` |
+
+## Next rotation ideas (Wave 55+)
 
 Priority candidates for the next cycles:
 
@@ -424,8 +433,6 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **CLI catalog-dates** — surface `list_dates` on CLI (REST + MCP already exist)  
-6. **CLI catalog-symbols** — surface `list_symbols` on CLI (REST + MCP already exist)  
 
 
 
@@ -491,3 +498,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 51: REST `GET /api/v1/catalog/search` optional `channel`/`exchange` filters (parity with CLI search / Catalog.search_symbols)
 - Wave 52: MCP `search_symbols` exchange filter; REST `GET /api/v1/catalog/symbols` distinct inventory symbols; inventory_snapshot filters verified
 - Wave 53: MCP `list_symbols` (inventory distinct symbols + channel/exchange filters; REST catalog/symbols parity); broad discovery regression 537 passed
+- Wave 54: CLI `catalog-dates` / `catalog-symbols` / `catalog-exchanges` (list_dates + inventory symbols + exchanges_on_disk; REST/MCP parity)
