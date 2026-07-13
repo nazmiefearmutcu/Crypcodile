@@ -35,3 +35,17 @@ class SyncRecovery:
     def save_last_block(self, pool: str, block: int) -> None:
         self.state[pool] = block
         self._save()
+
+    def get_seen_logs(self) -> dict[tuple[str, int], bool]:
+        raw = self.state.get("seen_logs", [])
+        res = {}
+        for entry in raw:
+            if isinstance(entry, list) and len(entry) >= 2:
+                res[(str(entry[0]), int(entry[1]))] = True
+        return res
+
+    def save_seen_logs(self, logs: dict[tuple[str, int], bool]) -> None:
+        serialized = [[k[0], k[1]] for k in logs.keys()]
+        self.state["seen_logs"] = serialized
+        self._save()
+

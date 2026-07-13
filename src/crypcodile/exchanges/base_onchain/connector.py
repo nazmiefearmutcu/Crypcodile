@@ -22,6 +22,12 @@ from crypcodile.sink.base import Sink
 from .normalize import normalize_onchain_update
 from .asset_registry import AssetRegistry
 from .smart_wallet import CoinbaseSmartWalletDetector
+from .limit_orders import (
+    ONEINCH_ORDER_FILLED_TOPIC,
+    ZEROX_LIMIT_ORDER_FILLED_TOPIC,
+    decode_1inch_order_filled,
+    decode_0x_limit_order_filled,
+)
 
 smart_wallet_detector = CoinbaseSmartWalletDetector()
 
@@ -41,7 +47,7 @@ FACTORIES = {
 }
 
 def _get_ipc_file() -> str:
-    return os.getenv("CUSTOM_POOLS_IPC_FILE", "/Users/nazmi/Crypcodile/.custom_pools_ipc.json")
+    return os.getenv("CUSTOM_POOLS_IPC_FILE", os.path.abspath(".custom_pools_ipc.json"))
 
 _ipc_executor = ThreadPoolExecutor(max_workers=1)
 _background_tasks = set()
@@ -310,6 +316,71 @@ POOL_SPECS = IPCDict("POOL_SPECS", {
     }
 })
 
+_INITIAL_TOKENS = {
+    "AERO": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+    "cbBTC": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+    "DEGEN": "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed",
+    "WELL": "0xA88594D404727625A9437C3f886C7643872296AE",
+    "USDC": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+    "USDbC": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA",
+    "WETH": "0x4200000000000000000000000000000000000006",
+}
+
+_INITIAL_POOL_SPECS = {
+    "AERO-USDC": {
+        "type": "aerodrome_v2",
+        "token0": "AERO",
+        "token1": "USDbC",
+        "stable": False,
+        "decimals0": 18,
+        "decimals1": 6,
+    },
+    "cbBTC-USDC": {
+        "type": "uniswap_v3",
+        "token0": "cbBTC",
+        "token1": "USDC",
+        "fee": 500,
+        "decimals0": 8,
+        "decimals1": 6,
+    },
+    "DEGEN-WETH": {
+        "type": "uniswap_v3",
+        "token0": "DEGEN",
+        "token1": "WETH",
+        "fee": 3000,
+        "decimals0": 18,
+        "decimals1": 18,
+    },
+    "WELL-WETH": {
+        "type": "aerodrome_v2",
+        "token0": "WELL",
+        "token1": "WETH",
+        "stable": False,
+        "decimals0": 18,
+        "decimals1": 18,
+    },
+    "WETH-USDC": {
+        "type": "uniswap_v3",
+        "token0": "WETH",
+        "token1": "USDC",
+        "fee": 500,
+        "decimals0": 18,
+        "decimals1": 6,
+    },
+}
+
+def reset_to_defaults() -> None:
+    TOKENS.clear()
+    TOKENS.update(_INITIAL_TOKENS)
+    POOL_SPECS.clear()
+    POOL_SPECS.update(_INITIAL_POOL_SPECS)
+    try:
+        ipc_f = _get_ipc_file()
+        if os.path.exists(ipc_f):
+            os.remove(ipc_f)
+    except Exception:
+        pass
+
 _load_ipc_sync()
 
 SWAP_TOPIC_V3 = "0xc42079f94a6350d7e6235f29174924f9287a20ac8e91c97b870daEE5297F6e85"
@@ -435,7 +506,6 @@ class BaseOnchainTransport:
         self._poll_task: asyncio.Task[None] | None = None
         self._last_blocks = {}
         self._block_cache = {}
-        self._seen_logs = set()
         _register_custom_pools(custom_pools)
 
         from crypcodile.ingest.sync_recovery import SyncRecovery
@@ -444,6 +514,15 @@ class BaseOnchainTransport:
         os.makedirs(state_dir, exist_ok=True)
         self.sync_recovery = SyncRecovery(os.path.join(state_dir, "base_onchain.json"))
         self.rollback_manager = RollbackManager(max_depth=100)
+        self._seen_logs = self.sync_recovery.get_seen_logs()
+
+    def _add_seen_log(self, log_key: tuple[str, int]) -> None:
+        self._seen_logs[log_key] = True
+        if len(self._seen_logs) > 5000:
+            keys_to_remove = list(self._seen_logs.keys())[:2500]
+            for k in keys_to_remove:
+                self._seen_logs.pop(k, None)
+
 
 
     @property
@@ -537,7 +616,7 @@ class BaseOnchainTransport:
         
         attempt = 0
         max_attempts = 5
-        base_delay = kwargs.pop("base_delay", 0.0001 if self.poll_interval < 0.2 else 1.0)
+        base_delay = kwargs.pop("base_delay", 0.05 if self.poll_interval < 0.2 else 1.0)
         max_delay = 10.0
         
         while True:
@@ -1155,9 +1234,7 @@ class BaseOnchainTransport:
                             await self._queue.put(json.dumps(update_msg).encode())
                             # Success! Mark logs as seen and update block number
                             for lk in new_seen_log_keys:
-                                self._seen_logs.add(lk)
-                            if len(self._seen_logs) > 5000:
-                                self._seen_logs = set(list(self._seen_logs)[2500:])
+                                self._add_seen_log(lk)
                             self._last_blocks[sym] = max(self._last_blocks[sym], last_block)
                             self.sync_recovery.save_last_block(sym, self._last_blocks[sym])
                             if logs_err is not None:
@@ -1188,6 +1265,7 @@ class BaseOnchainTransport:
                             AsyncWeb3.to_checksum_address("0xA238Dd80C259697C8390c76420315873AB4F66C5"),
                             AsyncWeb3.to_checksum_address("0x8FA4c96570F4D0860A7C93f0b2fB58416d860d5b")
                         ]
+                        lending_success = True
                         for l_addr in lending_addresses:
                             try:
                                 for topic in [RESERVE_DATA_UPDATED_TOPIC, LIQUIDATION_CALL_TOPIC]:
@@ -1265,11 +1343,14 @@ class BaseOnchainTransport:
                                             }
                                             await self._queue.put(json.dumps(update_msg).encode())
                                         
-                                        self._seen_logs.add(log_key)
+                                        self._add_seen_log(log_key)
                             except Exception as lending_err:
                                 log.debug(f"Failed to poll/decode lending logs for {l_addr}: {lending_err}")
-                        self._last_lending_block = lending_end_block
-                        self.sync_recovery.save_last_block("lending", self._last_lending_block)
+                                lending_success = False
+                        
+                        if lending_success:
+                            self._last_lending_block = lending_end_block
+                            self.sync_recovery.save_last_block("lending", self._last_lending_block)
 
                     # Poll for 1inch and 0x limit orders
                     if not hasattr(self, "_last_limit_order_block"):
@@ -1279,15 +1360,12 @@ class BaseOnchainTransport:
                     limit_start_block = max(0, self._last_limit_order_block + 1)
                     limit_end_block = current_block
                     if limit_start_block <= limit_end_block:
-                        from crypcodile.exchanges.base_onchain.limit_orders import (
-                            ONEINCH_ORDER_FILLED_TOPIC, ZEROX_LIMIT_ORDER_FILLED_TOPIC,
-                            decode_1inch_order_filled, decode_0x_limit_order_filled
-                        )
                         limit_protocols = {
                             "0x1111111254fb6c44bac0bed2854e76f90643097d": "1inch",
                             "0xdef1c0ded9bec7f1a1670819833240f027b25eff": "0x",
                             "0xDef1C0ded9bec7F1a1670819833240f027b25EfF": "0x",
                         }
+                        limit_success = True
                         for addr, proto in limit_protocols.items():
                             try:
                                 topic = ONEINCH_ORDER_FILLED_TOPIC if proto == "1inch" else ZEROX_LIMIT_ORDER_FILLED_TOPIC
@@ -1343,11 +1421,17 @@ class BaseOnchainTransport:
                                         "order_hash": decoded["order_hash"],
                                     }
                                     await self._queue.put(json.dumps(update_msg).encode())
-                                    self._seen_logs.add(log_key)
+                                    self._add_seen_log(log_key)
                             except Exception as limit_err:
                                 log.debug(f"Failed to poll limit order logs for {addr}: {limit_err}")
-                        self._last_limit_order_block = limit_end_block
-                        self.sync_recovery.save_last_block("limit_orders", self._last_limit_order_block)
+                                limit_success = False
+                        
+                        if limit_success:
+                            self._last_limit_order_block = limit_end_block
+                            self.sync_recovery.save_last_block("limit_orders", self._last_limit_order_block)
+
+                    # Persist seen logs to recovery once per loop cycle
+                    self.sync_recovery.save_seen_logs(self._seen_logs)
                     
                 except Exception as e:
                     log.error(f"base_onchain: Error polling pool data: {e}")
