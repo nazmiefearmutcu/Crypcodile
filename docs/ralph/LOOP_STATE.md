@@ -486,8 +486,8 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | # | Task | Status | Commit |
 |---|------|--------|--------|
 | 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **839 passed** (no pre-existing failures) | DONE | baseline `9e1a52e` |
-| 2 | CLI `catalog-inventory` with optional `--channel` / `--exchange` (strip empty → no filter; empty → `No inventory.`; table columns match `catalog --symbols` / `data-coverage`; REST inventory + MCP `inventory_snapshot` parity) | DONE | (feature commit) |
-| 3 | Tests: empty/data/channel/exchange hit-miss/strip/delegate/help — **7 passed**; post-feature critical suites **846 passed** (+7) | DONE | (feature commit) |
+| 2 | CLI `catalog-inventory` with optional `--channel` / `--exchange` (strip empty → no filter; empty → `No inventory.`; table columns match `catalog --symbols` / `data-coverage`; REST inventory + MCP `inventory_snapshot` parity) | DONE | `b099afe` |
+| 3 | Tests: empty/data/channel/exchange hit-miss/strip/delegate/help — **7 passed**; post-feature critical suites **846 passed** (+7) | DONE | `b099afe` |
 
 ## Next rotation ideas (Wave 63+)
 
