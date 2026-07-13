@@ -518,8 +518,8 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | # | Task | Status | Commit |
 |---|------|--------|--------|
 | 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **866 passed** (no pre-existing failures) | DONE | baseline `726867e` |
-| 2 | Optional `exchange` on `Client.data_coverage` + CLI `--exchange` + REST `?exchange=` + MCP tool arg (strip empty → no filter; inventory parity) | DONE | `FEATURE_SHA` |
-| 3 | Tests: client/CLI/REST/MCP exchange hit-miss + strip/delegate/schema; post-feature critical suites **870 passed** (+4) | DONE | `FEATURE_SHA` |
+| 2 | Optional `exchange` on `Client.data_coverage` + CLI `--exchange` + REST `?exchange=` + MCP tool arg (strip empty → no filter; inventory parity) | DONE | `6ac26c1` |
+| 3 | Tests: client/CLI/REST/MCP exchange hit-miss + strip/delegate/schema; post-feature critical suites **870 passed** (+4) | DONE | `6ac26c1` |
 
 ## Next rotation ideas (Wave 67+)
 
