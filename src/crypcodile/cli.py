@@ -13,7 +13,7 @@ catalog-exchanges -- List on-disk hive exchange= partitions.
 list-exchanges -- List registered factory connector names (no lake).
 search         -- Ranked symbol search over the data lake inventory (--channel / --exchange).
 resolve-symbols -- Resolve free-form symbols to canonical catalog ids.
-data-coverage  -- Inventory coverage rows for one symbol (optional channel).
+data-coverage  -- Inventory coverage rows for one symbol (optional channel/exchange).
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
 collect        -- Run live connectors and write data to the Parquet lake.
@@ -50,7 +50,7 @@ Usage examples::
     crypcodile list-exchanges  # registered connectors (factory; no lake)
     crypcodile search BTC --channel trade --exchange deribit --data-dir /data
     crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
-    crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
+    crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade --exchange deribit
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
                      --fmt csv --dest out/trades.csv --data-dir /data
     crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL \\
@@ -1319,16 +1319,20 @@ def data_coverage_cmd(
         str | None,
         typer.Option("--channel", help="Optional channel filter."),
     ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Print inventory coverage rows for one symbol.
 
     Delegates to :meth:`CrypcodileClient.data_coverage` — same contract as
     REST ``GET /api/v1/data-coverage`` / MCP ``data_coverage``: lake inventory
-    filtered to an exact ``symbol`` match, with optional ``--channel``
-    (empty/whitespace → no filter). Empty / missing symbol after strip exits
-    non-zero. Empty lake or no match prints ``No coverage.`` and exits 0.
-    Columns match ``catalog --symbols`` inventory summary.
+    filtered to an exact ``symbol`` match, with optional ``--channel`` and
+    ``--exchange`` (empty/whitespace → no filter). Empty / missing symbol
+    after strip exits non-zero. Empty lake or no match prints ``No coverage.``
+    and exits 0. Columns match ``catalog --symbols`` inventory summary.
     """
     from crypcodile.client.client import CrypcodileClient
 
@@ -1342,7 +1346,7 @@ def data_coverage_cmd(
             raise typer.Exit(code=1)
 
     client = CrypcodileClient(data_dir=data_dir)
-    matched = client.data_coverage(symbol, channel=channel)
+    matched = client.data_coverage(symbol, channel=channel, exchange=exchange)
     if len(matched) == 0:
         typer.echo("No coverage.")
         raise typer.Exit(code=0)

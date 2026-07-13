@@ -401,10 +401,24 @@ async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
     assert df["row_count"][0] == 3
 
 
+async def test_data_coverage_exchange_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    df = client.data_coverage("deribit:BTC-PERPETUAL", exchange="deribit")
+    assert len(df) >= 2
+    assert set(df["exchange"].to_list()) == {"deribit"}
+    assert set(df["symbol"].to_list()) == {"deribit:BTC-PERPETUAL"}
+    miss = client.data_coverage("deribit:BTC-PERPETUAL", exchange="binance")
+    assert len(miss) == 0
+    assert miss.columns == _INVENTORY_COLS
+
+
 def test_data_coverage_strips_and_filters(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Strips symbol/channel; exact symbol filter over inventory."""
+    """Strips symbol/channel/exchange; exact symbol filter over inventory."""
     from crypcodile.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
@@ -422,25 +436,30 @@ def test_data_coverage_strips_and_filters(
             "row_count": [5, 8, 99],
         }
     )
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, str | None]] = []
 
     def _inventory(
         channel: str | None = None, exchange: str | None = None
     ) -> pl.DataFrame:
-        calls.append(channel)
+        calls.append((channel, exchange))
         return inv
 
     monkeypatch.setattr(client, "inventory", _inventory)
-    df = client.data_coverage("  deribit:BTC-PERPETUAL  ", channel="  ")
+    df = client.data_coverage(
+        "  deribit:BTC-PERPETUAL  ", channel="  ", exchange="  "
+    )
     assert len(df) == 2
     assert set(df["channel"].to_list()) == {"trade", "book_snapshot"}
-    assert calls == [None]
+    assert calls == [(None, None)]
 
     calls.clear()
-    df2 = client.data_coverage("deribit:BTC-PERPETUAL", channel="  trade  ")
-    # inventory already channel-filtered in real path; mock returns full inv,
-    # so client still applies exact symbol match only (channel forwarded).
-    assert calls == ["trade"]
+    df2 = client.data_coverage(
+        "deribit:BTC-PERPETUAL", channel="  trade  ", exchange="  deribit  "
+    )
+    # inventory already channel/exchange-filtered in real path; mock returns
+    # full inv, so client still applies exact symbol match only (filters
+    # forwarded stripped).
+    assert calls == [("trade", "deribit")]
     assert set(df2["symbol"].to_list()) == {"deribit:BTC-PERPETUAL"}
 
 

@@ -441,14 +441,15 @@ def handle_data_coverage(
     client: CrypcodileClient,
     symbol: str,
     channel: str | None = None,
+    exchange: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return inventory coverage rows for *symbol* (and optional *channel*).
+    """Return inventory coverage rows for *symbol* (optional channel/exchange).
 
     Delegates to :meth:`CrypcodileClient.data_coverage` (same contract as REST
     ``GET /api/v1/data-coverage`` and CLI ``data-coverage``). Empty /
     whitespace-only symbol, empty lake, or no match → ``[]``.
     """
-    df = client.data_coverage(symbol, channel=channel)
+    df = client.data_coverage(symbol, channel=channel, exchange=exchange)
     if len(df) == 0:
         return []
     return _json_safe_records(df.to_dicts())
@@ -1163,9 +1164,9 @@ TOOLS = [
         "description": (
             "Return coverage inventory for a canonical symbol via "
             "client.data_coverage: exchange, channel, min_ts, max_ts, row_count "
-            "per channel. Optional channel filter (empty/whitespace → no filter). "
-            "Empty / blank symbol, empty lake, or unknown symbol returns []. "
-            "Mirrors REST GET /api/v1/data-coverage."
+            "per channel. Optional channel and exchange filters "
+            "(empty/whitespace → no filter). Empty / blank symbol, empty lake, "
+            "or unknown symbol returns []. Mirrors REST GET /api/v1/data-coverage."
         ),
         "inputSchema": {
             "type": "object",
@@ -1179,6 +1180,10 @@ TOOLS = [
                 "channel": {
                     "type": "string",
                     "description": "Optional channel filter.",
+                },
+                "exchange": {
+                    "type": "string",
+                    "description": "Optional exchange filter.",
                 },
             },
             "required": ["symbol"],
@@ -2187,8 +2192,9 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         try:
                             sym = arguments.get("symbol", "")
                             ch = arguments.get("channel")
+                            ex = arguments.get("exchange")
                             tool_result = handle_data_coverage(
-                                client, sym, channel=ch
+                                client, sym, channel=ch, exchange=ex
                             )
                         except Exception as e:
                             tool_result = {"error": f"data_coverage failed: {e}"}

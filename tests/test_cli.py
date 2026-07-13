@@ -1777,6 +1777,48 @@ async def test_cli_data_coverage_channel_filter(
     assert all("funding" not in ln for ln in lines)
 
 
+async def test_cli_data_coverage_exchange_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``--exchange deribit`` keeps hits; wrong exchange → No coverage."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    hit = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--exchange",
+            "deribit",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert hit.exit_code == 0, f"stdout:\n{hit.output}"
+    assert "deribit:BTC-PERPETUAL" in hit.output
+    assert "No coverage." not in hit.output
+
+    miss = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--exchange",
+            "binance",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert miss.exit_code == 0, f"stdout:\n{miss.output}"
+    assert "No coverage." in miss.output
+
+
 async def test_cli_data_coverage_no_symbol_match(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1817,7 +1859,7 @@ def test_cli_data_coverage_missing_symbol(tmp_path: pathlib.Path) -> None:
 def test_cli_data_coverage_strips_empty_channel(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """Whitespace --channel forwarded to client.data_coverage (strip lives there)."""
+    """Whitespace --channel/--exchange forwarded (strip lives on client)."""
     import polars as pl
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
@@ -1841,8 +1883,12 @@ def test_cli_data_coverage_strips_empty_channel(
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def data_coverage(self, symbol, channel=None):  # noqa: ANN001
-            return mock_client.data_coverage(symbol, channel=channel)
+        def data_coverage(  # noqa: ANN001
+            self, symbol, channel=None, exchange=None
+        ):
+            return mock_client.data_coverage(
+                symbol, channel=channel, exchange=exchange
+            )
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -1858,6 +1904,8 @@ def test_cli_data_coverage_strips_empty_channel(
             "deribit:BTC-PERPETUAL",
             "--channel",
             "   ",
+            "--exchange",
+            "   ",
             "--data-dir",
             str(tmp_path),
         ],
@@ -1865,7 +1913,7 @@ def test_cli_data_coverage_strips_empty_channel(
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert "deribit:BTC-PERPETUAL" in result.output
     mock_client.data_coverage.assert_called_once_with(
-        "deribit:BTC-PERPETUAL", channel="   "
+        "deribit:BTC-PERPETUAL", channel="   ", exchange="   "
     )
 
 
@@ -1896,8 +1944,12 @@ def test_cli_data_coverage_uses_client(
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def data_coverage(self, symbol, channel=None):  # noqa: ANN001
-            return mock_client.data_coverage(symbol, channel=channel)
+        def data_coverage(  # noqa: ANN001
+            self, symbol, channel=None, exchange=None
+        ):
+            return mock_client.data_coverage(
+                symbol, channel=channel, exchange=exchange
+            )
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -1913,6 +1965,8 @@ def test_cli_data_coverage_uses_client(
             "deribit:BTC-PERPETUAL",
             "--channel",
             "trade",
+            "--exchange",
+            "deribit",
             "--data-dir",
             str(tmp_path),
         ],
@@ -1921,7 +1975,7 @@ def test_cli_data_coverage_uses_client(
     assert "deribit:BTC-PERPETUAL" in result.output
     assert "binance:BTCUSDT" not in result.output
     mock_client.data_coverage.assert_called_once_with(
-        "deribit:BTC-PERPETUAL", channel="trade"
+        "deribit:BTC-PERPETUAL", channel="trade", exchange="deribit"
     )
 
 

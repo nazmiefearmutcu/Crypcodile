@@ -1705,15 +1705,18 @@ async def catalog_inventory(
 async def data_coverage(
     symbol: str = "",
     channel: str = "",
+    exchange: str = "",
 ) -> list[dict[str, Any]]:
     """Return inventory coverage rows for one symbol (read-only, no payment).
 
     Delegates to :meth:`CrypcodileClient.data_coverage` (exact ``symbol`` match
-    with optional ``channel``). Empty / whitespace-only symbol, empty lake, or
-    no matching rows yields ``[]``. Shared with MCP ``data_coverage`` and CLI
-    ``data-coverage``.
+    with optional ``channel`` and ``exchange``). Empty / whitespace-only
+    symbol, empty lake, or no matching rows yields ``[]``. Shared with MCP
+    ``data_coverage`` and CLI ``data-coverage``.
     """
-    df = _get_lake_client().data_coverage(symbol, channel=channel)
+    df = _get_lake_client().data_coverage(
+        symbol, channel=channel, exchange=exchange
+    )
     if len(df) == 0:
         return []
     return _json_safe_records(df.to_dicts())

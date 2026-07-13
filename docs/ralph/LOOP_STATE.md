@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–63 COMPLETE. Continuous loop still active → Wave 64+.
+**Status:** Waves 1–66 COMPLETE. Continuous loop still active → Wave 67+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -513,15 +513,22 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | `CrypcodileClient.data_coverage(symbol, channel=)` — exact-symbol inventory filter (strip symbol/channel; empty symbol → empty DF); REST/MCP/CLI data-coverage wire to it | DONE | `321148a` |
 | 3 | Tests: client unit + surface delegate for both; discovery regression **866 passed** | DONE | `321148a` |
 
-## Next rotation ideas (Wave 66+)
+## Wave 66 — Bug hunt (broad regression) + Feature (data-coverage --exchange) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **866 passed** (no pre-existing failures) | DONE | baseline `726867e` |
+| 2 | Optional `exchange` on `Client.data_coverage` + CLI `--exchange` + REST `?exchange=` + MCP tool arg (strip empty → no filter; inventory parity) | DONE | `FEATURE_SHA` |
+| 3 | Tests: client/CLI/REST/MCP exchange hit-miss + strip/delegate/schema; post-feature critical suites **870 passed** (+4) | DONE | `FEATURE_SHA` |
+
+## Next rotation ideas (Wave 67+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
-4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **data-coverage exchange filter** — optional exchange on REST/MCP/CLI coverage (parity with inventory filters)
+4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)
 
 
 
@@ -601,3 +608,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 63: Client `catalog_summary()` DRY — REST/MCP/CLI delegate; skip redundant inventory/coverage CLI aliases
 - Wave 64: Client `catalog_stats()` DRY — REST/MCP/CLI delegate; broad regression **854 passed**
 - Wave 65: Client `list_symbols()` + `data_coverage()` DRY — REST/MCP/CLI delegate for catalog/symbols and data-coverage; **866 passed** (`321148a`)
+- Wave 66: broad regression green (866→870 after +4 tests); data-coverage optional exchange filter on Client/CLI/REST/MCP (inventory parity)

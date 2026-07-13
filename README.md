@@ -94,7 +94,7 @@ crypcodile catalog-inventory --channel trade --exchange deribit  # full inventor
 crypcodile catalog-exchanges  # on-disk hive exchange= partitions
 crypcodile list-exchanges     # registered factory connectors (no lake; ≠ catalog-exchanges)
 crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
-crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
+crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade --exchange deribit
 crypcodile mcp  # tools: search_symbols, list_symbols, resolve_symbols, inventory_snapshot, list_data_channels, list_exchanges_on_disk, list_registered_exchanges, list_dates, catalog_summary, catalog_stats, data_coverage
 ```
 

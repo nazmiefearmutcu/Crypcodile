@@ -48,7 +48,7 @@ inventory(channel=None, exchange=None)
 list_symbols(channel=None, exchange=None)
     Sorted distinct inventory symbols (lighter than inventory rows).
 
-data_coverage(symbol, channel=None)
+data_coverage(symbol, channel=None, exchange=None)
     Inventory coverage rows for one exact symbol.
 
 search_symbols(q, channel=None, exchange=None, limit=20)
@@ -301,12 +301,13 @@ class CrypcodileClient:
         self,
         symbol: str,
         channel: str | None = None,
+        exchange: str | None = None,
     ) -> pl.DataFrame:
         """Return inventory coverage rows for one exact *symbol*.
 
         Filters :meth:`inventory` to rows whose ``symbol`` equals the stripped
-        *symbol*. Optional *channel* narrows inventory first; empty/whitespace
-        channel → no channel filter.
+        *symbol*. Optional *channel* and *exchange* narrow inventory first;
+        empty/whitespace values are treated as no filter.
 
         Empty / whitespace-only *symbol*, empty lake, or no match yields an
         empty DataFrame with the stable inventory schema::
@@ -318,6 +319,7 @@ class CrypcodileClient:
         """
         symbol = (symbol or "").strip()
         ch = (channel or "").strip() or None
+        ex = (exchange or "").strip() or None
         if not symbol:
             return pl.DataFrame(
                 schema={
@@ -329,7 +331,7 @@ class CrypcodileClient:
                     "row_count": pl.Int64,
                 }
             )
-        inv = self.inventory(channel=ch)
+        inv = self.inventory(channel=ch, exchange=ex)
         if len(inv) == 0:
             return inv
         return inv.filter(pl.col("symbol") == symbol)

@@ -450,6 +450,29 @@ async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
     assert rows[0]["row_count"] == 2
 
 
+async def test_data_coverage_exchange_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import TOOLS, handle_data_coverage
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    rows = handle_data_coverage(
+        client, "deribit:BTC-PERPETUAL", exchange="deribit"
+    )
+    assert len(rows) >= 1
+    assert all(r["exchange"] == "deribit" for r in rows)
+    assert (
+        handle_data_coverage(
+            client, "deribit:BTC-PERPETUAL", exchange="binance"
+        )
+        == []
+    )
+
+    tool = next(t for t in TOOLS if t["name"] == "data_coverage")
+    assert "exchange" in tool["inputSchema"]["properties"]
+    assert "channel" in tool["inputSchema"]["properties"]
+
+
 def test_data_coverage_delegates_to_client() -> None:
     """Handler delegates to client.data_coverage (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
@@ -470,13 +493,16 @@ def test_data_coverage_delegates_to_client() -> None:
         }
     )
     rows = handle_data_coverage(
-        client, "deribit:BTC-PERPETUAL", channel="trade"
+        client,
+        "deribit:BTC-PERPETUAL",
+        channel="trade",
+        exchange="deribit",
     )
     assert len(rows) == 1
     assert rows[0]["channel"] == "trade"
     assert rows[0]["row_count"] == 10
     client.data_coverage.assert_called_once_with(
-        "deribit:BTC-PERPETUAL", channel="trade"
+        "deribit:BTC-PERPETUAL", channel="trade", exchange="deribit"
     )
     client.inventory.assert_not_called()
 
