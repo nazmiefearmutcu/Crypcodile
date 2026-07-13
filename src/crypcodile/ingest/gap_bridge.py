@@ -1,8 +1,9 @@
 """Gap-detect → backfill bridge (Task 4.3).
 
-Wires OrderBookSync.RESYNC to a REST snapshot fetch, buffers live deltas
-during the resync window, and applies them after the snapshot arrives
-(dropping any with seq < snapshot.seq_id).
+Wires a :class:`~crypcodile.ingest.book_sync.BookSyncMachine` RESYNC to a
+REST snapshot fetch, buffers live deltas during the resync window, and
+applies them after the snapshot arrives (dropping any with seq below the
+snapshot anchor — see :func:`~crypcodile.ingest.book_sync.filter_buffered_book_deltas`).
 
 Appendix §6:
   Gap ⇒ buffer live deltas, fire REST snapshot, apply REST then buffered
@@ -36,6 +37,11 @@ Usage example (inside a connector's message loop)::
 Primary production wiring: ``BinanceConnector._handle_message`` (when
 ``book_delta`` / ``book_snapshot`` channels are subscribed) — see
 ``crypcodile.exchanges.binance.connector``.
+
+Bybit is deferred: REST ``u`` aligns only with ``orderbook.1000`` while the
+connector streams ``orderbook.50``; Bybit recovery is re-snapshot /
+re-subscribe, not this REST-anchored replay.  Shared helpers live in
+``crypcodile.ingest.book_sync`` for a future port.
 """
 
 from __future__ import annotations
@@ -43,7 +49,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 
-from crypcodile.exchanges.binance.book import OrderBookSync, SyncResult
+from crypcodile.ingest.book_sync import (
+    BookSyncMachine,
+    SyncResult,
+    filter_buffered_book_deltas,
+    keep_delta_after_snapshot,
+)
 from crypcodile.schema.records import BookDelta, BookSnapshot
 
 log = logging.getLogger(__name__)
@@ -56,13 +67,13 @@ BookRecord = BookSnapshot | BookDelta
 
 
 class BookResyncBridge:
-    """Stateful bridge between OrderBookSync and REST-snapshot resync logic.
+    """Stateful bridge between a book sync machine and REST-snapshot resync.
 
     Responsibilities:
     - Translate ``SyncResult`` (APPLY/DROP/RESYNC) into emit-or-buffer decisions.
     - On RESYNC: enter resyncing mode, buffer subsequent deltas.
     - On ``complete_resync()``: fetch REST snapshot, update the sync state machine,
-      apply buffered deltas with ``seq_id >= snapshot.sequence_id``, return
+      apply buffered deltas with ``seq_id`` past ``snapshot.sequence_id``, return
       the ordered list of records to emit.
     - A second RESYNC while already resyncing clears the stale buffer and restarts.
 
@@ -71,7 +82,7 @@ class BookResyncBridge:
 
     def __init__(
         self,
-        sync: OrderBookSync,
+        sync: BookSyncMachine,
         fetch_snapshot: FetchSnapshotFn,
         symbol: str,
     ) -> None:
@@ -211,48 +222,38 @@ class BookResyncBridge:
                 self._symbol,
             )
 
-        # Filter buffered deltas using the venue-aware threshold:
+        # Filter buffered deltas using the venue-aware threshold helper.
         #   Binance SPOT:    drop seq_id <= snap_seq (boundary already in snapshot)
         #   Binance FUTURES: drop seq_id <  snap_seq (boundary is the first valid event)
-        # Access venue from the injected OrderBookSync._venue attribute.
         venue = getattr(self._sync, "_venue", "spot")
-        kept_deltas: list[BookDelta] = []
-        for delta in self._buffer:
-            if snap_seq is None or delta.seq_id is None:
-                kept_deltas.append(delta)
-            elif venue == "futures":
-                # Keep when seq_id >= snap_seq (boundary inclusive)
-                if delta.seq_id >= snap_seq:
-                    kept_deltas.append(delta)
-                else:
+        if snap_seq is not None:
+            for delta in self._buffer:
+                if (
+                    delta.seq_id is not None
+                    and not keep_delta_after_snapshot(delta, snap_seq, venue=venue)
+                ):
                     log.debug(
-                        "BookResyncBridge [%s]: dropping buffered delta seq=%s (< snapshot %s).",
+                        "BookResyncBridge [%s]: dropping buffered delta seq=%s "
+                        "(snapshot %s, venue=%s).",
                         self._symbol,
                         delta.seq_id,
                         snap_seq,
+                        venue,
                     )
-            else:
-                # spot (default): keep when seq_id > snap_seq (boundary exclusive)
-                if delta.seq_id > snap_seq:
-                    kept_deltas.append(delta)
-                else:
-                    log.debug(
-                        "BookResyncBridge [%s]: dropping buffered delta seq=%s (<= snapshot %s).",
-                        self._symbol,
-                        delta.seq_id,
-                        snap_seq,
-                    )
+        kept_deltas = filter_buffered_book_deltas(
+            self._buffer, snap_seq, venue=venue
+        )
 
         # Clear state
         self._buffer = []
         self._resyncing = False
 
-        # Buffered deltas are emitted without re-running OrderBookSync.feed().
+        # Buffered deltas are emitted without re-running the sync machine feed().
         # Advance continuity so the next live event checks against the last
         # applied u (not first-event rules against the snapshot alone).
         if kept_deltas:
             last_seq = kept_deltas[-1].seq_id
-            if last_seq is not None and hasattr(self._sync, "note_applied"):
+            if last_seq is not None:
                 self._sync.note_applied(last_seq)
 
         # Return snapshot first, then kept deltas (in buffered order).

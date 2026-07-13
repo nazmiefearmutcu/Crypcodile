@@ -16,6 +16,10 @@ from __future__ import annotations
 import pytest
 
 from crypcodile.exchanges.binance.book import OrderBookSync, SyncResult
+from crypcodile.ingest.book_sync import (
+    filter_buffered_book_deltas,
+    keep_delta_after_snapshot,
+)
 from crypcodile.ingest.gap_bridge import BookResyncBridge, TradeSeqGap
 from crypcodile.schema.records import BookDelta, BookSnapshot
 
@@ -458,3 +462,35 @@ class TestCompleteResyncBoundaryVenueAware:
         )
         # stale delta (seq=199 < 200) must be dropped
         assert 199 not in seq_ids
+
+
+# ---------------------------------------------------------------------------
+# Shared helper extraction (book_sync) — multi-venue buffer filter
+# ---------------------------------------------------------------------------
+
+
+class TestFilterBufferedBookDeltas:
+    """Unit tests for :func:`filter_buffered_book_deltas` / keep helper."""
+
+    def test_spot_and_futures_boundary(self) -> None:
+        snap = 100
+        below = _make_delta(99, 99)
+        at = _make_delta(100, 100)
+        above = _make_delta(101, 101)
+        buf = [below, at, above]
+
+        spot_kept = filter_buffered_book_deltas(buf, snap, venue="spot")
+        assert [d.seq_id for d in spot_kept] == [101]
+
+        fut_kept = filter_buffered_book_deltas(buf, snap, venue="futures")
+        assert [d.seq_id for d in fut_kept] == [100, 101]
+
+    def test_none_snap_keeps_all(self) -> None:
+        buf = [_make_delta(1, 1), _make_delta(2, 2)]
+        kept = filter_buffered_book_deltas(buf, None, venue="spot")
+        assert len(kept) == 2
+
+    def test_keep_helper_matches_filter(self) -> None:
+        d = _make_delta(50, 50)
+        assert keep_delta_after_snapshot(d, 50, venue="spot") is False
+        assert keep_delta_after_snapshot(d, 50, venue="futures") is True

@@ -161,6 +161,20 @@ class BybitConnector(Connector):
     ``category`` selects the public WS endpoint:
     ``spot`` | ``linear`` | ``inverse`` | ``option``.
     Defaults to ``linear`` (USDT-margined perpetuals).
+
+    Book resync (deferred)
+    ----------------------
+    Bybit WS orderbooks carry update id ``u`` (and cross-seq ``seq``), but
+    :class:`~crypcodile.exchanges.binance.book.OrderBookSync` has no Bybit
+    venue, and :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge` REST
+    replay assumes REST ``sequence_id`` shares the WS stream.  Bybit REST
+    ``GET /v5/market/orderbook`` ``u`` aligns only with **orderbook.1000**,
+    while this connector streams **orderbook.50** — so REST-anchored delta
+    filtering would be incorrect.  Bybit's documented recovery is a fresh
+    WS snapshot (re-subscribe / exchange re-push), not Binance-style REST
+    bootstrap.  Shared filter helpers live in
+    :mod:`crypcodile.ingest.book_sync` for a future port (switch to
+    depth-1000, or re-subscribe resync).
     """
 
     name = EXCHANGE

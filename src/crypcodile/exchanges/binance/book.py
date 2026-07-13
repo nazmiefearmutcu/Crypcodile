@@ -19,18 +19,20 @@ OrderBookSync state machine:
 """
 
 from collections.abc import Iterable
-from enum import StrEnum
 from typing import Any, Literal
 
+from crypcodile.ingest.book_sync import SyncResult
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.schema.records import BookDelta, BookSnapshot, Record
 from crypcodile.util.time import ms_to_ns, now_ns
 
-
-class SyncResult(StrEnum):
-    DROP = "drop"
-    APPLY = "apply"
-    RESYNC = "resync"
+# Re-export for callers that import SyncResult from this module.
+__all__ = [
+    "OrderBookSync",
+    "SyncResult",
+    "normalize_depth",
+    "parse_rest_depth_snapshot",
+]
 
 
 class OrderBookSync:
