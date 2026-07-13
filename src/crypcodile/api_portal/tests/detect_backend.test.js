@@ -31,24 +31,31 @@ function isPythonProbeStatus(status) {
     return status === 200;
 }
 
-test('detectBackend probes include catalog, metrics, and health', () => {
+test('detectBackend probes include catalog, metrics, ready, and health', () => {
     const paths = extractProbePaths(appJs);
     assert.deepEqual(paths, [
         '/api/v1/catalog/channels',
         '/metrics',
+        '/api/v1/ready',
         '/api/v1/health',
     ]);
 });
 
-test('detectBackend treats /api/v1/health after catalog probes (fallback order)', () => {
+test('detectBackend treats /api/v1/ready and /api/v1/health after catalog probes', () => {
     const paths = extractProbePaths(appJs);
     const catalogIdx = paths.indexOf('/api/v1/catalog/channels');
+    const readyIdx = paths.indexOf('/api/v1/ready');
     const healthIdx = paths.indexOf('/api/v1/health');
     assert.ok(catalogIdx >= 0, 'catalog probe present');
+    assert.ok(readyIdx >= 0, 'ready probe present');
     assert.ok(healthIdx >= 0, 'health probe present');
     assert.ok(
-        healthIdx > catalogIdx,
-        'health must be tried after catalog so it only matters when catalog fails',
+        readyIdx > catalogIdx,
+        'ready must be tried after catalog so it only matters when catalog fails',
+    );
+    assert.ok(
+        healthIdx > readyIdx,
+        'health must be tried after ready so 503 readiness falls through to liveness',
     );
 });
 

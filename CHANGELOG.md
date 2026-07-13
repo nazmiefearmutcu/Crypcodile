@@ -6,6 +6,8 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **API capabilities endpoint**: `GET /api/v1/capabilities` — free agent discovery returning `{rest, mcp_tools_hint}` hardcoded short lists of major free REST routes (METHOD + path) and MCP tool names (no payment, no lake; defensive list copies).
+- **API ready probe**: `GET /api/v1/ready` — k8s-style readiness (same body as `/api/v1/health`; HTTP **200** when `ok`, **503** when lake unavailable). Prometheus remains at `GET /metrics`.
 - **API label-transfers endpoint**: `POST /api/v1/label-transfers` body `{transfers, watchlist, known_only?, min_usd?}` wrapping pure offline `label_transfer_addresses` (+ optional `filter_transfers_by_usd`); empty transfers → `[]`; empty watchlist still returns unlabeled rows; negative `min_usd` → 400.
 - **API gas-vol / mev-sandwich / smart-money endpoints**: `POST /api/v1/gas-vol`, `/mev-sandwich`, `/smart-money` pure JSON offline analytics (no lake, no payment).
 - **API funding-predict endpoint**: `GET /api/v1/funding-predict` with comma-separated `rates` and optional `window_size` wrapping pure offline `predict_next_funding` (no payment, no lake; empty/invalid rates or window → 400).
@@ -88,7 +90,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **WebSocket connect session leak**: Close the aiohttp session when WebSocket connect fails.
 - **Binance book bridge bootstrap**: Register the book resync bridge only after a successful bootstrap.
 - **Whitespace-only catalog search**: Treat whitespace-only search queries as empty.
-- **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back to free `GET /api/v1/health` 200, then admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
+- **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back to free `GET /api/v1/ready` 200 (Python readiness), then `GET /api/v1/health` 200, then admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
 - **Payment refund on serve failure**: Restore paid status when market-data serve fails after payment CAS spend.
 - **Multi-symbol OI exchange overwrite**: Keep multi-symbol open interest without clobbering exchange identity across symbols.
 - **Read-only SQL query hardening**: Harden the bounded read-only SQL / lake query API endpoint.

@@ -1430,6 +1430,68 @@ async def ready(response: Response) -> dict[str, Any]:
     return payload
 
 
+# Hardcoded short discovery lists for agents (free catalog / meta / analytics).
+# Not exhaustive — see OpenAPI or MCP ``tools/list`` for the full surface.
+_CAPABILITIES_REST: list[str] = [
+    "GET /api/v1/health",
+    "GET /api/v1/ready",
+    "GET /api/v1/version",
+    "GET /api/v1/exchanges",
+    "GET /api/v1/catalog/channels",
+    "GET /api/v1/catalog/search",
+    "GET /api/v1/catalog/inventory",
+    "GET /api/v1/data-coverage",
+    "GET /api/v1/resolve-symbols",
+    "GET /api/v1/open-interest",
+    "GET /api/v1/funding-apr",
+    "GET /api/v1/basis",
+    "GET /api/v1/indicators",
+    "GET /api/v1/ofi",
+    "GET /api/v1/iv-surface",
+    "POST /api/v1/query",
+    "POST /api/v1/gas-vol",
+    "POST /api/v1/mev-sandwich",
+    "POST /api/v1/smart-money",
+    "POST /api/v1/label-transfers",
+]
+
+_CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
+    "list_data_channels",
+    "search_symbols",
+    "data_coverage",
+    "inventory_snapshot",
+    "query_market_data",
+    "get_funding_apr",
+    "get_indicators",
+    "get_iv_surface",
+    "get_perp_basis",
+    "get_spot_perp_basis",
+    "get_open_interest",
+    "calculate_ofi",
+    "estimate_slippage",
+    "detect_mev_sandwiches",
+    "smart_money_summary",
+    "label_transfers",
+]
+
+
+@app.get("/api/v1/capabilities")
+async def capabilities() -> dict[str, list[str]]:
+    """Agent discovery: major free REST routes + MCP tool name hints.
+
+    Returns hardcoded short lists (not an OpenAPI dump)::
+
+        {"rest": [...], "mcp_tools_hint": [...]}
+
+    Read-only, no payment, no lake. Lists are static copies so callers cannot
+    mutate module-level constants.
+    """
+    return {
+        "rest": list(_CAPABILITIES_REST),
+        "mcp_tools_hint": list(_CAPABILITIES_MCP_TOOLS_HINT),
+    }
+
+
 @app.get("/api/v1/version")
 async def version() -> dict[str, str]:
     """Package version only (read-only, no payment, no lake).

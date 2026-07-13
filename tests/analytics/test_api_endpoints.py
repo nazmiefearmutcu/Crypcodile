@@ -5105,6 +5105,74 @@ def test_ready_separate_from_health_status_semantics() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/capabilities — agent discovery (hardcoded free route + MCP hints)
+# ---------------------------------------------------------------------------
+
+
+def test_capabilities_shape_and_contents() -> None:
+    """Returns {rest, mcp_tools_hint} with major free endpoints and tool names."""
+    from crypcodile.api_server import (
+        _CAPABILITIES_MCP_TOOLS_HINT,
+        _CAPABILITIES_REST,
+        capabilities,
+    )
+
+    with patch("crypcodile.api_server._get_lake_client") as mock_lake:
+        result = asyncio.run(capabilities())
+        mock_lake.assert_not_called()
+
+    assert set(result.keys()) == {"rest", "mcp_tools_hint"}
+    assert result["rest"] == _CAPABILITIES_REST
+    assert result["mcp_tools_hint"] == _CAPABILITIES_MCP_TOOLS_HINT
+    assert isinstance(result["rest"], list)
+    assert isinstance(result["mcp_tools_hint"], list)
+    assert len(result["rest"]) >= 10
+    assert len(result["mcp_tools_hint"]) >= 8
+
+    # Core free meta / catalog routes agents should discover first
+    for route in (
+        "GET /api/v1/health",
+        "GET /api/v1/ready",
+        "GET /api/v1/catalog/channels",
+        "POST /api/v1/query",
+    ):
+        assert route in result["rest"]
+
+    for tool in (
+        "list_data_channels",
+        "search_symbols",
+        "get_indicators",
+        "label_transfers",
+    ):
+        assert tool in result["mcp_tools_hint"]
+
+    # All REST entries are METHOD + path
+    for entry in result["rest"]:
+        assert entry.startswith("GET ") or entry.startswith("POST ")
+        assert "/api/v1/" in entry
+
+
+def test_capabilities_returns_defensive_copies() -> None:
+    """Mutating the response lists must not corrupt subsequent calls."""
+    from crypcodile.api_server import capabilities
+
+    a = asyncio.run(capabilities())
+    a["rest"].append("GET /api/v1/not-real")
+    a["mcp_tools_hint"].append("not_a_tool")
+    b = asyncio.run(capabilities())
+    assert "GET /api/v1/not-real" not in b["rest"]
+    assert "not_a_tool" not in b["mcp_tools_hint"]
+
+
+def test_capabilities_route_registered() -> None:
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/capabilities", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/version — package version only (no payment, no lake)
 # ---------------------------------------------------------------------------
 

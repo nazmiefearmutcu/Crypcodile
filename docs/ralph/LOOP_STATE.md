@@ -277,7 +277,14 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 |---|------|--------|--------|
 | 1 | Prefer readiness over metrics-summary: `GET /api/v1/ready` (200 when `health.ok`, else 503); leave Prometheus at `/metrics` | DONE | `8c4ca948e795762b68c53036148f4af4bdd91d22` |
 
-## Next rotation ideas (Wave 37+)
+## Wave 37 — Feature (capabilities + portal ready probe) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Portal `detectBackend`: also probe `/api/v1/ready` (200 → Python) before `/api/v1/health` | DONE | (this wave) |
+| 2 | Prefer `GET /api/v1/capabilities` `{rest, mcp_tools_hint}` hardcoded short free discovery lists (skip openapi-paths) | DONE | (this wave) |
+
+## Next rotation ideas (Wave 38+)
 
 Priority candidates for the next cycles:
 
@@ -331,3 +338,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 34: REST mev-sandwich + smart-money pure JSON bodies
 - Wave 35: REST `POST /api/v1/label-transfers`; blank watchlist key fix
 - Wave 36: REST `GET /api/v1/ready` k8s readiness (200/`ok` else 503); `/metrics` kept as-is
+- Wave 37: portal detectBackend `/api/v1/ready` probe; REST `GET /api/v1/capabilities` agent discovery

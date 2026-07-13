@@ -1628,9 +1628,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Prefer public Python-only probes (stable when ADMIN_API_KEY is unset).
-            // /api/v1/health is a lightweight fallback when catalog/metrics are
+            // /api/v1/ready is a Python-only k8s readiness signal (200 when lake ok).
+            // /api/v1/health is a lightweight fallback when catalog/metrics/ready are
             // unavailable (e.g. lake mount issues) but the FastAPI process is up.
-            for (const path of ['/api/v1/catalog/channels', '/metrics', '/api/v1/health']) {
+            for (const path of ['/api/v1/catalog/channels', '/metrics', '/api/v1/ready', '/api/v1/health']) {
                 try {
                     const probe = await fetch(path);
                     if (probe.status === 200) {
