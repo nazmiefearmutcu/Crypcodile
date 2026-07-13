@@ -81,7 +81,7 @@ uv run crypcodile mcp --data-dir data
 
 ## Search / Discovery
 
-Find symbols, list catalog coverage, and expose the same discovery surface to agents via MCP (`search_symbols`, `list_symbols`, `list_data_channels`, `list_exchanges_on_disk`, `list_dates`, `catalog_summary`, `data_coverage`):
+Find symbols, list catalog coverage, and expose the same discovery surface to agents via MCP (`search_symbols`, `list_symbols`, `resolve_symbols`, `list_data_channels`, `list_exchanges_on_disk`, `list_dates`, `catalog_summary`, `data_coverage`):
 
 ```bash
 crypcodile search "btc" --channel trade
@@ -90,7 +90,7 @@ crypcodile catalog-summary   # channels + exchanges_on_disk counts (mirrors REST
 crypcodile catalog-dates --channel trade          # hive date= partitions (list_dates)
 crypcodile catalog-symbols --channel trade --exchange deribit  # distinct inventory symbols
 crypcodile catalog-exchanges  # on-disk hive exchange= partitions
-crypcodile mcp  # tools: search_symbols, list_symbols, list_data_channels, list_exchanges_on_disk, list_dates, catalog_summary, data_coverage
+crypcodile mcp  # tools: search_symbols, list_symbols, resolve_symbols, list_data_channels, list_exchanges_on_disk, list_dates, catalog_summary, data_coverage
 ```
 
 ## 4. Analytics

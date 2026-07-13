@@ -5985,6 +5985,7 @@ def test_capabilities_shape_and_contents() -> None:
         "catalog_summary",
         "search_symbols",
         "list_symbols",
+        "resolve_symbols",
         "get_indicators",
         "get_spot_future_basis",
         "get_lending_stress",

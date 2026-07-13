@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–54 COMPLETE. Continuous loop still active → Wave 55+.
+**Status:** Waves 1–55 COMPLETE. Continuous loop still active → Wave 56+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -425,14 +425,23 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | CLI `catalog-exchanges` via `client.list_exchanges_on_disk` | DONE | `0c418c4` |
 | 4 | Tests: empty/data/filter/strip/delegate for all three; **16 passed** | DONE | `0c418c4` |
 
-## Next rotation ideas (Wave 55+)
+## Wave 55 — Bug hunt (broad regression) + Feature (MCP resolve_symbols) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx book resync + gap_bridge, cli, client search, json_safe, factory — **667 passed** (no pre-existing failures) | DONE | baseline `5bb3290` |
+| 2 | MCP `resolve_symbols` wrapping `client.resolve_symbols` (list or comma-separated symbols; optional channel + ambiguous; empty → `[]`; ValueError → `{error}`; TOOLS + tools/call + capabilities hint) | DONE | TBD |
+| 3 | Tests: empty/data/comma/strip/error/delegate + capabilities includes `resolve_symbols`; post-feature critical suites **675 passed** | DONE | TBD |
+
+## Next rotation ideas (Wave 56+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
-2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
-4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+2. **CLI resolve-symbols / data-coverage** — parity with REST/MCP discovery  
+3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
+4. **Payment / portal polish** — remaining API portal UX beyond backend detection  
+5. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 
 
@@ -499,3 +508,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 52: MCP `search_symbols` exchange filter; REST `GET /api/v1/catalog/symbols` distinct inventory symbols; inventory_snapshot filters verified
 - Wave 53: MCP `list_symbols` (inventory distinct symbols + channel/exchange filters; REST catalog/symbols parity); broad discovery regression 537 passed
 - Wave 54: CLI `catalog-dates` / `catalog-symbols` / `catalog-exchanges` (list_dates + inventory symbols + exchanges_on_disk; REST/MCP parity)
+- Wave 55: broad regression green (667→675 after +8 tests); MCP `resolve_symbols` (REST resolve-symbols parity for agents)

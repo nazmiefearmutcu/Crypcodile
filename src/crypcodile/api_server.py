@@ -1492,6 +1492,7 @@ _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
     "catalog_summary",
     "search_symbols",
     "list_symbols",
+    "resolve_symbols",
     "data_coverage",
     "inventory_snapshot",
     "query_market_data",

@@ -69,6 +69,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert "catalog_summary" in names
     assert "search_symbols" in names
     assert "list_symbols" in names
+    assert "resolve_symbols" in names
     assert "data_coverage" in names
     assert "inventory_snapshot" in names
 
@@ -477,3 +478,146 @@ def test_list_symbols_delegates_to_inventory() -> None:
     )
     assert handle_list_symbols(client) == []
     client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+# ---------------------------------------------------------------------------
+# resolve_symbols
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_symbols_empty_input() -> None:
+    """Empty / missing / blank symbols → [] without calling client."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_resolve_symbols, TOOLS
+
+    client = MagicMock()
+    assert handle_resolve_symbols(client) == []
+    assert handle_resolve_symbols(client, symbols=None) == []
+    assert handle_resolve_symbols(client, symbols="") == []
+    assert handle_resolve_symbols(client, symbols="   ") == []
+    assert handle_resolve_symbols(client, symbols=[]) == []
+    assert handle_resolve_symbols(client, symbols=["", "  "]) == []
+    assert handle_resolve_symbols(client, symbols=",,,") == []
+    client.resolve_symbols.assert_not_called()
+
+    names = {t["name"] for t in TOOLS}
+    assert "resolve_symbols" in names
+    tool = next(t for t in TOOLS if t["name"] == "resolve_symbols")
+    assert "symbols" in tool["inputSchema"]["properties"]
+    assert "channel" in tool["inputSchema"]["properties"]
+    assert "ambiguous" in tool["inputSchema"]["properties"]
+    assert tool["inputSchema"]["required"] == ["symbols"]
+
+
+async def test_resolve_symbols_with_data(tmp_path: pathlib.Path) -> None:
+    """Resolve raw unique match against lake inventory."""
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_resolve_symbols(client, symbols=["BTC-PERPETUAL"]) == [
+        "deribit:BTC-PERPETUAL"
+    ]
+    assert handle_resolve_symbols(
+        client, symbols=["deribit:BTC-PERPETUAL"]
+    ) == ["deribit:BTC-PERPETUAL"]
+
+
+async def test_resolve_symbols_comma_string(tmp_path: pathlib.Path) -> None:
+    """Comma-separated string input is split like REST query param."""
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_resolve_symbols(
+        client, symbols="BTC-PERPETUAL", ambiguous="first"
+    ) == ["deribit:BTC-PERPETUAL"]
+
+
+def test_resolve_symbols_strips_channel_and_default_ambiguous() -> None:
+    """Empty channel → None; blank ambiguous → 'error'."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    client = MagicMock()
+    client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
+    result = handle_resolve_symbols(
+        client,
+        symbols=["BTC-PERPETUAL"],
+        channel="  ",
+        ambiguous="",
+    )
+    assert result == ["deribit:BTC-PERPETUAL"]
+    client.resolve_symbols.assert_called_once_with(
+        ["BTC-PERPETUAL"], channel=None, ambiguous="error"
+    )
+
+
+def test_resolve_symbols_strips_padded_channel_and_parts() -> None:
+    """Padded channel and list items are stripped before client call."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    client = MagicMock()
+    client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
+    result = handle_resolve_symbols(
+        client,
+        symbols=["  BTC-PERPETUAL  ", ""],
+        channel="  trade  ",
+        ambiguous="  first  ",
+    )
+    assert result == ["deribit:BTC-PERPETUAL"]
+    client.resolve_symbols.assert_called_once_with(
+        ["BTC-PERPETUAL"], channel="trade", ambiguous="first"
+    )
+
+
+def test_resolve_symbols_value_error_to_error_dict() -> None:
+    """Client ValueError (no match / ambiguous / bad mode) → {error: ...}."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    client = MagicMock()
+    client.resolve_symbols.side_effect = ValueError("no matches for 'ZZZ'")
+    result = handle_resolve_symbols(client, symbols=["ZZZ"])
+    assert result == {"error": "no matches for 'ZZZ'"}
+
+
+def test_resolve_symbols_invalid_ambiguous_mode() -> None:
+    """Invalid ambiguous mode surfaces as structured error dict."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    client = MagicMock()
+    client.resolve_symbols.side_effect = ValueError(
+        "ambiguous must be 'error', 'first', or 'all'; got 'maybe'"
+    )
+    result = handle_resolve_symbols(
+        client, symbols=["BTC"], ambiguous="maybe"
+    )
+    assert isinstance(result, dict)
+    assert "error" in result
+    assert "ambiguous" in result["error"]
+
+
+def test_resolve_symbols_delegates_to_client() -> None:
+    """Handler is a thin normalize + client.resolve_symbols wrapper."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_resolve_symbols
+
+    client = MagicMock()
+    client.resolve_symbols.return_value = ["a", "b"]
+    assert handle_resolve_symbols(
+        client, symbols=["x", "y"], channel="trade", ambiguous="all"
+    ) == ["a", "b"]
+    client.resolve_symbols.assert_called_once_with(
+        ["x", "y"], channel="trade", ambiguous="all"
+    )

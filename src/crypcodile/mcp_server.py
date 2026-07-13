@@ -465,6 +465,47 @@ def handle_list_symbols(
     return sorted(inv["symbol"].unique().to_list())
 
 
+def handle_resolve_symbols(
+    client: CrypcodileClient,
+    symbols: list[str] | str | None = None,
+    channel: str | None = None,
+    ambiguous: str | None = "error",
+) -> list[str] | dict[str, str]:
+    """Resolve free-form symbol inputs to canonical catalog symbols.
+
+    Mirrors REST ``GET /api/v1/resolve-symbols`` via
+    :meth:`CrypcodileClient.resolve_symbols`.
+
+    *symbols* may be a list of strings or a single comma-separated string.
+    Empty / whitespace-only inputs → ``[]``. Empty/whitespace *channel*
+    → no filter. *ambiguous* defaults to ``"error"`` (also used when blank).
+
+    Client validation failures (no match, ambiguous multi-match when
+    ``ambiguous="error"``, invalid mode) return ``{"error": "..."}`` so
+    agents get structured failures without an uncaught exception.
+    """
+    parts: list[str] = []
+    if isinstance(symbols, str):
+        parts = [p.strip() for p in symbols.split(",") if p.strip()]
+    elif isinstance(symbols, list):
+        for item in symbols:
+            if item is None:
+                continue
+            s = str(item).strip()
+            if s:
+                parts.append(s)
+    if not parts:
+        return []
+
+    ch = (channel or "").strip() or None
+    mode = (ambiguous or "").strip() or "error"
+
+    try:
+        return client.resolve_symbols(parts, channel=ch, ambiguous=mode)  # type: ignore[arg-type]
+    except ValueError as e:
+        return {"error": str(e)}
+
+
 def handle_estimate_slippage(
     client: CrypcodileClient,
     symbol: str,
@@ -1134,6 +1175,41 @@ TOOLS = [
                 },
             },
             "required": [],
+        },
+    },
+    {
+        "name": "resolve_symbols",
+        "description": (
+            "Resolve free-form symbol inputs to canonical catalog symbols "
+            "(e.g. 'BTC-PERPETUAL' → 'deribit:BTC-PERPETUAL'). Accepts a "
+            "list of strings or a comma-separated string. Optional channel "
+            "filter; ambiguous multi-match policy: error (default), first, "
+            "or all. Empty input → []. No match / ambiguous (error mode) / "
+            "invalid ambiguous → {error: ...}. Mirrors REST "
+            "GET /api/v1/resolve-symbols."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbols": {
+                    "description": (
+                        "Free-form symbol strings to resolve (array of "
+                        "strings, or a single comma-separated string)."
+                    ),
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "Optional channel filter (e.g. 'trade').",
+                },
+                "ambiguous": {
+                    "type": "string",
+                    "description": (
+                        "Multi-match policy: 'error' (default), 'first', "
+                        "or 'all'."
+                    ),
+                },
+            },
+            "required": ["symbols"],
         },
     },
     {
@@ -2068,6 +2144,18 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"list_symbols failed: {e}"
+                            }
+                    elif tool_name == "resolve_symbols":
+                        try:
+                            tool_result = handle_resolve_symbols(
+                                client,
+                                arguments.get("symbols"),
+                                channel=arguments.get("channel"),
+                                ambiguous=arguments.get("ambiguous", "error"),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"resolve_symbols failed: {e}"
                             }
                     elif tool_name == "estimate_slippage":
                         try:
