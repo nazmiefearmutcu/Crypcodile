@@ -71,6 +71,7 @@ get_indicators(symbol, start_ns, end_ns, interval="1d", indicator=None, period=1
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
@@ -345,7 +346,11 @@ class CrypcodileClient:
                       An empty list yields nothing immediately.
             frm:      Inclusive start of the time range (nanoseconds UTC).
             to:       Inclusive end of the time range (nanoseconds UTC).
-            limit:    Optional maximum number of records to return.
+            limit:    Optional maximum number of records to yield from the
+                      globally merged stream (not per channel).  Per-channel
+                      scans still use the same bound as a read optimization:
+                      the first *N* merged records are always contained in the
+                      first *N* rows of each time-ordered input stream.
 
         Yields:
             Record objects in non-decreasing ``local_ts`` order.
@@ -354,6 +359,8 @@ class CrypcodileClient:
             return iter([])
 
         # Build one sorted iterator per channel, querying all symbols in a single scan.
+        # Pass limit into each scan so large lakes are not fully materialised when
+        # only the earliest N merged records are needed (safe upper bound per stream).
         streams: list[Iterator[Record]] = []
         for channel in channels:
             df = self._catalog.scan(channel, symbols, frm, to, limit=limit)
@@ -363,7 +370,12 @@ class CrypcodileClient:
         if not streams:
             return iter([])
 
-        return _kway_merge(streams)
+        merged: Iterator[Record] = _kway_merge(streams)
+        # Global bound: per-channel scan limits alone can yield up to
+        # limit * len(channels) after the k-way merge.
+        if limit is not None:
+            return itertools.islice(merged, limit)
+        return merged
 
     # ------------------------------------------------------------------
     # Analytics API (Task 6.5)
