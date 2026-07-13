@@ -220,3 +220,91 @@ def test_collect_cli_wizard(tmp_path: pathlib.Path) -> None:
     assert "exchange='deribit'" in result.output
     assert "['BTC-PERPETUAL']" in result.output
     assert "['trade']" in result.output
+
+
+def test_collect_cli_accepts_max_reconnects_and_duration_flags(
+    tmp_path: pathlib.Path,
+) -> None:
+    """--max-reconnects and --duration-seconds are accepted; max_reconnects is forwarded."""
+    seen: dict = {}
+
+    async def _fake_collect(*args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+
+    def _fake_make_connector(exchange, symbols, channels, out, registry, **kw):
+        conn = DeribitConnector(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        conn.transport = FakeTransport(frames=[])
+        return conn
+
+    with (
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.collect_live", _fake_collect),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+    ):
+        result = _RUNNER.invoke(
+            app,
+            [
+                "collect",
+                "--exchange", "deribit",
+                "--symbols", "BTC-PERPETUAL",
+                "--channels", "trade",
+                "--data-dir", str(tmp_path),
+                "--max-reconnects", "5",
+                "--duration-seconds", "1.5",
+            ],
+        )
+
+    assert result.exit_code == 0, (
+        f"CLI exited {result.exit_code}:\n{result.output}"
+    )
+    assert seen.get("kwargs", {}).get("max_reconnects") == 5
+    assert "max_reconnects=5" in result.output
+    assert "duration_seconds=1.5" in result.output
+
+
+def test_collect_cli_duration_seconds_auto_stops(tmp_path: pathlib.Path) -> None:
+    """--duration-seconds cancels a long-running collect and exits cleanly."""
+
+    async def _hanging_collect(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    def _fake_make_connector(exchange, symbols, channels, out, registry, **kw):
+        conn = DeribitConnector(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        conn.transport = FakeTransport(frames=[])
+        return conn
+
+    with (
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.collect_live", _hanging_collect),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+    ):
+        result = _RUNNER.invoke(
+            app,
+            [
+                "collect",
+                "--exchange", "deribit",
+                "--symbols", "BTC-PERPETUAL",
+                "--channels", "trade",
+                "--data-dir", str(tmp_path),
+                "--duration-seconds", "0.05",
+            ],
+        )
+
+    assert result.exit_code == 0, (
+        f"Expected exit 0 on duration auto-stop, got {result.exit_code}.\n"
+        f"{result.output}"
+    )
+    assert "Collection stopped" in result.output

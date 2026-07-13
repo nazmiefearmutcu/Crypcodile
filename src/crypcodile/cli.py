@@ -20,9 +20,11 @@ liquidity-depth -- Per-block bid/ask depth at ±1/2/5% from mid (book snapshots)
 sequencer-latency -- Sequencer production interval and ingestion delay (lake).
 peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
 chaos-score    -- Normalized [0, 100] chaos score from pure risk metrics.
+lending-stress -- LTV/health-factor stress under collateral haircut (pure nums).
 gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
 smart-money    -- Summarize smart-money net flow from transfers CSV + watchlist.
 label-transfers -- Label/filter transfer CSV rows via watchlist JSON (no RPC).
+mev-sandwich   -- Flag sandwich patterns in trade sequences (CSV/JSON offline).
 
 Usage examples::
 
@@ -60,10 +62,14 @@ Usage examples::
     crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
     crypcodile chaos-score --volatility 0.05 --stablecoin-deviation 0.002 \\
                           --orderbook-imbalance 0.1 --sequencer-delay 1.0
+    crypcodile lending-stress --collateral-usd 10000 --debt-usd 5000 \\
+                             --liquidation-threshold 0.8 --haircut-pct 0.20
     crypcodile gas-vol --gas-file gas.csv --vol-file vol.csv
     crypcodile smart-money --transfers transfers.csv --watchlist watchlist.json
     crypcodile label-transfers --transfers transfers.csv --watchlist watchlist.json \\
                               --min-usd 100000
+    crypcodile mev-sandwich --trades swaps.csv
+    crypcodile mev-sandwich --trades swaps.json --sandwiches-only
 """
 
 from __future__ import annotations
@@ -1511,12 +1517,32 @@ def collect(
             ),
         ),
     ] = None,
+    max_reconnects: Annotated[
+        int | None,
+        typer.Option(
+            "--max-reconnects",
+            help=(
+                "Maximum connector reconnect attempts after a transport failure. "
+                "Default: unlimited (-1). Use 0 to disable reconnects."
+            ),
+        ),
+    ] = None,
+    duration_seconds: Annotated[
+        float | None,
+        typer.Option(
+            "--duration-seconds",
+            help="Auto-stop collection after this many seconds.",
+        ),
+    ] = None,
 ) -> None:
     """Collect live market data from an exchange and write to the Parquet data lake.
 
     Press Ctrl-C (SIGINT) to stop gracefully — the sink is flushed before exit.
     Unparseable frames land in a dead-letter queue; on stop a JSON report is
     written when the queue is non-empty (see --dlq-report).
+
+    Use --duration-seconds to auto-stop after a fixed wall-clock duration, and
+    --max-reconnects to cap reconnect attempts (default unlimited).
 
     Valid exchange names: binance, bybit, coinbase, deribit, okx,
     base_onchain, gmx_synthetix.
@@ -1578,10 +1604,46 @@ def collect(
     typer.echo(
         f"Starting collection: exchange={exchange!r} symbols={symbols} "
         f"channels={channels} data_dir={data_dir}"
+        + (f" max_reconnects={max_reconnects}" if max_reconnects is not None else "")
+        + (f" duration_seconds={duration_seconds}" if duration_seconds is not None else "")
     )
 
     monitoring_sink = MonitoringSink(sink)
     connector.out = monitoring_sink
+
+    collect_kwargs: dict = {
+        "dlq_report_path": dlq_report,
+        "data_dir": data_dir,
+    }
+    if max_reconnects is not None:
+        collect_kwargs["max_reconnects"] = max_reconnects
+
+    async def _run_collect_live() -> None:
+        """Run collect_live, optionally auto-stopping after duration_seconds."""
+        if duration_seconds is None:
+            await collect_live([connector], monitoring_sink, **collect_kwargs)
+            return
+
+        collect_task = asyncio.create_task(
+            collect_live([connector], monitoring_sink, **collect_kwargs)
+        )
+
+        async def _cancel_after() -> None:
+            await asyncio.sleep(duration_seconds)
+            collect_task.cancel()
+
+        timer_task = asyncio.create_task(_cancel_after())
+        try:
+            await collect_task
+        except asyncio.CancelledError:
+            # Expected on duration expiry (and on outer cancellation).
+            pass
+        finally:
+            timer_task.cancel()
+            try:
+                await timer_task
+            except asyncio.CancelledError:
+                pass
 
     if is_interactive_stdin():
 
@@ -1590,12 +1652,7 @@ def collect(
                 run_dashboard(monitoring_sink, exchange, symbols, channels, data_dir)
             )
             try:
-                await collect_live(
-                    [connector],
-                    monitoring_sink,
-                    dlq_report_path=dlq_report,
-                    data_dir=data_dir,
-                )
+                await _run_collect_live()
             finally:
                 dashboard_task.cancel()
                 try:
@@ -1609,14 +1666,7 @@ def collect(
             pass
     else:
         try:
-            asyncio.run(
-                collect_live(
-                    [connector],
-                    monitoring_sink,
-                    dlq_report_path=dlq_report,
-                    data_dir=data_dir,
-                )
-            )
+            asyncio.run(_run_collect_live())
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
 
@@ -3295,6 +3345,69 @@ def chaos_score_cmd(
 
 
 # ---------------------------------------------------------------------------
+# lending-stress (Base risk analytics — pure numeric LTV / health-factor)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="lending-stress")
+def lending_stress_cmd(
+    collateral_usd: Annotated[
+        float,
+        typer.Option(
+            "--collateral-usd",
+            help="Current collateral value in USD.",
+        ),
+    ],
+    debt_usd: Annotated[
+        float,
+        typer.Option(
+            "--debt-usd",
+            help="Current debt value in USD.",
+        ),
+    ],
+    liquidation_threshold: Annotated[
+        float,
+        typer.Option(
+            "--liquidation-threshold",
+            help="Liquidation threshold as a fraction (e.g. 0.8 for 80%).",
+        ),
+    ],
+    haircut_pct: Annotated[
+        float,
+        typer.Option(
+            "--haircut-pct",
+            help="Collateral haircut as fraction or percent (0.20 or 20 for 20%).",
+        ),
+    ],
+) -> None:
+    """Stress-test a lending position's health factor under a collateral haircut (no lake/RPC)."""
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    result = lending_stress_test(
+        collateral_usd=collateral_usd,
+        debt_usd=debt_usd,
+        liquidation_threshold=liquidation_threshold,
+        haircut_pct=haircut_pct,
+    )
+
+    def _fmt_hf(value: float) -> str:
+        if value == float("inf"):
+            return "inf"
+        return str(value)
+
+    typer.echo(
+        f"collateral_usd: {collateral_usd}\n"
+        f"debt_usd: {debt_usd}\n"
+        f"liquidation_threshold: {liquidation_threshold}\n"
+        f"haircut_pct: {haircut_pct}\n"
+        f"current_health_factor: {_fmt_hf(float(result['current_health_factor']))}\n"
+        f"simulated_health_factor: {_fmt_hf(float(result['simulated_health_factor']))}\n"
+        f"is_liquidatable: {result['is_liquidatable']}\n"
+        f"simulated_is_liquidatable: {result['simulated_is_liquidatable']}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # gas-vol (Base risk analytics — pure DF inputs)
 # ---------------------------------------------------------------------------
 
@@ -3525,6 +3638,80 @@ def label_transfers_cmd(
         raise typer.Exit(code=0)
 
     typer.echo(pl.DataFrame(rows))
+
+
+# ---------------------------------------------------------------------------
+# mev-sandwich (pure trade-sequence sandwich flags; CSV/JSON offline)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="mev-sandwich")
+def mev_sandwich_cmd(
+    trades: Annotated[
+        Path | None,
+        typer.Option(
+            "--trades",
+            help=(
+                "CSV/JSON/JSONL trade sequence with columns "
+                "block, pool, log_index, sender, is_buy."
+            ),
+        ),
+    ] = None,
+    sandwiches_only: Annotated[
+        bool,
+        typer.Option(
+            "--sandwiches-only",
+            help="Only emit rows flagged as sandwich legs (frontrun/victim/backrun).",
+        ),
+    ] = False,
+) -> None:
+    """Flag MEV sandwich patterns in an offline trade sequence (no RPC/lake)."""
+    import polars as pl
+
+    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+
+    if not is_interactive_stdin():
+        if trades is None:
+            typer.echo(
+                "Error: --trades is required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if trades is None:
+            trades = Path(typer.prompt("Path to trades CSV/JSON"))
+
+    if trades is None:
+        typer.echo("Error: --trades is required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        df = _load_series_dataframe(trades)
+    except Exception as e:
+        typer.echo(f"Error loading trades file: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        out = detect_sandwiches(df)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    n_flagged = int(out.filter(pl.col("is_sandwich")).height) if out.height else 0
+    if sandwiches_only:
+        out = out.filter(pl.col("is_sandwich"))
+
+    if out.height == 0:
+        typer.echo(
+            "No sandwich legs found." if sandwiches_only else "No trades in input."
+        )
+        raise typer.Exit(code=0)
+
+    typer.echo(out)
+    typer.echo(
+        f"sandwich_legs: {n_flagged} / {df.height}",
+        err=True,
+    )
 
 
 # ---------------------------------------------------------------------------
