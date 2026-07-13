@@ -2,7 +2,7 @@
 
 **Deterministic Market Data Infrastructure for Quantitative Research and Autonomous Agents**
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.043-blue.svg)](https://pypi.org/project/crypcodile/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.044-blue.svg)](https://pypi.org/project/crypcodile/)
 [![Python Supported](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -68,6 +68,16 @@ Crypcodile pioneers this integration via its natively embedded **Model Context P
 ```bash
 # Initialize the MCP server for agentic consumption
 uv run crypcodile mcp --data-dir data
+```
+
+## Search / Discovery
+
+Find symbols, list catalog coverage, and expose the same discovery surface to agents via MCP (`search_symbols`, `list_data_channels`, `data_coverage`):
+
+```bash
+crypcodile search "btc" --channel trade
+crypcodile catalog --symbols
+crypcodile mcp  # tools: search_symbols, list_data_channels, data_coverage
 ```
 
 ## 4. Analytics
