@@ -311,6 +311,75 @@ async def test_parquet_sink_write_failure_preserves_concurrent_puts(
     assert original_write is not None
 
 
+async def test_parquet_sink_partial_multi_partition_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """Partial multi-partition flush re-buffers only unwritten partitions.
+
+    Two partition groups: first write succeeds, second fails.  Buffer must
+    retain only group B; group A is durable on disk once.  A subsequent
+    successful flush must write B without duplicating A.
+    """
+    from crypcodile.store.rows import to_row
+
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    # Distinct dates → distinct (exchange, date, bucket) partitions.
+    ts_a = 1_700_000_000_000_000_000  # 2023-11-14
+    ts_b = 1_700_086_400_000_000_000  # 2023-11-15
+    row_a = to_row(_trade(price=1.0, local_ts=ts_a))
+    row_b = to_row(_trade(price=2.0, local_ts=ts_b))
+    key_a = (row_a["exchange"], row_a["date"], row_a["bucket"])
+    key_b = (row_b["exchange"], row_b["date"], row_b["bucket"])
+    assert key_a != key_b
+
+    # Insert A then B so groups iteration writes A first (insertion order).
+    sink._buffers["trade"].append(row_a)
+    sink._buffers["trade"].append(row_b)
+
+    original_write = sink._write_parquet_sync
+    calls = {"n": 0}
+
+    def _fail_second_partition(channel, exchange, date, bucket, rows):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original_write(channel, exchange, date, bucket, rows)
+        raise OSError("simulated second partition write failure")
+
+    monkeypatch.setattr(sink, "_write_parquet_sync", _fail_second_partition)
+
+    with pytest.raises(OSError, match="simulated second partition write failure"):
+        await sink.flush()
+
+    # Buffer only has group B rows
+    buf = sink._buffers["trade"]
+    assert len(buf) == 1
+    assert buf[0]["price"] == 2.0
+    assert (buf[0]["exchange"], buf[0]["date"], buf[0]["bucket"]) == key_b
+
+    # A is on disk once
+    trade_files = [p for p in _find_parquets(tmp_path) if "channel=trade" in str(p)]
+    assert trade_files
+    df_after_partial = pl.read_parquet(trade_files)
+    assert len(df_after_partial) == 1
+    assert df_after_partial["price"][0] == 1.0
+    assert set(df_after_partial["date"].to_list()) == {row_a["date"]}
+
+    # Retry succeeds without duplicating A
+    monkeypatch.undo()
+    await sink.flush()
+    assert sink._buffers.get("trade", []) == []
+
+    all_trade_files = [p for p in _find_parquets(tmp_path) if "channel=trade" in str(p)]
+    df = pl.read_parquet(all_trade_files)
+    assert len(df) == 2
+    assert set(df["price"].to_list()) == {1.0, 2.0}
+    # Partition A still a single row (no duplicate on retry)
+    assert len(df.filter(pl.col("date") == row_a["date"])) == 1
+    assert len(df.filter(pl.col("date") == row_b["date"])) == 1
+
+
 async def test_parquet_sink_cancelled_flush_re_buffers_rows(
     tmp_path: pathlib.Path,
     monkeypatch,

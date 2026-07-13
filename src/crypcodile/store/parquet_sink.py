@@ -272,12 +272,13 @@ class ParquetSink(Sink):
     async def _flush_channel(self, channel: str) -> None:
         """Write a channel's buffer to one or more Parquet files.
 
-        Rows are detached for the write attempt but only dropped after every
-        partition write succeeds.  On any non-success path (write failure,
-        ``CancelledError``, or other ``BaseException``) the snapshot is
+        Rows are detached for the write attempt.  Each partition group is
+        tracked in ``written`` after a successful write.  On any non-success
+        path (write failure, ``CancelledError``, or other ``BaseException``)
+        only rows whose partition key is **not** in ``written`` are
         re-buffered (prepended ahead of any rows concurrent ``put()`` may
-        have added while the write was in flight) so callers never see silent
-        data loss.
+        have added while the write was in flight).  Already-durable
+        partitions are not re-queued, avoiding duplicates on retry.
         """
         # Detach current buffer so concurrent put() appends to a fresh list
         # via defaultdict, while we own the snapshot for this flush.
@@ -285,10 +286,11 @@ class ParquetSink(Sink):
         if not rows:
             return
 
-        # Use try/finally + success flag so rows are re-buffered on ANY
-        # non-success path, including CancelledError / BaseException (which
-        # ``except Exception`` does not catch).
+        # Use try/finally + success flag so unwritten rows are re-buffered on
+        # ANY non-success path, including CancelledError / BaseException
+        # (which ``except Exception`` does not catch).
         ok = False
+        written: set[tuple[str, str, int]] = set()
         try:
             # Group rows by (exchange, date, bucket) — each group → one file
             groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = (
@@ -308,14 +310,20 @@ class ParquetSink(Sink):
                     bucket,
                     group_rows,
                 )
+                written.add((exchange, date, bucket))
             ok = True
         finally:
             if not ok:
-                # Write failed or task cancelled: restore snapshot without
-                # losing any rows that arrived via put() while the flush was
-                # in progress.
+                # Partial or total failure: re-buffer only partitions that
+                # never completed a durable write.  Prepend remaining ahead of
+                # concurrent put() rows so order is remaining + pending.
+                remaining = [
+                    r
+                    for r in rows
+                    if (r["exchange"], r["date"], r["bucket"]) not in written
+                ]
                 pending = self._buffers.get(channel, [])
-                self._buffers[channel] = rows + pending
+                self._buffers[channel] = remaining + pending
 
     def _write_parquet_sync(
         self,
