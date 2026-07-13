@@ -34,9 +34,14 @@ Usage example (inside a connector's message loop)::
             for r in applied:
                 await sink.put(r)
 
-Primary production wiring: ``BinanceConnector._handle_message`` (when
-``book_delta`` / ``book_snapshot`` channels are subscribed) — see
-``crypcodile.exchanges.binance.connector``.
+Primary production wiring:
+
+- ``BinanceConnector._handle_message`` (when ``book_delta`` /
+  ``book_snapshot`` are subscribed) — see
+  ``crypcodile.exchanges.binance.connector``.
+- ``OKXConnector._handle_message`` for the ``books`` channel — see
+  ``crypcodile.exchanges.okx.connector`` (``OkxOrderBookSync`` + REST
+  ``GET /market/books``).
 
 Bybit is deferred: REST ``u`` aligns only with ``orderbook.1000`` while the
 connector streams ``orderbook.50``; Bybit recovery is re-snapshot /

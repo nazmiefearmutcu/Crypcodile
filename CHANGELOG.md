@@ -42,6 +42,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Superchain connector factory registration**: Register the superchain on-chain connector in the exchange factory registry.
 - **Dead-letter queue drain on collect stop**: Drain the ingest dead-letter queue when collect stops and emit a stop report.
 - **Book resync bridge (Binance)**: On depth sequence gaps, buffer live deltas, REST re-fetch `/depth`, and emit snapshot plus post-snapshot deltas via `OrderBookSync` + `BookResyncBridge`.
+- **Book resync bridge (OKX)**: On `books` `seqId`/`prevSeqId` gaps, buffer live deltas, REST re-fetch `/market/books`, and emit snapshot plus post-snapshot deltas via `OkxOrderBookSync` + `BookResyncBridge` (WS snapshot bootstrap preferred; register after successful bootstrap).
 - **Shared book-sync helpers**: Extracted `SyncResult`, `BookSyncMachine` protocol, and buffer filter for multi-venue resync.
 - **Smart-money / whale-transfer CLI**: CLI surface for smart-money and whale-transfer analytics.
 - **CLI backfill command**: Historical REST backfill command with client-side backfill orchestration.

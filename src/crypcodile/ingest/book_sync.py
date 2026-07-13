@@ -5,10 +5,11 @@
 state machines (e.g. Binance ``OrderBookSync``) implement
 :class:`BookSyncMachine` and live under ``exchanges/<venue>/book.py``.
 
-Bybit is intentionally not wired yet — see the deferral note on
-``BybitConnector`` (REST ``u`` only aligns with ``orderbook.1000``, while
-the connector uses ``orderbook.50``; recovery is re-snapshot, not
-Binance-style REST-anchored delta replay).
+OKX is wired via ``OkxOrderBookSync`` (``seqId`` / ``prevSeqId``) and
+REST ``GET /market/books``.  Bybit is intentionally not wired yet — see
+the deferral note on ``BybitConnector`` (REST ``u`` only aligns with
+``orderbook.1000``, while the connector uses ``orderbook.50``; recovery
+is re-snapshot, not Binance-style REST-anchored delta replay).
 """
 
 from __future__ import annotations

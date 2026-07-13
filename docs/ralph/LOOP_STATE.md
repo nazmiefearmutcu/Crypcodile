@@ -165,7 +165,13 @@
 |---|------|--------|--------|
 | 1 | REST endpoint for open-interest aggregation | DONE | `8f80bd0` |
 
-## Next rotation ideas (Wave 19+)
+## Wave 21 — Feature (OKX book resync) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST /market/books) | DONE | `a24d32f` |
+
+## Next rotation ideas (Wave 22+)
 
 Priority candidates for the next cycles:
 
@@ -202,4 +208,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 18: REST open-interest endpoint (`GET /api/v1/open-interest`)
 - Wave 19: REST funding-apr / basis / indicators endpoints; MCP lending-stress / peg_deviation / MEV sandwich
 - Wave 20: REST OFI / whale-alerts / slippage endpoints
-- **HEAD:** `1c354b2` — wave 20 whale-alerts + slippage REST; ready for Wave 21
+- Wave 21: OKX book resync bridge (`OkxOrderBookSync` + REST `/market/books`)

@@ -12,6 +12,24 @@ Appendix §7:
   Response: ``{"code":"0","data":[...]}``; fields: ``instType``, ``instId``,
   ``baseCcy``, ``quoteCcy``, ``settleCcy``, ``stk`` (strike, option only),
   ``expTime`` (expiry ms, option only), ``optType`` (``C``/``P``), ``tickSz``.
+
+Book path (sequence-gap resync)
+-------------------------------
+When ``book_delta`` / ``book_snapshot`` channels are subscribed, the ``books``
+stream is gated through :class:`~crypcodile.exchanges.okx.book.OkxOrderBookSync`
+and :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`:
+
+1. First ``action=snapshot`` → seed the sync machine from the WS snapshot
+   (no REST).  If the first books push is an ``update`` (rare), REST
+   ``GET /market/books`` bootstraps instead.
+2. Continuous ``action=update`` events → APPLY / DROP via ``OkxOrderBookSync``
+   using ``prevSeqId`` / ``seqId`` continuity.
+3. Sequence gap (``SyncResult.RESYNC``) → buffer live deltas, re-fetch REST
+   books snapshot, emit snapshot + post-snapshot buffered deltas.
+
+Bridges are registered only after a successful bootstrap with a usable
+``sequence_id`` / ``seqId`` so a failed fetch does not permanently DROP the
+symbol (same fix as Binance).
 """
 
 from __future__ import annotations
@@ -21,14 +39,14 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-import aiohttp
-
 from crypcodile.exchanges.base import Connector
+from crypcodile.exchanges.okx.book import OkxOrderBookSync, parse_rest_books_snapshot
+from crypcodile.ingest.gap_bridge import BookResyncBridge
 from crypcodile.ingest.transport import Transport
 from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crypcodile.schema.records import Record
+from crypcodile.schema.records import BookDelta, BookSnapshot, Record
 from crypcodile.sink.base import Sink
-from crypcodile.util.time import ms_to_ns
+from crypcodile.util.time import ms_to_ns, now_ns
 
 from .normalize import normalize_message
 
@@ -195,6 +213,11 @@ class OKXConnector(Connector):
         self.ws_url = _REGION_WS_URL.get(region, _REGION_WS_URL["global"])
         self._rest_base = _REGION_REST_URL.get(region, _REGION_REST_URL["global"])
         self._sub_args = build_channels(symbols, channels)
+        # Per-symbol book sync + resync bridge (lazy, only for book channels).
+        self._book_syncs: dict[str, OkxOrderBookSync] = {}
+        self._book_bridges: dict[str, BookResyncBridge] = {}
+        # REST books depth per side (OKX max 400).
+        self.book_depth_sz: int = 400
 
     def normalize(self, msg: object, local_ts: int) -> Iterable[Record]:
         if isinstance(msg, dict):
@@ -223,8 +246,169 @@ class OKXConnector(Connector):
         """Return the list of OKX subscribe arg dicts."""
         return self._sub_args
 
+    # ------------------------------------------------------------------
+    # Book resync integration (BookResyncBridge)
+    # ------------------------------------------------------------------
+
+    def _wants_book_sync(self) -> bool:
+        """True when book channels are requested (enable gap → REST resync)."""
+        return any(c in ("book_delta", "book_snapshot") for c in self.channels)
+
+    @staticmethod
+    def _is_books_message(msg: dict[str, Any]) -> bool:
+        """True for incremental ``books`` pushes (not bbo-tbt / books5)."""
+        arg = msg.get("arg")
+        if not isinstance(arg, dict):
+            return False
+        if arg.get("channel") != "books":
+            return False
+        return isinstance(msg.get("data"), list)
+
+    async def fetch_book_snapshot(self, symbol: str) -> BookSnapshot:
+        """Fetch a REST order-book snapshot for *symbol* (raw ``instId``).
+
+        Used as the ``fetch_snapshot`` callback for
+        :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`.  Tests may
+        monkeypatch this method to avoid network I/O.
+        """
+        url = f"{self._rest_base}/market/books"
+        data = await self.http_get(
+            url,
+            params={"instId": symbol, "sz": str(self.book_depth_sz)},
+        )
+        return parse_rest_books_snapshot(
+            data,
+            symbol_raw=symbol,
+            venue=self.name,
+            local_ts=now_ns(),
+            registry=self.registry,
+        )
+
+    async def _ensure_book_bridge(
+        self,
+        symbol_raw: str,
+        *,
+        ws_snapshot: BookSnapshot | None = None,
+    ) -> tuple[OkxOrderBookSync, BookResyncBridge]:
+        """Return (create if needed) OkxOrderBookSync + BookResyncBridge.
+
+        Bootstrap preference:
+        1. Seed from the concurrent WS ``action=snapshot`` when provided.
+        2. Otherwise REST-fetch ``/market/books``.
+
+        Bridges are registered only after a successful bootstrap with a usable
+        ``sequence_id`` so a failed fetch does not permanently DROP the symbol.
+        """
+        key = symbol_raw
+        if key not in self._book_bridges:
+            sync = OkxOrderBookSync()
+            bridge = BookResyncBridge(
+                sync=sync,
+                fetch_snapshot=self.fetch_book_snapshot,
+                symbol=key,
+            )
+
+            if ws_snapshot is not None:
+                snap = ws_snapshot
+            else:
+                snap = await self.fetch_book_snapshot(key)
+
+            if snap.sequence_id is None:
+                raise ValueError(
+                    f"OKX book bootstrap [{key}]: snapshot missing sequence_id"
+                )
+            sync.set_snapshot(last_update_id=snap.sequence_id)
+            await self.out.put(snap)
+            self._book_syncs[key] = sync
+            self._book_bridges[key] = bridge
+            log.info(
+                "OKX book bootstrap [%s]: snapshot seq=%s (source=%s)",
+                key,
+                snap.sequence_id,
+                "ws" if ws_snapshot is not None else "rest",
+            )
+        return self._book_syncs[key], self._book_bridges[key]
+
+    async def _handle_books_message(self, msg: dict[str, Any], local_ts: int) -> None:
+        """Normalize one books push, gate updates via OkxOrderBookSync + bridge."""
+        arg: dict[str, Any] = msg.get("arg") or {}
+        symbol_raw: str = arg.get("instId", "")
+        action: str = msg.get("action", "")
+
+        # Pre-normalize so we can seed from a WS snapshot without REST.
+        records = list(
+            normalize_message(
+                msg,
+                local_ts=local_ts,
+                venue=self.name,
+                registry=self.registry,
+            )
+        )
+
+        ws_snap: BookSnapshot | None = None
+        if action == "snapshot":
+            for rec in records:
+                if isinstance(rec, BookSnapshot) and rec.sequence_id is not None:
+                    ws_snap = rec
+                    break
+
+        # Mid-stream WS re-snapshot: re-anchor an existing bridge.
+        if symbol_raw in self._book_bridges and ws_snap is not None:
+            assert ws_snap.sequence_id is not None
+            self._book_syncs[symbol_raw].set_snapshot(
+                last_update_id=ws_snap.sequence_id
+            )
+            await self.out.put(ws_snap)
+            log.info(
+                "OKX book re-snapshot [%s]: seq=%s",
+                symbol_raw,
+                ws_snap.sequence_id,
+            )
+            return
+
+        sync, bridge = await self._ensure_book_bridge(
+            symbol_raw, ws_snapshot=ws_snap
+        )
+
+        # Bootstrap already emitted the WS snapshot; skip re-emitting it.
+        for rec in records:
+            if isinstance(rec, BookSnapshot):
+                # Already emitted during bootstrap (or mid-stream handled above).
+                continue
+            if not isinstance(rec, BookDelta):
+                await self.out.put(rec)
+                continue
+
+            result = sync.feed(seq_id=rec.seq_id, prev_seq_id=rec.prev_seq_id)
+            emit = bridge.feed_sync_result(result, rec)
+            if emit is not None:
+                await self.out.put(emit)
+
+            if bridge.is_resyncing:
+                applied = await bridge.complete_resync()
+                for r in applied:
+                    await self.out.put(r)
+
+    async def _handle_message(self, msg: object, local_ts: int) -> None:
+        """Route books updates through BookResyncBridge; all else default path.
+
+        Integration point documented on
+        :meth:`crypcodile.exchanges.base.Connector._handle_message`.
+        """
+        if (
+            isinstance(msg, dict)
+            and self._wants_book_sync()
+            and self._is_books_message(msg)
+        ):
+            await self._handle_books_message(msg, local_ts)
+            return
+        await super()._handle_message(msg, local_ts)
+
     async def _subscribe(self, transport: Transport) -> None:  # pragma: no cover
         """Send an OKX V5 subscribe frame."""
+        # Drop book state on (re)subscribe so a reconnect re-bootstraps.
+        self._book_syncs.clear()
+        self._book_bridges.clear()
         args = self.subscribe_channels()
         if args:
             frame = json.dumps({"op": "subscribe", "args": args}).encode()
