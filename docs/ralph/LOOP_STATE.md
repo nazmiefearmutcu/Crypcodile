@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–16 COMPLETE. Ready for Wave 17 (Bug hunt).
+**Status:** Waves 1–17 COMPLETE. Ready for Wave 18 (Feature).
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -146,7 +146,20 @@
 | 6 | Register superchain connector in factory | DONE | `aaf7893` |
 | 7 | Multi-exchange collect CLI | DONE | `c8a22ae` |
 
-## Next rotation ideas (Wave 17+)
+## Wave 17 — Bug hunt — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Payment refund: restore paid when market-data serve fails after CAS | DONE | `5af5c7f` |
+| 2 | Multi-symbol OI without exchange overwrite | DONE | `55e55bf` |
+| 3 | Harden read-only SQL query endpoint | DONE | `92dcf3f` |
+| 4 | Superchain identity + per-exchange recovery state | DONE | `cb2bcad` |
+| 5 | Onchain: co-persist seen logs with cursor advances | DONE | `b1032b5` |
+| 6 | MCP chaos-score tool | DONE | `9644341` |
+| 7 | CLI: include derive / superchain in exchange lists | DONE | `72bdd64` |
+| 8 | Register derive poll connector | DONE | `994ed98` |
+
+## Next rotation ideas (Wave 18+)
 
 Priority candidates for the next cycles:
 
@@ -180,4 +193,5 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 14: API exception detail, orderbook apply validation, NaN OHLCV drop, onchain cursor/seen-log
 - Wave 15: e2e fixture/tier hardening, MCP open-interest tool
 - Wave 16: portal detect, multi-exchange collect, REST query, superchain factory, inventory, funding MCP, catalog scan
-- **HEAD:** `c8a22ae` — ready for Wave 17
+- Wave 17: payment refund, multi-symbol OI, SQL harden, superchain identity, seen-logs co-persist, chaos MCP, CLI derive/superchain lists, derive poll connector
+- **HEAD:** `b1032b5` — wave 17 docs; ready for Wave 18
