@@ -255,18 +255,23 @@
 |---|------|--------|--------|
 | 1 | REST `POST /api/v1/gas-vol` pure JSON body `{gas, vol}` → `gas_to_volatility_correlation` (no files/lake) | DONE | `1a60834` |
 
-Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exists); mev-sandwich / smart-money deferred.
+Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exists); mev-sandwich / smart-money deferred (Wave 34).
 
-## Next rotation ideas (Wave 34+)
+## Wave 34 — Feature (mev-sandwich + smart-money pure REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `POST /api/v1/mev-sandwich` body `{trades: [...]}` → `detect_sandwiches` | DONE | `5cb3294` |
+| 2 | REST `POST /api/v1/smart-money` body `{transfers, watchlist}` → `summarize_smart_money` | DONE | `5cb3294` |
+
+## Next rotation ideas (Wave 35+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
-2. **POST /api/v1/smart-money** — pure transfers+watchlist JSON (CLI/MCP already exist)  
-3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-4. **Payment / portal polish** — remaining API portal UX beyond backend detection  
-5. **MEV sandwich surface** — further REST/CLI/MCP wiring if pure detect helpers remain unexposed  
-6. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
+3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
+4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 ## Subagent policy
 
@@ -297,6 +302,8 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 20: REST OFI / whale-alerts / slippage endpoints
 - Wave 21: OKX book resync bridge; base risk REST (depth/seq/chaos/peg); iv-surface / term-structure REST
 - Wave 22: REST vol-skew / lending-stress endpoints
+- Wave 33: REST gas-vol pure JSON correlation
+- Wave 34: REST mev-sandwich + smart-money pure JSON bodies
 - Wave 23: REST risk-reversal (`vol_skew` → `risk_reversal_butterfly`)
 - Wave 24: REST data-coverage (`inventory` filter by symbol/channel); skip search alias
 - Wave 25: REST perp-basis (`client.perp_basis`); MCP `label_transfers`; skip bulk export HTTP
