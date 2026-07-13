@@ -162,7 +162,7 @@ Python FastAPI surface in `src/crypcodile/api_server.py` (local lake + free prob
 | **Catalog / discovery** | `GET /catalog/channels`, `/catalog/search`, `/catalog/inventory`, `/catalog/scan`, `/data-coverage`, `/resolve-symbols` | Lake inventory & symbol resolve |
 | **Market data (gated)** | `GET /market-data`; `POST /simulate-payment` | x402 demo gating |
 | **Query** | `POST /query` | Bounded read-only SQL against the lake |
-| **Derivatives / OI** | `GET /open-interest`, `/funding-apr`, `/basis`, `/perp-basis`, `/spot-future-basis` | Funding & basis surfaces |
+| **Derivatives / OI** | `GET /open-interest`, `/funding-apr`, `/funding-predict`, `/basis`, `/perp-basis`, `/spot-future-basis` | Funding & basis surfaces; `/funding-predict` is pure offline (comma-separated `rates`) |
 | **Microstructure** | `GET /indicators`, `/ofi`, `/whale-alerts`, `/slippage`; `POST /simulate-price-impact` | Indicators & flow |
 | **Options** | `GET /iv-surface`, `/term-structure`, `/vol-skew`, `/risk-reversal` | IV / skew analytics |
 | **Base / risk** | `GET /liquidity-depth`, `/sequencer-latency`, `/chaos-score`, `/peg-deviation`, `/lending-stress` | L2 & DeFi risk |

@@ -3896,6 +3896,110 @@ def test_lending_stress_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/funding-predict — pure offline next-period funding (no lake)
+# ---------------------------------------------------------------------------
+
+
+def test_funding_predict_basic() -> None:
+    from crypcodile.api_server import funding_predict
+
+    result = asyncio.run(funding_predict(rates="0.1,0.2,0.3", window_size=5))
+    assert result["n_history"] == 3
+    assert result["window_size"] == 5
+    assert result["method"] in ("rolling_mean", "xgboost")
+    assert isinstance(result["predicted_funding_rate"], float)
+    assert isinstance(result["xgboost_available"], bool)
+    if result["method"] == "rolling_mean":
+        # Full history is shorter than window → mean of all three rates.
+        assert abs(result["predicted_funding_rate"] - 0.2) < 1e-9
+
+
+def test_funding_predict_custom_window() -> None:
+    from crypcodile.api_server import funding_predict
+
+    result = asyncio.run(funding_predict(rates="0.1,0.2,0.3", window_size=2))
+    assert result["window_size"] == 2
+    assert result["n_history"] == 3
+    if result["method"] == "rolling_mean":
+        # Last 2 rates: (0.2 + 0.3) / 2 = 0.25
+        assert abs(result["predicted_funding_rate"] - 0.25) < 1e-9
+
+
+def test_funding_predict_matches_analytics() -> None:
+    from crypcodile.analytics.funding_prediction import predict_next_funding
+    from crypcodile.api_server import funding_predict
+
+    rates = [0.01, 0.02, 0.03, 0.04]
+    expected = predict_next_funding(rates, window_size=3)
+    result = asyncio.run(
+        funding_predict(rates="0.01,0.02,0.03,0.04", window_size=3)
+    )
+    assert result["n_history"] == expected["n_history"]
+    assert result["window_size"] == expected["window_size"]
+    assert result["method"] == expected["method"]
+    assert result["xgboost_available"] == expected["xgboost_available"]
+    assert abs(
+        result["predicted_funding_rate"] - expected["predicted_funding_rate"]
+    ) < 1e-12
+
+
+def test_funding_predict_whitespace_and_trailing_commas() -> None:
+    from crypcodile.api_server import funding_predict
+
+    result = asyncio.run(funding_predict(rates=" 0.1 , 0.2 , 0.3 ,", window_size=3))
+    assert result["n_history"] == 3
+    if result["method"] == "rolling_mean":
+        assert abs(result["predicted_funding_rate"] - 0.2) < 1e-9
+
+
+def test_funding_predict_empty_rates_400() -> None:
+    from crypcodile.api_server import funding_predict
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(funding_predict(rates=""))
+    assert ei.value.status_code == 400
+    assert "rates" in str(ei.value.detail).lower()
+
+    with pytest.raises(HTTPException) as ei2:
+        asyncio.run(funding_predict(rates="  , , "))
+    assert ei2.value.status_code == 400
+
+
+def test_funding_predict_invalid_token_400() -> None:
+    from crypcodile.api_server import funding_predict
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(funding_predict(rates="0.1,abc,0.3"))
+    assert ei.value.status_code == 400
+    assert "invalid" in str(ei.value.detail).lower()
+
+
+def test_funding_predict_invalid_window_400() -> None:
+    from crypcodile.api_server import funding_predict
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(funding_predict(rates="0.1,0.2", window_size=0))
+    assert ei.value.status_code == 400
+    assert "window" in str(ei.value.detail).lower()
+
+
+def test_funding_predict_default_window() -> None:
+    from crypcodile.api_server import funding_predict
+
+    result = asyncio.run(funding_predict(rates="0.01,0.02,0.03"))
+    assert result["window_size"] == 5
+
+
+def test_funding_predict_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/funding-predict."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/funding-predict", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/data-coverage — inventory filter for one symbol (read-only)
 # ---------------------------------------------------------------------------
 

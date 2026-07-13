@@ -2439,6 +2439,60 @@ async def lending_stress(
     }
 
 
+@app.get("/api/v1/funding-predict")
+async def funding_predict(
+    rates: str = "",
+    window_size: int = 5,
+) -> dict[str, Any]:
+    """Predict next-period funding rate from pure offline rates (no lake, no payment).
+
+    Query params:
+      - ``rates``: comma-separated historical funding rates
+        (e.g. ``0.1,0.2,0.3`` or ``0.0001,0.0002,0.00015``)
+      - ``window_size``: rolling window for the heuristic fallback
+        (default ``5``; must be ``>= 1``)
+
+    Wraps :func:`crypcodile.analytics.funding_prediction.predict_next_funding`.
+    Returns ``predicted_funding_rate``, ``method`` (``xgboost`` or
+    ``rolling_mean``), ``window_size``, ``n_history``, ``xgboost_available``.
+
+    Empty / whitespace-only ``rates``, non-numeric tokens, empty after split,
+    or ``window_size < 1`` yield HTTP 400.
+    """
+    from crypcodile.analytics.funding_prediction import predict_next_funding
+
+    raw = (rates or "").strip()
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="rates is required (comma-separated floats).",
+        )
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        raise HTTPException(
+            status_code=400,
+            detail="rates is empty after parsing.",
+        )
+    try:
+        rate_list = [float(p) for p in parts]
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid rates value: {e}",
+        ) from e
+
+    try:
+        return predict_next_funding(rate_list, window_size=int(window_size))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Funding prediction failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Funding prediction failed.",
+        ) from e
+
+
 class QueryPayload(BaseModel):
     """Body for ``POST /api/v1/query`` — bounded read-only SQL against the lake."""
 
