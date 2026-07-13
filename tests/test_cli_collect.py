@@ -308,3 +308,160 @@ def test_collect_cli_duration_seconds_auto_stops(tmp_path: pathlib.Path) -> None
         f"{result.output}"
     )
     assert "Collection stopped" in result.output
+
+
+def test_collect_cli_multi_exchange_repeated_flags(tmp_path: pathlib.Path) -> None:
+    """Repeated --exchange builds one connector per exchange and passes the list."""
+    make_calls: list[dict] = []
+    seen: dict = {}
+
+    async def _fake_collect(connectors, sink, **kwargs):
+        seen["connectors"] = connectors
+        seen["n"] = len(connectors)
+
+    def _fake_make_connector(exchange, symbols, channels, out, registry, **kw):
+        make_calls.append(
+            {"exchange": exchange, "symbols": list(symbols), "channels": list(channels)}
+        )
+        conn = DeribitConnector(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        conn.transport = FakeTransport(frames=[])
+        return conn
+
+    with (
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.collect_live", _fake_collect),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+    ):
+        result = _RUNNER.invoke(
+            app,
+            [
+                "collect",
+                "--exchange", "binance",
+                "--exchange", "deribit",
+                "--symbols", "BTC",
+                "--channels", "trade",
+                "--data-dir", str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, (
+        f"CLI exited {result.exit_code}:\n{result.output}"
+    )
+    assert [c["exchange"] for c in make_calls] == ["binance", "deribit"]
+    # Same channels for every exchange; symbols normalized per exchange.
+    assert make_calls[0]["channels"] == ["trade"]
+    assert make_calls[1]["channels"] == ["trade"]
+    assert make_calls[0]["symbols"] == ["BTCUSDT"]
+    assert make_calls[1]["symbols"] == ["BTC-PERPETUAL"]
+    assert seen.get("n") == 2
+    assert len(seen.get("connectors", [])) == 2
+    assert "exchanges=['binance', 'deribit']" in result.output
+
+
+def test_collect_cli_multi_exchange_comma_separated(tmp_path: pathlib.Path) -> None:
+    """Comma-separated --exchange builds one connector per name."""
+    make_calls: list[str] = []
+    seen: dict = {}
+
+    async def _fake_collect(connectors, sink, **kwargs):
+        seen["n"] = len(connectors)
+
+    def _fake_make_connector(exchange, symbols, channels, out, registry, **kw):
+        make_calls.append(exchange)
+        conn = DeribitConnector(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        conn.transport = FakeTransport(frames=[])
+        return conn
+
+    with (
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.collect_live", _fake_collect),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+    ):
+        result = _RUNNER.invoke(
+            app,
+            [
+                "collect",
+                "--exchange", "binance,bybit",
+                "--symbols", "ETHUSDT",
+                "--channels", "trade",
+                "--data-dir", str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, (
+        f"CLI exited {result.exit_code}:\n{result.output}"
+    )
+    assert make_calls == ["binance", "bybit"]
+    assert seen.get("n") == 2
+    assert "exchanges=['binance', 'bybit']" in result.output
+
+
+def test_collect_cli_multi_exchange_mixed_repeat_and_csv(tmp_path: pathlib.Path) -> None:
+    """Mix of repeated flags and commas expands and de-duplicates in order."""
+    make_calls: list[str] = []
+
+    async def _fake_collect(connectors, sink, **kwargs):
+        pass
+
+    def _fake_make_connector(exchange, symbols, channels, out, registry, **kw):
+        make_calls.append(exchange)
+        conn = DeribitConnector(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        conn.transport = FakeTransport(frames=[])
+        return conn
+
+    with (
+        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crypcodile.cli.collect_live", _fake_collect),
+        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+    ):
+        result = _RUNNER.invoke(
+            app,
+            [
+                "collect",
+                "--exchange", "binance,deribit",
+                "--exchange", "binance",
+                "--exchange", "okx",
+                "--symbols", "BTC",
+                "--channels", "trade",
+                "--data-dir", str(tmp_path),
+            ],
+        )
+
+    assert result.exit_code == 0, (
+        f"CLI exited {result.exit_code}:\n{result.output}"
+    )
+    assert make_calls == ["binance", "deribit", "okx"]
+
+
+def test_expand_csv_options_helpers() -> None:
+    """Unit-test expand_csv_options / unique_preserve without invoking CLI."""
+    from crypcodile.cli import expand_csv_options, unique_preserve
+
+    assert expand_csv_options(None) == []
+    assert expand_csv_options([]) == []
+    assert expand_csv_options(["binance", "deribit"]) == ["binance", "deribit"]
+    assert expand_csv_options(["binance, deribit", "okx"]) == [
+        "binance",
+        "deribit",
+        "okx",
+    ]
+    assert expand_csv_options([" a , , b "]) == ["a", "b"]
+    assert unique_preserve(["a", "b", "a", "c", "b"]) == ["a", "b", "c"]

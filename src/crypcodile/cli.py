@@ -39,6 +39,10 @@ Usage examples::
                      --from 0 --to 9e18 --data-dir /data
     crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \\
                       --channels trade --data-dir /data
+    crypcodile collect --exchange binance --exchange deribit --symbols BTC \\
+                      --channels trade --data-dir /data
+    crypcodile collect --exchange binance,bybit --symbols BTCUSDT \\
+                      --channels trade --data-dir /data
     crypcodile backfill --exchange binance --channel trade --symbols BTCUSDT \\
                        --from 1700000000000000000 --to 1700000100000000000 --data-dir /data
     crypcodile funding-apr --symbol deribit:BTC-PERPETUAL \\
@@ -1498,9 +1502,50 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
 # ---------------------------------------------------------------------------
 # collect  (T7b-collect — live connector wiring)
 # ---------------------------------------------------------------------------
+
+
+def expand_csv_options(values: list[str] | None) -> list[str]:
+    """Expand repeated CLI options that may also contain commas.
+
+    ``--exchange a --exchange b`` and ``--exchange a,b`` both yield
+    ``["a", "b"]``.  Empty segments are dropped; order is preserved.
+    """
+    if not values:
+        return []
+    out: list[str] = []
+    for raw in values:
+        for part in str(raw).split(","):
+            item = part.strip()
+            if item:
+                out.append(item)
+    return out
+
+
+def unique_preserve(items: list[str]) -> list[str]:
+    """Return *items* de-duplicated while preserving first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 @app.command()
 def collect(
-    exchange: Annotated[str | None, typer.Option("--exchange", help="Exchange name, e.g. deribit.")] = None,
+    exchange: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exchange",
+            help=(
+                "Exchange name(s), e.g. deribit. Repeat the flag and/or use "
+                "commas for multi-exchange collect (same symbols/channels for "
+                "every exchange; symbols are normalized per exchange)."
+            ),
+        ),
+    ] = None,
     symbols: Annotated[
         list[str] | None,
         typer.Option("--symbols", help="Symbol(s) to collect. Repeat for multiple."),
@@ -1538,7 +1583,7 @@ def collect(
         ),
     ] = None,
 ) -> None:
-    """Collect live market data from an exchange and write to the Parquet data lake.
+    """Collect live market data from one or more exchanges into the Parquet lake.
 
     Press Ctrl-C (SIGINT) to stop gracefully — the sink is flushed before exit.
     Unparseable frames land in a dead-letter queue; on stop a JSON report is
@@ -1547,25 +1592,61 @@ def collect(
     Use --duration-seconds to auto-stop after a fixed wall-clock duration, and
     --max-reconnects to cap reconnect attempts (default unlimited).
 
+    Multi-exchange: pass ``--exchange`` multiple times and/or comma-separate
+    names (``--exchange binance,deribit``).  One connector is built per
+    exchange.  **Limitation:** the same symbol and channel lists are applied
+    to every exchange (each symbol string is normalized for that exchange,
+    e.g. ``BTC`` → ``BTCUSDT`` on binance and ``BTC-PERPETUAL`` on deribit).
+    Per-exchange symbol maps are not supported yet.
+
     Valid exchange names: binance, bybit, coinbase, deribit, okx,
     base_onchain, gmx_synthetix.
 
-    Example::
+    Examples::
 
         crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
                           --channels trade --channels book_delta --data-dir data
+
+        crypcodile collect --exchange binance --exchange deribit \
+                          --symbols BTC --channels trade --data-dir data
+
+        crypcodile collect --exchange binance,bybit --symbols BTCUSDT \
+                          --channels trade --data-dir data
     """
+    exchanges = unique_preserve(
+        [e.lower() for e in expand_csv_options(exchange)]
+    )
+
     if not is_interactive_stdin():
-        if not exchange or not symbols or not channels:
-            typer.echo("Error: exchange, symbols, and channels are required in non-interactive mode.", err=True)
+        if not exchanges or not symbols or not channels:
+            typer.echo(
+                "Error: exchange, symbols, and channels are required in "
+                "non-interactive mode.",
+                err=True,
+            )
             raise typer.Exit(code=1)
     else:
-        # Interactive
-        if not exchange or not symbols or not channels:
-            exchange, symbols, channels = select_collect_params_interactively(exchange, symbols, channels)
+        # Interactive — wizard is single-exchange; multi-exchange only via flags.
+        if not exchanges or not symbols or not channels:
+            if len(exchanges) > 1:
+                if not channels:
+                    ch_input = typer.prompt("Channel (e.g. trade)")
+                    channels = [c.strip() for c in ch_input.split(",") if c.strip()]
+                if not symbols:
+                    sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
+                    symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+            else:
+                ex_single = exchanges[0] if exchanges else None
+                ex_single, symbols, channels = select_collect_params_interactively(
+                    ex_single, symbols, channels
+                )
+                exchanges = [ex_single] if ex_single else []
 
-        if not exchange:
-            exchange = typer.prompt("Exchange (e.g. deribit)")
+        if not exchanges:
+            exchange_prompt = typer.prompt("Exchange (e.g. deribit)")
+            exchanges = unique_preserve(
+                [e.lower() for e in expand_csv_options([exchange_prompt])]
+            )
         if not symbols:
             sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
             symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
@@ -1573,12 +1654,13 @@ def collect(
             ch_input = typer.prompt("Channel (e.g. trade)")
             channels = [c.strip() for c in ch_input.split(",") if c.strip()]
 
-    if symbols and exchange:
-        symbols = [normalize_user_symbol(exchange, s) for s in symbols]
-
-    if not exchange or not symbols or not channels:
+    if not exchanges or not symbols or not channels:
         typer.echo("Error: Exchange, symbols, and channels are required.", err=True)
         raise typer.Exit(code=1)
+
+    # Raw user symbols; normalized per exchange when building connectors.
+    raw_symbols = [s for s in symbols if s and str(s).strip()]
+    channel_list = list(channels)
 
     sink = ParquetSink(
         data_dir=data_dir,
@@ -1586,33 +1668,53 @@ def collect(
         flush_interval_seconds=5.0,
     )
     registry = InstrumentRegistry()
+    monitoring_sink = MonitoringSink(sink)
 
+    connectors: list = []
+    per_exchange_symbols: dict[str, list[str]] = {}
     try:
-        connector = make_connector(
-            exchange=exchange,
-            symbols=list(symbols),
-            channels=list(channels),
-            out=sink,
-            registry=registry,
-        )
+        for ex in exchanges:
+            ex_symbols = [
+                normalize_user_symbol(ex, s) for s in raw_symbols if str(s).strip()
+            ]
+            ex_symbols = [s for s in ex_symbols if s]
+            if not ex_symbols:
+                typer.echo(
+                    f"Error: no valid symbols after normalization for exchange {ex!r}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            per_exchange_symbols[ex] = ex_symbols
+            connector = make_connector(
+                exchange=ex,
+                symbols=ex_symbols,
+                channels=channel_list,
+                out=sink,
+                registry=registry,
+            )
+            # Wire live WS transport (may already be set by tests/monkeypatch).
+            if connector.transport is None:
+                connector.transport = AiohttpWsTransport(connector.ws_url)
+            connector.out = monitoring_sink
+            connectors.append(connector)
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    # Wire the live WebSocket transport (may be replaced by a FakeTransport in
-    # tests via monkeypatching make_connector).
-    if connector.transport is None:
-        connector.transport = AiohttpWsTransport(connector.ws_url)
+    # Log line keeps single-exchange shape for backward-compatible tests.
+    if len(exchanges) == 1:
+        exchange_log = f"exchange={exchanges[0]!r}"
+        symbols_log = per_exchange_symbols[exchanges[0]]
+    else:
+        exchange_log = f"exchanges={exchanges!r}"
+        symbols_log = per_exchange_symbols
 
     typer.echo(
-        f"Starting collection: exchange={exchange!r} symbols={symbols} "
-        f"channels={channels} data_dir={data_dir}"
+        f"Starting collection: {exchange_log} symbols={symbols_log} "
+        f"channels={channel_list} data_dir={data_dir}"
         + (f" max_reconnects={max_reconnects}" if max_reconnects is not None else "")
         + (f" duration_seconds={duration_seconds}" if duration_seconds is not None else "")
     )
-
-    monitoring_sink = MonitoringSink(sink)
-    connector.out = monitoring_sink
 
     collect_kwargs: dict = {
         "dlq_report_path": dlq_report,
@@ -1624,11 +1726,11 @@ def collect(
     async def _run_collect_live() -> None:
         """Run collect_live, optionally auto-stopping after duration_seconds."""
         if duration_seconds is None:
-            await collect_live([connector], monitoring_sink, **collect_kwargs)
+            await collect_live(connectors, monitoring_sink, **collect_kwargs)
             return
 
         collect_task = asyncio.create_task(
-            collect_live([connector], monitoring_sink, **collect_kwargs)
+            collect_live(connectors, monitoring_sink, **collect_kwargs)
         )
 
         async def _cancel_after() -> None:
@@ -1648,11 +1750,22 @@ def collect(
             except asyncio.CancelledError:
                 pass
 
+    # Dashboard label: comma-joined exchange names.
+    dashboard_exchange = ",".join(exchanges)
+    # Prefer first exchange's normalized symbols for the status panel.
+    dashboard_symbols = per_exchange_symbols[exchanges[0]]
+
     if is_interactive_stdin():
 
         async def collect_with_dashboard():
             dashboard_task = asyncio.create_task(
-                run_dashboard(monitoring_sink, exchange, symbols, channels, data_dir)
+                run_dashboard(
+                    monitoring_sink,
+                    dashboard_exchange,
+                    dashboard_symbols,
+                    channel_list,
+                    data_dir,
+                )
             )
             try:
                 await _run_collect_live()
