@@ -1400,10 +1400,11 @@ async def _health_payload() -> dict[str, Any]:
 
 @app.get("/api/v1/health")
 async def health() -> dict[str, Any]:
-    """Lightweight liveness/readiness probe (read-only, no payment).
+    """Lightweight liveness probe (read-only, no payment).
 
-    Response keys: ``ok`` (bool), ``version`` (str from
-    ``crypcodile.__version__``), ``lake_channels`` (int count).
+    Always returns HTTP 200 with body keys: ``ok`` (bool), ``version``
+    (str from ``crypcodile.__version__``), ``lake_channels`` (int count).
+    Use :func:`ready` for k8s-style readiness that fails when ``ok`` is false.
     """
     return await _health_payload()
 
@@ -1412,6 +1413,21 @@ async def health() -> dict[str, Any]:
 async def status() -> dict[str, Any]:
     """Alias of :func:`health` (read-only, no payment)."""
     return await _health_payload()
+
+
+@app.get("/api/v1/ready")
+async def ready(response: Response) -> dict[str, Any]:
+    """K8s-style readiness probe, separate from liveness (:func:`health`).
+
+    Returns the same body as :func:`health`. HTTP **200** when
+    ``health.ok`` is true; HTTP **503** when the lake is unavailable so
+    orchestrators can stop routing traffic while the process is still up.
+    Prometheus metrics remain at ``GET /metrics`` (not duplicated here).
+    """
+    payload = await _health_payload()
+    if not payload.get("ok"):
+        response.status_code = 503
+    return payload
 
 
 @app.get("/api/v1/version")

@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–34 COMPLETE. Continuous loop still active → Wave 35+.
+**Status:** Waves 1–36 COMPLETE. Continuous loop still active → Wave 37+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -271,7 +271,13 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 1 | REST `POST /api/v1/label-transfers` body `{transfers, watchlist, known_only?, min_usd?}` → `label_transfer_addresses` + filter | DONE | `7d005c98da2d6e4cbb340972d4df63e5d38becec` |
 | 2 | Drop blank/whitespace watchlist address keys; never label empty transfer sides | DONE | `7d005c98da2d6e4cbb340972d4df63e5d38becec` |
 
-## Next rotation ideas (Wave 36+)
+## Wave 36 — Feature (k8s readiness probe) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Prefer readiness over metrics-summary: `GET /api/v1/ready` (200 when `health.ok`, else 503); leave Prometheus at `/metrics` | DONE | *(this commit)* |
+
+## Next rotation ideas (Wave 37+)
 
 Priority candidates for the next cycles:
 
@@ -324,3 +330,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 33: REST `POST /api/v1/gas-vol` pure JSON gas/vol correlation
 - Wave 34: REST mev-sandwich + smart-money pure JSON bodies
 - Wave 35: REST `POST /api/v1/label-transfers`; blank watchlist key fix
+- Wave 36: REST `GET /api/v1/ready` k8s readiness (200/`ok` else 503); `/metrics` kept as-is

@@ -5009,6 +5009,102 @@ def test_health_and_status_routes_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/ready — k8s-style readiness (200 when health.ok, else 503)
+# ---------------------------------------------------------------------------
+
+
+def test_ready_returns_200_when_ok() -> None:
+    """Ready when lake is available: same payload as health, HTTP 200."""
+    from fastapi import Response
+
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile import __version__
+        from crypcodile.api_server import health, ready
+
+        response = Response()
+        result = asyncio.run(ready(response))
+        h = asyncio.run(health())
+    assert result == h
+    assert result["ok"] is True
+    assert result["version"] == __version__
+    assert result["lake_channels"] == 1
+    # Default Response status is 200; ready does not downgrade when ok.
+    assert response.status_code == 200
+
+
+def test_ready_returns_503_when_not_ok() -> None:
+    """Lake failure → readiness fails with HTTP 503; health body still ok=False."""
+    from fastapi import Response
+
+    mock_client = MagicMock()
+    mock_client.list_channels.side_effect = RuntimeError("disk failed")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile import __version__
+        from crypcodile.api_server import health, ready
+
+        response = Response()
+        result = asyncio.run(ready(response))
+        h = asyncio.run(health())
+    assert result == h
+    assert result["ok"] is False
+    assert result["error"] == "lake_unavailable"
+    assert result["version"] == __version__
+    assert response.status_code == 503
+
+
+def test_ready_empty_lake_is_ready(tmp_path, monkeypatch) -> None:
+    """Empty lake is still ready (ok=true, lake_channels=0) — same as health."""
+    from fastapi import Response
+
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile import __version__
+    from crypcodile.api_server import ready
+
+    response = Response()
+    result = asyncio.run(ready(response))
+    assert result == {
+        "ok": True,
+        "version": __version__,
+        "lake_channels": 0,
+    }
+    assert response.status_code == 200
+
+
+def test_ready_route_registered() -> None:
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/ready", ("GET",)) in paths
+    # metrics stays at /metrics; readiness is the separate k8s probe
+    assert ("/metrics", ("GET",)) in paths
+
+
+def test_ready_separate_from_health_status_semantics() -> None:
+    """health/status always return body (liveness); ready sets 503 when not ok.
+
+    Direct handler calls: health ignores Response status; ready mutates it.
+    """
+    from fastapi import Response
+
+    mock_fail = MagicMock()
+    mock_fail.list_channels.side_effect = RuntimeError("disk failed")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_fail):
+        from crypcodile.api_server import health, ready, status
+
+        ready_resp = Response()
+        ready_body = asyncio.run(ready(ready_resp))
+        health_body = asyncio.run(health())
+        status_body = asyncio.run(status())
+
+    assert ready_body == health_body == status_body
+    assert ready_body["ok"] is False
+    assert ready_resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/version — package version only (no payment, no lake)
 # ---------------------------------------------------------------------------
 
