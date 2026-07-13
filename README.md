@@ -7,6 +7,15 @@
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
+### 0.1.044 continuous-dev highlights
+
+- **Multi-exchange collect** — one CLI collect across venues
+- **Search** — ranked symbol search + catalog coverage (CLI/MCP)
+- **Backfill** — historical REST backfill orchestration
+- **REST catalog / query / OI** — lake catalog, bounded SQL query, open-interest surfaces
+- **Superchain / Derive** — factory-registered connectors in exchange lists
+- **MCP analytics pack** — slippage, OFI, whale alerts, IV/basis/vol-skew, liquidity-depth, and related tools
+
 ---
 
 ## 🔵 Built for the Base Ecosystem & AI Agents
