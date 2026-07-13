@@ -12,12 +12,12 @@
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Compactor atomic rename-before-delete | DONE | `912c79b` |
+| 1 | Compactor atomic rename-before-delete | DONE | `1a60834` |
 | 1b | Compactor stop cancel await | DONE + APPROVED | `747c217` |
 | 2 | Payment CAS before serve | DONE + APPROVED | `5813278` |
 | 2b | pending-only → paid | DONE + APPROVED | `23442c0` |
 | 3 | ALLOW_SIMULATION default false; admin lock | DONE (in 5813278) | |
-| 4 | MCP stdin EOF (no executor hang) | DONE | `f6c2a5d` |
+| 4 | MCP stdin EOF (no executor hang) | DONE | `1a60834` |
 
 ## Wave 2 — Search system — COMPLETE
 
@@ -25,235 +25,235 @@
 |---|------|--------|--------|
 | 1–2 | Catalog inventory + search_symbols | DONE + APPROVED | `a19228f` |
 | 3–5 | Client + CLI + MCP discovery | DONE + APPROVED | `6fe12a5` |
-| 6 | CLI resolve via client | DONE | `69ba0fd` |
+| 6 | CLI resolve via client | DONE | `1a60834` |
 
 ## Wave 3 — Hardening + surfaces — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | ParquetSink buffer after durable write | DONE | `1813f6f` |
-| 1b | Re-buffer on CancelledError | DONE | `16c5dbc` |
-| 2 | Path traversal sanitize partitions | DONE | `17d8803` |
-| 3 | MCP analytics pack (slippage, ofi, whale, iv, term) | DONE | `b5c7005` |
-| 4 | CLI vol-skew / risk-reversal | DONE | `f43298e` |
-| 5 | Polars min_periods → min_samples | DONE | `102e5fd` |
+| 1 | ParquetSink buffer after durable write | DONE | `1a60834` |
+| 1b | Re-buffer on CancelledError | DONE | `1a60834` |
+| 2 | Path traversal sanitize partitions | DONE | `1a60834` |
+| 3 | MCP analytics pack (slippage, ofi, whale, iv, term) | DONE | `1a60834` |
+| 4 | CLI vol-skew / risk-reversal | DONE | `1a60834` |
+| 5 | Polars min_periods → min_samples | DONE | `1a60834` |
 
 ## Wave 4 — Feature (analytics + catalog) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Catalog scan limit + escape channel ids | DONE | `649721f` |
-| 2 | CLI base risk analytics commands | DONE | `e211e2c` |
-| 3 | MCP get_vol_skew analytics tool | DONE | `2d8a6ad` |
+| 1 | Catalog scan limit + escape channel ids | DONE | `1a60834` |
+| 2 | CLI base risk analytics commands | DONE | `1a60834` |
+| 3 | MCP get_vol_skew analytics tool | DONE | `1a60834` |
 
 ## Wave 5 — Bug hunt / ingest reliability — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Drain dead-letter queue on collect stop + report | DONE | `0410ba7` |
-| 2 | Close aiohttp session when ws connect fails | DONE | `7edff04` |
-| 3 | Changelog + version bump 0.1.044 | DONE | `c54c7cb`, `15acaa1` |
+| 1 | Drain dead-letter queue on collect stop + report | DONE | `1a60834` |
+| 2 | Close aiohttp session when ws connect fails | DONE | `1a60834` |
+| 3 | Changelog + version bump 0.1.044 | DONE | `1a60834`, `15acaa1` |
 
 ## Wave 6 — Feature (book resync bridge) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Wire book resync bridge on sequence gap (Binance) | DONE | `a2df5de` |
+| 1 | Wire book resync bridge on sequence gap (Binance) | DONE | `1a60834` |
 
 ## Wave 7 — Feature (docs + smart-money surface) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Document search/discovery commands in README | DONE | `fd840bc` |
-| 2 | Align CLI exchange lists with factory registry | DONE | `04da164` |
-| 3 | CLI smart-money / whale-transfer surface | DONE | `605ac34` |
+| 1 | Document search/discovery commands in README | DONE | `1a60834` |
+| 2 | Align CLI exchange lists with factory registry | DONE | `1a60834` |
+| 3 | CLI smart-money / whale-transfer surface | DONE | `1a60834` |
 
 ## Wave 8 — Feature (CLI backfill + chaos + basis) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Binance book bridge only after successful bootstrap | DONE | `2e51798` |
-| 2 | CLI backfill command (historical REST) | DONE | `600f574` |
-| 3 | CLI chaos-score command | DONE | `e172f7a` |
-| 4 | CLI spot-perp basis mode (`--spot X --perp Y`) | DONE | `2bad0dd` |
+| 1 | Binance book bridge only after successful bootstrap | DONE | `1a60834` |
+| 2 | CLI backfill command (historical REST) | DONE | `1a60834` |
+| 3 | CLI chaos-score command | DONE | `1a60834` |
+| 4 | CLI spot-perp basis mode (`--spot X --perp Y`) | DONE | `1a60834` |
 
 ## Wave 9 — Hardening + docs (search + ingest notes) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Bybit book resync deferred (shared helpers only) | DONE | `6a6ae7a` |
-| 2 | Whitespace-only catalog search treated as empty | DONE | `a871d14` |
-| 3 | Expand 0.1.044 changelog with wave 7–9 work | DONE | `9cc58d0` |
+| 1 | Bybit book resync deferred (shared helpers only) | DONE | `1a60834` |
+| 2 | Whitespace-only catalog search treated as empty | DONE | `1a60834` |
+| 3 | Expand 0.1.044 changelog with wave 7–9 work | DONE | `1a60834` |
 
 ## Wave 10 — Feature (API catalog + liquidity + sequencer + MCP basis) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST API lake catalog list and search endpoints | DONE | `cb00578` |
-| 2 | CLI liquidity-depth command | DONE | `3d490a1` |
-| 3 | CLI sequencer-latency command | DONE | `1c09a09` |
-| 4 | MCP basis analytics tools | DONE | `7d8a4ac` |
+| 1 | REST API lake catalog list and search endpoints | DONE | `1a60834` |
+| 2 | CLI liquidity-depth command | DONE | `1a60834` |
+| 3 | CLI sequencer-latency command | DONE | `1a60834` |
+| 4 | MCP basis analytics tools | DONE | `1a60834` |
 
 ## Wave 11 — Hardening + indicators surface — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Multi-partition sink: re-buffer only unwritten partitions after partial flush | DONE | `cc51a71` |
-| 2 | Client/MCP technical indicators surface | DONE | `8aaf679` |
+| 1 | Multi-partition sink: re-buffer only unwritten partitions after partial flush | DONE | `1a60834` |
+| 2 | Client/MCP technical indicators surface | DONE | `1a60834` |
 
 ## Wave 12 — Feature (exchanges + collect + lending + MCP depth/seq) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Public `list_exchanges` from factory registry | DONE | `f5aadf7` |
-| 2 | CLI collect `--duration` and `--max-reconnects` | DONE | `ba09fdd` |
-| 3 | CLI lending-stress command | DONE | `4f3dc96` |
-| 4 | MCP liquidity-depth and sequencer-latency tools | DONE | `2ff6251` |
+| 1 | Public `list_exchanges` from factory registry | DONE | `1a60834` |
+| 2 | CLI collect `--duration` and `--max-reconnects` | DONE | `1a60834` |
+| 3 | CLI lending-stress command | DONE | `1a60834` |
+| 4 | MCP liquidity-depth and sequencer-latency tools | DONE | `1a60834` |
 
 ## Wave 13 — Hardening (store + payments + changelog) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Atomic temp-rename for parquet part writes | DONE | `5059c95` |
-| 2 | Atomic fail-loud payment DB persistence | DONE | `eec2522` |
-| 3 | Changelog catch-up for waves 10–12 | DONE | `143c65e` |
+| 1 | Atomic temp-rename for parquet part writes | DONE | `1a60834` |
+| 2 | Atomic fail-loud payment DB persistence | DONE | `1a60834` |
+| 3 | Changelog catch-up for waves 10–12 | DONE | `1a60834` |
 
 ## Wave 14 — Bug hunt (API + replay + resample + onchain) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Reduce internal exception detail in HTTP responses | DONE | `742ac64` |
-| 2 | Validate orderbook price and amount on apply | DONE | `a608d45` |
-| 3 | Drop NaN price/amount trades from OHLCV bars | DONE | `7016780` |
-| 4 | Onchain: persist seen logs; advance cursors only on success | DONE | `c769bbc` |
+| 1 | Reduce internal exception detail in HTTP responses | DONE | `1a60834` |
+| 2 | Validate orderbook price and amount on apply | DONE | `1a60834` |
+| 3 | Drop NaN price/amount trades from OHLCV bars | DONE | `1a60834` |
+| 4 | Onchain: persist seen logs; advance cursors only on success | DONE | `1a60834` |
 
 ## Wave 15 — Hardening + feature (e2e + open interest) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Harden API server fixture and tier waits (e2e) | DONE | `c38d317` |
-| 2 | MCP open-interest tool | DONE | `4746678` |
+| 1 | Harden API server fixture and tier waits (e2e) | DONE | `1a60834` |
+| 2 | MCP open-interest tool | DONE | `1a60834` |
 
 ## Wave 16 — Feature (portal + lake API + multi-collect + funding) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Implement lake catalog scan endpoint | DONE | `9189d62` |
-| 2 | Lake catalog inventory endpoint | DONE | `bcb26e2` |
-| 3 | MCP funding prediction tool | DONE | `6f06d78` |
-| 4 | Portal: detect Python backend when admin returns 404 | DONE | `0a183e1` |
-| 5 | Bounded read-only SQL / REST query endpoint | DONE | `d6b5e85` |
-| 6 | Register superchain connector in factory | DONE | `aaf7893` |
-| 7 | Multi-exchange collect CLI | DONE | `c8a22ae` |
+| 1 | Implement lake catalog scan endpoint | DONE | `1a60834` |
+| 2 | Lake catalog inventory endpoint | DONE | `1a60834` |
+| 3 | MCP funding prediction tool | DONE | `1a60834` |
+| 4 | Portal: detect Python backend when admin returns 404 | DONE | `1a60834` |
+| 5 | Bounded read-only SQL / REST query endpoint | DONE | `1a60834` |
+| 6 | Register superchain connector in factory | DONE | `1a60834` |
+| 7 | Multi-exchange collect CLI | DONE | `1a60834` |
 
 ## Wave 17 — Bug hunt — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Payment refund: restore paid when market-data serve fails after CAS | DONE | `5af5c7f` |
-| 2 | Multi-symbol OI without exchange overwrite | DONE | `55e55bf` |
-| 3 | Harden read-only SQL query endpoint | DONE | `92dcf3f` |
-| 4 | Superchain identity + per-exchange recovery state | DONE | `cb2bcad` |
-| 5 | Onchain: co-persist seen logs with cursor advances | DONE | `b1032b5` |
-| 6 | MCP chaos-score tool | DONE | `9644341` |
-| 7 | CLI: include derive / superchain in exchange lists | DONE | `72bdd64` |
-| 8 | Register derive poll connector | DONE | `994ed98` |
+| 1 | Payment refund: restore paid when market-data serve fails after CAS | DONE | `1a60834` |
+| 2 | Multi-symbol OI without exchange overwrite | DONE | `1a60834` |
+| 3 | Harden read-only SQL query endpoint | DONE | `1a60834` |
+| 4 | Superchain identity + per-exchange recovery state | DONE | `1a60834` |
+| 5 | Onchain: co-persist seen logs with cursor advances | DONE | `1a60834` |
+| 6 | MCP chaos-score tool | DONE | `1a60834` |
+| 7 | CLI: include derive / superchain in exchange lists | DONE | `1a60834` |
+| 8 | Register derive poll connector | DONE | `1a60834` |
 
 ## Wave 18 — Feature (open-interest REST) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST endpoint for open-interest aggregation | DONE | `8f80bd0` |
+| 1 | REST endpoint for open-interest aggregation | DONE | `1a60834` |
 
 ## Wave 21 — Feature (OKX resync + risk REST + options surface) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST `/market/books`) | DONE | `71fec44` |
-| 2 | Base risk REST: `liquidity-depth`, `sequencer-latency`, `chaos-score`, `peg-deviation` | DONE | `73a8287` |
-| 3 | Options REST: `GET /api/v1/iv-surface`, `GET /api/v1/term-structure` | DONE | `7d41f7a` |
+| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST `/market/books`) | DONE | `1a60834` |
+| 2 | Base risk REST: `liquidity-depth`, `sequencer-latency`, `chaos-score`, `peg-deviation` | DONE | `1a60834` |
+| 3 | Options REST: `GET /api/v1/iv-surface`, `GET /api/v1/term-structure` | DONE | `1a60834` |
 
 ## Wave 22 — Feature (vol-skew + lending-stress REST) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/vol-skew` (underlying/expiry_ns/at/rate/limit) | DONE | `fd92785` |
-| 2 | REST `GET /api/v1/lending-stress` pure CLI-matching query params | DONE | `fd92785` |
+| 1 | REST `GET /api/v1/vol-skew` (underlying/expiry_ns/at/rate/limit) | DONE | `1a60834` |
+| 2 | REST `GET /api/v1/lending-stress` pure CLI-matching query params | DONE | `1a60834` |
 
 ## Wave 23 — Feature (risk-reversal REST) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/risk-reversal` (vol_skew → risk_reversal_butterfly; target_delta) | DONE | `eb23611` |
+| 1 | REST `GET /api/v1/risk-reversal` (vol_skew → risk_reversal_butterfly; target_delta) | DONE | `1a60834` |
 
 ## Wave 24 — Feature (data-coverage REST) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/data-coverage` (symbol/channel → inventory filter) | DONE | `3438684` |
+| 1 | REST `GET /api/v1/data-coverage` (symbol/channel → inventory filter) | DONE | `1a60834` |
 | 2 | Skip `/api/v1/search` alias — already `GET /api/v1/catalog/search` | SKIP | — |
 
 ## Wave 25 — Feature (perp-basis REST + label_transfers MCP) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/perp-basis` (symbol/start/end/limit → client.perp_basis); skip bulk `/export` | DONE | `275a9d2` |
-| 2 | MCP `label_transfers` wrapping pure `label_transfer_addresses` | DONE | `6ae47e3` |
+| 1 | REST `GET /api/v1/perp-basis` (symbol/start/end/limit → client.perp_basis); skip bulk `/export` | DONE | `1a60834` |
+| 2 | MCP `label_transfers` wrapping pure `label_transfer_addresses` | DONE | `1a60834` |
 
 ## Wave 26 — Feature (spot-future-basis REST) + bugfix — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/spot-future-basis` (future/spot/start/end/limit → client.spot_future_basis) | DONE | `defd71e` |
-| 2 | Fix `Catalog.search_symbols` non-positive limit (Polars `head(-n)` trap) | DONE | `9a961d8` |
+| 1 | REST `GET /api/v1/spot-future-basis` (future/spot/start/end/limit → client.spot_future_basis) | DONE | `1a60834` |
+| 2 | Fix `Catalog.search_symbols` non-positive limit (Polars `head(-n)` trap) | DONE | `1a60834` |
 
 ## Wave 27 — Feature (resolve-symbols REST) + bugfix — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/resolve-symbols` (symbols/channel/ambiguous → client.resolve_symbols) | DONE | `08808cf` |
-| 2 | Fix `resolve_symbols` empty/whitespace channel treated as no filter | DONE | `3cf669d` |
+| 1 | REST `GET /api/v1/resolve-symbols` (symbols/channel/ambiguous → client.resolve_symbols) | DONE | `1a60834` |
+| 2 | Fix `resolve_symbols` empty/whitespace channel treated as no filter | DONE | `1a60834` |
 
 ## Wave 28 — Feature (health/status REST) + bugfix — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/health` + `/api/v1/status` (`ok`, `__version__`, `lake_channels` count; no payment) | DONE | `63e879b` |
-| 2 | Fix `Catalog.inventory` empty/whitespace channel/exchange treated as no filter | DONE | `ed1f812` |
+| 1 | REST `GET /api/v1/health` + `/api/v1/status` (`ok`, `__version__`, `lake_channels` count; no payment) | DONE | `1a60834` |
+| 2 | Fix `Catalog.inventory` empty/whitespace channel/exchange treated as no filter | DONE | `1a60834` |
 
 ## Wave 29 — Hardening (portal detect) + feature (exchanges REST) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Portal `detectBackend`: treat `/api/v1/health` 200 as Python when catalog/metrics probes fail | DONE | `d1698dd` |
-| 2 | REST `GET /api/v1/exchanges` → `list_exchanges()` (free, no lake, no payment) | DONE | `24b1ef6` |
+| 1 | Portal `detectBackend`: treat `/api/v1/health` 200 as Python when catalog/metrics probes fail | DONE | `1a60834` |
+| 2 | REST `GET /api/v1/exchanges` → `list_exchanges()` (free, no lake, no payment) | DONE | `1a60834` |
 
 ## Wave 30 — Bug hunt (derive ns, Aave HF, OKX/Bybit expiry) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Derive options: store timestamps in nanoseconds | DONE | `fd93b93` |
-| 2 | Aave health factor: treat HF zero as zero, not infinity | DONE | `5afd87b` |
-| 3 | OKX/Bybit options: parse expiry from symbol when instrument unregistered | DONE | `8fb0a7d` |
+| 1 | Derive options: store timestamps in nanoseconds | DONE | `1a60834` |
+| 2 | Aave health factor: treat HF zero as zero, not infinity | DONE | `1a60834` |
+| 3 | OKX/Bybit options: parse expiry from symbol when instrument unregistered | DONE | `1a60834` |
 
 ## Wave 31 — Feature (MCP spot-future basis) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | MCP `get_spot_future_basis` (handler + TOOLS schema + dispatch; optional `expiry_ns`) | DONE | `096426f` |
+| 1 | MCP `get_spot_future_basis` (handler + TOOLS schema + dispatch; optional `expiry_ns`) | DONE | `1a60834` |
 
 ## Wave 32 — Feature (funding-predict REST) + bugfix — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/funding-predict` (comma-separated `rates`, `window_size` → `predict_next_funding`) | DONE | `fc2bd22` |
-| 2 | Fix OI symbol filter: `str.contains` literal match + skip empty tokens | DONE | `0af065a` |
+| 1 | REST `GET /api/v1/funding-predict` (comma-separated `rates`, `window_size` → `predict_next_funding`) | DONE | `1a60834` |
+| 2 | Fix OI symbol filter: `str.contains` literal match + skip empty tokens | DONE | `1a60834` |
 
 ## Wave 33 — Feature (gas-vol pure REST) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `POST /api/v1/gas-vol` pure JSON body `{gas, vol}` → `gas_to_volatility_correlation` (no files/lake) | DONE | `6e2d6b8` |
+| 1 | REST `POST /api/v1/gas-vol` pure JSON body `{gas, vol}` → `gas_to_volatility_correlation` (no files/lake) | DONE | `1a60834` |
 
 Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exists); mev-sandwich / smart-money deferred.
 
