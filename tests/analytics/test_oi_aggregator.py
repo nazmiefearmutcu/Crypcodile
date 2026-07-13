@@ -173,3 +173,65 @@ def test_oi_aggregator_skips_null_oi_preserves_forward_fill() -> None:
     assert row2["binance"] == 110.0
     assert row2["okx"] == 55.0
     assert row2["total_oi"] == 165.0
+
+
+def test_oi_aggregator_symbol_filter_literal_not_regex() -> None:
+    """Dots in filter tokens must be literal substrings, not regex wildcards."""
+    raw = pl.DataFrame(
+        {
+            "local_ts": [_T1, _T1, _T1],
+            "exchange": ["binance", "binance", "derive"],
+            "symbol": [
+                "binance:BTCXUSDT",
+                "binance:BTC-USDT",
+                "derive:BTC.USDT",
+            ],
+            "open_interest": [10.0, 20.0, 30.0],
+        }
+    )
+
+    class _FakeCatalog:
+        def refresh_views(self) -> None:
+            return None
+
+        def query(self, sql: str) -> pl.DataFrame:
+            return raw
+
+    df = aggregate_open_interest(
+        _FakeCatalog(), "BTC.USDT", _T1, _T1  # type: ignore[arg-type]
+    )
+    assert len(df) == 1
+    row = df.row(0, named=True)
+    assert row["derive"] == 30.0
+    assert "binance" not in df.columns or row.get("binance", 0.0) == 0.0
+    assert row["total_oi"] == 30.0
+
+
+def test_oi_aggregator_empty_symbol_tokens_mean_no_filter() -> None:
+    """Empty / whitespace filter tokens must not become contains('')."""
+    raw = pl.DataFrame(
+        {
+            "local_ts": [_T1, _T1],
+            "exchange": ["binance", "okx"],
+            "symbol": ["binance:BTCUSDT", "okx:ETH-USDT-SWAP"],
+            "open_interest": [100.0, 50.0],
+        }
+    )
+
+    class _FakeCatalog:
+        def refresh_views(self) -> None:
+            return None
+
+        def query(self, sql: str) -> pl.DataFrame:
+            return raw
+
+    # Empty string / whitespace list items → treat as no filter (all symbols).
+    df = aggregate_open_interest(_FakeCatalog(), "", _T1, _T1)  # type: ignore[arg-type]
+    assert len(df) == 1
+    assert df.row(0, named=True)["total_oi"] == 150.0
+
+    df2 = aggregate_open_interest(
+        _FakeCatalog(), ["", "  "], _T1, _T1  # type: ignore[arg-type]
+    )
+    assert len(df2) == 1
+    assert df2.row(0, named=True)["total_oi"] == 150.0

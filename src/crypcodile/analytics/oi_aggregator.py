@@ -32,9 +32,11 @@ def aggregate_open_interest(
     if raw_df is None or len(raw_df) == 0:
         return pl.DataFrame()
 
-    # Filter matching symbols
+    # Filter matching symbols (substring, case-insensitive).
+    # Use literal=True so dots/parens in symbols are not regex metacharacters
+    # (e.g. "BTC.USDT" must not match "BTCXUSDT").
     if symbols is None:
-        symbols_list = []
+        symbols_list: list[str] = []
     elif isinstance(symbols, str):
         symbols_list = [symbols]
     else:
@@ -43,9 +45,17 @@ def aggregate_open_interest(
         except TypeError:
             symbols_list = []
 
+    # Drop empty / whitespace-only tokens so they do not become contains("")
+    # (which matches every symbol under the default regex engine).
+    symbols_list = [
+        s for s in symbols_list if isinstance(s, str) and s.strip()
+    ]
+
     if symbols_list:
         filters = [
-            pl.col("symbol").str.to_lowercase().str.contains(s.lower())
+            pl.col("symbol")
+            .str.to_lowercase()
+            .str.contains(s.lower(), literal=True)
             for s in symbols_list
         ]
         filter_expr = filters[0]
