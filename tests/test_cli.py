@@ -323,6 +323,462 @@ def test_cli_catalog_summary_uses_client_discovery(
 
 
 # ---------------------------------------------------------------------------
+# catalog-dates command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_catalog_dates_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``catalog-dates`` on empty lake prints No dates.; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["catalog-dates", "--channel", "trade", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No dates." in result.output
+
+
+async def test_cli_catalog_dates_with_data(tmp_path: pathlib.Path) -> None:
+    """``catalog-dates`` lists hive date= partitions for a channel."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["catalog-dates", "--channel", "trade", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    # Fixture trades use _BASE_TS → date partition 2023-11-14 (UTC).
+    assert "2023-11-14" in result.output
+    assert "No dates." not in result.output
+
+
+def test_cli_catalog_dates_unknown_channel(tmp_path: pathlib.Path) -> None:
+    """Unknown channel yields No dates. (exit 0)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    (tmp_path / "exchange=deribit" / "channel=trade" / "date=2024-01-01").mkdir(
+        parents=True
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-dates",
+            "--channel",
+            "liquidations",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No dates." in result.output
+
+
+def test_cli_catalog_dates_strips_channel(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Whitespace around --channel is stripped before list_dates."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_dates.return_value = ["2024-06-01"]
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_dates(self, channel: str):
+            return mock_client.list_dates(channel)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-dates",
+            "--channel",
+            "  trade  ",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "2024-06-01" in result.output
+    mock_client.list_dates.assert_called_once_with("trade")
+
+
+def test_cli_catalog_dates_missing_channel(tmp_path: pathlib.Path) -> None:
+    """``catalog-dates`` without --channel exits non-zero."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-dates", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+
+
+def test_cli_catalog_dates_uses_client(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI delegates to client.list_dates."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_dates.return_value = ["2023-11-14", "2023-11-15"]
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_dates(self, channel: str):
+            return mock_client.list_dates(channel)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["catalog-dates", "--channel", "trade", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["2023-11-14", "2023-11-15"]
+    mock_client.list_dates.assert_called_once_with("trade")
+
+
+# ---------------------------------------------------------------------------
+# catalog-symbols command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_catalog_symbols_cmd_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``catalog-symbols`` on empty lake prints No symbols.; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No symbols." in result.output
+
+
+async def test_cli_catalog_symbols_cmd_with_data(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-symbols`` lists distinct inventory symbols (one per line)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "No symbols." not in result.output
+    # Lighter than catalog --symbols: no coverage table headers.
+    assert "row_count" not in result.output
+    assert "min_ts" not in result.output
+
+
+async def test_cli_catalog_symbols_cmd_channel_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-symbols --channel trade`` still finds trade symbols."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-symbols",
+            "--channel",
+            "trade",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+
+
+async def test_cli_catalog_symbols_cmd_exchange_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-symbols --exchange deribit`` filters inventory."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    ok = runner.invoke(
+        app,
+        [
+            "catalog-symbols",
+            "--exchange",
+            "deribit",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert ok.exit_code == 0, f"stdout:\n{ok.output}"
+    assert "deribit:BTC-PERPETUAL" in ok.output
+
+    miss = runner.invoke(
+        app,
+        [
+            "catalog-symbols",
+            "--exchange",
+            "binance",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert miss.exit_code == 0, f"stdout:\n{miss.output}"
+    assert "No symbols." in miss.output
+
+
+def test_cli_catalog_symbols_cmd_strips_filters(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Empty/whitespace --channel/--exchange treated as no filter."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [0],
+            "max_ts": [1],
+            "row_count": [1],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = inv
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def inventory(self, channel=None, exchange=None):
+            return mock_client.inventory(channel=channel, exchange=exchange)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-symbols",
+            "--channel",
+            "   ",
+            "--exchange",
+            "",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_cli_catalog_symbols_cmd_uses_inventory(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI builds distinct sorted symbols from client.inventory."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    inv = pl.DataFrame(
+        {
+            "exchange": ["binance", "deribit", "deribit"],
+            "channel": ["trade", "trade", "funding"],
+            "symbol": [
+                "binance:BTCUSDT",
+                "deribit:BTC-PERPETUAL",
+                "deribit:BTC-PERPETUAL",
+            ],
+            "min_ts": [0, 0, 0],
+            "max_ts": [1, 1, 1],
+            "row_count": [1, 2, 3],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = inv
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def inventory(self, channel=None, exchange=None):
+            return mock_client.inventory(channel=channel, exchange=exchange)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-symbols",
+            "--channel",
+            "trade",
+            "--exchange",
+            "deribit",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    # Distinct + sorted.
+    assert lines == ["binance:BTCUSDT", "deribit:BTC-PERPETUAL"]
+    mock_client.inventory.assert_called_once_with(
+        channel="trade", exchange="deribit"
+    )
+
+
+# ---------------------------------------------------------------------------
+# catalog-exchanges command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_catalog_exchanges_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``catalog-exchanges`` on empty lake prints No exchanges.; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-exchanges", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No exchanges." in result.output
+
+
+async def test_cli_catalog_exchanges_with_data(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-exchanges`` lists on-disk hive exchange= partitions."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-exchanges", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit" in result.output
+    assert "No exchanges." not in result.output
+
+
+def test_cli_catalog_exchanges_empty_partition_dirs(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Empty hive exchange= dirs still appear (filesystem discovery)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    (tmp_path / "exchange=binance" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "exchange=deribit" / "channel=funding").mkdir(parents=True)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-exchanges", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["binance", "deribit"]
+
+
+def test_cli_catalog_exchanges_uses_client(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI delegates to client.list_exchanges_on_disk."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_exchanges_on_disk.return_value = ["binance", "okx"]
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_exchanges_on_disk(self):
+            return mock_client.list_exchanges_on_disk()
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-exchanges", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["binance", "okx"]
+    mock_client.list_exchanges_on_disk.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
 # search command
 # ---------------------------------------------------------------------------
 

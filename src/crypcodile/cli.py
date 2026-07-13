@@ -5,6 +5,9 @@ Commands
 query          -- Execute DuckDB SQL against the data lake; print result table.
 catalog        -- List channels (filesystem list_channels) with row counts; --symbols inventory.
 catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
+catalog-dates  -- List hive date= partitions for a channel (list_dates).
+catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
+catalog-exchanges -- List on-disk hive exchange= partitions.
 search         -- Ranked symbol search over the data lake inventory.
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
@@ -34,6 +37,9 @@ Usage examples::
     crypcodile catalog --data-dir /data
     crypcodile catalog --symbols --data-dir /data
     crypcodile catalog-summary --data-dir /data
+    crypcodile catalog-dates --channel trade --data-dir /data
+    crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
+    crypcodile catalog-exchanges --data-dir /data
     crypcodile search BTC --data-dir /data
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
                      --fmt csv --dest out/trades.csv --data-dir /data
@@ -929,6 +935,124 @@ def catalog_summary(
         "exchanges_on_disk: "
         + (", ".join(exchanges_on_disk) if exchanges_on_disk else "(none)")
     )
+
+
+# ---------------------------------------------------------------------------
+# catalog-dates
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-dates")
+def catalog_dates(
+    channel: Annotated[
+        str,
+        typer.Option(
+            "--channel",
+            help="Channel name, e.g. trade (required).",
+        ),
+    ],
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """List distinct hive ``date=`` partitions for a channel.
+
+    Mirrors REST ``GET /api/v1/catalog/dates`` / MCP ``list_dates`` via
+    :meth:`CrypcodileClient.list_dates` (filesystem walk; no DuckDB).
+    Empty / whitespace channel after strip, unknown channel, or empty lake
+    prints ``No dates.`` and exits 0. Dates are sorted ascending
+    (typically ``YYYY-MM-DD``), one per line.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    channel = (channel or "").strip()
+    if not channel:
+        if is_interactive_stdin():
+            channel = typer.prompt("Channel").strip()
+        if not channel:
+            typer.echo("Error: --channel is required.", err=True)
+            raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    dates = client.list_dates(channel)
+    if not dates:
+        typer.echo("No dates.")
+        raise typer.Exit(code=0)
+    for d in dates:
+        typer.echo(d)
+
+
+# ---------------------------------------------------------------------------
+# catalog-symbols
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-symbols")
+def catalog_symbols(
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """List distinct symbols present in the lake inventory.
+
+    Mirrors REST ``GET /api/v1/catalog/symbols`` / MCP ``list_symbols``:
+    optional ``--channel`` and ``--exchange`` filters (empty/whitespace →
+    no filter). Empty lake or no match prints ``No symbols.`` and exits 0.
+    Symbols are sorted, one per line. Lighter than ``catalog --symbols``
+    (symbol strings only, no per-channel coverage rows).
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+
+    client = CrypcodileClient(data_dir=data_dir)
+    inv = client.inventory(channel=ch, exchange=ex)
+    if len(inv) == 0:
+        typer.echo("No symbols.")
+        raise typer.Exit(code=0)
+
+    symbols = sorted(inv["symbol"].unique().to_list())
+    if not symbols:
+        typer.echo("No symbols.")
+        raise typer.Exit(code=0)
+    for sym in symbols:
+        typer.echo(sym)
+
+
+# ---------------------------------------------------------------------------
+# catalog-exchanges
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-exchanges")
+def catalog_exchanges(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """List distinct hive ``exchange=`` partitions present on disk.
+
+    Mirrors REST ``GET /api/v1/catalog/exchanges`` / MCP
+    ``list_exchanges_on_disk`` via
+    :meth:`CrypcodileClient.list_exchanges_on_disk` (filesystem walk).
+    Empty lake prints ``No exchanges.`` and exits 0. Distinct from factory
+    connector registry (``list_exchanges``). Sorted, one per line.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+    exchanges = client.list_exchanges_on_disk()
+    if not exchanges:
+        typer.echo("No exchanges.")
+        raise typer.Exit(code=0)
+    for ex in exchanges:
+        typer.echo(ex)
 
 
 # ---------------------------------------------------------------------------

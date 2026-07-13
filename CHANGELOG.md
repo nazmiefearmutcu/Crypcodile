@@ -6,6 +6,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **CLI catalog-dates / catalog-symbols / catalog-exchanges**: `crypcodile catalog-dates --channel` lists hive `date=` partitions via `client.list_dates`; `catalog-symbols` lists distinct inventory symbols with optional `--channel` / `--exchange` (empty/whitespace → no filter); `catalog-exchanges` lists on-disk hive `exchange=` partitions via `client.list_exchanges_on_disk`. Empty results print `No dates.` / `No symbols.` / `No exchanges.` and exit 0 — parity with REST/MCP discovery surfaces.
 - **MCP list_symbols tool**: `list_symbols` wraps inventory distinct symbols with optional `channel` / `exchange` filters (empty/whitespace → no filter; empty lake → `[]`; listed in capabilities `mcp_tools_hint`). Lighter than `inventory_snapshot`; mirrors REST `GET /api/v1/catalog/symbols`.
 - **API catalog symbols discovery**: `GET /api/v1/catalog/symbols?channel=&exchange=` returns sorted distinct inventory symbols (lighter than full inventory rows; empty/whitespace filters → no filter; empty lake → `[]`; listed in capabilities).
 - **MCP search_symbols exchange filter**: `search_symbols` accepts optional `exchange` (alongside existing `channel` / `limit`) and forwards it to `client.search_symbols` — parity with REST/CLI/Catalog.
