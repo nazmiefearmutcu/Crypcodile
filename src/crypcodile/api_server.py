@@ -1447,6 +1447,7 @@ _CAPABILITIES_REST: list[str] = [
     # Catalog / discovery
     "GET /api/v1/catalog/channels",
     "GET /api/v1/catalog/exchanges",
+    "GET /api/v1/catalog/summary",
     "GET /api/v1/catalog/search",
     "GET /api/v1/catalog/inventory",
     "GET /api/v1/catalog/dates",
@@ -1576,6 +1577,34 @@ async def catalog_list_exchanges() -> list[str]:
     """
     client = _get_lake_client()
     return client.list_exchanges_on_disk()
+
+
+@app.get("/api/v1/catalog/summary")
+async def catalog_summary() -> dict[str, object]:
+    """One-shot lake catalog summary for agent discovery (read-only, no payment).
+
+    Combines channel and on-disk exchange partition lists with counts::
+
+        {
+            "channels": [...],           # sorted channel ids
+            "exchanges_on_disk": [...],  # sorted hive exchange= suffixes
+            "exchange_count": int,
+            "channel_count": int,
+        }
+
+    Empty lake yields empty lists and zero counts. Distinct from
+    ``GET /api/v1/exchanges`` (factory registry) — ``exchanges_on_disk``
+    reflects hive partitions only.
+    """
+    client = _get_lake_client()
+    channels = client.list_channels()
+    exchanges_on_disk = client.list_exchanges_on_disk()
+    return {
+        "channels": channels,
+        "exchanges_on_disk": exchanges_on_disk,
+        "exchange_count": len(exchanges_on_disk),
+        "channel_count": len(channels),
+    }
 
 
 @app.get("/api/v1/catalog/dates")
