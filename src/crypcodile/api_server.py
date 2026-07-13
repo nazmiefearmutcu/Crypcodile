@@ -1449,6 +1449,7 @@ _CAPABILITIES_REST: list[str] = [
     "GET /api/v1/catalog/exchanges",
     "GET /api/v1/catalog/summary",
     "GET /api/v1/catalog/search",
+    "GET /api/v1/catalog/symbols",
     "GET /api/v1/catalog/inventory",
     "GET /api/v1/catalog/dates",
     "GET /api/v1/catalog/scan",
@@ -1646,6 +1647,27 @@ async def catalog_search_symbols(
     if len(df) == 0:
         return []
     return _json_safe_records(df.to_dicts())
+
+
+@app.get("/api/v1/catalog/symbols")
+async def catalog_list_symbols(
+    channel: str = "",
+    exchange: str = "",
+) -> list[str]:
+    """List distinct symbols from lake inventory (read-only, no payment).
+
+    Lighter than ``GET /api/v1/catalog/inventory``: returns only sorted unique
+    ``symbol`` values (no per-channel coverage rows). Optional ``channel`` and
+    ``exchange`` query filters narrow inventory first (empty/whitespace → no
+    filter). Empty lake or no match yields ``[]``.
+    """
+    client = _get_lake_client()
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+    df = client.inventory(channel=ch, exchange=ex)
+    if len(df) == 0:
+        return []
+    return sorted(df["symbol"].unique().to_list())
 
 
 @app.get("/api/v1/catalog/inventory")

@@ -395,10 +395,17 @@ def handle_search_symbols(
     client: CrypcodileClient,
     q: str,
     channel: str | None = None,
+    exchange: str | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Ranked symbol search; returns list of row dicts (empty lake / no match → [])."""
-    df = client.search_symbols(q, channel=channel, limit=limit)
+    """Ranked symbol search; returns list of row dicts (empty lake / no match → []).
+
+    Optional *channel* and *exchange* filters match REST/CLI/Catalog
+    ``search_symbols`` (empty/whitespace treated as no filter by Catalog).
+    """
+    df = client.search_symbols(
+        q, channel=channel, exchange=exchange, limit=limit
+    )
     if len(df) == 0:
         return []
     return _json_safe_records(df.to_dicts())
@@ -1013,8 +1020,8 @@ TOOLS = [
         "name": "search_symbols",
         "description": (
             "Ranked symbol search over the data lake inventory. Returns symbol, "
-            "exchange, channels, score, min_ts, max_ts, row_count. Empty lake "
-            "or no matches returns []."
+            "exchange, channels, score, min_ts, max_ts, row_count. Optional "
+            "channel and exchange filters. Empty lake or no matches returns []."
         ),
         "inputSchema": {
             "type": "object",
@@ -1026,6 +1033,10 @@ TOOLS = [
                 "channel": {
                     "type": "string",
                     "description": "Optional channel filter (e.g. 'trade').",
+                },
+                "exchange": {
+                    "type": "string",
+                    "description": "Optional exchange filter (e.g. 'deribit').",
                 },
                 "limit": {
                     "type": "integer",
@@ -1976,9 +1987,10 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         try:
                             q = arguments.get("q", "")
                             ch = arguments.get("channel")
+                            ex = arguments.get("exchange")
                             lim = int(arguments.get("limit", 20))
                             tool_result = handle_search_symbols(
-                                client, q, channel=ch, limit=lim
+                                client, q, channel=ch, exchange=ex, limit=lim
                             )
                         except Exception as e:
                             tool_result = {"error": f"search_symbols failed: {e}"}

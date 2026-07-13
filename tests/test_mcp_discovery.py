@@ -244,6 +244,22 @@ async def test_search_symbols_channel_filter(tmp_path: pathlib.Path) -> None:
     assert all("trade" in r["channels"] for r in rows)
 
 
+async def test_search_symbols_exchange_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_search_symbols, TOOLS
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    rows = handle_search_symbols(client, "BTC", exchange="deribit")
+    assert len(rows) >= 1
+    assert all(r["exchange"] == "deribit" for r in rows)
+    assert handle_search_symbols(client, "BTC", exchange="binance") == []
+
+    tool = next(t for t in TOOLS if t["name"] == "search_symbols")
+    assert "exchange" in tool["inputSchema"]["properties"]
+    assert "channel" in tool["inputSchema"]["properties"]
+
+
 def test_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
     from crypcodile.client.client import CrypcodileClient
     from crypcodile.mcp_server import handle_data_coverage

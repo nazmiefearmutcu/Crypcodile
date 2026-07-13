@@ -6,6 +6,8 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **API catalog symbols discovery**: `GET /api/v1/catalog/symbols?channel=&exchange=` returns sorted distinct inventory symbols (lighter than full inventory rows; empty/whitespace filters → no filter; empty lake → `[]`; listed in capabilities).
+- **MCP search_symbols exchange filter**: `search_symbols` accepts optional `exchange` (alongside existing `channel` / `limit`) and forwards it to `client.search_symbols` — parity with REST/CLI/Catalog.
 - **API catalog/search channel + exchange filters**: `GET /api/v1/catalog/search` accepts optional `channel` and `exchange` query params (empty/whitespace → no filter; values stripped) and forwards them to `client.search_symbols` — parity with CLI `search` / `Catalog.search_symbols`.
 - **CLI catalog-summary**: `crypcodile catalog-summary` prints one-shot lake discovery via client `list_channels` + `list_exchanges_on_disk` (channel/exchange counts and lists; empty lake → zero counts / `(none)`). Mirrors REST `GET /api/v1/catalog/summary` and MCP `catalog_summary`.
 - **MCP catalog_summary tool**: `catalog_summary` wraps `list_channels` + `list_exchanges_on_disk` with counts, returning `{channels, exchanges_on_disk, exchange_count, channel_count}` (empty lake → empty lists + zero counts; listed in capabilities `mcp_tools_hint`). Mirrors REST `GET /api/v1/catalog/summary` for agents without HTTP.

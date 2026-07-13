@@ -469,6 +469,129 @@ def test_catalog_search_strips_padded_channel_exchange() -> None:
     )
 
 
+def test_catalog_list_symbols_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_list_symbols
+
+    result = asyncio.run(catalog_list_symbols())
+    assert result == []
+
+
+def test_catalog_list_symbols_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_symbols
+
+        result = asyncio.run(catalog_list_symbols())
+    assert result == []
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_catalog_list_symbols_returns_distinct_sorted() -> None:
+    """Distinct symbols only (lighter than full inventory rows), sorted."""
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit", "deribit", "binance"],
+            "channel": ["trade", "book_snapshot", "trade"],
+            "symbol": [
+                "deribit:BTC-PERPETUAL",
+                "deribit:BTC-PERPETUAL",
+                "binance:BTCUSDT",
+            ],
+            "min_ts": [1, 2, 3],
+            "max_ts": [2, 3, 4],
+            "row_count": [10, 5, 7],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_symbols
+
+        result = asyncio.run(catalog_list_symbols())
+    assert result == ["binance:BTCUSDT", "deribit:BTC-PERPETUAL"]
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_catalog_list_symbols_forwards_filters() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_symbols
+
+        result = asyncio.run(
+            catalog_list_symbols(channel="trade", exchange="deribit")
+        )
+    assert result == ["deribit:BTC-PERPETUAL"]
+    mock_client.inventory.assert_called_once_with(
+        channel="trade", exchange="deribit"
+    )
+
+
+def test_catalog_list_symbols_strips_empty_filters() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_symbols
+
+        asyncio.run(catalog_list_symbols(channel="  ", exchange=""))
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_catalog_list_symbols_strips_padded_filters() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["binance"],
+            "channel": ["book_snapshot"],
+            "symbol": ["binance:ETHUSDT"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [3],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_symbols
+
+        result = asyncio.run(
+            catalog_list_symbols(
+                channel="  book_snapshot  ",
+                exchange="  binance  ",
+            )
+        )
+    assert result == ["binance:ETHUSDT"]
+    mock_client.inventory.assert_called_once_with(
+        channel="book_snapshot", exchange="binance"
+    )
+
+
 def test_catalog_inventory_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
     from crypcodile.api_server import catalog_inventory
@@ -5478,6 +5601,15 @@ def test_catalog_search_route_registered() -> None:
     assert ("/api/v1/catalog/search", ("GET",)) in paths
 
 
+def test_catalog_symbols_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/catalog/symbols."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/catalog/symbols", ("GET",)) in paths
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/resolve-symbols — wrap client.resolve_symbols (read-only)
 # ---------------------------------------------------------------------------
@@ -5825,6 +5957,7 @@ def test_capabilities_shape_and_contents() -> None:
         "GET /api/v1/capabilities",
         "GET /api/v1/catalog/channels",
         "GET /api/v1/catalog/inventory",
+        "GET /api/v1/catalog/symbols",
         "GET /api/v1/catalog/dates",
         "GET /api/v1/catalog/exchanges",
         "GET /api/v1/catalog/summary",
