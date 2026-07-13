@@ -159,16 +159,21 @@
 | 7 | CLI: include derive / superchain in exchange lists | DONE | `72bdd64` |
 | 8 | Register derive poll connector | DONE | `994ed98` |
 
-## Next rotation ideas (Wave 18+)
+## Wave 18 — Feature (open-interest REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST endpoint for open-interest aggregation | DONE | `21513dd` |
+
+## Next rotation ideas (Wave 19+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-3. **Open-interest CLI + API** — surface OI beyond MCP (funding MCP/CLI landed in wave 16)  
-4. **Payment / portal polish** — remaining API portal UX beyond backend detection  
-5. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
-6. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query as needed  
+3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
+4. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
+5. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query/open-interest as needed  
 
 ## Subagent policy
 
@@ -194,4 +199,5 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 15: e2e fixture/tier hardening, MCP open-interest tool
 - Wave 16: portal detect, multi-exchange collect, REST query, superchain factory, inventory, funding MCP, catalog scan
 - Wave 17: payment refund, multi-symbol OI, SQL harden, superchain identity, seen-logs co-persist, chaos MCP, CLI derive/superchain lists, derive poll connector
-- **HEAD:** `b1032b5` — wave 17 docs; ready for Wave 18
+- Wave 18: REST open-interest endpoint (`GET /api/v1/open-interest`)
+- **HEAD:** `21513dd` — wave 18 open-interest REST; ready for Wave 19

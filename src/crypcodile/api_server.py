@@ -1408,9 +1408,10 @@ async def catalog_inventory(
     return df.to_dicts()
 
 
-# Hard max rows for lake scan / SQL query HTTP responses (bounded discovery).
+# Hard max rows for lake scan / SQL query / OI HTTP responses (bounded discovery).
 _CATALOG_SCAN_MAX_LIMIT = 10_000
 _QUERY_MAX_LIMIT = 10_000
+_OPEN_INTEREST_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1502,6 +1503,45 @@ async def catalog_scan(
 
     client = _get_lake_client()
     df = client.scan(channel, [symbol], start, end)
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/open-interest")
+async def open_interest(
+    symbols: str = "",
+    start: int = 0,
+    end: int = 0,
+    limit: int = _OPEN_INTEREST_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Aggregate open interest across exchanges (read-only, no payment).
+
+    Optional ``symbols`` substring filter (e.g. ``BTC``); empty/omitted means
+    all symbols. Aligns OI across exchanges with forward-fill; each row has
+    ``local_ts``, per-exchange OI columns, and ``total_oi``.
+
+    Returns at most ``limit`` rows (default and hard max: 10000). Empty lake
+    or no matching rows yields ``[]``.
+    """
+    sym = (symbols or "").strip() or None
+    if limit < 1:
+        limit = 1
+    if limit > _OPEN_INTEREST_MAX_LIMIT:
+        limit = _OPEN_INTEREST_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.aggregate_open_interest(sym, start, end)
+    except Exception as e:
+        log.error("Open interest aggregation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Open interest aggregation failed.",
+        ) from e
+
     if len(df) == 0:
         return []
     if len(df) > limit:

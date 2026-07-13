@@ -764,3 +764,164 @@ def test_query_lake_route_sanitizes_sql_error() -> None:
     assert body["detail"] == "SQL execution failed."
     assert "secret" not in body["detail"]
     assert "/secret" not in str(body)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/open-interest — aggregate OI (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_open_interest_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import open_interest
+
+    result = asyncio.run(open_interest(symbols="BTC", start=0, end=10**18))
+    assert result == []
+
+
+def test_open_interest_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        result = asyncio.run(open_interest(symbols="BTC", start=0, end=100))
+    assert result == []
+    mock_client.aggregate_open_interest.assert_called_once_with("BTC", 0, 100)
+
+
+def test_open_interest_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame(
+        {
+            "local_ts": [100, 200],
+            "binance": [1000.0, 1100.0],
+            "bybit": [500.0, 550.0],
+            "total_oi": [1500.0, 1650.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        result = asyncio.run(
+            open_interest(symbols="BTC", start=0, end=1000, limit=100)
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 100
+    assert result[0]["binance"] == 1000.0
+    assert result[0]["total_oi"] == 1500.0
+    assert result[1]["local_ts"] == 200
+    assert result[1]["total_oi"] == 1650.0
+    mock_client.aggregate_open_interest.assert_called_once_with("BTC", 0, 1000)
+
+
+def test_open_interest_all_symbols_when_empty_filter() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame(
+        {"local_ts": [1], "total_oi": [42.0]}
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        result = asyncio.run(open_interest(symbols="", start=0, end=99))
+    assert len(result) == 1
+    assert result[0]["total_oi"] == 42.0
+    mock_client.aggregate_open_interest.assert_called_once_with(None, 0, 99)
+
+
+def test_open_interest_strips_whitespace_symbols() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        asyncio.run(open_interest(symbols="  ", start=1, end=2))
+        asyncio.run(open_interest(symbols="  ETH  ", start=1, end=2))
+    assert mock_client.aggregate_open_interest.call_args_list[0].args == (
+        None,
+        1,
+        2,
+    )
+    assert mock_client.aggregate_open_interest.call_args_list[1].args == (
+        "ETH",
+        1,
+        2,
+    )
+
+
+def test_open_interest_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3, 4, 5],
+            "total_oi": [10.0, 20.0, 30.0, 40.0, 50.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        result = asyncio.run(
+            open_interest(symbols="BTC", start=0, end=99, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 1
+    assert result[1]["local_ts"] == 2
+
+
+def test_open_interest_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame(
+        {"local_ts": list(range(20)), "total_oi": [1.0] * 20}
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _OPEN_INTEREST_MAX_LIMIT, open_interest
+
+        result = asyncio.run(
+            open_interest(
+                symbols="x",
+                start=0,
+                end=1,
+                limit=_OPEN_INTEREST_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.aggregate_open_interest.assert_called_once()
+
+
+def test_open_interest_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame(
+        {"local_ts": [1, 2, 3], "total_oi": [1.0, 2.0, 3.0]}
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        result = asyncio.run(
+            open_interest(symbols="x", start=0, end=1, limit=0)
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 1
+
+
+def test_open_interest_aggregation_error() -> None:
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(open_interest(symbols="BTC", start=0, end=1))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Open interest aggregation failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_open_interest_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/open-interest."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/open-interest", ("GET",)) in paths
