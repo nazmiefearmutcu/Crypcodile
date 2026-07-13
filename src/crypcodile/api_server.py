@@ -1414,6 +1414,7 @@ _QUERY_MAX_LIMIT = 10_000
 _OPEN_INTEREST_MAX_LIMIT = 10_000
 _FUNDING_APR_MAX_LIMIT = 10_000
 _BASIS_MAX_LIMIT = 10_000
+_INDICATORS_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1626,6 +1627,68 @@ async def basis(
         raise HTTPException(
             status_code=500,
             detail="Spot-perp basis query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/indicators")
+async def indicators(
+    symbol: str = "",
+    start: int = 0,
+    end: int = 0,
+    interval: str = "1d",
+    indicator: str = "",
+    period: int = 14,
+    limit: int = _INDICATORS_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Technical indicators on resampled OHLCV (read-only, no payment).
+
+    Query params: ``symbol`` (canonical, e.g. ``deribit:BTC-PERPETUAL``),
+    ``start`` / ``end`` as nanoseconds UTC, ``interval`` (e.g. ``1m``, ``1h``,
+    ``1d``), ``indicator`` (``sma``|``ema``|``rsi``|``macd``|``bb``|``all``;
+    empty/omitted means ``all``), ``period`` (smoothing/lookback window).
+
+    Wraps :meth:`CrypcodileClient.get_indicators`. Returns at most ``limit``
+    rows (default and hard max: 10000). Empty/missing ``symbol``, empty lake,
+    or no matching bars yields ``[]``. Unknown ``indicator`` names yield 400.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _INDICATORS_MAX_LIMIT:
+        limit = _INDICATORS_MAX_LIMIT
+
+    ind = (indicator or "").strip() or None
+    interval_s = (interval or "").strip() or "1d"
+    period_i = int(period)
+    if period_i < 1:
+        period_i = 1
+
+    client = _get_lake_client()
+    try:
+        df = client.get_indicators(
+            sym,
+            start,
+            end,
+            interval=interval_s,
+            indicator=ind,
+            period=period_i,
+        )
+    except ValueError as e:
+        # Unknown indicator names are intentional client-facing validation.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Indicators query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Indicators query failed.",
         ) from e
 
     if len(df) == 0:
