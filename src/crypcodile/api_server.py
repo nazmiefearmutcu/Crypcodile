@@ -1438,6 +1438,7 @@ _OPEN_INTEREST_MAX_LIMIT = 10_000
 _FUNDING_APR_MAX_LIMIT = 10_000
 _BASIS_MAX_LIMIT = 10_000
 _PERP_BASIS_MAX_LIMIT = 10_000
+_SPOT_FUTURE_BASIS_MAX_LIMIT = 10_000
 _INDICATORS_MAX_LIMIT = 10_000
 _OFI_MAX_LIMIT = 10_000
 _WHALE_ALERTS_MAX_LIMIT = 10_000
@@ -1699,6 +1700,50 @@ async def perp_basis(
         raise HTTPException(
             status_code=500,
             detail="Perp basis query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/spot-future-basis")
+async def spot_future_basis(
+    future: str = "",
+    spot: str = "",
+    start: int = 0,
+    end: int = 0,
+    limit: int = _SPOT_FUTURE_BASIS_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Spot–future basis via ASOF join (read-only, no payment).
+
+    Query params: ``future`` and ``spot`` canonical symbols (e.g.
+    ``deribit:BTC-27JUN25``, ``deribit:BTC-SPOT``), ``start`` / ``end`` as
+    nanoseconds UTC (inclusive bounds on ``local_ts``).
+
+    Wraps :meth:`CrypcodileClient.spot_future_basis`. Returns at most ``limit``
+    rows (default and hard max: 10000). Empty/missing ``future`` or ``spot``,
+    empty lake, or no matching rows yields ``[]``.
+    """
+    future_sym = (future or "").strip()
+    spot_sym = (spot or "").strip()
+    if not future_sym or not spot_sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _SPOT_FUTURE_BASIS_MAX_LIMIT:
+        limit = _SPOT_FUTURE_BASIS_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.spot_future_basis(future_sym, spot_sym, start, end)
+    except Exception as e:
+        log.error("Spot-future basis query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Spot-future basis query failed.",
         ) from e
 
     if len(df) == 0:

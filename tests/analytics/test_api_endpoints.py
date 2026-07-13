@@ -1485,6 +1485,215 @@ def test_perp_basis_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/spot-future-basis — spot-future ASOF basis (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_spot_future_basis_missing_params_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        assert asyncio.run(spot_future_basis(future="", spot="deribit:BTC-SPOT")) == []
+        assert asyncio.run(spot_future_basis(future="deribit:BTC-FUTURE", spot="")) == []
+        assert asyncio.run(spot_future_basis(future="  ", spot="  ")) == []
+        assert asyncio.run(spot_future_basis(future="", spot="")) == []
+    mock_client.spot_future_basis.assert_not_called()
+
+
+def test_spot_future_basis_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import spot_future_basis
+
+    result = asyncio.run(
+        spot_future_basis(
+            future="deribit:BTC-FUTURE",
+            spot="deribit:BTC-SPOT",
+            start=0,
+            end=10**18,
+        )
+    )
+    assert result == []
+
+
+def test_spot_future_basis_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        result = asyncio.run(
+            spot_future_basis(
+                future="deribit:BTC-FUTURE",
+                spot="deribit:BTC-SPOT",
+                start=0,
+                end=100,
+            )
+        )
+    assert result == []
+    mock_client.spot_future_basis.assert_called_once_with(
+        "deribit:BTC-FUTURE", "deribit:BTC-SPOT", 0, 100
+    )
+
+
+def test_spot_future_basis_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [100, 200],
+            "future_price": [50100.0, 50200.0],
+            "spot_price": [50000.0, 50100.0],
+            "basis": [100.0, 100.0],
+            "basis_pct": [0.002, 0.001996],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        result = asyncio.run(
+            spot_future_basis(
+                future="deribit:BTC-FUTURE",
+                spot="deribit:BTC-SPOT",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 100
+    assert result[0]["future_price"] == 50100.0
+    assert result[0]["spot_price"] == 50000.0
+    assert result[0]["basis"] == 100.0
+    assert result[1]["local_ts"] == 200
+    mock_client.spot_future_basis.assert_called_once_with(
+        "deribit:BTC-FUTURE", "deribit:BTC-SPOT", 0, 1000
+    )
+
+
+def test_spot_future_basis_strips_whitespace_symbols() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        asyncio.run(
+            spot_future_basis(
+                future="  deribit:BTC-FUTURE  ",
+                spot="  deribit:BTC-SPOT  ",
+                start=1,
+                end=2,
+            )
+        )
+    mock_client.spot_future_basis.assert_called_once_with(
+        "deribit:BTC-FUTURE", "deribit:BTC-SPOT", 1, 2
+    )
+
+
+def test_spot_future_basis_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3, 4, 5],
+            "future_price": [101.0] * 5,
+            "spot_price": [100.0] * 5,
+            "basis": [1.0] * 5,
+            "basis_pct": [0.01] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        result = asyncio.run(
+            spot_future_basis(future="f", spot="s", start=0, end=99, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 1
+    assert result[1]["local_ts"] == 2
+
+
+def test_spot_future_basis_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": list(range(20)),
+            "future_price": [101.0] * 20,
+            "spot_price": [100.0] * 20,
+            "basis": [1.0] * 20,
+            "basis_pct": [0.01] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import (
+            _SPOT_FUTURE_BASIS_MAX_LIMIT,
+            spot_future_basis,
+        )
+
+        result = asyncio.run(
+            spot_future_basis(
+                future="f",
+                spot="s",
+                start=0,
+                end=1,
+                limit=_SPOT_FUTURE_BASIS_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.spot_future_basis.assert_called_once()
+
+
+def test_spot_future_basis_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3],
+            "future_price": [101.0, 102.0, 103.0],
+            "spot_price": [100.0, 101.0, 102.0],
+            "basis": [1.0, 1.0, 1.0],
+            "basis_pct": [0.01, 0.01, 0.01],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        result = asyncio.run(
+            spot_future_basis(future="f", spot="s", start=0, end=1, limit=0)
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 1
+
+
+def test_spot_future_basis_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_future_basis.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import spot_future_basis
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                spot_future_basis(
+                    future="deribit:BTC-FUTURE",
+                    spot="deribit:BTC-SPOT",
+                    start=0,
+                    end=1,
+                )
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Spot-future basis query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_spot_future_basis_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/spot-future-basis."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/spot-future-basis", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/indicators — technical indicators on OHLCV (read-only, no payment)
 # ---------------------------------------------------------------------------
 
