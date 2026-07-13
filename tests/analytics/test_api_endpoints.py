@@ -4043,3 +4043,151 @@ def test_catalog_search_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/catalog/search", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/resolve-symbols — wrap client.resolve_symbols (read-only)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_symbols_empty_input_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        assert asyncio.run(resolve_symbols()) == []
+        assert asyncio.run(resolve_symbols(symbols="")) == []
+        assert asyncio.run(resolve_symbols(symbols="   ")) == []
+        assert asyncio.run(resolve_symbols(symbols=",,,")) == []
+    mock_client.resolve_symbols.assert_not_called()
+
+
+def test_resolve_symbols_success_list() -> None:
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.return_value = [
+        "deribit:BTC-PERPETUAL",
+        "deribit:ETH-PERPETUAL",
+    ]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        result = asyncio.run(
+            resolve_symbols(symbols="BTC-PERPETUAL,ETH-PERPETUAL", ambiguous="first")
+        )
+    assert result == ["deribit:BTC-PERPETUAL", "deribit:ETH-PERPETUAL"]
+    mock_client.resolve_symbols.assert_called_once_with(
+        ["BTC-PERPETUAL", "ETH-PERPETUAL"],
+        channel=None,
+        ambiguous="first",
+    )
+
+
+def test_resolve_symbols_strips_parts_and_channel() -> None:
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        result = asyncio.run(
+            resolve_symbols(
+                symbols="  BTC-PERPETUAL ,  ",
+                channel="  trade  ",
+                ambiguous="first",
+            )
+        )
+    assert result == ["deribit:BTC-PERPETUAL"]
+    mock_client.resolve_symbols.assert_called_once_with(
+        ["BTC-PERPETUAL"],
+        channel="trade",
+        ambiguous="first",
+    )
+
+
+def test_resolve_symbols_default_ambiguous_error() -> None:
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        asyncio.run(resolve_symbols(symbols="BTC-PERPETUAL"))
+    mock_client.resolve_symbols.assert_called_once_with(
+        ["BTC-PERPETUAL"],
+        channel=None,
+        ambiguous="error",
+    )
+
+
+def test_resolve_symbols_ambiguous_error_structure() -> None:
+    """ambiguous=error multi-match → HTTP 400 with detail message."""
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.side_effect = ValueError(
+        "Ambiguous symbol 'PERPETUAL': 2 matches: "
+        "deribit:BTC-PERPETUAL (score=40), deribit:ETH-PERPETUAL (score=40)"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(resolve_symbols(symbols="PERPETUAL", ambiguous="error"))
+    assert exc_info.value.status_code == 400
+    assert "Ambiguous symbol" in str(exc_info.value.detail)
+    assert "BTC-PERPETUAL" in str(exc_info.value.detail)
+
+
+def test_resolve_symbols_no_match_error_structure() -> None:
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.side_effect = ValueError(
+        "No symbols matched 'ZZZZ-NO-MATCH'"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(resolve_symbols(symbols="ZZZZ-NO-MATCH"))
+    assert exc_info.value.status_code == 400
+    assert "No symbols matched" in str(exc_info.value.detail)
+
+
+def test_resolve_symbols_invalid_ambiguous_mode() -> None:
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.side_effect = ValueError(
+        "ambiguous must be 'error', 'first', or 'all'; got 'maybe'"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(resolve_symbols(symbols="BTC", ambiguous="maybe"))
+    assert exc_info.value.status_code == 400
+    assert "ambiguous must be" in str(exc_info.value.detail)
+
+
+def test_resolve_symbols_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import resolve_symbols
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(resolve_symbols(symbols="BTC-PERPETUAL"))
+    assert exc_info.value.status_code == 400
+    assert "No symbols matched" in str(exc_info.value.detail)
+
+
+def test_resolve_symbols_unexpected_error_is_500() -> None:
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.side_effect = RuntimeError("disk failed")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import resolve_symbols
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(resolve_symbols(symbols="BTC"))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Symbol resolution failed."
+
+
+def test_resolve_symbols_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/resolve-symbols."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/resolve-symbols", ("GET",)) in paths

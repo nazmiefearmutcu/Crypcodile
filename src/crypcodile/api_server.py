@@ -1431,6 +1431,50 @@ async def data_coverage(
     return matched
 
 
+@app.get("/api/v1/resolve-symbols")
+async def resolve_symbols(
+    symbols: str = "",
+    channel: str = "",
+    ambiguous: str = "error",
+) -> list[str]:
+    """Resolve free-form symbol inputs to canonical catalog symbols.
+
+    Query params:
+      - ``symbols``: comma-separated free-form symbol strings (e.g. ``a,b``
+        or ``BTC-PERPETUAL,ETH-PERPETUAL``)
+      - ``channel``: optional channel filter (empty/omitted = all channels)
+      - ``ambiguous``: multi-match policy — ``error`` (default), ``first``,
+        or ``all``
+
+    Wraps :meth:`CrypcodileClient.resolve_symbols`. Success returns a JSON
+    list of canonical symbols. Empty / whitespace-only ``symbols`` yields
+    ``[]``. No match, ambiguous multi-match when ``ambiguous=error``, or an
+    invalid ``ambiguous`` value yields HTTP 400 with ``detail`` describing
+    the failure (client-facing validation).
+    """
+    raw = (symbols or "").strip()
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        return []
+    ch = (channel or "").strip() or None
+    mode = (ambiguous or "").strip() or "error"
+
+    client = _get_lake_client()
+    try:
+        return client.resolve_symbols(parts, channel=ch, ambiguous=mode)  # type: ignore[arg-type]
+    except ValueError as e:
+        # Ambiguous / no-match / invalid mode are intentional client-facing errors.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Symbol resolution failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Symbol resolution failed.",
+        ) from e
+
+
 # Hard max rows for lake scan / SQL query / OI / funding-APR HTTP responses (bounded discovery).
 _CATALOG_SCAN_MAX_LIMIT = 10_000
 _QUERY_MAX_LIMIT = 10_000
