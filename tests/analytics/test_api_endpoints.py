@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 from typing import Any
 from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
@@ -162,6 +163,41 @@ def test_simulate_price_impact_estimation_error() -> None:
         )
         assert resp.status_code == 400
         assert "No book snapshots found" in resp.json()["detail"]
+
+
+def test_simulate_price_impact_non_finite_floats_json_safe_null() -> None:
+    """Slippage rows may contain nan/inf; REST maps them to JSON null."""
+    mock_df = pl.DataFrame(
+        {
+            "symbol": ["binance:BTC-USDT"],
+            "side": ["buy"],
+            "size": [1.5],
+            "best_price": [60000.0],
+            "expected_price": [float("inf")],
+            "slippage_usd": [float("nan")],
+            "slippage_pct": [float("-inf")],
+        }
+    )
+    with patch(
+        "crypcodile.analytics.slippage.estimate_slippage",
+        return_value=mock_df,
+    ):
+        resp = client.post(
+            "/api/v1/simulate-price-impact",
+            json={
+                "symbol": "binance:BTC-USDT",
+                "side": "buy",
+                "amount": 1.5,
+            },
+        )
+    assert resp.status_code == 200
+    data = resp.json()[0]
+    assert data["symbol"] == "binance:BTC-USDT"
+    assert data["size"] == 1.5
+    assert data["best_price"] == 60000.0
+    assert data["expected_price"] is None
+    assert data["slippage_usd"] is None
+    assert data["slippage_pct"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -4807,6 +4843,47 @@ def test_smart_money_route_registered() -> None:
     assert ("/api/v1/smart-money", ("POST",)) in paths
 
 
+def test_smart_money_non_finite_floats_json_safe_null() -> None:
+    """Non-finite flow metrics (e.g. Inf usd_value) → JSON null on REST."""
+    from crypcodile.api_server import SmartMoneyPayload, smart_money
+
+    # Single Inf outflow: net_flow_usd = -inf, total_volume_usd = +inf.
+    transfers = [
+        {
+            "from": _SMART_ADDR,
+            "to": _SMART_OTHER,
+            "usd_value": float("inf"),
+            "timestamp": 1,
+        },
+    ]
+    rows = asyncio.run(
+        smart_money(
+            SmartMoneyPayload(
+                transfers=transfers,
+                watchlist={_SMART_ADDR: "vitalik"},
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["net_flow_usd"] is None
+    assert rows[0]["total_volume_usd"] is None
+    assert rows[0]["tx_count"] == 1
+    assert rows[0]["label"] == "vitalik"
+    # MockTestClient path also encodes without raising.
+    resp = client.post(
+        "/api/v1/smart-money",
+        json={
+            "transfers": transfers,
+            "watchlist": {_SMART_ADDR: "vitalik"},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["net_flow_usd"] is None
+    assert body[0]["total_volume_usd"] is None
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/label-transfers — pure offline label + filter (no lake)
 # ---------------------------------------------------------------------------
@@ -5024,6 +5101,50 @@ def test_label_transfers_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/label-transfers", ("POST",)) in paths
+
+
+def test_label_transfers_non_finite_floats_json_safe_null() -> None:
+    """Pass-through float fields with nan/inf → JSON null on REST."""
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    transfers = [
+        {
+            "from": _SMART_ADDR,
+            "to": _SMART_OTHER,
+            "usd_value": float("inf"),
+        },
+        {
+            "from": _SMART_OTHER,
+            "to": _SMART_ADDR,
+            "usd_value": float("nan"),
+        },
+    ]
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=transfers,
+                watchlist={_SMART_ADDR: "vitalik"},
+            )
+        )
+    )
+    assert len(rows) == 2
+    assert rows[0]["usd_value"] is None
+    assert rows[0]["from_label"] == "vitalik"
+    assert rows[1]["usd_value"] is None
+    assert rows[1]["to_label"] == "vitalik"
+    # MockTestClient path also encodes without raising.
+    resp = client.post(
+        "/api/v1/label-transfers",
+        json={
+            "transfers": transfers,
+            "watchlist": {_SMART_ADDR: "vitalik"},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["usd_value"] is None
+    assert data[1]["usd_value"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -2880,7 +2880,8 @@ async def smart_money(payload: SmartMoneyPayload) -> list[dict[str, Any]]:
         labels = normalize_watchlist(watchlist)
         if not labels:
             return []
-        return summarize_smart_money(transfers, labels)
+        rows = summarize_smart_money(transfers, labels)
+        return _json_safe_records(rows)
     except TypeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -2966,7 +2967,7 @@ async def label_transfers(payload: LabelTransfersPayload) -> list[dict[str, Any]
         labeled = label_transfer_addresses(rows, labels)
         if payload.known_only:
             labeled = [r for r in labeled if r.get("is_known")]
-        return labeled
+        return _json_safe_records(labeled)
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -3107,7 +3108,7 @@ async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, A
         )
         if df.is_empty():
             raise HTTPException(status_code=404, detail="No result from slippage estimation.")
-        return df.to_dicts()
+        return _json_safe_records(df.to_dicts())
     except ValueError as e:
         # Client-facing ValueError messages are intentional validation feedback.
         raise HTTPException(status_code=400, detail=str(e))

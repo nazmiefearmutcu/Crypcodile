@@ -6,6 +6,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Fixed
+- **API POST row-list JSON safety**: `_json_safe_records` applied to `POST /api/v1/simulate-price-impact`, `/smart-money`, and `/label-transfers` so NaN/±Inf floats in returned row dicts encode as JSON `null` (matches lake DF and pure-float REST boundaries).
 - **API/MCP pure float JSON safety**: non-finite floats from pure offline analytics are mapped to JSON `null` via `_json_safe_float` at REST/MCP boundaries — covers `chaos-score` (±Inf inputs → NaN score), `peg-deviation` (Inf/NaN price), `funding-predict` (Inf/NaN history), `gas-vol` (undefined correlations), and the prior `lending-stress` zero-debt health-factor case. Prevents Starlette `ValueError: Out of range float values are not JSON compliant`.
 - **API/MCP lending-stress JSON safety**: zero-debt health factors (`float('inf')` in pure analytics) are returned as JSON `null` at the REST and MCP boundaries so Starlette/JSON-RPC encoding no longer raises `ValueError: Out of range float values are not JSON compliant`.
 
