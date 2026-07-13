@@ -497,11 +497,38 @@ def normalize_user_symbol(exchange: str, symbol: str) -> str:
 
 
 def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: list[str] | str | None = None) -> list[str]:
-    """Resolve user entered symbols to matching catalog symbols if possible."""
+    """Resolve user entered symbols to matching catalog symbols if possible.
+
+    Prefers :meth:`CrypcodileClient.resolve_symbols` with ``ambiguous="first"``
+    when the lake has catalog data. Falls back to the legacy Catalog walk on
+    empty lakes or any client failure (keeps original input on no match).
+    """
+    # Prefer client façade when catalog has data.
+    try:
+        from crypcodile.client.client import CrypcodileClient
+
+        client = CrypcodileClient(data_dir=data_dir)
+        if client.list_channels():
+            channel: str | None = None
+            if isinstance(channels, str):
+                channel = channels
+            elif isinstance(channels, (list, tuple)) and len(channels) == 1:
+                channel = channels[0]
+            # Multi-channel filters are not supported by resolve_symbols;
+            # leave channel=None so inventory spans the lake.
+            return client.resolve_symbols(
+                list(symbols_input or []),
+                channel=channel,
+                ambiguous="first",
+            )
+    except Exception:
+        pass
+
+    # Legacy fallback: walk registered Catalog symbols directly.
     from crypcodile.store.catalog import Catalog
-    
+
     all_registered = None
-    
+
     def get_registered():
         nonlocal all_registered
         if all_registered is not None:
@@ -516,7 +543,7 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
                 else:
                     ch_list = list(channels)
                 target_channels = [c for c in ch_list if c in target_channels]
-                
+
             for ch in target_channels:
                 try:
                     df = cat.query(f'SELECT DISTINCT symbol FROM "{ch}"')
@@ -534,22 +561,22 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
         sym_clean = sym.strip()
         if not sym_clean:
             continue
-            
+
         # Fast path: if the input is already in canonical format (e.g. exchange:symbol)
         # we can bypass checking the DB entirely to avoid slow startup queries.
         if ":" in sym_clean:
             resolved.append(sym_clean)
             continue
-            
+
         reg_symbols_set = get_registered()
-        
+
         # 1. Exact match in registered symbols
         if sym_clean in reg_symbols_set:
             resolved.append(sym_clean)
             continue
-            
+
         reg_symbols = sorted(list(reg_symbols_set))
-        
+
         # 2. Case-insensitive exact match
         lower_sym = sym_clean.lower()
         matched = False
@@ -560,7 +587,7 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
                 break
         if matched:
             continue
-            
+
         # 3. Prefix-less match (e.g., "BTC-PERPETUAL" matching "deribit:BTC-PERPETUAL")
         for reg in reg_symbols:
             if ":" in reg:
@@ -583,7 +610,7 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
 
         # 5. Fallback to original
         resolved.append(sym_clean)
-        
+
     return resolved
 
 

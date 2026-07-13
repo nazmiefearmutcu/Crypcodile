@@ -31,8 +31,13 @@ class AwaitableValue:
 
 # --- 1. Deterministic Symbol Resolution Test ---
 def test_deterministic_symbol_resolution(tmp_path: Path) -> None:
-    """Verify prefix-less and fuzzy match symbol resolution is deterministic."""
-    with patch("crypcodile.store.catalog.Catalog") as mock_catalog_class:
+    """Verify prefix-less and fuzzy match symbol resolution is deterministic.
+
+    Client path is forced to fail so the legacy Catalog walk is exercised.
+    Sorted candidates → first prefix-less match is bybit:...
+    """
+    with patch("crypcodile.client.client.CrypcodileClient", side_effect=RuntimeError("no client")), \
+         patch("crypcodile.store.catalog.Catalog") as mock_catalog_class:
         mock_catalog = MagicMock()
         mock_catalog._registered_channels = ["trade"]
         import polars as pl
@@ -46,6 +51,35 @@ def test_deterministic_symbol_resolution(tmp_path: Path) -> None:
         # First match found must be "bybit:BTC-PERPETUAL" deterministically.
         resolved = resolve_input_symbols(tmp_path, ["btc-perpetual"], ["trade"])
         assert resolved == ["bybit:BTC-PERPETUAL"]
+
+
+def test_resolve_input_symbols_delegates_to_client(tmp_path: Path) -> None:
+    """When catalog has data, resolve_input_symbols uses client.resolve_symbols."""
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade"]
+    mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
+
+    with patch("crypcodile.client.client.CrypcodileClient", return_value=mock_client):
+        resolved = resolve_input_symbols(tmp_path, ["btc-perpetual"], "trade")
+
+    assert resolved == ["deribit:BTC-PERPETUAL"]
+    mock_client.resolve_symbols.assert_called_once_with(
+        ["btc-perpetual"],
+        channel="trade",
+        ambiguous="first",
+    )
+
+
+def test_resolve_input_symbols_falls_back_when_client_empty(tmp_path: Path) -> None:
+    """Empty catalog → skip client resolve and use legacy (pass-through colon)."""
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = []
+
+    with patch("crypcodile.client.client.CrypcodileClient", return_value=mock_client):
+        resolved = resolve_input_symbols(tmp_path, ["deribit:BTC-PERPETUAL"], None)
+
+    assert resolved == ["deribit:BTC-PERPETUAL"]
+    mock_client.resolve_symbols.assert_not_called()
 
 
 # --- 2. Empty String Inputs Validation in basis_cmd ---
