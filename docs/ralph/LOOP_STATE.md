@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–17 COMPLETE. Ready for Wave 18 (Feature).
+**Status:** Waves 1–18 COMPLETE. Ready for Wave 19.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -163,7 +163,7 @@
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST endpoint for open-interest aggregation | DONE | `21513dd` |
+| 1 | REST endpoint for open-interest aggregation | DONE | `8f80bd0` |
 
 ## Next rotation ideas (Wave 19+)
 
@@ -200,4 +200,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 16: portal detect, multi-exchange collect, REST query, superchain factory, inventory, funding MCP, catalog scan
 - Wave 17: payment refund, multi-symbol OI, SQL harden, superchain identity, seen-logs co-persist, chaos MCP, CLI derive/superchain lists, derive poll connector
 - Wave 18: REST open-interest endpoint (`GET /api/v1/open-interest`)
-- **HEAD:** `21513dd` — wave 18 open-interest REST; ready for Wave 19
+- **HEAD:** `8f80bd0` — wave 18 open-interest REST; ready for Wave 19
