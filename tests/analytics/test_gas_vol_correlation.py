@@ -33,10 +33,10 @@ def test_gas_to_volatility_correlation_empty() -> None:
 
 
 def test_gas_to_volatility_correlation_insufficient_data() -> None:
-    # Only 1 matching timestamp
+    # Only one gas sample → ASOF yields a single pair → correlation undefined
     gas_df = pl.DataFrame({
-        "local_ts": [1, 2],
-        "gas_price": [10.0, 20.0],
+        "local_ts": [1],
+        "gas_price": [10.0],
     })
     vol_df = pl.DataFrame({
         "local_ts": [2, 3],
@@ -46,3 +46,19 @@ def test_gas_to_volatility_correlation_insufficient_data() -> None:
     res = gas_to_volatility_correlation(gas_df, vol_df)
     assert math.isnan(res["pearson"])
     assert math.isnan(res["spearman"])
+
+
+def test_gas_to_volatility_correlation_asof_nearest() -> None:
+    # Off-by-one timestamps: exact join would leave nothing useful; nearest ASOF pairs them
+    gas_df = pl.DataFrame({
+        "local_ts": [100, 200, 300, 400, 500],
+        "gas_price": [10.0, 20.0, 30.0, 40.0, 50.0],
+    })
+    vol_df = pl.DataFrame({
+        "local_ts": [101, 199, 302, 398, 505],
+        "volatility": [0.1, 0.2, 0.3, 0.4, 0.5],
+    })
+
+    res = gas_to_volatility_correlation(gas_df, vol_df)
+    assert abs(res["pearson"] - 1.0) < 1e-7
+    assert abs(res["spearman"] - 1.0) < 1e-7
