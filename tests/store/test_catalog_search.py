@@ -284,6 +284,17 @@ async def test_search_limit_enforced(tmp_path: pathlib.Path) -> None:
     assert len(df_all) == 3
 
 
+async def test_search_limit_non_positive_returns_empty(tmp_path: pathlib.Path) -> None:
+    """limit < 1 must not use Polars head(-n) (which drops last n rows)."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+
+    for bad_limit in (0, -1, -5):
+        df = cat.search_symbols("BTC", limit=bad_limit)
+        assert len(df) == 0
+        assert df.schema == cat.search_symbols("").schema
+
+
 async def test_search_aggregates_multi_channel(tmp_path: pathlib.Path) -> None:
     """Same symbol on trade + book_snapshot → one row, channels joined, counts summed."""
     await _write_fixtures(tmp_path)

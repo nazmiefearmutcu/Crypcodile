@@ -309,11 +309,15 @@ class Catalog:
         returns an empty DataFrame with the documented schema.  Multi-channel
         rows for the same ``(symbol, exchange)`` are aggregated: channels
         joined with commas, ``row_count`` summed, timestamps min/max'd,
-        score max'd.
+        score max'd.  ``limit < 1`` yields the empty schema (Polars
+        ``DataFrame.head(-n)`` would otherwise drop the last *n* rows).
         """
         empty = pl.DataFrame(schema=_SEARCH_SCHEMA)
         q = q.strip()
         if not q:
+            return empty
+        # Guard before .head(limit): Polars treats negative n as "all but last n".
+        if limit < 1:
             return empty
 
         inv = self.inventory(channel=channel, exchange=exchange)
