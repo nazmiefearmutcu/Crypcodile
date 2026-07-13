@@ -350,7 +350,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | REST `GET /api/v1/catalog/exchanges` + capabilities entry | DONE | `4e7c2ff39c2078f95c8a34d5da696c358b26b922` |
 | 3 | Tests: store list_exchanges_on_disk + client + API empty/mock; capabilities includes catalog/exchanges | DONE | `4e7c2ff39c2078f95c8a34d5da696c358b26b922` |
 
-## Next rotation ideas (Wave 46+)
+## Wave 46 — Feature (MCP list_exchanges_on_disk + filesystem list_channels) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | MCP `list_exchanges_on_disk` tool wrapping `client.list_exchanges_on_disk` (handler, TOOLS, tools/call, capabilities hint) | DONE | `3886d1dc9b66e52fe5d7207c2aba43f04b43c735` |
+| 2 | `Catalog.list_channels` filesystem-based (`exchange=*/channel=*`; empty partitions without DuckDB); `_refresh_views` skips empty channel suffixes | DONE | `3886d1dc9b66e52fe5d7207c2aba43f04b43c735` |
+| 3 | Tests: MCP empty/data/delegate; catalog empty-partition dirs; capabilities includes list_exchanges_on_disk | DONE | `3886d1dc9b66e52fe5d7207c2aba43f04b43c735` |
+
+## Next rotation ideas (Wave 47+)
 
 Priority candidates for the next cycles:
 
@@ -358,7 +366,6 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **MCP list_exchanges_on_disk** — optional MCP mirror of catalog exchanges discovery  
 
 
 ## Subagent policy
@@ -415,3 +422,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 43: REST `GET /api/v1/catalog/dates?channel=` via Catalog/Client `list_dates` (filesystem date partition discovery)
 - Wave 44: MCP `list_dates` tool + shared `crypcodile.util.json_safe` (dedupe REST/MCP JSON-safe helpers)
 - Wave 45: REST `GET /api/v1/catalog/exchanges` via Catalog/Client `list_exchanges_on_disk` (filesystem exchange partition discovery; ≠ factory `list_exchanges`)
+- Wave 46: MCP `list_exchanges_on_disk` tool + filesystem `Catalog.list_channels` (empty partitions without DuckDB)
