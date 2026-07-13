@@ -74,6 +74,30 @@ def calculate_peg_deviation(catalog: Catalog, symbol: str, threshold: float = 0.
 
     return result
 
+def peg_deviation_from_price(
+    price: float,
+    threshold: float = 0.01,
+    target: float = 1.0,
+) -> dict[str, float | bool]:
+    """Pure peg-deviation check from a single mid price (no lake required).
+
+    Args:
+        price: Observed mid price of the stablecoin pair.
+        threshold: Absolute deviation threshold (e.g. 0.01 for 1%).
+        target: Peg target price (default 1.0).
+
+    Returns:
+        Dict with ``price``, ``deviation_pct``, ``is_alert_triggered``, ``threshold``.
+    """
+    deviation_pct = abs(float(price) - float(target))
+    return {
+        "price": float(price),
+        "deviation_pct": float(deviation_pct),
+        "is_alert_triggered": bool(deviation_pct >= threshold),
+        "threshold": float(threshold),
+    }
+
+
 def check_live_peg_deviation(record: Record, threshold: float = 0.01) -> bool:
     """Inspects a record in the live ingest pipeline to log warnings if peg is breached."""
     if not hasattr(record, "symbol"):

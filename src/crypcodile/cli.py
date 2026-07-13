@@ -14,6 +14,9 @@ iv-surface     -- Print the implied-vol surface snapshot.
 term-structure -- Print the ATM IV term structure.
 vol-skew       -- Print per-strike IV and delta for a single expiry.
 risk-reversal  -- Print risk-reversal and butterfly from vol skew.
+open-interest  -- Aggregate open interest across exchanges from the lake.
+peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
+gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
 
 Usage examples::
 
@@ -39,6 +42,11 @@ Usage examples::
                        --at 1704067200000000000 --data-dir /data
     crypcodile risk-reversal --underlying BTC --expiry-ns 1735689600000000000 \\
                             --at 1704067200000000000 --target-delta 0.25 --data-dir /data
+    crypcodile open-interest --symbol BTC --start 0 --end 9999999999999999999 \\
+                            --data-dir /data
+    crypcodile peg-deviation --price 0.98 --threshold 0.01
+    crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
+    crypcodile gas-vol --gas-file gas.csv --vol-file vol.csv
 """
 
 from __future__ import annotations
@@ -2639,6 +2647,267 @@ def whale_alerts_cmd(
         })
     df_formatted = pl.DataFrame(formatted_rows)
     typer.echo(df_formatted)
+
+
+# ---------------------------------------------------------------------------
+# open-interest (Base risk analytics)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="open-interest")
+def open_interest_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option(
+            "--symbol",
+            help="Substring filter for symbols (e.g. BTC). Omit to aggregate all.",
+        ),
+    ] = None,
+    start: Annotated[
+        int | None,
+        typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
+    ] = None,
+    end: Annotated[
+        int | None,
+        typer.Option("--end", help="End of time range (nanoseconds UTC)."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Aggregate open interest across exchanges with forward-fill alignment."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if start is None:
+            start = 0
+        if end is None:
+            end = 9999999999999999999
+    else:
+        if symbol is None:
+            symbol = typer.prompt(
+                "Symbol filter (e.g. BTC, empty for all)",
+                default="",
+                show_default=False,
+            )
+            if not symbol:
+                symbol = None
+        if start is None or end is None:
+            resolved_start, resolved_end = prompt_time_range_helper(
+                data_dir,
+                "open_interest",
+                [symbol] if symbol else None,
+                default_start=0,
+                default_end=9999999999999999999,
+            )
+            if start is None:
+                start = resolved_start
+            if end is None:
+                end = resolved_end
+
+    if start is None:
+        start = 0
+    if end is None:
+        end = 9999999999999999999
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.aggregate_open_interest(symbol, start, end)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No open interest data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# peg-deviation (Base risk analytics)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="peg-deviation")
+def peg_deviation_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option(
+            "--symbol",
+            help="Canonical stablecoin symbol for lake mode, e.g. base_onchain:USDC-USDbC.",
+        ),
+    ] = None,
+    price: Annotated[
+        float | None,
+        typer.Option(
+            "--price",
+            help="Mid price for pure mode (no lake). Absolute deviation from $1.00.",
+        ),
+    ] = None,
+    bid: Annotated[
+        float | None,
+        typer.Option("--bid", help="Bid price for pure mode (paired with --ask)."),
+    ] = None,
+    ask: Annotated[
+        float | None,
+        typer.Option("--ask", help="Ask price for pure mode (paired with --bid)."),
+    ] = None,
+    threshold: Annotated[
+        float,
+        typer.Option("--threshold", help="Deviation alert threshold (e.g. 0.01 = 1%)."),
+    ] = 0.01,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Detect stablecoin peg deviation from $1.00 (lake or pure --price/--bid/--ask)."""
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+    from crypcodile.client.client import CrypcodileClient
+
+    # Pure path: --price or --bid/--ask
+    mid: float | None = price
+    if mid is None and bid is not None and ask is not None:
+        mid = (float(bid) + float(ask)) / 2.0
+
+    if mid is not None:
+        result = peg_deviation_from_price(mid, threshold=threshold)
+        typer.echo(
+            f"price: {result['price']}\n"
+            f"deviation_pct: {result['deviation_pct']}\n"
+            f"threshold: {result['threshold']}\n"
+            f"is_alert_triggered: {result['is_alert_triggered']}"
+        )
+        raise typer.Exit(code=0)
+
+    # Lake path
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo(
+                "Error: provide --price/--bid+--ask (pure) or --symbol (lake) "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(
+                data_dir, channel="book_ticker"
+            )
+            if selected_symbols:
+                symbol = selected_symbols[0]
+        if not symbol:
+            symbol = prompt_symbol(
+                "Symbol (e.g. base_onchain:USDC-USDbC)",
+                data_dir,
+                channel="book_ticker",
+            )
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_ticker")
+        if not resolved_syms:
+            resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo(
+            "Error: Symbol is required for lake mode (or pass --price for pure mode).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_peg_deviation(symbol, threshold)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No peg deviation data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# gas-vol (Base risk analytics — pure DF inputs)
+# ---------------------------------------------------------------------------
+
+
+def _load_series_dataframe(path: Path) -> "pl.DataFrame":
+    """Load a CSV or JSON/JSONL series file into a Polars DataFrame."""
+    import polars as pl
+
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pl.read_csv(path)
+    if suffix == ".jsonl" or suffix == ".ndjson":
+        return pl.read_ndjson(path)
+    if suffix == ".json":
+        return pl.read_json(path)
+    # Fallback: try CSV then JSON
+    try:
+        return pl.read_csv(path)
+    except Exception:
+        return pl.read_json(path)
+
+
+@app.command(name="gas-vol")
+def gas_vol_cmd(
+    gas_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--gas-file",
+            help="CSV/JSON path with local_ts and a gas column (gas_price/gas_cost).",
+        ),
+    ] = None,
+    vol_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--vol-file",
+            help="CSV/JSON path with local_ts and a volatility column (volatility/vol).",
+        ),
+    ] = None,
+) -> None:
+    """Correlate gas costs with volatility (Pearson & Spearman) from CSV/JSON inputs."""
+    import json
+
+    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
+
+    if not is_interactive_stdin():
+        if gas_file is None or vol_file is None:
+            typer.echo(
+                "Error: --gas-file and --vol-file are required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if gas_file is None:
+            gas_file = Path(typer.prompt("Path to gas series file (CSV/JSON)"))
+        if vol_file is None:
+            vol_file = Path(typer.prompt("Path to volatility series file (CSV/JSON)"))
+
+    if gas_file is None or vol_file is None:
+        typer.echo("Error: --gas-file and --vol-file are required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        gas_df = _load_series_dataframe(gas_file)
+        vol_df = _load_series_dataframe(vol_file)
+    except Exception as e:
+        typer.echo(f"Error loading input files: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = gas_to_volatility_correlation(gas_df, vol_df)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(json.dumps(result, indent=2, allow_nan=True))
 
 
 # ---------------------------------------------------------------------------

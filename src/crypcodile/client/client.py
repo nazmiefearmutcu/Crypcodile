@@ -431,6 +431,37 @@ class CrypcodileClient:
 
         return _track_whale_alerts(self._catalog, symbol, start_ns, end_ns, min_usd)
 
+    def aggregate_open_interest(
+        self,
+        symbols: str | list[str] | None = None,
+        start_ns: int = 0,
+        end_ns: int = 0,
+    ) -> pl.DataFrame:
+        """Aggregate open interest across exchanges with forward-fill alignment.
+
+        Thin wrapper over :func:`crypcodile.analytics.oi_aggregator.aggregate_open_interest`.
+        """
+        from crypcodile.analytics.oi_aggregator import (
+            aggregate_open_interest as _aggregate_open_interest,
+        )
+
+        return _aggregate_open_interest(self._catalog, symbols, start_ns, end_ns)
+
+    def calculate_peg_deviation(
+        self,
+        symbol: str,
+        threshold: float = 0.01,
+    ) -> pl.DataFrame:
+        """Detect stablecoin peg deviations from book ticker / snapshot data.
+
+        Thin wrapper over :func:`crypcodile.analytics.peg_deviation.calculate_peg_deviation`.
+        """
+        from crypcodile.analytics.peg_deviation import (
+            calculate_peg_deviation as _calculate_peg_deviation,
+        )
+
+        return _calculate_peg_deviation(self._catalog, symbol, threshold)
+
     def spot_future_basis(
         self,
         future_symbol: str,
