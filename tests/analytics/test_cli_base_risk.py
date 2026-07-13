@@ -1,4 +1,4 @@
-"""CLI exposure tests for Base risk analytics (open-interest, peg-deviation, chaos-score, gas-vol)."""
+"""CLI exposure tests for Base risk analytics (open-interest, peg-deviation, chaos-score, lending-stress, gas-vol)."""
 
 from __future__ import annotations
 
@@ -277,6 +277,91 @@ def test_cli_chaos_score_high_risk_near_100() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CLI: lending-stress (pure numeric kwargs)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_lending_stress_healthy() -> None:
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    expected = lending_stress_test(
+        collateral_usd=10000.0,
+        debt_usd=5000.0,
+        liquidation_threshold=0.8,
+        haircut_pct=0.20,
+    )
+    result = _RUNNER.invoke(
+        app,
+        [
+            "lending-stress",
+            "--collateral-usd",
+            "10000",
+            "--debt-usd",
+            "5000",
+            "--liquidation-threshold",
+            "0.8",
+            "--haircut-pct",
+            "0.20",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "collateral_usd: 10000.0" in result.output
+    assert "debt_usd: 5000.0" in result.output
+    assert f"current_health_factor: {expected['current_health_factor']}" in result.output
+    assert f"simulated_health_factor: {expected['simulated_health_factor']}" in result.output
+    assert "is_liquidatable: False" in result.output
+    assert "simulated_is_liquidatable: False" in result.output
+
+
+def test_cli_lending_stress_liquidation() -> None:
+    result = _RUNNER.invoke(
+        app,
+        [
+            "lending-stress",
+            "--collateral-usd",
+            "10000",
+            "--debt-usd",
+            "9000",
+            "--liquidation-threshold",
+            "0.8",
+            "--haircut-pct",
+            "10",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "is_liquidatable: True" in result.output
+    assert "simulated_is_liquidatable: True" in result.output
+
+
+def test_cli_lending_stress_zero_debt_inf() -> None:
+    result = _RUNNER.invoke(
+        app,
+        [
+            "lending-stress",
+            "--collateral-usd",
+            "10000",
+            "--debt-usd",
+            "0",
+            "--liquidation-threshold",
+            "0.8",
+            "--haircut-pct",
+            "20",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "current_health_factor: inf" in result.output
+    assert "simulated_health_factor: inf" in result.output
+    assert "is_liquidatable: False" in result.output
+    assert "simulated_is_liquidatable: False" in result.output
+
+
+def test_cli_lending_stress_missing_args_exits_2() -> None:
+    # Typer/Click exits 2 when required options are missing.
+    result = _RUNNER.invoke(app, ["lending-stress"])
+    assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
 # CLI: gas-vol
 # ---------------------------------------------------------------------------
 
@@ -332,4 +417,6 @@ def test_cli_commands_registered() -> None:
     assert "open-interest" in result.output
     assert "peg-deviation" in result.output
     assert "chaos-score" in result.output
+    assert "lending-stress" in result.output
     assert "gas-vol" in result.output
+    assert "mev-sandwich" in result.output
