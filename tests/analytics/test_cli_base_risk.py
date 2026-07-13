@@ -411,6 +411,57 @@ def test_cli_gas_vol_missing_args_exits_1() -> None:
     assert "Error" in result.output
 
 
+# ---------------------------------------------------------------------------
+# CLI: funding-predict (pure offline)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_funding_predict_rates() -> None:
+    result = _RUNNER.invoke(
+        app,
+        ["funding-predict", "--rates", "0.01,0.02,0.03", "--window", "3"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["n_history"] == 3
+    assert payload["window_size"] == 3
+    assert payload["method"] in ("rolling_mean", "xgboost")
+    assert isinstance(payload["predicted_funding_rate"], float)
+    if payload["method"] == "rolling_mean":
+        assert abs(payload["predicted_funding_rate"] - 0.02) < 1e-9
+
+
+def test_cli_funding_predict_file_csv(tmp_path: Path) -> None:
+    path = tmp_path / "funding.csv"
+    pl.DataFrame({"funding_rate": [0.01, 0.02, 0.03, 0.04, 0.05]}).write_csv(path)
+    result = _RUNNER.invoke(
+        app,
+        ["funding-predict", "--file", str(path), "--window", "5"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["n_history"] == 5
+    if payload["method"] == "rolling_mean":
+        assert abs(payload["predicted_funding_rate"] - 0.03) < 1e-9
+
+
+def test_cli_funding_predict_missing_args_exits_1() -> None:
+    result = _RUNNER.invoke(app, ["funding-predict"])
+    assert result.exit_code == 1
+    assert "Error" in result.output
+
+
+def test_cli_funding_predict_both_inputs_exits_1(tmp_path: Path) -> None:
+    path = tmp_path / "funding.csv"
+    pl.DataFrame({"funding_rate": [0.01]}).write_csv(path)
+    result = _RUNNER.invoke(
+        app,
+        ["funding-predict", "--rates", "0.01", "--file", str(path)],
+    )
+    assert result.exit_code == 1
+    assert "only one" in result.output
+
+
 def test_cli_commands_registered() -> None:
     result = _RUNNER.invoke(app, ["--help"])
     assert result.exit_code == 0
@@ -420,3 +471,4 @@ def test_cli_commands_registered() -> None:
     assert "lending-stress" in result.output
     assert "gas-vol" in result.output
     assert "mev-sandwich" in result.output
+    assert "funding-predict" in result.output

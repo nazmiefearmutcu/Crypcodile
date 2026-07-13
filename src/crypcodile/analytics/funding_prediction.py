@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+
 import polars as pl
 
 XGBOOST_AVAILABLE = False
@@ -15,6 +16,102 @@ xgb = None
 
 def is_xgboost_available() -> bool:
     return XGBOOST_AVAILABLE
+
+
+def predict_next_funding(
+    historical: pl.DataFrame | list[float] | tuple[float, ...],
+    *,
+    window_size: int = 5,
+    target_col: str = "funding_rate",
+) -> dict[str, Any]:
+    """Predict the next-period funding rate from pure offline history.
+
+    Accepts either a Polars DataFrame with a ``funding_rate`` (or
+    ``target_col``) column, or a sequence of floats. Trains
+    :class:`XGBoostFundingPredictor` when XGBoost is available; otherwise
+    uses the built-in rolling-mean heuristic (no network, no data lake).
+
+    Returns a dict with:
+      - ``predicted_funding_rate`` (float)
+      - ``method`` (``"xgboost"`` | ``"rolling_mean"``)
+      - ``window_size`` (int)
+      - ``n_history`` (int)
+      - ``xgboost_available`` (bool)
+    """
+    if window_size < 1:
+        raise ValueError("window_size must be >= 1")
+
+    if isinstance(historical, (list, tuple)):
+        rates = [float(r) for r in historical]
+        if not rates:
+            raise ValueError("historical rates list is empty")
+        df = pl.DataFrame({target_col: rates})
+    elif isinstance(historical, pl.DataFrame):
+        df = historical
+        if target_col not in df.columns:
+            raise ValueError(
+                f"historical DataFrame must contain column {target_col!r}"
+            )
+        if len(df) == 0:
+            raise ValueError("historical DataFrame is empty")
+    else:
+        raise TypeError("historical must be a polars DataFrame or sequence of floats")
+
+    predictor = XGBoostFundingPredictor(
+        target_col=target_col,
+        window_size=window_size,
+    )
+    predictor.train(df)
+
+    # Build next-step features from the last rows (lag columns + last extras).
+    features: dict[str, Any] = {}
+    rates = [float(r) for r in df[target_col].drop_nulls().to_list()]
+    if predictor.feature_cols:
+        for col in predictor.feature_cols:
+            if col.startswith(f"{target_col}_lag"):
+                try:
+                    lag = int(col.rsplit("lag", 1)[1])
+                except ValueError:
+                    continue
+                if len(rates) >= lag:
+                    features[col] = rates[-lag]
+            elif col in df.columns:
+                vals = df[col].drop_nulls()
+                if len(vals) > 0:
+                    features[col] = float(vals[-1])
+
+    can_use_xgb = (
+        is_xgboost_available()
+        and predictor._is_trained
+        and predictor.model is not None
+        and predictor.feature_cols is not None
+        and bool(predictor.feature_cols)
+        and all(c in features for c in predictor.feature_cols)
+    )
+
+    if can_use_xgb:
+        try:
+            import numpy as np
+
+            vals = [features[c] for c in predictor.feature_cols]  # type: ignore[union-attr]
+            preds = predictor.model.predict(np.array([vals], dtype=np.float64))
+            predicted = float(preds[0])
+            method = "xgboost"
+        except Exception:
+            # Empty dict -> rolling mean of recent_rates / fallback mean.
+            predicted = float(predictor.predict({}))
+            method = "rolling_mean"
+    else:
+        predicted = float(predictor.predict({}))
+        method = "rolling_mean"
+
+    return {
+        "predicted_funding_rate": float(predicted),
+        "method": method,
+        "window_size": window_size,
+        "n_history": len(df),
+        "xgboost_available": is_xgboost_available(),
+    }
 
 
 class XGBoostFundingPredictor:

@@ -25,6 +25,7 @@ gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
 smart-money    -- Summarize smart-money net flow from transfers CSV + watchlist.
 label-transfers -- Label/filter transfer CSV rows via watchlist JSON (no RPC).
 mev-sandwich   -- Flag sandwich patterns in trade sequences (CSV/JSON offline).
+funding-predict -- Next-period funding rate from rates list or CSV/JSON (offline).
 
 Usage examples::
 
@@ -70,6 +71,8 @@ Usage examples::
                               --min-usd 100000
     crypcodile mev-sandwich --trades swaps.csv
     crypcodile mev-sandwich --trades swaps.json --sandwiches-only
+    crypcodile funding-predict --rates 0.0001,0.0002,0.00015
+    crypcodile funding-predict --file funding.csv --window 5
 """
 
 from __future__ import annotations
@@ -3712,6 +3715,101 @@ def mev_sandwich_cmd(
         f"sandwich_legs: {n_flagged} / {df.height}",
         err=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# funding-predict (pure offline rates / CSV — rolling mean or XGBoost)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="funding-predict")
+def funding_predict_cmd(
+    rates: Annotated[
+        str | None,
+        typer.Option(
+            "--rates",
+            help="Comma-separated historical funding rates (e.g. 0.0001,0.0002,0.00015).",
+        ),
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            help="CSV/JSON/JSONL with a funding_rate column (optional feature columns).",
+        ),
+    ] = None,
+    window: Annotated[
+        int,
+        typer.Option(
+            "--window",
+            help="Rolling window size for the heuristic fallback (default: 5).",
+        ),
+    ] = 5,
+) -> None:
+    """Predict next-period funding rate from pure offline history (no lake/RPC).
+
+    Uses XGBoost when installed and trainable; otherwise a rolling-mean fallback.
+    Provide either ``--rates`` or ``--file``.
+    """
+    import json
+
+    from crypcodile.analytics.funding_prediction import predict_next_funding
+
+    if not is_interactive_stdin():
+        if rates is None and file is None:
+            typer.echo(
+                "Error: --rates or --file is required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if rates is None and file is None:
+            choice = typer.prompt("Input mode: rates or file", default="rates")
+            if str(choice).strip().lower().startswith("f"):
+                file = Path(typer.prompt("Path to funding history CSV/JSON"))
+            else:
+                rates = typer.prompt(
+                    "Comma-separated funding rates (e.g. 0.0001,0.0002)"
+                )
+
+    if rates is None and file is None:
+        typer.echo("Error: --rates or --file is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if rates is not None and file is not None:
+        typer.echo(
+            "Error: provide only one of --rates or --file, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if window < 1:
+        typer.echo("Error: --window must be >= 1.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        if rates is not None:
+            parts = [p.strip() for p in rates.split(",") if p.strip()]
+            if not parts:
+                typer.echo("Error: --rates is empty.", err=True)
+                raise typer.Exit(code=1)
+            try:
+                rate_list = [float(p) for p in parts]
+            except ValueError as e:
+                typer.echo(f"Error: invalid --rates value: {e}", err=True)
+                raise typer.Exit(code=1)
+            result = predict_next_funding(rate_list, window_size=window)
+        else:
+            assert file is not None
+            df = _load_series_dataframe(file)
+            result = predict_next_funding(df, window_size=window)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(json.dumps(result, indent=2))
 
 
 # ---------------------------------------------------------------------------

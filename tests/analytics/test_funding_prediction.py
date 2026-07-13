@@ -6,7 +6,10 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-from crypcodile.analytics.funding_prediction import XGBoostFundingPredictor
+from crypcodile.analytics.funding_prediction import (
+    XGBoostFundingPredictor,
+    predict_next_funding,
+)
 
 
 def test_predictor_fallback_rolling_mean_untrained_df() -> None:
@@ -180,3 +183,33 @@ def test_predictor_fallback_when_xgboost_missing() -> None:
     # Predict should fall back to mean of recent rates [0.01, 0.02, 0.03] -> 0.02
     pred = predictor.predict({"feature1": 1.5})
     assert pred == 0.02
+
+
+def test_predict_next_funding_from_list() -> None:
+    result = predict_next_funding([0.01, 0.02, 0.03], window_size=3)
+    assert result["method"] == "rolling_mean" or result["method"] == "xgboost"
+    assert result["n_history"] == 3
+    assert result["window_size"] == 3
+    assert isinstance(result["predicted_funding_rate"], float)
+    # Pure fallback path (or xgboost trained on lag-only): last-window mean is 0.02
+    if result["method"] == "rolling_mean":
+        assert abs(result["predicted_funding_rate"] - 0.02) < 1e-9
+
+
+def test_predict_next_funding_from_dataframe() -> None:
+    df = pl.DataFrame({"funding_rate": [0.01, 0.02, 0.03, 0.04, 0.05]})
+    result = predict_next_funding(df, window_size=5)
+    assert result["n_history"] == 5
+    if result["method"] == "rolling_mean":
+        assert abs(result["predicted_funding_rate"] - 0.03) < 1e-9
+
+
+def test_predict_next_funding_empty_raises() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        predict_next_funding([])
+    with pytest.raises(ValueError, match="empty"):
+        predict_next_funding(pl.DataFrame({"funding_rate": []}))
+    with pytest.raises(ValueError, match="funding_rate"):
+        predict_next_funding(pl.DataFrame({"other": [1.0]}))
+    with pytest.raises(ValueError, match="window_size"):
+        predict_next_funding([0.01], window_size=0)
