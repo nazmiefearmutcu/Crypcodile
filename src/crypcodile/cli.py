@@ -1481,10 +1481,22 @@ def collect(
         typer.Option("--channels", help="Channel(s) to subscribe. Repeat for multiple."),
     ] = None,
     data_dir: _DataDirOpt = Path("data"),
+    dlq_report: Annotated[
+        Path | None,
+        typer.Option(
+            "--dlq-report",
+            help=(
+                "Path for dead-letter report JSON written on stop when the DLQ "
+                "is non-empty. Default: {data_dir}/dlq_report.json."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Collect live market data from an exchange and write to the Parquet data lake.
 
     Press Ctrl-C (SIGINT) to stop gracefully — the sink is flushed before exit.
+    Unparseable frames land in a dead-letter queue; on stop a JSON report is
+    written when the queue is non-empty (see --dlq-report).
 
     Valid exchange names: binance, bybit, coinbase, deribit, okx.
 
@@ -1557,7 +1569,12 @@ def collect(
                 run_dashboard(monitoring_sink, exchange, symbols, channels, data_dir)
             )
             try:
-                await collect_live([connector], monitoring_sink)
+                await collect_live(
+                    [connector],
+                    monitoring_sink,
+                    dlq_report_path=dlq_report,
+                    data_dir=data_dir,
+                )
             finally:
                 dashboard_task.cancel()
                 try:
@@ -1571,7 +1588,14 @@ def collect(
             pass
     else:
         try:
-            asyncio.run(collect_live([connector], monitoring_sink))
+            asyncio.run(
+                collect_live(
+                    [connector],
+                    monitoring_sink,
+                    dlq_report_path=dlq_report,
+                    data_dir=data_dir,
+                )
+            )
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
 
