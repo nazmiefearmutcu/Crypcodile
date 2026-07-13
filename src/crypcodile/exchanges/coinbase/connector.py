@@ -125,6 +125,17 @@ class CoinbaseConnector(Connector):
 
     The ``/products`` endpoint is used to populate the InstrumentRegistry;
     ``product_id`` is the canonical symbol on this exchange.
+
+    Book gap counter (deferred)
+    ---------------------------
+    Coinbase ``level2`` wire messages do not carry book sequence fields:
+    snapshots omit any sequence id, and ``l2update`` deltas have no
+    ``seq`` / ``prev_seq`` (normalizer sets ``sequence_id`` / ``seq_id`` /
+    ``prev_seq_id`` to ``None``).  Without contiguous sequence anchors there
+    is nothing to detect gaps against, so a book sequence-gap counter metric
+    (and Binance/OKX-style :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`
+    wiring) is deferred until Coinbase exposes a sequenced book channel or
+    we adopt an alternate continuity signal.
     """
 
     name = EXCHANGE
