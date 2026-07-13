@@ -396,8 +396,8 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/catalog/search` optional `channel` + `exchange` query filters (strip empty → no filter; forward to client) | DONE | TBD |
-| 2 | Tests: forwards filters; strips empty/padded filters; existing search tests updated for kwargs | DONE | TBD |
+| 1 | REST `GET /api/v1/catalog/search` optional `channel` + `exchange` query filters (strip empty → no filter; forward to client) | DONE | `9afda11` |
+| 2 | Tests: forwards filters; strips empty/padded filters; existing search tests updated for kwargs | DONE | `9afda11` |
 
 ## Next rotation ideas (Wave 52+)
 
