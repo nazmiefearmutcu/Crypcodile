@@ -30,6 +30,9 @@ export(channel, symbols, frm, to, fmt, dest)
 list_channels()
     Sorted channel names present in the lake.
 
+list_dates(channel)
+    Sorted distinct date partition values for a channel.
+
 inventory(channel=None, exchange=None)
     Per-symbol coverage summary DataFrame.
 
@@ -152,6 +155,14 @@ class CrypcodileClient:
         Thin wrapper over :meth:`Catalog.list_channels`.  Empty lake → ``[]``.
         """
         return self._catalog.list_channels()
+
+    def list_dates(self, channel: str) -> list[str]:
+        """Return sorted distinct date partitions for *channel*.
+
+        Thin wrapper over :meth:`Catalog.list_dates`.  Empty / unknown
+        channel or empty lake → ``[]``.
+        """
+        return self._catalog.list_dates(channel)
 
     def inventory(
         self,

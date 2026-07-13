@@ -1445,6 +1445,7 @@ _CAPABILITIES_REST: list[str] = [
     "GET /api/v1/catalog/channels",
     "GET /api/v1/catalog/search",
     "GET /api/v1/catalog/inventory",
+    "GET /api/v1/catalog/dates",
     "GET /api/v1/catalog/scan",
     "GET /api/v1/data-coverage",
     "GET /api/v1/resolve-symbols",
@@ -1555,6 +1556,21 @@ async def catalog_list_channels() -> list[str]:
     """List data channels present in the local lake (read-only, no payment)."""
     client = _get_lake_client()
     return client.list_channels()
+
+
+@app.get("/api/v1/catalog/dates")
+async def catalog_list_dates(channel: str = "") -> list[str]:
+    """List distinct date partitions for a channel (read-only, no payment).
+
+    Query ``channel`` is required (non-empty after strip). Empty / whitespace
+    channel, unknown channel, or empty lake yields ``[]``. Dates are sorted
+    ascending (typically ``YYYY-MM-DD`` hive partition suffixes).
+    """
+    channel = (channel or "").strip()
+    if not channel:
+        return []
+    client = _get_lake_client()
+    return client.list_dates(channel)
 
 
 @app.get("/api/v1/catalog/search")

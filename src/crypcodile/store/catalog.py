@@ -242,6 +242,68 @@ class Catalog:
         self._refresh_views()
         return sorted(self._registered_channels)
 
+    def list_dates(self, channel: str) -> list[str]:
+        """Return sorted distinct ``date=`` partition values for *channel*.
+
+        Walks the hive layout ``exchange=*/channel={channel}/date=*`` on the
+        filesystem (no DuckDB scan).  Useful discovery before bounded
+        ``scan()`` / analytics calls.
+
+        Empty / whitespace *channel*, unknown channel, empty lake, or a
+        channel value that is unsafe as a path segment (separators, null
+        bytes, ``.`` / ``..``, glob metacharacters) yields ``[]``.
+
+        Dates are the raw partition suffixes (typically ``YYYY-MM-DD``),
+        deduplicated across exchanges and sorted ascending.
+        """
+        channel = (channel or "").strip()
+        if not channel:
+            return []
+        # Reject path traversal and glob injection — never interpolate
+        # untrusted channel into Path.glob patterns.
+        if any(c in channel for c in ("/", "\\", "\x00", "*", "?", "[", "]")):
+            return []
+        if channel in (".", ".."):
+            return []
+
+        if not self._data_dir.exists() or not self._data_dir.is_dir():
+            return []
+
+        try:
+            data_root = self._data_dir.resolve()
+        except OSError:
+            return []
+
+        dates: set[str] = set()
+        try:
+            exchange_dirs = list(self._data_dir.iterdir())
+        except OSError:
+            return []
+
+        for exchange_dir in exchange_dirs:
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
+                continue
+            chan_dir = exchange_dir / f"channel={channel}"
+            if not chan_dir.is_dir():
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                chan_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            try:
+                children = list(chan_dir.iterdir())
+            except OSError:
+                continue
+            for date_dir in children:
+                if not date_dir.is_dir() or not date_dir.name.startswith("date="):
+                    continue
+                date_str = date_dir.name[len("date=") :]
+                if date_str and date_str not in (".", ".."):
+                    dates.add(date_str)
+
+        return sorted(dates)
+
     def inventory(
         self,
         channel: str | None = None,

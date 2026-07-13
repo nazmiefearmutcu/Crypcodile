@@ -224,6 +224,44 @@ def test_catalog_list_channels_returns_channels() -> None:
     mock_client.list_channels.assert_called_once_with()
 
 
+def test_catalog_list_dates_empty_channel() -> None:
+    from crypcodile.api_server import catalog_list_dates
+
+    assert asyncio.run(catalog_list_dates()) == []
+    assert asyncio.run(catalog_list_dates(channel="")) == []
+    assert asyncio.run(catalog_list_dates(channel="   ")) == []
+
+
+def test_catalog_list_dates_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_list_dates
+
+    result = asyncio.run(catalog_list_dates(channel="trade"))
+    assert result == []
+
+
+def test_catalog_list_dates_returns_dates() -> None:
+    mock_client = MagicMock()
+    mock_client.list_dates.return_value = ["2023-11-14", "2023-11-15"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_dates
+
+        result = asyncio.run(catalog_list_dates(channel="trade"))
+    assert result == ["2023-11-14", "2023-11-15"]
+    mock_client.list_dates.assert_called_once_with("trade")
+
+
+def test_catalog_list_dates_strips_channel() -> None:
+    mock_client = MagicMock()
+    mock_client.list_dates.return_value = ["2024-01-01"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_dates
+
+        result = asyncio.run(catalog_list_dates(channel="  book_snapshot  "))
+    assert result == ["2024-01-01"]
+    mock_client.list_dates.assert_called_once_with("book_snapshot")
+
+
 def test_catalog_search_symbols_empty() -> None:
     mock_client = MagicMock()
     mock_client.search_symbols.return_value = pl.DataFrame(
@@ -5644,6 +5682,7 @@ def test_capabilities_shape_and_contents() -> None:
         "GET /api/v1/capabilities",
         "GET /api/v1/catalog/channels",
         "GET /api/v1/catalog/inventory",
+        "GET /api/v1/catalog/dates",
         "GET /api/v1/catalog/scan",
         "GET /api/v1/open-interest",
         "GET /api/v1/perp-basis",

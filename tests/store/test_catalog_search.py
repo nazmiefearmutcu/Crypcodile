@@ -87,6 +87,71 @@ async def test_list_channels_with_fixtures(tmp_path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# list_dates
+# ---------------------------------------------------------------------------
+
+
+def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:
+    """Empty lake → []."""
+    cat = Catalog(tmp_path)
+    assert cat.list_dates("trade") == []
+
+
+def test_list_dates_empty_or_whitespace_channel(tmp_path: pathlib.Path) -> None:
+    cat = Catalog(tmp_path)
+    assert cat.list_dates("") == []
+    assert cat.list_dates("   ") == []
+
+
+def test_list_dates_rejects_unsafe_channel(tmp_path: pathlib.Path) -> None:
+    """Path / glob metacharacters must not be used as path segments."""
+    cat = Catalog(tmp_path)
+    assert cat.list_dates("../etc") == []
+    assert cat.list_dates("trade/../trade") == []
+    assert cat.list_dates("trade*") == []
+    assert cat.list_dates(".") == []
+    assert cat.list_dates("..") == []
+
+
+async def test_list_dates_with_fixtures(tmp_path: pathlib.Path) -> None:
+    """Single-day fixtures → one date partition for trade and book_snapshot."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+    assert cat.list_dates("trade") == ["2023-11-14"]
+    assert cat.list_dates("book_snapshot") == ["2023-11-14"]
+    assert cat.list_dates("no_such_channel") == []
+
+
+async def test_list_dates_multiday_and_multi_exchange(tmp_path: pathlib.Path) -> None:
+    """Distinct dates across days; same date on two exchanges is deduped."""
+    # Exact midnight 2023-11-15 UTC (matches catalog multiday tests).
+    day2_ts = 1_700_006_400_000_000_000
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    await sink.put(_trade(1.0, local_ts=_BASE_TS, exchange="deribit"))
+    await sink.put(
+        _trade(
+            2.0,
+            local_ts=day2_ts,
+            exchange="deribit",
+            symbol="deribit:BTC-PERPETUAL",
+        )
+    )
+    await sink.put(
+        _trade(
+            3.0,
+            local_ts=_BASE_TS,
+            exchange="binance",
+            symbol="binance-spot:BTC-USDT",
+            symbol_raw="BTCUSDT",
+        )
+    )
+    await sink.flush()
+
+    cat = Catalog(tmp_path)
+    assert cat.list_dates("trade") == ["2023-11-14", "2023-11-15"]
+
+
+# ---------------------------------------------------------------------------
 # inventory
 # ---------------------------------------------------------------------------
 

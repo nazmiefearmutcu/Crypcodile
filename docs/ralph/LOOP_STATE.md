@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–41 COMPLETE. Continuous loop still active → Wave 42+.
+**Status:** Waves 1–43 COMPLETE. Continuous loop still active → Wave 44+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -326,7 +326,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | Sanitize inline `query_market_data` / `get_funding_apr` tools/call paths | DONE | `9845aeb4870b83cb47ec95d8bdf874a3d91dbbcb` |
 | 4 | Tests for helper + non-finite ofi/slippage/OI/basis/indicators/whale; MCP analytics suite green | DONE | `9845aeb4870b83cb47ec95d8bdf874a3d91dbbcb` |
 
-## Next rotation ideas (Wave 43+)
+## Wave 43 — Feature (catalog dates discovery) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | `Catalog.list_dates(channel)` + client wrapper (filesystem hive `date=` partitions; path-safe) | DONE | (pending) |
+| 2 | REST `GET /api/v1/catalog/dates?channel=` + capabilities entry | DONE | (pending) |
+| 3 | Tests: store list_dates + API empty/mock/strip; capabilities includes dates | DONE | (pending) |
+
+## Next rotation ideas (Wave 44+)
 
 Priority candidates for the next cycles:
 
@@ -387,3 +395,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 40: lake DF REST `_json_safe_records` on ofi / funding-apr / open-interest / basis suite (+ remaining free DF endpoints)
 - Wave 41: `_json_safe_records` on POST simulate-price-impact / smart-money / label-transfers
 - Wave 42: MCP `_json_safe_records` on list[dict] DF handlers (ofi/slippage/whale/vol/basis/indicators/OI/…) + query/funding_apr paths
+- Wave 43: REST `GET /api/v1/catalog/dates?channel=` via Catalog/Client `list_dates` (filesystem date partition discovery)

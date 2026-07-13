@@ -15,6 +15,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **API capabilities discovery lists expanded**: `GET /api/v1/capabilities` `rest` now covers free routes previously missing from the short list (`status`, `capabilities`, `catalog/scan`, `perp-basis`, `spot-future-basis`, whale/slippage/vol suite, base-risk pure endpoints, `funding-predict`, `simulate-price-impact`, etc.); `mcp_tools_hint` aligned with major MCP tools including `get_onchain_price` / `get_base_market_data`. Paid/admin routes still omitted.
 
 ### Added
+- **API catalog dates discovery**: `GET /api/v1/catalog/dates?channel=` lists distinct hive `date=` partitions for a channel from the filesystem (sorted; empty channel/lake → `[]`; path-safe). Wired through `Catalog.list_dates` / `CrypcodileClient.list_dates` and listed in capabilities.
 - **API capabilities endpoint**: `GET /api/v1/capabilities` — free agent discovery returning `{rest, mcp_tools_hint}` hardcoded lists of free REST routes (METHOD + path) and MCP tool names (no payment, no lake; defensive list copies).
 - **API ready probe**: `GET /api/v1/ready` — k8s-style readiness (same body as `/api/v1/health`; HTTP **200** when `ok`, **503** when lake unavailable). Prometheus remains at `GET /metrics`.
 - **API label-transfers endpoint**: `POST /api/v1/label-transfers` body `{transfers, watchlist, known_only?, min_usd?}` wrapping pure offline `label_transfer_addresses` (+ optional `filter_transfers_by_usd`); empty transfers → `[]`; empty watchlist still returns unlabeled rows; negative `min_usd` → 400.
