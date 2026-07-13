@@ -2701,6 +2701,215 @@ def test_vol_skew_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/risk-reversal — RR/BF from vol skew (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_risk_reversal_empty_underlying_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        result = asyncio.run(risk_reversal(underlying="", expiry_ns=1, at=1))
+        result_ws = asyncio.run(risk_reversal(underlying="  ", expiry_ns=1, at=1))
+    assert result["risk_reversal"] is None
+    assert result["butterfly"] is None
+    assert result["underlying"] == ""
+    assert result_ws["risk_reversal"] is None
+    assert result_ws["butterfly"] is None
+    mock_client.vol_skew.assert_not_called()
+    mock_client.risk_reversal_butterfly.assert_not_called()
+
+
+def test_risk_reversal_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import risk_reversal
+
+    result = asyncio.run(
+        risk_reversal(
+            underlying="BTC",
+            expiry_ns=1_735_689_600_000_000_000,
+            at=1_700_000_000_000_000_000,
+            rate=0.0,
+            target_delta=0.25,
+        )
+    )
+    assert result["underlying"] == "BTC"
+    assert result["risk_reversal"] is None
+    assert result["butterfly"] is None
+    assert result["target_delta"] == 0.25
+
+
+def test_risk_reversal_empty_skew_skips_butterfly() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        result = asyncio.run(
+            risk_reversal(
+                underlying="BTC",
+                expiry_ns=100,
+                at=1_700_000_000_000_000_000,
+                rate=0.01,
+                target_delta=0.25,
+            )
+        )
+    assert result["risk_reversal"] is None
+    assert result["butterfly"] is None
+    assert result["rate"] == 0.01
+    mock_client.vol_skew.assert_called_once_with(
+        "BTC", 100, 1_700_000_000_000_000_000, rate=0.01
+    )
+    mock_client.risk_reversal_butterfly.assert_not_called()
+
+
+def test_risk_reversal_returns_metrics() -> None:
+    mock_client = MagicMock()
+    skew = pl.DataFrame(
+        {
+            "strike": [50000.0, 55000.0],
+            "moneyness": [1.0, 1.1],
+            "opt_type": ["C", "P"],
+            "iv": [0.5, 0.55],
+            "delta": [0.25, -0.25],
+        }
+    )
+    mock_client.vol_skew.return_value = skew
+    mock_client.risk_reversal_butterfly.return_value = (0.05, -0.01)
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        result = asyncio.run(
+            risk_reversal(
+                underlying="BTC",
+                expiry_ns=100,
+                at=1_700_000_000_000_000_000,
+                rate=0.0,
+                target_delta=0.25,
+            )
+        )
+    assert result["underlying"] == "BTC"
+    assert result["expiry_ns"] == 100
+    assert result["at"] == 1_700_000_000_000_000_000
+    assert result["rate"] == 0.0
+    assert result["target_delta"] == 0.25
+    assert result["risk_reversal"] == pytest.approx(0.05)
+    assert result["butterfly"] == pytest.approx(-0.01)
+    mock_client.vol_skew.assert_called_once_with(
+        "BTC", 100, 1_700_000_000_000_000_000, rate=0.0
+    )
+    mock_client.risk_reversal_butterfly.assert_called_once()
+    call_args = mock_client.risk_reversal_butterfly.call_args
+    assert call_args.args[0] is skew or call_args[0][0] is skew
+    assert call_args.kwargs.get("target_delta") == 0.25 or (
+        len(call_args.args) > 1 and call_args.args[1] == 0.25
+    )
+
+
+def test_risk_reversal_strips_whitespace_underlying() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        result = asyncio.run(
+            risk_reversal(
+                underlying="  ETH  ",
+                expiry_ns=42,
+                at=99,
+                rate=0.02,
+                target_delta=0.10,
+            )
+        )
+    assert result["underlying"] == "ETH"
+    mock_client.vol_skew.assert_called_once_with("ETH", 42, 99, rate=0.02)
+
+
+def test_risk_reversal_custom_target_delta() -> None:
+    mock_client = MagicMock()
+    skew = pl.DataFrame(
+        {
+            "strike": [100.0],
+            "moneyness": [1.0],
+            "opt_type": ["C"],
+            "iv": [0.4],
+            "delta": [0.5],
+        }
+    )
+    mock_client.vol_skew.return_value = skew
+    mock_client.risk_reversal_butterfly.return_value = (None, None)
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        result = asyncio.run(
+            risk_reversal(
+                underlying="BTC",
+                expiry_ns=1,
+                at=2,
+                rate=0.0,
+                target_delta=0.10,
+            )
+        )
+    assert result["target_delta"] == 0.10
+    assert result["risk_reversal"] is None
+    assert result["butterfly"] is None
+    mock_client.risk_reversal_butterfly.assert_called_once_with(
+        skew, target_delta=0.10
+    )
+
+
+def test_risk_reversal_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.side_effect = RuntimeError("internal path /secret/lake")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                risk_reversal(underlying="BTC", expiry_ns=1, at=1, rate=0.0)
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Risk reversal query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_risk_reversal_butterfly_error() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame(
+        {
+            "strike": [100.0],
+            "moneyness": [1.0],
+            "opt_type": ["C"],
+            "iv": [0.5],
+            "delta": [0.5],
+        }
+    )
+    mock_client.risk_reversal_butterfly.side_effect = RuntimeError(
+        "internal path /secret/skew"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import risk_reversal
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                risk_reversal(underlying="BTC", expiry_ns=1, at=1, rate=0.0)
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Risk reversal query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_risk_reversal_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/risk-reversal."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/risk-reversal", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/liquidity-depth — per-block book depth (read-only, no payment)
 # ---------------------------------------------------------------------------
 

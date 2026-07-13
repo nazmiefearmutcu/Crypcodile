@@ -1962,6 +1962,65 @@ async def vol_skew(
     return df.to_dicts()
 
 
+@app.get("/api/v1/risk-reversal")
+async def risk_reversal(
+    underlying: str = "",
+    expiry_ns: int = 0,
+    at: int = 0,
+    rate: float = 0.0,
+    target_delta: float = 0.25,
+) -> dict[str, Any]:
+    """Risk-reversal and butterfly from vol skew at one expiry (read-only, no payment).
+
+    Query params: ``underlying`` (e.g. ``BTC``), ``expiry_ns`` option expiry
+    as nanoseconds UTC, ``at`` snapshot instant as nanoseconds UTC, ``rate``
+    continuous risk-free rate (default ``0.0``), ``target_delta`` absolute
+    delta for RR/BF (default ``0.25``).
+
+    Wraps :meth:`CrypcodileClient.vol_skew` then
+    :meth:`CrypcodileClient.risk_reversal_butterfly`. Empty/missing
+    ``underlying``, empty lake, or no matching options yields
+    ``risk_reversal`` / ``butterfly`` as ``null``.
+    """
+    und = (underlying or "").strip()
+    if not und:
+        return {
+            "underlying": "",
+            "expiry_ns": int(expiry_ns),
+            "at": int(at),
+            "rate": float(rate),
+            "target_delta": float(target_delta),
+            "risk_reversal": None,
+            "butterfly": None,
+        }
+
+    client = _get_lake_client()
+    try:
+        skew_df = client.vol_skew(und, int(expiry_ns), int(at), rate=float(rate))
+        if len(skew_df) == 0:
+            rr, bf = None, None
+        else:
+            rr, bf = client.risk_reversal_butterfly(
+                skew_df, target_delta=float(target_delta)
+            )
+    except Exception as e:
+        log.error("Risk reversal query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Risk reversal query failed.",
+        ) from e
+
+    return {
+        "underlying": und,
+        "expiry_ns": int(expiry_ns),
+        "at": int(at),
+        "rate": float(rate),
+        "target_delta": float(target_delta),
+        "risk_reversal": rr,
+        "butterfly": bf,
+    }
+
+
 @app.get("/api/v1/liquidity-depth")
 async def liquidity_depth(
     symbol: str = "",

@@ -14,7 +14,10 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **API slippage endpoint**: `GET /api/v1/slippage` wrapping `estimate_slippage` (query: symbol, side, size; validation errors → 400).
 - **API spot-perp basis endpoint**: `GET /api/v1/basis` with `spot` + `perp` query params wrapping `spot_perp_basis` (bounded rows, no payment).
 - **API vol-skew endpoint**: `GET /api/v1/vol-skew` with `underlying`, `expiry_ns`, `at`, `rate`, `limit` wrapping `CrypcodileClient.vol_skew` (hard row limit 10000).
+- **API risk-reversal endpoint**: `GET /api/v1/risk-reversal` with `underlying`, `expiry_ns`, `at`, `rate`, `target_delta` wrapping `vol_skew` then `risk_reversal_butterfly` (returns `risk_reversal` / `butterfly`, nulls when empty).
 - **API lending-stress endpoint**: `GET /api/v1/lending-stress` pure query params matching CLI (`collateral_usd`, `debt_usd`, `liquidation_threshold`, `haircut_pct`) wrapping `lending_stress_test`.
+- **API base risk analytics endpoints**: `GET /api/v1/liquidity-depth`, `/sequencer-latency`, `/chaos-score`, `/peg-deviation` (lake + pure risk metrics, no payment).
+- **API iv-surface and term-structure endpoints**: `GET /api/v1/iv-surface` and `GET /api/v1/term-structure` wrapping client options analytics (hard row limit 10000).
 - **MCP MEV sandwich detection tool**: Expose MEV sandwich detection over MCP.
 - **MCP chaos-score tool**: Base risk / chaos scoring available as an MCP tool.
 - **MCP get_peg_deviation tool**: Pure `peg_deviation_from_price` over MCP (`price` required; optional `threshold`/`target`; no data lake).
