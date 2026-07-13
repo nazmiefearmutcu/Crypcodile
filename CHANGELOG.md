@@ -6,8 +6,15 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-13
 ### Added
+- **API open-interest endpoint**: `GET /api/v1/open-interest` with optional symbols, time range, and row limit (read-only lake HTTP surface for OI aggregation).
+- **API funding-apr endpoint**: `GET /api/v1/funding-apr` REST endpoint for funding APR analytics.
+- **API indicators endpoint**: `GET /api/v1/indicators` wrapping `get_indicators` (symbol/start/end/interval/indicator/period; hard row limit 10000; unknown indicator → 400).
 - **API spot-perp basis endpoint**: `GET /api/v1/basis` with `spot` + `perp` query params wrapping `spot_perp_basis` (bounded rows, no payment).
+- **MCP MEV sandwich detection tool**: Expose MEV sandwich detection over MCP.
+- **MCP chaos-score tool**: Base risk / chaos scoring available as an MCP tool.
+- **MCP get_peg_deviation tool**: Pure `peg_deviation_from_price` over MCP (`price` required; optional `threshold`/`target`; no data lake).
 - **MCP get_lending_stress tool**: Pure numeric lending health-factor stress test over MCP (wraps `lending_stress_test`).
+- **Derive poll connector factory registration**: Register the Derive poll connector in the exchange factory registry.
 - **Catalog inventory and ranked symbol search**: Store-layer inventory listing and ranked symbol search over the data catalog.
 - **Search system (client, CLI, MCP)**: Client `resolve_symbols`, CLI search, and MCP discovery tools for symbol resolution.
 - **MCP analytics tools**: Exposed slippage, OFI, whale alerts, IV surface, and term-structure tools over MCP.
@@ -53,6 +60,14 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Binance book bridge bootstrap**: Register the book resync bridge only after a successful bootstrap.
 - **Whitespace-only catalog search**: Treat whitespace-only search queries as empty.
 - **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back through admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
+- **Payment refund on serve failure**: Restore paid status when market-data serve fails after payment CAS spend.
+- **Multi-symbol OI exchange overwrite**: Keep multi-symbol open interest without clobbering exchange identity across symbols.
+- **Read-only SQL query hardening**: Harden the bounded read-only SQL / lake query API endpoint.
+- **Superchain identity and recovery state**: Fix superchain connector identity and per-exchange recovery state isolation.
+- **Seen logs cursor advances**: Persist on-chain seen logs together with cursor advances so restarts do not reprocess.
+- **IV fit without underlying price**: Skip IV surface fit when underlying price is missing instead of failing the fit path.
+- **Gas–vol correlation asof align**: ASOF-align gas and vol series before correlation so mismatched timestamps do not skew results.
+- **Null OI samples in aggregation**: Skip null open-interest samples during OI aggregation.
 
 ### Changed
 - **CLI symbol resolution**: Resolve symbols via `client.resolve_symbols` for consistent catalog-backed lookup.
