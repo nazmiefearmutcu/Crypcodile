@@ -342,7 +342,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | Extract `crypcodile.util.json_safe` (`json_safe_float` / `json_safe_records`); api_server + mcp_server re-export | DONE | `e84834135e9ab641910393893fe1870f886713a7` |
 | 3 | Tests: MCP list_dates empty/data/strip; util json_safe + re-export identity; capabilities includes list_dates | DONE | `e84834135e9ab641910393893fe1870f886713a7` |
 
-## Next rotation ideas (Wave 45+)
+## Wave 45 — Feature (catalog exchanges on-disk discovery) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | `Catalog.list_exchanges_on_disk()` + client wrapper (filesystem hive `exchange=` partitions; distinct from factory `list_exchanges`) | DONE | `4e7c2ff39c2078f95c8a34d5da696c358b26b922` |
+| 2 | REST `GET /api/v1/catalog/exchanges` + capabilities entry | DONE | `4e7c2ff39c2078f95c8a34d5da696c358b26b922` |
+| 3 | Tests: store list_exchanges_on_disk + client + API empty/mock; capabilities includes catalog/exchanges | DONE | `4e7c2ff39c2078f95c8a34d5da696c358b26b922` |
+
+## Next rotation ideas (Wave 46+)
 
 Priority candidates for the next cycles:
 
@@ -350,6 +358,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **MCP list_exchanges_on_disk** — optional MCP mirror of catalog exchanges discovery  
+
 
 ## Subagent policy
 
@@ -404,3 +414,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 42: MCP `_json_safe_records` on list[dict] DF handlers (ofi/slippage/whale/vol/basis/indicators/OI/…) + query/funding_apr paths
 - Wave 43: REST `GET /api/v1/catalog/dates?channel=` via Catalog/Client `list_dates` (filesystem date partition discovery)
 - Wave 44: MCP `list_dates` tool + shared `crypcodile.util.json_safe` (dedupe REST/MCP JSON-safe helpers)
+- Wave 45: REST `GET /api/v1/catalog/exchanges` via Catalog/Client `list_exchanges_on_disk` (filesystem exchange partition discovery; ≠ factory `list_exchanges`)
