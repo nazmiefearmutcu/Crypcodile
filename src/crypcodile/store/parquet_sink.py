@@ -174,6 +174,24 @@ def _channel_schema(channel: str) -> dict[str, Any]:
     return {**_COMMON_FIELDS, **extra}
 
 
+def _sanitize_path_segment(value: str, *, field: str) -> str:
+    """Sanitize a hive-partition path segment before joining under data_dir.
+
+    Rejects empty values, path separators, null bytes, and ``.`` / ``..`` so a
+    hostile exchange/channel/date cannot escape the lake root via path
+    traversal when building ``part_dir``.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Invalid {field} path segment: {value!r}")
+    if "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(
+            f"Invalid {field} path segment (contains separator or null): {value!r}"
+        )
+    if value in (".", ".."):
+        raise ValueError(f"Invalid {field} path segment: {value!r}")
+    return value
+
+
 def _coerce_levels(
     rows: list[dict[str, Any]], field: str
 ) -> None:
@@ -301,14 +319,24 @@ class ParquetSink(Sink):
         rows: list[dict[str, Any]],
     ) -> None:
         """Synchronous Parquet write (runs in executor to avoid blocking the loop)."""
-        # Build output path
+        # Sanitize path components from record fields before joining under data_dir.
+        exchange = _sanitize_path_segment(exchange, field="exchange")
+        channel = _sanitize_path_segment(channel, field="channel")
+        date = _sanitize_path_segment(date, field="date")
+
+        data_dir = self._data_dir.resolve()
         part_dir = (
-            self._data_dir
+            data_dir
             / f"exchange={exchange}"
             / f"channel={channel}"
             / f"date={date}"
             / f"bucket={bucket}"
         )
+        part_dir = part_dir.resolve()
+        if not part_dir.is_relative_to(data_dir):
+            raise ValueError(
+                f"Partition path escapes data_dir: {part_dir} not under {data_dir}"
+            )
         part_dir.mkdir(parents=True, exist_ok=True)
         out_path = part_dir / f"part-{uuid.uuid4().hex}.parquet"
 

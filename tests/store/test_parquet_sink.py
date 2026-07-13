@@ -309,3 +309,74 @@ async def test_parquet_sink_write_failure_preserves_concurrent_puts(
     assert prices == [1.0, 99.0]
     # original_write kept only to document intent / silence unused lint
     assert original_write is not None
+
+
+# ---------------------------------------------------------------------------
+# Security: partition path components must not escape data_dir
+# ---------------------------------------------------------------------------
+
+
+async def test_parquet_sink_rejects_malicious_exchange_path_traversal(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A malicious exchange name must not write outside data_dir (raises).
+
+    exchange values are used as hive path segments. Without sanitization,
+    values containing ``/`` or ``..`` could escape the lake root.
+    """
+    data_dir = tmp_path / "lake"
+    data_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    sink = ParquetSink(data_dir=data_dir, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    # Inject a path-traversal exchange into the buffered row.
+    from crypcodile.store.rows import to_row
+
+    row = to_row(_trade(1.0))
+    row["exchange"] = "../../outside"
+    sink._buffers["trade"].append(row)
+
+    with pytest.raises(ValueError, match="path segment|escapes data_dir"):
+        await sink.flush()
+
+    # Nothing written outside data_dir
+    assert list(outside.rglob("*")) == []
+    # No parquet under data_dir either (write aborted)
+    assert _find_parquets(data_dir) == []
+    # Rows re-buffered for retry (flush failure path)
+    assert len(sink._buffers["trade"]) == 1
+
+
+async def test_parquet_sink_rejects_malicious_channel_and_date_segments(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Channel and date path segments are sanitized the same way as exchange."""
+    from crypcodile.store.parquet_sink import _sanitize_path_segment
+
+    for bad in ("../x", "a/b", "a\\b", "..", ".", "", "foo/../../../etc"):
+        with pytest.raises(ValueError):
+            _sanitize_path_segment(bad, field="test")
+
+    assert _sanitize_path_segment("deribit", field="exchange") == "deribit"
+    assert _sanitize_path_segment("trade", field="channel") == "trade"
+    assert _sanitize_path_segment("2024-01-15", field="date") == "2024-01-15"
+
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+    with pytest.raises(ValueError, match="path segment|escapes data_dir"):
+        sink._write_parquet_sync(
+            channel="trade/../evil",
+            exchange="deribit",
+            date="2024-01-01",
+            bucket=0,
+            rows=[{"exchange": "deribit", "channel": "trade", "date": "2024-01-01"}],
+        )
+    with pytest.raises(ValueError, match="path segment|escapes data_dir"):
+        sink._write_parquet_sync(
+            channel="trade",
+            exchange="deribit",
+            date="2024-01-01/../../escape",
+            bucket=0,
+            rows=[{"exchange": "deribit", "channel": "trade", "date": "2024-01-01"}],
+        )
