@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–60 COMPLETE. Continuous loop still active → Wave 61+.
+**Status:** Waves 1–62 COMPLETE. Continuous loop still active → Wave 63+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -481,7 +481,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | CLI `catalog-stats`: same logic; empty → channel_count 0 / row_counts (none); module docstring + --help | DONE | `a10192a` |
 | 3 | Tests: MCP empty/data/mock/fail/-1/quote; CLI empty/data/mock/fail/quote/help; capabilities includes catalog_stats; critical suites **448 passed** | DONE | `a10192a` |
 
-## Next rotation ideas (Wave 62+)
+## Wave 62 — Bug hunt (broad regression) + Feature (CLI catalog-inventory) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **839 passed** (no pre-existing failures) | DONE | baseline `9e1a52e` |
+| 2 | CLI `catalog-inventory` with optional `--channel` / `--exchange` (strip empty → no filter; empty → `No inventory.`; table columns match `catalog --symbols` / `data-coverage`; REST inventory + MCP `inventory_snapshot` parity) | DONE | (feature commit) |
+| 3 | Tests: empty/data/channel/exchange hit-miss/strip/delegate/help — **7 passed**; post-feature critical suites **846 passed** (+7) | DONE | (feature commit) |
+
+## Next rotation ideas (Wave 63+)
 
 Priority candidates for the next cycles:
 
@@ -489,6 +497,7 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **data-coverage exchange filter** — optional exchange on REST/MCP/CLI coverage (parity with inventory filters)
 
 
 
@@ -564,3 +573,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 59: broad regression green (798→799 after +1 test); list-exchanges `--help` main listing + module docstring lock
 - Wave 60: REST `GET /api/v1/catalog/stats` per-channel row counts (list_channels + COUNT(*); -1 on fail; no inventory)
 - Wave 61: MCP `catalog_stats` + CLI `catalog-stats` (REST stats parity for agents/CLI)
+- Wave 62: broad regression green (839→846 after +7 tests); CLI `catalog-inventory` (REST inventory / MCP inventory_snapshot parity with channel/exchange filters)

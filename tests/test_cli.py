@@ -884,6 +884,232 @@ def test_cli_catalog_symbols_cmd_uses_inventory(
 
 
 # ---------------------------------------------------------------------------
+# catalog-inventory command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_catalog_inventory_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``catalog-inventory`` on empty lake prints No inventory.; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-inventory", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No inventory." in result.output
+
+
+async def test_cli_catalog_inventory_with_data(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-inventory`` prints inventory coverage table rows."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-inventory", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "No inventory." not in result.output
+    # Full inventory table (heavier than catalog-symbols).
+    assert "row_count" in result.output
+    assert "min_ts" in result.output
+    assert "exchange" in result.output
+
+
+async def test_cli_catalog_inventory_channel_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-inventory --channel trade`` still finds trade rows."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-inventory",
+            "--channel",
+            "trade",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "trade" in result.output
+
+
+async def test_cli_catalog_inventory_exchange_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``catalog-inventory --exchange deribit`` filters; miss → No inventory."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    ok = runner.invoke(
+        app,
+        [
+            "catalog-inventory",
+            "--exchange",
+            "deribit",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert ok.exit_code == 0, f"stdout:\n{ok.output}"
+    assert "deribit:BTC-PERPETUAL" in ok.output
+
+    miss = runner.invoke(
+        app,
+        [
+            "catalog-inventory",
+            "--exchange",
+            "binance",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert miss.exit_code == 0, f"stdout:\n{miss.output}"
+    assert "No inventory." in miss.output
+
+
+def test_cli_catalog_inventory_strips_filters(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Empty/whitespace --channel/--exchange treated as no filter."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [0],
+            "max_ts": [1],
+            "row_count": [1],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = inv
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def inventory(self, channel=None, exchange=None):
+            return mock_client.inventory(channel=channel, exchange=exchange)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-inventory",
+            "--channel",
+            "   ",
+            "--exchange",
+            "",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_cli_catalog_inventory_uses_inventory(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI forwards channel/exchange filters to client.inventory."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [100],
+            "max_ts": [200],
+            "row_count": [42],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = inv
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def inventory(self, channel=None, exchange=None):
+            return mock_client.inventory(channel=channel, exchange=exchange)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "catalog-inventory",
+            "--channel",
+            "trade",
+            "--exchange",
+            "deribit",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "42" in result.output
+    mock_client.inventory.assert_called_once_with(
+        channel="trade", exchange="deribit"
+    )
+
+
+def test_cli_catalog_inventory_in_main_help() -> None:
+    """``catalog-inventory`` appears in top-level ``--help`` Commands listing."""
+    from typer.testing import CliRunner
+
+    import crypcodile.cli as cli_mod
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "catalog-inventory" in result.output
+    assert "catalog-inventory" in (cli_mod.__doc__ or "")
+
+
+# ---------------------------------------------------------------------------
 # catalog-exchanges command
 # ---------------------------------------------------------------------------
 

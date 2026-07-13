@@ -90,11 +90,12 @@ crypcodile catalog-summary   # channels + exchanges_on_disk counts (mirrors REST
 crypcodile catalog-stats     # per-channel COUNT(*) row counts (-1 on fail; mirrors REST/MCP)
 crypcodile catalog-dates --channel trade          # hive date= partitions (list_dates)
 crypcodile catalog-symbols --channel trade --exchange deribit  # distinct inventory symbols
+crypcodile catalog-inventory --channel trade --exchange deribit  # full inventory rows (REST/MCP parity)
 crypcodile catalog-exchanges  # on-disk hive exchange= partitions
 crypcodile list-exchanges     # registered factory connectors (no lake; ≠ catalog-exchanges)
 crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
 crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
-crypcodile mcp  # tools: search_symbols, list_symbols, resolve_symbols, list_data_channels, list_exchanges_on_disk, list_registered_exchanges, list_dates, catalog_summary, catalog_stats, data_coverage
+crypcodile mcp  # tools: search_symbols, list_symbols, resolve_symbols, inventory_snapshot, list_data_channels, list_exchanges_on_disk, list_registered_exchanges, list_dates, catalog_summary, catalog_stats, data_coverage
 ```
 
 ## 4. Analytics

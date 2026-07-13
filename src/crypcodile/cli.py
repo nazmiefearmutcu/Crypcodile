@@ -8,6 +8,7 @@ catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
 catalog-stats  -- Per-channel row counts via list_channels + COUNT(*) (-1 on fail).
 catalog-dates  -- List hive date= partitions for a channel (list_dates).
 catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
+catalog-inventory -- Full inventory rows with optional --channel / --exchange filters.
 catalog-exchanges -- List on-disk hive exchange= partitions.
 list-exchanges -- List registered factory connector names (no lake).
 search         -- Ranked symbol search over the data lake inventory (--channel / --exchange).
@@ -44,6 +45,7 @@ Usage examples::
     crypcodile catalog-stats --data-dir /data
     crypcodile catalog-dates --channel trade --data-dir /data
     crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
+    crypcodile catalog-inventory --channel trade --exchange deribit --data-dir /data
     crypcodile catalog-exchanges --data-dir /data
     crypcodile list-exchanges  # registered connectors (factory; no lake)
     crypcodile search BTC --channel trade --exchange deribit --data-dir /data
@@ -1074,6 +1076,57 @@ def catalog_symbols(
         raise typer.Exit(code=0)
     for sym in symbols:
         typer.echo(sym)
+
+
+# ---------------------------------------------------------------------------
+# catalog-inventory
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-inventory")
+def catalog_inventory(
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print full lake inventory rows (exchange/channel/symbol coverage).
+
+    Mirrors REST ``GET /api/v1/catalog/inventory`` / MCP ``inventory_snapshot``:
+    optional ``--channel`` and ``--exchange`` filters (empty/whitespace →
+    no filter). Empty lake or no match prints ``No inventory.`` and exits 0.
+    Columns match ``catalog --symbols`` / ``data-coverage`` (exchange,
+    channel, symbol, min_ts, max_ts, row_count). Heavier than
+    ``catalog-symbols`` (coverage rows, not symbol strings only).
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+
+    client = CrypcodileClient(data_dir=data_dir)
+    inv = client.inventory(channel=ch, exchange=ex)
+    if len(inv) == 0:
+        typer.echo("No inventory.")
+        raise typer.Exit(code=0)
+
+    cols = ["exchange", "channel", "symbol", "min_ts", "max_ts", "row_count"]
+    typer.echo(
+        f"{'exchange':<16}  {'channel':<16}  {'symbol':<32}  "
+        f"{'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+    )
+    typer.echo("-" * 128)
+    for row in inv.select(cols).iter_rows(named=True):
+        typer.echo(
+            f"{row['exchange']:<16}  {row['channel']:<16}  {row['symbol']:<32}  "
+            f"{row['min_ts']:>20}  {row['max_ts']:>20}  {row['row_count']:>10,}"
+        )
 
 
 # ---------------------------------------------------------------------------
