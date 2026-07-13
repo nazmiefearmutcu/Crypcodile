@@ -365,35 +365,24 @@ async def test_cli_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
 def test_cli_catalog_stats_uses_client(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """CLI delegates to client list_channels + query COUNT(*)."""
+    """CLI delegates to client.catalog_stats (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
-
-    import polars as pl
 
     from crypcodile.cli import app
 
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
-
-    def _query(sql: str):
-        if "book_snapshot" in sql:
-            return pl.DataFrame({"n": [42]})
-        if "trade" in sql:
-            return pl.DataFrame({"n": [7]})
-        raise AssertionError(f"unexpected sql: {sql}")
-
-    mock_client.query.side_effect = _query
+    mock_client.catalog_stats.return_value = {
+        "row_counts": {"book_snapshot": 42, "trade": 7},
+        "channel_count": 2,
+    }
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def list_channels(self):
-            return mock_client.list_channels()
-
-        def query(self, sql: str):
-            return mock_client.query(sql)
+        def catalog_stats(self):
+            return mock_client.catalog_stats()
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -410,40 +399,30 @@ def test_cli_catalog_stats_uses_client(
     assert "channel_count:  2" in result.output
     assert "book_snapshot: 42" in result.output
     assert "trade: 7" in result.output
-    mock_client.list_channels.assert_called_once_with()
-    assert mock_client.query.call_count == 2
+    mock_client.catalog_stats.assert_called_once_with()
 
 
 def test_cli_catalog_stats_query_failure_reports_minus_one(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """Query failure per channel reports -1 (REST/MCP parity)."""
+    """CLI prints -1 from client.catalog_stats (REST/MCP parity)."""
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
-
-    import polars as pl
 
     from crypcodile.cli import app
 
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["trade", "funding"]
-
-    def _query(sql: str):
-        if "trade" in sql:
-            return pl.DataFrame({"n": [10]})
-        raise RuntimeError("view missing")
-
-    mock_client.query.side_effect = _query
+    mock_client.catalog_stats.return_value = {
+        "row_counts": {"trade": 10, "funding": -1},
+        "channel_count": 2,
+    }
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def list_channels(self):
-            return mock_client.list_channels()
-
-        def query(self, sql: str):
-            return mock_client.query(sql)
+        def catalog_stats(self):
+            return mock_client.catalog_stats()
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -460,32 +439,30 @@ def test_cli_catalog_stats_query_failure_reports_minus_one(
     assert "channel_count:  2" in result.output
     assert "trade: 10" in result.output
     assert "funding: -1" in result.output
+    mock_client.catalog_stats.assert_called_once_with()
 
 
 def test_cli_catalog_stats_escapes_double_quotes(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """Channel names with double quotes are SQL-escaped."""
+    """CLI prints odd channel keys from client.catalog_stats as-is."""
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
-
-    import polars as pl
 
     from crypcodile.cli import app
 
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ['odd"chan']
-    mock_client.query.return_value = pl.DataFrame({"n": [1]})
+    mock_client.catalog_stats.return_value = {
+        "row_counts": {'odd"chan': 1},
+        "channel_count": 1,
+    }
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
             pass
 
-        def list_channels(self):
-            return mock_client.list_channels()
-
-        def query(self, sql: str):
-            return mock_client.query(sql)
+        def catalog_stats(self):
+            return mock_client.catalog_stats()
 
     monkeypatch.setattr(
         "crypcodile.client.client.CrypcodileClient", _FakeClient
@@ -500,8 +477,7 @@ def test_cli_catalog_stats_escapes_double_quotes(
     )
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert 'odd"chan: 1' in result.output
-    sql = mock_client.query.call_args.args[0]
-    assert 'FROM "odd""chan"' in sql
+    mock_client.catalog_stats.assert_called_once_with()
 
 
 def test_cli_catalog_stats_in_main_help() -> None:

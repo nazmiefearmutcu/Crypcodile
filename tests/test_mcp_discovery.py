@@ -260,72 +260,59 @@ async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
     assert result["row_counts"]["book_snapshot"] == 1
 
 
-def test_catalog_stats_returns_row_counts() -> None:
-    """Handler list_channels + per-channel COUNT(*) via client.query."""
+def test_catalog_stats_delegates_to_client() -> None:
+    """Handler delegates to client.catalog_stats (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
-
-    import polars as pl
 
     from crypcodile.mcp_server import handle_catalog_stats
 
     client = MagicMock()
-    client.list_channels.return_value = ["book_snapshot", "trade"]
-
-    def _query(sql: str):
-        if "book_snapshot" in sql:
-            return pl.DataFrame({"n": [42]})
-        if "trade" in sql:
-            return pl.DataFrame({"n": [7]})
-        raise AssertionError(f"unexpected sql: {sql}")
-
-    client.query.side_effect = _query
+    client.catalog_stats.return_value = {
+        "row_counts": {"book_snapshot": 42, "trade": 7},
+        "channel_count": 2,
+    }
     assert handle_catalog_stats(client) == {
         "row_counts": {"book_snapshot": 42, "trade": 7},
         "channel_count": 2,
     }
-    client.list_channels.assert_called_once_with()
-    assert client.query.call_count == 2
-    sqls = [c.args[0] for c in client.query.call_args_list]
-    assert any('FROM "book_snapshot"' in s for s in sqls)
-    assert any('FROM "trade"' in s for s in sqls)
+    client.catalog_stats.assert_called_once_with()
+    client.list_channels.assert_not_called()
+    client.query.assert_not_called()
 
 
 def test_catalog_stats_query_failure_reports_minus_one() -> None:
+    """MCP surface forwards client.catalog_stats -1 contract."""
     from unittest.mock import MagicMock
-
-    import polars as pl
 
     from crypcodile.mcp_server import handle_catalog_stats
 
     client = MagicMock()
-    client.list_channels.return_value = ["trade", "funding"]
-
-    def _query(sql: str):
-        if "trade" in sql:
-            return pl.DataFrame({"n": [10]})
-        raise RuntimeError("view missing")
-
-    client.query.side_effect = _query
+    client.catalog_stats.return_value = {
+        "row_counts": {"trade": 10, "funding": -1},
+        "channel_count": 2,
+    }
     assert handle_catalog_stats(client) == {
         "row_counts": {"trade": 10, "funding": -1},
         "channel_count": 2,
     }
+    client.catalog_stats.assert_called_once_with()
 
 
 def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
+    """MCP surface forwards client.catalog_stats for odd channel keys."""
     from unittest.mock import MagicMock
-
-    import polars as pl
 
     from crypcodile.mcp_server import handle_catalog_stats
 
     client = MagicMock()
-    client.list_channels.return_value = ['odd"chan']
-    client.query.return_value = pl.DataFrame({"n": [1]})
+    client.catalog_stats.return_value = {
+        "row_counts": {'odd"chan': 1},
+        "channel_count": 1,
+    }
     result = handle_catalog_stats(client)
     assert result["row_counts"] == {'odd"chan': 1}
-    sql = client.query.call_args.args[0]
-    assert 'FROM "odd""chan"' in sql
+    client.catalog_stats.assert_called_once_with()
+    client.query.assert_not_called()
 
 
 def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:

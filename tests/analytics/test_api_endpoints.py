@@ -326,17 +326,12 @@ def test_catalog_stats_empty_lake(tmp_path, monkeypatch) -> None:
 
 
 def test_catalog_stats_returns_row_counts() -> None:
+    """REST delegates to client.catalog_stats (shared REST/MCP/CLI contract)."""
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
-
-    def _query(sql: str):
-        if "book_snapshot" in sql:
-            return pl.DataFrame({"n": [42]})
-        if "trade" in sql:
-            return pl.DataFrame({"n": [7]})
-        raise AssertionError(f"unexpected sql: {sql}")
-
-    mock_client.query.side_effect = _query
+    mock_client.catalog_stats.return_value = {
+        "row_counts": {"book_snapshot": 42, "trade": 7},
+        "channel_count": 2,
+    }
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
         from crypcodile.api_server import catalog_stats
 
@@ -345,23 +340,18 @@ def test_catalog_stats_returns_row_counts() -> None:
         "row_counts": {"book_snapshot": 42, "trade": 7},
         "channel_count": 2,
     }
-    mock_client.list_channels.assert_called_once_with()
-    assert mock_client.query.call_count == 2
-    sqls = [c.args[0] for c in mock_client.query.call_args_list]
-    assert any('FROM "book_snapshot"' in s for s in sqls)
-    assert any('FROM "trade"' in s for s in sqls)
+    mock_client.catalog_stats.assert_called_once_with()
+    mock_client.list_channels.assert_not_called()
+    mock_client.query.assert_not_called()
 
 
 def test_catalog_stats_query_failure_reports_minus_one() -> None:
+    """REST surface forwards client.catalog_stats -1 contract."""
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["trade", "funding"]
-
-    def _query(sql: str):
-        if "trade" in sql:
-            return pl.DataFrame({"n": [10]})
-        raise RuntimeError("view missing")
-
-    mock_client.query.side_effect = _query
+    mock_client.catalog_stats.return_value = {
+        "row_counts": {"trade": 10, "funding": -1},
+        "channel_count": 2,
+    }
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
         from crypcodile.api_server import catalog_stats
 
@@ -370,19 +360,23 @@ def test_catalog_stats_query_failure_reports_minus_one() -> None:
         "row_counts": {"trade": 10, "funding": -1},
         "channel_count": 2,
     }
+    mock_client.catalog_stats.assert_called_once_with()
 
 
 def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
+    """REST surface forwards client.catalog_stats for odd channel keys."""
     mock_client = MagicMock()
-    mock_client.list_channels.return_value = ['odd"chan']
-    mock_client.query.return_value = pl.DataFrame({"n": [1]})
+    mock_client.catalog_stats.return_value = {
+        "row_counts": {'odd"chan': 1},
+        "channel_count": 1,
+    }
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
         from crypcodile.api_server import catalog_stats
 
         result = asyncio.run(catalog_stats())
     assert result["row_counts"] == {'odd"chan': 1}
-    sql = mock_client.query.call_args.args[0]
-    assert 'FROM "odd""chan"' in sql
+    mock_client.catalog_stats.assert_called_once_with()
+    mock_client.query.assert_not_called()
 
 
 def test_catalog_stats_route_registered() -> None:

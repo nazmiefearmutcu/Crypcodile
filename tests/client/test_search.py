@@ -167,6 +167,98 @@ def test_catalog_summary_composes_list_methods(
     }
 
 
+def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.catalog_stats() == {
+        "row_counts": {},
+        "channel_count": 0,
+    }
+
+
+async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    result = client.catalog_stats()
+    assert result["channel_count"] == 2
+    assert set(result["row_counts"].keys()) == {"book_snapshot", "trade"}  # type: ignore[union-attr]
+    # fixtures: 3 trades + 1 book_snapshot
+    assert result["row_counts"]["trade"] == 3  # type: ignore[index]
+    assert result["row_counts"]["book_snapshot"] == 1  # type: ignore[index]
+
+
+def test_catalog_stats_count_query(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """catalog_stats runs COUNT(*) per channel via query; escapes quotes."""
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    monkeypatch.setattr(client, "list_channels", lambda: ["book_snapshot", "trade"])
+
+    calls: list[str] = []
+
+    def _query(sql: str) -> pl.DataFrame:
+        calls.append(sql)
+        if "book_snapshot" in sql:
+            return pl.DataFrame({"n": [42]})
+        if "trade" in sql:
+            return pl.DataFrame({"n": [7]})
+        raise AssertionError(f"unexpected sql: {sql}")
+
+    monkeypatch.setattr(client, "query", _query)
+    assert client.catalog_stats() == {
+        "row_counts": {"book_snapshot": 42, "trade": 7},
+        "channel_count": 2,
+    }
+    assert len(calls) == 2
+    assert any('FROM "book_snapshot"' in s for s in calls)
+    assert any('FROM "trade"' in s for s in calls)
+
+
+def test_catalog_stats_query_failure_reports_minus_one(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    monkeypatch.setattr(client, "list_channels", lambda: ["trade", "funding"])
+
+    def _query(sql: str) -> pl.DataFrame:
+        if "trade" in sql:
+            return pl.DataFrame({"n": [10]})
+        raise RuntimeError("view missing")
+
+    monkeypatch.setattr(client, "query", _query)
+    assert client.catalog_stats() == {
+        "row_counts": {"trade": 10, "funding": -1},
+        "channel_count": 2,
+    }
+
+
+def test_catalog_stats_escapes_double_quotes_in_channel(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    monkeypatch.setattr(client, "list_channels", lambda: ['odd"chan'])
+    calls: list[str] = []
+
+    def _query(sql: str) -> pl.DataFrame:
+        calls.append(sql)
+        return pl.DataFrame({"n": [1]})
+
+    monkeypatch.setattr(client, "query", _query)
+    result = client.catalog_stats()
+    assert result["row_counts"] == {'odd"chan': 1}
+    assert len(calls) == 1
+    assert 'FROM "odd""chan"' in calls[0]
+
+
 def test_inventory_empty_schema(tmp_path: pathlib.Path) -> None:
     from crypcodile.client.client import CrypcodileClient
 

@@ -957,34 +957,28 @@ def catalog_stats(
 ) -> None:
     """Print per-channel row counts for the local lake.
 
-    Mirrors REST ``GET /api/v1/catalog/stats`` / MCP ``catalog_stats``:
-    discovers channels via filesystem ``list_channels``, then runs a
-    lightweight ``COUNT(*)`` per channel through ``client.query``. Query
-    failure for a channel reports ``-1`` (missing view / empty partition)
-    so callers can distinguish unavailable from true zero-row channels.
-    Empty lake prints ``channel_count: 0`` and ``row_counts: (none)``;
-    exit 0. Avoids heavy inventory aggregation.
+    Delegates to :meth:`CrypcodileClient.catalog_stats` — same contract as
+    REST ``GET /api/v1/catalog/stats`` / MCP ``catalog_stats``: discovers
+    channels via filesystem ``list_channels``, then runs a lightweight
+    ``COUNT(*)`` per channel (``-1`` on query failure). Empty lake prints
+    ``channel_count: 0`` and ``row_counts: (none)``; exit 0. Avoids heavy
+    inventory aggregation.
     """
     from crypcodile.client.client import CrypcodileClient
 
     data_dir = resolve_data_dir(data_dir)
     client = CrypcodileClient(data_dir=data_dir)
+    stats = client.catalog_stats()
+    row_counts: dict[str, int] = stats["row_counts"]  # type: ignore[assignment]
+    channel_count = int(stats["channel_count"])  # type: ignore[arg-type]
 
-    channels = client.list_channels()
-    channel_count = len(channels)
     typer.echo(f"channel_count:  {channel_count}")
-    if not channels:
+    if not row_counts:
         typer.echo("row_counts: (none)")
         raise typer.Exit(code=0)
 
     typer.echo("row_counts:")
-    for ch in channels:
-        try:
-            escaped = str(ch).replace('"', '""')
-            row_df = client.query(f'SELECT count(*) AS n FROM "{escaped}"')
-            n = int(row_df["n"][0])
-        except Exception:
-            n = -1
+    for ch, n in row_counts.items():
         typer.echo(f"  {ch}: {n}")
 
 

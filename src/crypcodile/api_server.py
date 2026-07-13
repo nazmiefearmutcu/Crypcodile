@@ -1611,39 +1611,19 @@ async def catalog_summary() -> dict[str, object]:
 async def catalog_stats() -> dict[str, object]:
     """Per-channel row counts for the local lake (read-only, no payment).
 
-    Discovers channels via filesystem :meth:`~CrypcodileClient.list_channels`,
-    then runs a lightweight ``COUNT(*)`` per channel through
-    :meth:`~CrypcodileClient.query` (registered DuckDB views). Avoids the
-    heavier per-symbol :meth:`~CrypcodileClient.inventory` aggregate.
-
-    On query failure for a channel (missing view, empty partition without
-    parquet, DuckDB error), that channel reports ``-1`` so callers can
-    distinguish "unknown/unavailable" from a true zero-row channel.
-
-    Response shape::
+    Delegates to :meth:`CrypcodileClient.catalog_stats`::
 
         {
             "row_counts": {"trade": 1234, "book_snapshot": 0, ...},
             "channel_count": int,
         }
 
-    Empty lake yields ``row_counts: {}`` and ``channel_count: 0``. Channel
-    keys follow ``list_channels`` order (sorted).
+    Discovers channels via filesystem ``list_channels``, then runs a
+    lightweight ``COUNT(*)`` per channel (``-1`` on query failure). Empty
+    lake yields ``row_counts: {}`` and ``channel_count: 0``. Shared with
+    MCP ``catalog_stats`` and CLI ``catalog-stats``.
     """
-    client = _get_lake_client()
-    channels = client.list_channels()
-    row_counts: dict[str, int] = {}
-    for ch in channels:
-        try:
-            escaped = str(ch).replace('"', '""')
-            row_df = client.query(f'SELECT count(*) AS n FROM "{escaped}"')
-            row_counts[ch] = int(row_df["n"][0])
-        except Exception:
-            row_counts[ch] = -1
-    return {
-        "row_counts": row_counts,
-        "channel_count": len(channels),
-    }
+    return _get_lake_client().catalog_stats()
 
 
 @app.get("/api/v1/catalog/dates")

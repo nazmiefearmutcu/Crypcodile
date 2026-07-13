@@ -39,6 +39,9 @@ list_exchanges_on_disk()
 catalog_summary()
     One-shot lake summary dict: channels, exchanges_on_disk, counts.
 
+catalog_stats()
+    Per-channel row counts via list_channels + COUNT(*) (-1 on fail).
+
 inventory(channel=None, exchange=None)
     Per-symbol coverage summary DataFrame.
 
@@ -207,6 +210,46 @@ class CrypcodileClient:
             "channels": channels,
             "exchanges_on_disk": exchanges_on_disk,
             "exchange_count": len(exchanges_on_disk),
+            "channel_count": len(channels),
+        }
+
+    def catalog_stats(self) -> dict[str, object]:
+        """Per-channel row counts for agent / CLI / REST discovery.
+
+        Discovers channels via filesystem :meth:`list_channels`, then runs a
+        lightweight ``COUNT(*)`` per channel through :meth:`query` (registered
+        DuckDB views). Avoids the heavier per-symbol :meth:`inventory`
+        aggregate.
+
+        On query failure for a channel (missing view, empty partition without
+        parquet, DuckDB error), that channel reports ``-1`` so callers can
+        distinguish "unknown/unavailable" from a true zero-row channel.
+        Channel names are SQL-escaped (``"`` → ``""``) for quoted identifiers.
+
+        Response shape::
+
+            {
+                "row_counts": {"trade": 1234, "book_snapshot": 0, ...},
+                "channel_count": int,
+            }
+
+        Empty lake yields ``row_counts: {}`` and ``channel_count: 0``. Channel
+        keys follow ``list_channels`` order (sorted).
+
+        Shared by REST ``GET /api/v1/catalog/stats``, MCP ``catalog_stats``,
+        and CLI ``catalog-stats``.
+        """
+        channels = self.list_channels()
+        row_counts: dict[str, int] = {}
+        for ch in channels:
+            try:
+                escaped = str(ch).replace('"', '""')
+                row_df = self.query(f'SELECT count(*) AS n FROM "{escaped}"')
+                row_counts[ch] = int(row_df["n"][0])
+            except Exception:
+                row_counts[ch] = -1
+        return {
+            "row_counts": row_counts,
             "channel_count": len(channels),
         }
 
