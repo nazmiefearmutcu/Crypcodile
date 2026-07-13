@@ -10,8 +10,17 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Search system (client, CLI, MCP)**: Client `resolve_symbols`, CLI search, and MCP discovery tools for symbol resolution.
 - **MCP analytics tools**: Exposed slippage, OFI, whale alerts, IV surface, and term-structure tools over MCP.
 - **MCP vol-skew tool**: Added `get_vol_skew` analytics tool on the MCP server.
+- **MCP basis analytics tools**: Exposed basis analytics tools over MCP.
+- **MCP liquidity-depth and sequencer-latency tools**: Liquidity-depth and sequencer-latency analytics available as MCP tools.
+- **Client/MCP indicators surface**: Technical analysis indicators exposed via client API and MCP.
 - **CLI vol-skew and risk-reversal**: New `vol-skew` and risk-reversal commands for options skew analytics.
 - **CLI base risk analytics**: Exposed base risk analytics commands on the CLI.
+- **CLI liquidity-depth command**: Liquidity-depth analytics command on the CLI.
+- **CLI sequencer-latency command**: Sequencer-latency analytics command on the CLI.
+- **CLI lending-stress command**: Expose pure `lending_stress_test` as `crypcodile lending-stress` with collateral/debt/threshold/haircut options.
+- **CLI collect duration and max-reconnects**: Collect accepts duration and max-reconnects options for bounded runs and reconnect caps.
+- **Public `list_exchanges`**: Factory-registry-backed public exchange listing for CLI/API consumers.
+- **API lake catalog list and search**: Lake catalog list and search endpoints on the API.
 - **Dead-letter queue drain on collect stop**: Drain the ingest dead-letter queue when collect stops and emit a stop report.
 - **Book resync bridge (Binance)**: On depth sequence gaps, buffer live deltas, REST re-fetch `/depth`, and emit snapshot plus post-snapshot deltas via `OrderBookSync` + `BookResyncBridge`.
 - **Shared book-sync helpers**: Extracted `SyncResult`, `BookSyncMachine` protocol, and buffer filter for multi-venue resync.
@@ -22,9 +31,12 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ### Fixed
 - **Atomic parquet compact**: Compact uses rename-before-delete; in-flight work is awaited on stop; compact executor is awaited across start/stop cancel paths.
+- **Atomic parquet part writes**: Parquet part files written via temp path then atomic rename for crash-safe durability.
 - **Parquet sink buffer durability**: Drop sink buffer only after durable write; re-buffer rows when a flush is cancelled.
+- **Multi-partition rebuffer**: After a partial multi-partition flush, re-buffer only partitions that were not durably written.
 - **Partition path sanitization**: Sanitize parquet partition path components; validate catalog scan limits and escape channel IDs.
 - **API payment CAS and sim defaults**: Compare-and-swap payment spend before serve; disable simulation by default; lock admin behind admin key.
+- **Atomic fail-loud payment DB persistence**: Payment DB writes are atomic and fail loudly on persistence errors.
 - **Pending-only paid transitions**: Enforce pending-only transitions to paid for verify and simulate payment flows.
 - **MCP stdin EOF**: Exit cleanly on stdin EOF without hanging the executor.
 - **Polars min_samples**: Update analytics from deprecated `min_periods` to `min_samples`.
