@@ -388,9 +388,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | # | Task | Status | Commit |
 |---|------|--------|--------|
 | 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog_search/catalog, compactor, parquet_sink, client search, json_safe, factory, binance/okx, cli, schema, sink, instruments, replay — green (no pre-existing failures) | DONE | baseline `231070a` |
-| 2 | CLI `catalog` uses filesystem `list_channels`; empty partitions → `0` rows; `--symbols` inventory still works with empty dirs coexisting | DONE | (this wave) |
-| 3 | Fix `_create_view` skip when no parquet (Catalog init no longer raises on empty hive dirs) | DONE | (this wave) |
-| 4 | Tests: empty partitions catalog listing; --symbols with/without data + empty dirs; construct-before-data Catalog; list_channels delegate | DONE | (this wave) |
+| 2 | CLI `catalog` uses filesystem `list_channels`; empty partitions → `0` rows; `--symbols` inventory still works with empty dirs coexisting | DONE | `6c65a1818487827aaca33f27ffcda63ef449462f` |
+| 3 | Fix `_create_view` skip when no parquet (Catalog init no longer raises on empty hive dirs) | DONE | `6c65a1818487827aaca33f27ffcda63ef449462f` |
+| 4 | Tests: empty partitions catalog listing; --symbols with/without data + empty dirs; construct-before-data Catalog; list_channels delegate | DONE | `6c65a1818487827aaca33f27ffcda63ef449462f` |
 
 ## Next rotation ideas (Wave 51+)
 
