@@ -1419,6 +1419,8 @@ _OFI_MAX_LIMIT = 10_000
 _WHALE_ALERTS_MAX_LIMIT = 10_000
 _IV_SURFACE_MAX_LIMIT = 10_000
 _TERM_STRUCTURE_MAX_LIMIT = 10_000
+_LIQUIDITY_DEPTH_MAX_LIMIT = 10_000
+_SEQUENCER_LATENCY_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1914,6 +1916,158 @@ async def term_structure(
     if len(df) > limit:
         df = df.head(limit)
     return df.to_dicts()
+
+
+@app.get("/api/v1/liquidity-depth")
+async def liquidity_depth(
+    symbol: str = "",
+    limit: int = _LIQUIDITY_DEPTH_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Per-block bid/ask liquidity depth at ±1/2/5% from mid (read-only, no payment).
+
+    Query params: ``symbol`` (canonical, e.g. ``base_onchain:DEGEN-WETH``).
+
+    Wraps :meth:`CrypcodileClient.calculate_block_liquidity_depth`. Returns at
+    most ``limit`` rows (default and hard max: 10000). Empty/missing ``symbol``,
+    empty lake, or no matching book snapshots yields ``[]``.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _LIQUIDITY_DEPTH_MAX_LIMIT:
+        limit = _LIQUIDITY_DEPTH_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.calculate_block_liquidity_depth(sym)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Liquidity depth query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Liquidity depth query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/sequencer-latency")
+async def sequencer_latency(
+    exchange: str = "base_onchain",
+    limit: int = _SEQUENCER_LATENCY_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Sequencer production interval and ingestion delay (read-only, no payment).
+
+    Query params: ``exchange`` (e.g. ``base_onchain``; default ``base_onchain``).
+
+    Wraps :meth:`CrypcodileClient.calculate_sequencer_latency`. Returns at most
+    ``limit`` summary rows (default and hard max: 10000). Empty lake or
+    insufficient timestamps yields ``[]``.
+    """
+    ex = (exchange or "").strip() or "base_onchain"
+    if limit < 1:
+        limit = 1
+    if limit > _SEQUENCER_LATENCY_MAX_LIMIT:
+        limit = _SEQUENCER_LATENCY_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.calculate_sequencer_latency(ex)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Sequencer latency query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Sequencer latency query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/chaos-score")
+async def chaos_score(
+    volatility: float = 0.0,
+    stablecoin_deviation: float = 0.0,
+    orderbook_imbalance: float = 0.0,
+    sequencer_delay: float = 0.0,
+) -> dict[str, Any]:
+    """Normalized [0, 100] chaos score from pure risk metrics (no lake, no payment).
+
+    Query params: ``volatility``, ``stablecoin_deviation``,
+    ``orderbook_imbalance``, ``sequencer_delay`` (all floats; default ``0``).
+
+    Wraps :func:`crypcodile.analytics.risk.calculate_chaos_score`. Returns the
+    inputs plus ``chaos_score``.
+    """
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    try:
+        score = calculate_chaos_score(
+            volatility=float(volatility),
+            stablecoin_deviation=float(stablecoin_deviation),
+            orderbook_imbalance=float(orderbook_imbalance),
+            sequencer_delay=float(sequencer_delay),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Chaos score calculation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Chaos score calculation failed.",
+        ) from e
+
+    return {
+        "volatility": float(volatility),
+        "stablecoin_deviation": float(stablecoin_deviation),
+        "orderbook_imbalance": float(orderbook_imbalance),
+        "sequencer_delay": float(sequencer_delay),
+        "chaos_score": float(score),
+    }
+
+
+@app.get("/api/v1/peg-deviation")
+async def peg_deviation(
+    price: float = 0.0,
+    threshold: float = 0.01,
+    target: float = 1.0,
+) -> dict[str, Any]:
+    """Pure peg-deviation check from a single mid price (no lake, no payment).
+
+    Query params: ``price`` (observed mid), ``threshold`` absolute deviation
+    alert threshold (default ``0.01``), optional ``target`` peg (default ``1.0``).
+
+    Wraps :func:`crypcodile.analytics.peg_deviation.peg_deviation_from_price`.
+    Returns ``price``, ``deviation_pct``, ``is_alert_triggered``, ``threshold``.
+    """
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+
+    try:
+        return peg_deviation_from_price(
+            float(price),
+            threshold=float(threshold),
+            target=float(target),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Peg deviation calculation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Peg deviation calculation failed.",
+        ) from e
 
 
 class QueryPayload(BaseModel):

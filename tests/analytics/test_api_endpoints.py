@@ -2513,3 +2513,467 @@ def test_term_structure_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/term-structure", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/liquidity-depth — per-block book depth (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_liquidity_depth_empty_symbol_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        result = asyncio.run(liquidity_depth(symbol=""))
+        result_ws = asyncio.run(liquidity_depth(symbol="  "))
+    assert result == []
+    assert result_ws == []
+    mock_client.calculate_block_liquidity_depth.assert_not_called()
+
+
+def test_liquidity_depth_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import liquidity_depth
+
+    result = asyncio.run(liquidity_depth(symbol="base_onchain:DEGEN-WETH"))
+    assert result == []
+
+
+def test_liquidity_depth_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        result = asyncio.run(liquidity_depth(symbol="base_onchain:DEGEN-WETH"))
+    assert result == []
+    mock_client.calculate_block_liquidity_depth.assert_called_once_with(
+        "base_onchain:DEGEN-WETH"
+    )
+
+
+def test_liquidity_depth_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame(
+        {
+            "block": [100, 101],
+            "bid_depth_1pct": [10.0, 11.0],
+            "ask_depth_1pct": [12.0, 13.0],
+            "bid_depth_2pct": [20.0, 21.0],
+            "ask_depth_2pct": [22.0, 23.0],
+            "bid_depth_5pct": [50.0, 51.0],
+            "ask_depth_5pct": [52.0, 53.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        result = asyncio.run(
+            liquidity_depth(symbol="base_onchain:DEGEN-WETH", limit=100)
+        )
+    assert len(result) == 2
+    assert result[0]["block"] == 100
+    assert result[0]["bid_depth_1pct"] == 10.0
+    assert result[1]["block"] == 101
+    assert result[1]["ask_depth_5pct"] == 53.0
+    mock_client.calculate_block_liquidity_depth.assert_called_once_with(
+        "base_onchain:DEGEN-WETH"
+    )
+
+
+def test_liquidity_depth_strips_whitespace_symbol() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        asyncio.run(liquidity_depth(symbol="  base_onchain:WETH-USDC  "))
+    mock_client.calculate_block_liquidity_depth.assert_called_once_with(
+        "base_onchain:WETH-USDC"
+    )
+
+
+def test_liquidity_depth_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame(
+        {
+            "block": [1, 2, 3, 4, 5],
+            "bid_depth_1pct": [1.0] * 5,
+            "ask_depth_1pct": [1.0] * 5,
+            "bid_depth_2pct": [2.0] * 5,
+            "ask_depth_2pct": [2.0] * 5,
+            "bid_depth_5pct": [5.0] * 5,
+            "ask_depth_5pct": [5.0] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        result = asyncio.run(liquidity_depth(symbol="x", limit=2))
+    assert len(result) == 2
+    assert result[0]["block"] == 1
+    assert result[1]["block"] == 2
+
+
+def test_liquidity_depth_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame(
+        {
+            "block": list(range(20)),
+            "bid_depth_1pct": [1.0] * 20,
+            "ask_depth_1pct": [1.0] * 20,
+            "bid_depth_2pct": [2.0] * 20,
+            "ask_depth_2pct": [2.0] * 20,
+            "bid_depth_5pct": [5.0] * 20,
+            "ask_depth_5pct": [5.0] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _LIQUIDITY_DEPTH_MAX_LIMIT, liquidity_depth
+
+        result = asyncio.run(
+            liquidity_depth(
+                symbol="x",
+                limit=_LIQUIDITY_DEPTH_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.calculate_block_liquidity_depth.assert_called_once()
+
+
+def test_liquidity_depth_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame(
+        {
+            "block": [1, 2, 3],
+            "bid_depth_1pct": [1.0, 2.0, 3.0],
+            "ask_depth_1pct": [1.0, 2.0, 3.0],
+            "bid_depth_2pct": [1.0, 2.0, 3.0],
+            "ask_depth_2pct": [1.0, 2.0, 3.0],
+            "bid_depth_5pct": [1.0, 2.0, 3.0],
+            "ask_depth_5pct": [1.0, 2.0, 3.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        result = asyncio.run(liquidity_depth(symbol="x", limit=0))
+    assert len(result) == 1
+    assert result[0]["block"] == 1
+
+
+def test_liquidity_depth_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_block_liquidity_depth.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import liquidity_depth
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(liquidity_depth(symbol="base_onchain:DEGEN-WETH"))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Liquidity depth query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_liquidity_depth_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/liquidity-depth."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/liquidity-depth", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/sequencer-latency — production interval + ingest delay
+# ---------------------------------------------------------------------------
+
+
+def test_sequencer_latency_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import sequencer_latency
+
+    result = asyncio.run(sequencer_latency(exchange="base_onchain"))
+    assert result == []
+
+
+def test_sequencer_latency_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        result = asyncio.run(sequencer_latency(exchange="base_onchain"))
+    assert result == []
+    mock_client.calculate_sequencer_latency.assert_called_once_with("base_onchain")
+
+
+def test_sequencer_latency_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame(
+        {
+            "metric": ["production_interval", "ingestion_delay"],
+            "avg_seconds": [2.0, 0.1],
+            "max_seconds": [5.0, 0.5],
+            "std_seconds": [0.5, 0.05],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        result = asyncio.run(sequencer_latency(exchange="base_onchain", limit=100))
+    assert len(result) == 2
+    assert result[0]["metric"] == "production_interval"
+    assert result[0]["avg_seconds"] == 2.0
+    assert result[1]["metric"] == "ingestion_delay"
+    assert result[1]["max_seconds"] == 0.5
+    mock_client.calculate_sequencer_latency.assert_called_once_with("base_onchain")
+
+
+def test_sequencer_latency_default_exchange_is_base_onchain() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        asyncio.run(sequencer_latency(exchange=""))
+        asyncio.run(sequencer_latency(exchange="  "))
+    assert mock_client.calculate_sequencer_latency.call_args_list == [
+        (("base_onchain",),),
+        (("base_onchain",),),
+    ]
+
+
+def test_sequencer_latency_strips_whitespace_exchange() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        asyncio.run(sequencer_latency(exchange="  optimism  "))
+    mock_client.calculate_sequencer_latency.assert_called_once_with("optimism")
+
+
+def test_sequencer_latency_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame(
+        {
+            "metric": ["a", "b", "c"],
+            "avg_seconds": [1.0, 2.0, 3.0],
+            "max_seconds": [1.0, 2.0, 3.0],
+            "std_seconds": [0.0, 0.0, 0.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        result = asyncio.run(sequencer_latency(exchange="base_onchain", limit=1))
+    assert len(result) == 1
+    assert result[0]["metric"] == "a"
+
+
+def test_sequencer_latency_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame(
+        {
+            "metric": [f"m{i}" for i in range(20)],
+            "avg_seconds": [1.0] * 20,
+            "max_seconds": [2.0] * 20,
+            "std_seconds": [0.1] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import (
+            _SEQUENCER_LATENCY_MAX_LIMIT,
+            sequencer_latency,
+        )
+
+        result = asyncio.run(
+            sequencer_latency(
+                exchange="base_onchain",
+                limit=_SEQUENCER_LATENCY_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.calculate_sequencer_latency.assert_called_once()
+
+
+def test_sequencer_latency_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.return_value = pl.DataFrame(
+        {
+            "metric": ["a", "b", "c"],
+            "avg_seconds": [1.0, 2.0, 3.0],
+            "max_seconds": [1.0, 2.0, 3.0],
+            "std_seconds": [0.0, 0.0, 0.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        result = asyncio.run(sequencer_latency(exchange="base_onchain", limit=0))
+    assert len(result) == 1
+    assert result[0]["metric"] == "a"
+
+
+def test_sequencer_latency_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_sequencer_latency.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import sequencer_latency
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(sequencer_latency(exchange="base_onchain"))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Sequencer latency query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_sequencer_latency_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/sequencer-latency."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/sequencer-latency", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/chaos-score — pure risk score (no lake, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_chaos_score_zeros() -> None:
+    from crypcodile.api_server import chaos_score
+
+    result = asyncio.run(
+        chaos_score(
+            volatility=0.0,
+            stablecoin_deviation=0.0,
+            orderbook_imbalance=0.0,
+            sequencer_delay=0.0,
+        )
+    )
+    assert result["volatility"] == 0.0
+    assert result["stablecoin_deviation"] == 0.0
+    assert result["orderbook_imbalance"] == 0.0
+    assert result["sequencer_delay"] == 0.0
+    assert result["chaos_score"] == 0.0
+
+
+def test_chaos_score_matches_analytics() -> None:
+    from crypcodile.analytics.risk import calculate_chaos_score
+    from crypcodile.api_server import chaos_score
+
+    vol, dev, imb, delay = 0.05, 0.02, 0.5, 3.0
+    expected = calculate_chaos_score(vol, dev, imb, delay)
+    result = asyncio.run(
+        chaos_score(
+            volatility=vol,
+            stablecoin_deviation=dev,
+            orderbook_imbalance=imb,
+            sequencer_delay=delay,
+        )
+    )
+    assert result["volatility"] == vol
+    assert result["stablecoin_deviation"] == dev
+    assert result["orderbook_imbalance"] == imb
+    assert result["sequencer_delay"] == delay
+    assert result["chaos_score"] == expected
+    assert 0.0 <= result["chaos_score"] <= 100.0
+
+
+def test_chaos_score_high_risk_bounded() -> None:
+    from crypcodile.api_server import chaos_score
+
+    result = asyncio.run(
+        chaos_score(
+            volatility=1000.0,
+            stablecoin_deviation=1000.0,
+            orderbook_imbalance=1.0,
+            sequencer_delay=1000.0,
+        )
+    )
+    assert 0.0 <= result["chaos_score"] <= 100.0
+
+
+def test_chaos_score_defaults() -> None:
+    from crypcodile.api_server import chaos_score
+
+    result = asyncio.run(chaos_score())
+    assert result["chaos_score"] == 0.0
+
+
+def test_chaos_score_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/chaos-score."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/chaos-score", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/peg-deviation — pure peg check (no lake, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_peg_deviation_alert() -> None:
+    from crypcodile.api_server import peg_deviation
+
+    result = asyncio.run(peg_deviation(price=0.98, threshold=0.01))
+    assert result["price"] == 0.98
+    assert abs(result["deviation_pct"] - 0.02) < 1e-12
+    assert result["is_alert_triggered"] is True
+    assert result["threshold"] == 0.01
+
+
+def test_peg_deviation_ok() -> None:
+    from crypcodile.api_server import peg_deviation
+
+    result = asyncio.run(peg_deviation(price=1.0))
+    assert result["price"] == 1.0
+    assert result["deviation_pct"] == 0.0
+    assert result["is_alert_triggered"] is False
+    assert result["threshold"] == 0.01
+
+
+def test_peg_deviation_custom_target() -> None:
+    from crypcodile.api_server import peg_deviation
+
+    result = asyncio.run(peg_deviation(price=1.05, threshold=0.02, target=1.0))
+    assert result["is_alert_triggered"] is True
+    result_ok = asyncio.run(peg_deviation(price=2.0, threshold=0.05, target=2.0))
+    assert result_ok["is_alert_triggered"] is False
+    assert result_ok["deviation_pct"] == 0.0
+
+
+def test_peg_deviation_matches_analytics() -> None:
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+    from crypcodile.api_server import peg_deviation
+
+    expected = peg_deviation_from_price(0.975, threshold=0.01, target=1.0)
+    result = asyncio.run(peg_deviation(price=0.975, threshold=0.01, target=1.0))
+    assert result == expected
+
+
+def test_peg_deviation_default_threshold() -> None:
+    from crypcodile.api_server import peg_deviation
+
+    result = asyncio.run(peg_deviation(price=0.995))
+    assert result["threshold"] == 0.01
+    assert result["is_alert_triggered"] is False
+
+
+def test_peg_deviation_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/peg-deviation."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/peg-deviation", ("GET",)) in paths
