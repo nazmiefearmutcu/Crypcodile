@@ -618,6 +618,41 @@ def handle_detect_mev_sandwiches(
     return out.to_dicts()
 
 
+def handle_smart_money_summary(
+    transfers: list[dict[str, Any]],
+    watchlist: dict[str, Any] | list[Any],
+) -> list[dict[str, Any]]:
+    """Summarize smart-money capital flows from offline transfers + watchlist.
+
+    Wraps :func:`crypcodile.analytics.smart_money.summarize_smart_money` with
+    :func:`crypcodile.analytics.smart_money.normalize_watchlist`. Pure offline:
+    no data lake or RPC. ``transfers`` is a list of transfer dicts
+    (``from``/``to``/``usd_value``/``timestamp``, with common aliases).
+    ``watchlist`` is an addr->label map, address list, or nested JSON shapes
+    accepted by ``normalize_watchlist``. Returns per-address flow rows sorted
+    by total volume; empty watchlist or no matching activity → ``[]``.
+    """
+    from crypcodile.analytics.smart_money import (
+        normalize_watchlist,
+        summarize_smart_money,
+    )
+
+    if not isinstance(transfers, list):
+        raise TypeError("transfers must be a list of dicts")
+    for i, row in enumerate(transfers):
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"transfers[{i}] must be a dict, got {type(row).__name__}"
+            )
+    if not isinstance(watchlist, (dict, list)):
+        raise TypeError("watchlist must be a dict or list of addresses")
+
+    labels = normalize_watchlist(watchlist)
+    if not labels:
+        return []
+    return summarize_smart_money(transfers, labels)
+
+
 def handle_get_lending_stress(
     collateral_usd: float,
     debt_usd: float,
@@ -1412,6 +1447,60 @@ TOOLS = [
             "required": ["trades"],
         },
     },
+    {
+        "name": "smart_money_summary",
+        "description": (
+            "Summarize capital flows for smart-money / MEV watchlist addresses "
+            "from an offline transfer sequence (no data lake / RPC). Accepts "
+            "transfer dicts (from/to/usd_value/timestamp, with common aliases) "
+            "and a watchlist (addr->label map, address list, or nested "
+            "watchlist/labels/addresses shapes). Returns per-address rows with "
+            "net_flow_usd, total_volume_usd, tx_count, last_active_ts, and "
+            "optional label, sorted by total volume descending."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "transfers": {
+                    "type": "array",
+                    "description": (
+                        "List of transfer objects. Fields: from/to (or "
+                        "from_address/to_address/sender/recipient), "
+                        "usd_value (or amount/value), timestamp (or local_ts)."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": {
+                                "type": "string",
+                                "description": "Sender address.",
+                            },
+                            "to": {
+                                "type": "string",
+                                "description": "Recipient address.",
+                            },
+                            "usd_value": {
+                                "type": "number",
+                                "description": "Transfer notional in USD.",
+                            },
+                            "timestamp": {
+                                "type": "integer",
+                                "description": "Event timestamp (ns or epoch).",
+                            },
+                        },
+                    },
+                },
+                "watchlist": {
+                    "description": (
+                        "Smart addresses to track. Object map of address->label, "
+                        "list of addresses, or nested shapes "
+                        "({watchlist: {...}}, {labels: {...}}, {addresses: [...]})."
+                    ),
+                },
+            },
+            "required": ["transfers", "watchlist"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1765,6 +1854,22 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"detect_mev_sandwiches failed: {e}"
+                            }
+                    elif tool_name == "smart_money_summary":
+                        try:
+                            raw_transfers = arguments.get("transfers", [])
+                            if not isinstance(raw_transfers, (list, tuple)):
+                                raise TypeError(
+                                    "transfers must be an array of objects"
+                                )
+                            raw_watchlist = arguments.get("watchlist", {})
+                            tool_result = handle_smart_money_summary(
+                                list(raw_transfers),
+                                raw_watchlist,
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"smart_money_summary failed: {e}"
                             }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}

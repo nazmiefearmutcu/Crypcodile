@@ -31,6 +31,7 @@ from crypcodile.mcp_server import (
     handle_get_spot_perp_basis,
     handle_get_term_structure,
     handle_get_vol_skew,
+    handle_smart_money_summary,
     handle_track_whale_alerts,
 )
 
@@ -53,7 +54,25 @@ _ANALYTICS_TOOLS = {
     "get_lending_stress",
     "get_peg_deviation",
     "detect_mev_sandwiches",
+    "smart_money_summary",
 }
+
+_SMART_ADDR = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B"
+_OTHER_ADDR = "0x1111111111111111111111111111111111111111"
+_SMART_TRANSFERS = [
+    {
+        "from": _SMART_ADDR,
+        "to": _OTHER_ADDR,
+        "usd_value": 100.0,
+        "timestamp": 1,
+    },
+    {
+        "from": _OTHER_ADDR,
+        "to": _SMART_ADDR,
+        "usd_value": 40.0,
+        "timestamp": 2,
+    },
+]
 
 _MEV_SANDWICH_TRADES = [
     {
@@ -654,6 +673,101 @@ def test_handle_detect_mev_sandwiches_matches_analytics() -> None:
     assert rows == expected
 
 
+def test_handle_smart_money_summary_with_labels() -> None:
+    rows = handle_smart_money_summary(
+        _SMART_TRANSFERS,
+        {_SMART_ADDR: "vitalik"},
+    )
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["net_flow_usd"] == -60.0
+    assert rows[0]["total_volume_usd"] == 140.0
+    assert rows[0]["tx_count"] == 2
+    assert rows[0]["label"] == "vitalik"
+    assert rows[0]["last_active_ts"] == 2
+
+
+def test_handle_smart_money_summary_list_watchlist() -> None:
+    rows = handle_smart_money_summary(_SMART_TRANSFERS, [_SMART_ADDR])
+    assert len(rows) == 1
+    assert rows[0]["net_flow_usd"] == -60.0
+    # List watchlist uses address as label
+    assert rows[0]["label"] == _SMART_ADDR
+
+
+def test_handle_smart_money_summary_nested_watchlist() -> None:
+    rows = handle_smart_money_summary(
+        _SMART_TRANSFERS,
+        {"watchlist": {_SMART_ADDR: "mev-bot"}},
+    )
+    assert len(rows) == 1
+    assert rows[0]["label"] == "mev-bot"
+
+
+def test_handle_smart_money_summary_empty_transfers() -> None:
+    assert handle_smart_money_summary([], {_SMART_ADDR: "x"}) == []
+
+
+def test_handle_smart_money_summary_empty_watchlist() -> None:
+    assert handle_smart_money_summary(_SMART_TRANSFERS, {}) == []
+    assert handle_smart_money_summary(_SMART_TRANSFERS, []) == []
+
+
+def test_handle_smart_money_summary_no_matching_activity() -> None:
+    rows = handle_smart_money_summary(
+        _SMART_TRANSFERS,
+        {"0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead": "ghost"},
+    )
+    assert rows == []
+
+
+def test_handle_smart_money_summary_aliases() -> None:
+    transfers = [
+        {
+            "from_address": _SMART_ADDR,
+            "to_address": _OTHER_ADDR,
+            "amount": "50",
+            "local_ts": "9",
+        }
+    ]
+    rows = handle_smart_money_summary(transfers, {_SMART_ADDR: "smart"})
+    assert len(rows) == 1
+    assert rows[0]["net_flow_usd"] == -50.0
+    assert rows[0]["total_volume_usd"] == 50.0
+    assert rows[0]["last_active_ts"] == 9
+    assert rows[0]["label"] == "smart"
+
+
+def test_handle_smart_money_summary_not_list_raises() -> None:
+    with pytest.raises(TypeError, match="list of dicts"):
+        handle_smart_money_summary(
+            {"from": _SMART_ADDR},  # type: ignore[arg-type]
+            {_SMART_ADDR: "x"},
+        )
+
+
+def test_handle_smart_money_summary_bad_row_raises() -> None:
+    with pytest.raises(TypeError, match="transfers\\[0\\]"):
+        handle_smart_money_summary(
+            ["not-a-dict"],  # type: ignore[list-item]
+            {_SMART_ADDR: "x"},
+        )
+
+
+def test_handle_smart_money_summary_bad_watchlist_raises() -> None:
+    with pytest.raises(TypeError, match="watchlist"):
+        handle_smart_money_summary(_SMART_TRANSFERS, "0xabc")  # type: ignore[arg-type]
+
+
+def test_handle_smart_money_summary_matches_analytics() -> None:
+    from crypcodile.analytics.smart_money import summarize_smart_money
+
+    watchlist = {_SMART_ADDR: "vitalik"}
+    rows = handle_smart_money_summary(_SMART_TRANSFERS, watchlist)
+    expected = summarize_smart_money(_SMART_TRANSFERS, watchlist)
+    assert rows == expected
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -778,3 +892,11 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "sender",
         "is_buy",
     }
+    assert set(by_name["smart_money_summary"]["inputSchema"]["required"]) == {
+        "transfers",
+        "watchlist",
+    }
+    sm_props = by_name["smart_money_summary"]["inputSchema"]["properties"]
+    assert sm_props["transfers"]["type"] == "array"
+    assert sm_props["transfers"]["items"]["type"] == "object"
+    assert "watchlist" in sm_props
