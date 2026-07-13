@@ -6,6 +6,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **MCP list_symbols tool**: `list_symbols` wraps inventory distinct symbols with optional `channel` / `exchange` filters (empty/whitespace → no filter; empty lake → `[]`; listed in capabilities `mcp_tools_hint`). Lighter than `inventory_snapshot`; mirrors REST `GET /api/v1/catalog/symbols`.
 - **API catalog symbols discovery**: `GET /api/v1/catalog/symbols?channel=&exchange=` returns sorted distinct inventory symbols (lighter than full inventory rows; empty/whitespace filters → no filter; empty lake → `[]`; listed in capabilities).
 - **MCP search_symbols exchange filter**: `search_symbols` accepts optional `exchange` (alongside existing `channel` / `limit`) and forwards it to `client.search_symbols` — parity with REST/CLI/Catalog.
 - **API catalog/search channel + exchange filters**: `GET /api/v1/catalog/search` accepts optional `channel` and `exchange` query params (empty/whitespace → no filter; values stripped) and forwards them to `client.search_symbols` — parity with CLI `search` / `Catalog.search_symbols`.

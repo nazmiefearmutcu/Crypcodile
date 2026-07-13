@@ -1491,6 +1491,7 @@ _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
     "list_exchanges_on_disk",
     "catalog_summary",
     "search_symbols",
+    "list_symbols",
     "data_coverage",
     "inventory_snapshot",
     "query_market_data",

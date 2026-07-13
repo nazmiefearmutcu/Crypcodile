@@ -445,6 +445,26 @@ def handle_inventory_snapshot(
     return _json_safe_records(inv.to_dicts())
 
 
+def handle_list_symbols(
+    client: CrypcodileClient,
+    channel: str | None = None,
+    exchange: str | None = None,
+) -> list[str]:
+    """Return sorted distinct symbols from lake inventory.
+
+    Mirrors REST ``GET /api/v1/catalog/symbols``: optional *channel* and
+    *exchange* filters (empty/whitespace → no filter). Empty lake or no
+    match → ``[]``. Lighter than :func:`handle_inventory_snapshot` (symbol
+    strings only, no per-channel coverage rows).
+    """
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+    inv = client.inventory(channel=ch, exchange=ex)
+    if len(inv) == 0:
+        return []
+    return sorted(inv["symbol"].unique().to_list())
+
+
 def handle_estimate_slippage(
     client: CrypcodileClient,
     symbol: str,
@@ -1076,6 +1096,30 @@ TOOLS = [
             "Return the full data-lake inventory snapshot: exchange, channel, "
             "symbol, min_ts, max_ts, row_count. Optional channel and exchange "
             "filters. Empty lake or no matches returns []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "description": "Optional channel filter (e.g. 'trade').",
+                },
+                "exchange": {
+                    "type": "string",
+                    "description": "Optional exchange filter (e.g. 'deribit').",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_symbols",
+        "description": (
+            "List distinct symbols present in the data lake inventory "
+            "(sorted). Lighter than inventory_snapshot: returns symbol "
+            "strings only. Optional channel and exchange filters "
+            "(empty/whitespace → no filter). Empty lake or no matches "
+            "returns []. Mirrors REST GET /api/v1/catalog/symbols."
         ),
         "inputSchema": {
             "type": "object",
@@ -2013,6 +2057,17 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"inventory_snapshot failed: {e}"
+                            }
+                    elif tool_name == "list_symbols":
+                        try:
+                            ch = arguments.get("channel")
+                            ex = arguments.get("exchange")
+                            tool_result = handle_list_symbols(
+                                client, channel=ch, exchange=ex
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"list_symbols failed: {e}"
                             }
                     elif tool_name == "estimate_slippage":
                         try:

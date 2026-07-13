@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–52 COMPLETE. Continuous loop still active → Wave 53+.
+**Status:** Waves 1–53 COMPLETE. Continuous loop still active → Wave 54+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -408,7 +408,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | REST `GET /api/v1/catalog/symbols?channel=&exchange=` distinct sorted symbols from inventory + capabilities | DONE | `f152671` |
 | 4 | Tests: MCP exchange filter; catalog symbols empty/distinct/filters/strip/route; capabilities includes symbols | DONE | `f152671` |
 
-## Next rotation ideas (Wave 53+)
+## Wave 53 — Feature (MCP list_symbols) + broad discovery regression — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | MCP `list_symbols` wrapping inventory distinct sorted symbols; optional channel/exchange (strip empty → no filter); TOOLS + tools/call + capabilities hint | DONE | (this wave) |
+| 2 | Tests: empty/data/channel/exchange/strip/delegate; TOOLS schema; capabilities includes `list_symbols` | DONE | (this wave) |
+| 3 | Broad regression: mcp_discovery, mcp_analytics, api_endpoints, catalog, catalog_search, client search, json_safe, factory — all green | DONE | (this wave) |
+
+## Next rotation ideas (Wave 54+)
 
 Priority candidates for the next cycles:
 
@@ -417,6 +425,7 @@ Priority candidates for the next cycles:
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 5. **CLI catalog-dates** — surface `list_dates` on CLI (REST + MCP already exist)  
+6. **CLI catalog-symbols** — surface `list_symbols` on CLI (REST + MCP already exist)  
 
 
 
@@ -481,3 +490,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 50: broad regression green (714→719 after +5 tests); CLI catalog filesystem list_channels; `_create_view` empty-partition skip; `--symbols` still inventories with empty dirs present
 - Wave 51: REST `GET /api/v1/catalog/search` optional `channel`/`exchange` filters (parity with CLI search / Catalog.search_symbols)
 - Wave 52: MCP `search_symbols` exchange filter; REST `GET /api/v1/catalog/symbols` distinct inventory symbols; inventory_snapshot filters verified
+- Wave 53: MCP `list_symbols` (inventory distinct symbols + channel/exchange filters; REST catalog/symbols parity); broad discovery regression 537 passed

@@ -68,6 +68,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert "list_exchanges_on_disk" in names
     assert "catalog_summary" in names
     assert "search_symbols" in names
+    assert "list_symbols" in names
     assert "data_coverage" in names
     assert "inventory_snapshot" in names
 
@@ -349,3 +350,130 @@ async def test_inventory_snapshot_exchange_filter(tmp_path: pathlib.Path) -> Non
     assert len(rows) >= 2
     assert all(r["exchange"] == "deribit" for r in rows)
     assert handle_inventory_snapshot(client, exchange="binance") == []
+
+
+def test_list_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_symbols, TOOLS
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_symbols(client) == []
+    names = {t["name"] for t in TOOLS}
+    assert "list_symbols" in names
+    tool = next(t for t in TOOLS if t["name"] == "list_symbols")
+    assert "channel" in tool["inputSchema"]["properties"]
+    assert "exchange" in tool["inputSchema"]["properties"]
+    assert tool["inputSchema"]["required"] == []
+
+
+async def test_list_symbols_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_symbols
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    symbols = handle_list_symbols(client)
+    assert symbols == ["deribit:BTC-PERPETUAL"]
+
+
+async def test_list_symbols_channel_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_symbols
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_symbols(client, channel="trade") == [
+        "deribit:BTC-PERPETUAL"
+    ]
+    assert handle_list_symbols(client, channel="no_such_channel") == []
+
+
+async def test_list_symbols_exchange_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_symbols
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_symbols(client, exchange="deribit") == [
+        "deribit:BTC-PERPETUAL"
+    ]
+    assert handle_list_symbols(client, exchange="binance") == []
+
+
+def test_list_symbols_strips_empty_filters() -> None:
+    """Empty/whitespace channel/exchange treated as no filter (REST parity)."""
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_list_symbols
+
+    client = MagicMock()
+    client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit", "deribit", "binance"],
+            "channel": ["trade", "book_snapshot", "trade"],
+            "symbol": [
+                "deribit:BTC-PERPETUAL",
+                "deribit:BTC-PERPETUAL",
+                "binance:BTCUSDT",
+            ],
+            "min_ts": [1, 2, 3],
+            "max_ts": [2, 3, 4],
+            "row_count": [10, 5, 7],
+        }
+    )
+    result = handle_list_symbols(client, channel="  ", exchange="")
+    assert result == ["binance:BTCUSDT", "deribit:BTC-PERPETUAL"]
+    client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_list_symbols_strips_padded_filters() -> None:
+    """Padded channel/exchange are stripped before inventory call."""
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_list_symbols
+
+    client = MagicMock()
+    client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    result = handle_list_symbols(
+        client, channel="  trade  ", exchange="  deribit  "
+    )
+    assert result == ["deribit:BTC-PERPETUAL"]
+    client.inventory.assert_called_once_with(
+        channel="trade", exchange="deribit"
+    )
+
+
+def test_list_symbols_delegates_to_inventory() -> None:
+    """Handler is a thin inventory → distinct sorted symbols wrapper."""
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_list_symbols
+
+    client = MagicMock()
+    client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    assert handle_list_symbols(client) == []
+    client.inventory.assert_called_once_with(channel=None, exchange=None)
