@@ -1465,10 +1465,12 @@ class BaseOnchainConnector(Connector):
         out: Sink,
         registry: InstrumentRegistry,
         custom_pools: dict[str, dict[str, Any]] | None = None,
+        rpc_url: str | list[str] | None = None,
         **kwargs: Any
     ) -> None:
         super().__init__(symbols=symbols, channels=channels, out=out, registry=registry)
-        rpc_url = os.getenv("BASE_RPC_URL", DEFAULT_RPC_URL)
+        if rpc_url is None:
+            rpc_url = os.getenv("BASE_RPC_URL", DEFAULT_RPC_URL)
         _register_custom_pools(custom_pools)
         self.transport = BaseOnchainTransport(rpc_url, symbols, custom_pools=custom_pools, exchange=self.name)
 

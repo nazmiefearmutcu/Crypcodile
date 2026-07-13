@@ -45,7 +45,9 @@ def test_list_exchanges_sorted() -> None:
         "deribit",
         "gmx_synthetix",
         "okx",
+        "superchain",
     ]
+    assert "superchain" in names
 
 
 def test_list_exchanges_returns_copy() -> None:
@@ -115,6 +117,33 @@ def test_make_connector_base_onchain() -> None:
     assert isinstance(conn, BaseOnchainConnector)
 
 
+def test_make_connector_superchain() -> None:
+    from unittest.mock import MagicMock, patch
+
+    from crypcodile.exchanges.superchain.connector import SuperchainConnector
+
+    mock_transport = MagicMock()
+    mock_transport.rpc_urls = ["http://localhost:8545"]
+    with patch(
+        "crypcodile.exchanges.base_onchain.connector.BaseOnchainTransport",
+        return_value=mock_transport,
+    ) as mock_cls:
+        # Default SuperchainConnector.exchange is "optimism"; do not pass
+        # exchange= here — it collides with make_connector's exchange name.
+        conn = _make(
+            "superchain",
+            rpc_url="http://localhost:8545",
+            chain_id=10,
+        )
+    assert isinstance(conn, SuperchainConnector)
+    assert conn.chain_id == 10
+    assert conn.name == "optimism"
+    mock_cls.assert_called_once()
+    # rpc_url is the first positional arg to BaseOnchainTransport
+    assert mock_cls.call_args.args[0] == "http://localhost:8545"
+    assert conn.transport is mock_transport
+
+
 # ---------------------------------------------------------------------------
 # Unknown exchange raises a clear ValueError
 # ---------------------------------------------------------------------------
@@ -125,7 +154,15 @@ def test_make_connector_unknown_raises() -> None:
         _make("unknownexchange")
     # Error message must list all valid names
     msg = str(exc_info.value)
-    for name in ("binance", "bybit", "okx", "coinbase", "deribit", "base_onchain"):
+    for name in (
+        "binance",
+        "bybit",
+        "okx",
+        "coinbase",
+        "deribit",
+        "base_onchain",
+        "superchain",
+    ):
         assert name in msg, f"Expected {name!r} in error message: {msg!r}"
 
 

@@ -14,7 +14,7 @@ Usage::
     )
 
 Valid exchange names: ``binance``, ``bybit``, ``coinbase``, ``deribit``,
-``okx``, ``base_onchain``, ``gmx_synthetix``.
+``okx``, ``base_onchain``, ``gmx_synthetix``, ``superchain``.
 Extra keyword arguments (e.g. ``market`` for Binance, ``category`` for Bybit,
 ``region`` for OKX) are forwarded to the connector constructor unchanged.
 """
@@ -31,6 +31,7 @@ from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
 from crypcodile.exchanges.deribit.connector import DeribitConnector
 from crypcodile.exchanges.okx.connector import OKXConnector
 from crypcodile.exchanges.gmx_synthetix.connector import GMXSynthetixConnector
+from crypcodile.exchanges.superchain.connector import SuperchainConnector
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.sink.base import Sink
 
@@ -42,6 +43,7 @@ _REGISTRY: dict[str, type[Connector]] = {
     "okx": OKXConnector,
     "base_onchain": BaseOnchainConnector,
     "gmx_synthetix": GMXSynthetixConnector,
+    "superchain": SuperchainConnector,
 }
 
 
@@ -68,7 +70,7 @@ def make_connector(
     exchange:
         Lowercase exchange name.  Valid values: ``binance``, ``bybit``,
         ``coinbase``, ``deribit``, ``okx``, ``base_onchain``,
-        ``gmx_synthetix``.
+        ``gmx_synthetix``, ``superchain``.
     symbols:
         List of symbol strings to subscribe to (exchange-native format).
     channels:

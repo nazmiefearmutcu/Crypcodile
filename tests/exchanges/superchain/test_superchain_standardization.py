@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from crypcodile.exchanges.superchain.gas_oracle import SuperchainGasOracle
@@ -33,10 +35,14 @@ async def test_superchain_gas_oracle_queries():
     l1_fee = await oracle.get_l1_fee_for_calldata(w3, b"\x00\x01\x02")
     assert l1_fee == 456
 
-def test_superchain_connector_initialization():
+def test_superchain_connector_initialization(monkeypatch):
     registry = InstrumentRegistry()
     sink = MagicMock(spec=Sink)
-    
+
+    # Ensure parent would not pick up RPC from a polluted environment.
+    monkeypatch.delenv("BASE_RPC_URL", raising=False)
+    before_env = dict(os.environ)
+
     # Test initialization with standard settings
     connector = SuperchainConnector(
         symbols=["AERO-USDC"],
@@ -44,8 +50,11 @@ def test_superchain_connector_initialization():
         out=sink,
         registry=registry,
         rpc_url="http://localhost:8545",
-        chain_id=10 # Optimism
+        chain_id=10,  # Optimism
     )
-    
+
     assert connector.chain_id == 10
     assert connector.transport.rpc_urls == ["http://localhost:8545"]
+    # Must not mutate process environment for RPC configuration.
+    assert os.environ.get("BASE_RPC_URL") is None
+    assert os.environ == before_env
