@@ -1556,3 +1556,216 @@ def test_indicators_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/indicators", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/ofi — order flow imbalance (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_ofi_empty_symbol_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        result = asyncio.run(ofi(symbol="", start=0, end=100))
+        result_ws = asyncio.run(ofi(symbol="  ", start=0, end=100))
+    assert result == []
+    assert result_ws == []
+    mock_client.calculate_ofi.assert_not_called()
+
+
+def test_ofi_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import ofi
+
+    result = asyncio.run(
+        ofi(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18, interval="1m")
+    )
+    assert result == []
+
+
+def test_ofi_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        result = asyncio.run(
+            ofi(symbol="deribit:BTC-PERPETUAL", start=0, end=100, interval="1m")
+        )
+    assert result == []
+    mock_client.calculate_ofi.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 0, 100, "1m"
+    )
+
+
+def test_ofi_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame(
+        {
+            "timestamp": [100, 200],
+            "best_bid": [100.0, 101.0],
+            "best_ask": [100.5, 101.5],
+            "ofi": [1.5, -0.5],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        result = asyncio.run(
+            ofi(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                interval="5m",
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["timestamp"] == 100
+    assert result[0]["best_bid"] == 100.0
+    assert result[0]["ofi"] == 1.5
+    assert result[1]["timestamp"] == 200
+    assert result[1]["ofi"] == -0.5
+    mock_client.calculate_ofi.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 0, 1000, "5m"
+    )
+
+
+def test_ofi_strips_whitespace_symbol_and_interval() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        asyncio.run(
+            ofi(
+                symbol="  binance:BTCUSDT  ",
+                start=1,
+                end=2,
+                interval=" 1h ",
+            )
+        )
+    mock_client.calculate_ofi.assert_called_once_with(
+        "binance:BTCUSDT", 1, 2, "1h"
+    )
+
+
+def test_ofi_default_interval_is_1m() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        asyncio.run(ofi(symbol="x", start=0, end=1, interval=""))
+    mock_client.calculate_ofi.assert_called_once_with("x", 0, 1, "1m")
+
+
+def test_ofi_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame(
+        {
+            "timestamp": [1, 2, 3, 4, 5],
+            "best_bid": [100.0] * 5,
+            "best_ask": [100.5] * 5,
+            "ofi": [0.1, 0.2, 0.3, 0.4, 0.5],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        result = asyncio.run(ofi(symbol="x", start=0, end=99, limit=2))
+    assert len(result) == 2
+    assert result[0]["timestamp"] == 1
+    assert result[1]["timestamp"] == 2
+
+
+def test_ofi_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame(
+        {
+            "timestamp": list(range(20)),
+            "best_bid": [100.0] * 20,
+            "best_ask": [100.5] * 20,
+            "ofi": [0.1] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _OFI_MAX_LIMIT, ofi
+
+        result = asyncio.run(
+            ofi(
+                symbol="x",
+                start=0,
+                end=1,
+                limit=_OFI_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.calculate_ofi.assert_called_once()
+
+
+def test_ofi_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame(
+        {
+            "timestamp": [1, 2, 3],
+            "best_bid": [100.0, 101.0, 102.0],
+            "best_ask": [100.5, 101.5, 102.5],
+            "ofi": [0.1, 0.2, 0.3],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        result = asyncio.run(ofi(symbol="x", start=0, end=1, limit=0))
+    assert len(result) == 1
+    assert result[0]["timestamp"] == 1
+
+
+def test_ofi_invalid_interval_400() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.side_effect = ValueError(
+        "Unknown interval unit 'x' in '1x'. Supported units are s, m, h, d."
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                ofi(
+                    symbol="deribit:BTC-PERPETUAL",
+                    start=0,
+                    end=1,
+                    interval="1x",
+                )
+            )
+    assert exc_info.value.status_code == 400
+    assert "1x" in str(exc_info.value.detail)
+
+
+def test_ofi_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                ofi(symbol="deribit:BTC-PERPETUAL", start=0, end=1, interval="1m")
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "OFI query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_ofi_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/ofi."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/ofi", ("GET",)) in paths

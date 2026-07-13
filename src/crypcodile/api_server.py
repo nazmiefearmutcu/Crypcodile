@@ -1415,6 +1415,7 @@ _OPEN_INTEREST_MAX_LIMIT = 10_000
 _FUNDING_APR_MAX_LIMIT = 10_000
 _BASIS_MAX_LIMIT = 10_000
 _INDICATORS_MAX_LIMIT = 10_000
+_OFI_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1689,6 +1690,54 @@ async def indicators(
         raise HTTPException(
             status_code=500,
             detail="Indicators query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/ofi")
+async def ofi(
+    symbol: str = "",
+    start: int = 0,
+    end: int = 0,
+    interval: str = "1m",
+    limit: int = _OFI_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Order Flow Imbalance (OFI) over time-binned book snapshots (read-only, no payment).
+
+    Query params: ``symbol`` (canonical, e.g. ``deribit:BTC-PERPETUAL``),
+    ``start`` / ``end`` as nanoseconds UTC (inclusive bounds on ``local_ts``),
+    ``interval`` bin size (e.g. ``1s``, ``1m``, ``5m``, ``1h``; default ``1m``).
+
+    Wraps :meth:`CrypcodileClient.calculate_ofi`. Returns at most ``limit``
+    rows (default and hard max: 10000). Empty/missing ``symbol``, empty lake,
+    or no matching snapshots yields ``[]``. Invalid ``interval`` strings yield 400.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _OFI_MAX_LIMIT:
+        limit = _OFI_MAX_LIMIT
+
+    interval_s = (interval or "").strip() or "1m"
+
+    client = _get_lake_client()
+    try:
+        df = client.calculate_ofi(sym, start, end, interval_s)
+    except ValueError as e:
+        # Invalid interval strings are intentional client-facing validation.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("OFI query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="OFI query failed.",
         ) from e
 
     if len(df) == 0:
