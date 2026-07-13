@@ -229,6 +229,12 @@ class CrypcodileClient:
         if not symbols:
             return []
 
+        # Treat empty / whitespace channel as "no filter". Catalog.inventory
+        # treats a non-None channel that is not registered as an empty result,
+        # so "" would otherwise falsely resolve nothing.
+        if isinstance(channel, str):
+            channel = channel.strip() or None
+
         inv = self.inventory(channel=channel)
         known: set[str] = set()
         if len(inv) > 0:

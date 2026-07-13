@@ -246,3 +246,17 @@ async def test_resolve_channel_filter(tmp_path: pathlib.Path) -> None:
     client = CrypcodileClient(data_dir=tmp_path)
     out = client.resolve_symbols(["BTC-PERPETUAL"], channel="trade")
     assert out == ["deribit:BTC-PERPETUAL"]
+
+
+async def test_resolve_empty_channel_treated_as_none(tmp_path: pathlib.Path) -> None:
+    """Empty / whitespace channel must not filter inventory to nothing."""
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.resolve_symbols(["BTC-PERPETUAL"], channel="") == [
+        "deribit:BTC-PERPETUAL"
+    ]
+    assert client.resolve_symbols(["BTC-PERPETUAL"], channel="   ") == [
+        "deribit:BTC-PERPETUAL"
+    ]
