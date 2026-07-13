@@ -473,7 +473,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 1 | REST `GET /api/v1/catalog/stats` → `{row_counts, channel_count}` via list_channels + per-channel COUNT(*) (try/except → -1); capabilities entry | DONE | `7ebac63` |
 | 2 | Tests: empty lake, mock counts, query fail → -1, quote escape, route registered, capabilities | DONE | `7ebac63` |
 
-## Next rotation ideas (Wave 61+)
+## Wave 61 — Feature (MCP catalog_stats + CLI catalog-stats) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | MCP `catalog_stats` tool: handler + TOOLS + tools/call + capabilities hint; list_channels + COUNT(*) (-1 on fail); mirrors REST | DONE | `a10192a` |
+| 2 | CLI `catalog-stats`: same logic; empty → channel_count 0 / row_counts (none); module docstring + --help | DONE | `a10192a` |
+| 3 | Tests: MCP empty/data/mock/fail/-1/quote; CLI empty/data/mock/fail/quote/help; capabilities includes catalog_stats; critical suites **448 passed** | DONE | `a10192a` |
+
+## Next rotation ideas (Wave 62+)
 
 Priority candidates for the next cycles:
 
@@ -481,7 +489,7 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **MCP / CLI catalog-stats surface** — mirror REST stats for agents/CLI  
+
 
 
 
@@ -555,3 +563,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 58: CLI `list-exchanges` + MCP `list_registered_exchanges` (factory connector registry; ≠ lake on-disk)
 - Wave 59: broad regression green (798→799 after +1 test); list-exchanges `--help` main listing + module docstring lock
 - Wave 60: REST `GET /api/v1/catalog/stats` per-channel row counts (list_channels + COUNT(*); -1 on fail; no inventory)
+- Wave 61: MCP `catalog_stats` + CLI `catalog-stats` (REST stats parity for agents/CLI)
