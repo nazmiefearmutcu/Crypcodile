@@ -1413,6 +1413,7 @@ _CATALOG_SCAN_MAX_LIMIT = 10_000
 _QUERY_MAX_LIMIT = 10_000
 _OPEN_INTEREST_MAX_LIMIT = 10_000
 _FUNDING_APR_MAX_LIMIT = 10_000
+_BASIS_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1581,6 +1582,50 @@ async def funding_apr(
         raise HTTPException(
             status_code=500,
             detail="Funding APR query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/basis")
+async def basis(
+    spot: str = "",
+    perp: str = "",
+    start: int = 0,
+    end: int = 0,
+    limit: int = _BASIS_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Spot–perp basis via ASOF join (read-only, no payment).
+
+    Query params: ``spot`` and ``perp`` canonical symbols (e.g.
+    ``deribit:BTC-SPOT``, ``deribit:BTC-PERPETUAL``), ``start`` / ``end`` as
+    nanoseconds UTC (inclusive bounds on ``local_ts``).
+
+    Wraps :meth:`CrypcodileClient.spot_perp_basis`. Returns at most ``limit``
+    rows (default and hard max: 10000). Empty/missing ``spot`` or ``perp``,
+    empty lake, or no matching rows yields ``[]``.
+    """
+    spot_sym = (spot or "").strip()
+    perp_sym = (perp or "").strip()
+    if not spot_sym or not perp_sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _BASIS_MAX_LIMIT:
+        limit = _BASIS_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.spot_perp_basis(spot_sym, perp_sym, start, end)
+    except Exception as e:
+        log.error("Spot-perp basis query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Spot-perp basis query failed.",
         ) from e
 
     if len(df) == 0:

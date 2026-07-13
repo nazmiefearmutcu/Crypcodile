@@ -1094,3 +1094,207 @@ def test_funding_apr_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/funding-apr", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/basis — spot-perp basis (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_basis_missing_params_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        assert asyncio.run(basis(spot="", perp="deribit:BTC-PERPETUAL")) == []
+        assert asyncio.run(basis(spot="deribit:BTC-SPOT", perp="")) == []
+        assert asyncio.run(basis(spot="  ", perp="  ")) == []
+        assert asyncio.run(basis(spot="", perp="")) == []
+    mock_client.spot_perp_basis.assert_not_called()
+
+
+def test_basis_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import basis
+
+    result = asyncio.run(
+        basis(
+            spot="deribit:BTC-SPOT",
+            perp="deribit:BTC-PERPETUAL",
+            start=0,
+            end=10**18,
+        )
+    )
+    assert result == []
+
+
+def test_basis_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        result = asyncio.run(
+            basis(
+                spot="deribit:BTC-SPOT",
+                perp="deribit:BTC-PERPETUAL",
+                start=0,
+                end=100,
+            )
+        )
+    assert result == []
+    mock_client.spot_perp_basis.assert_called_once_with(
+        "deribit:BTC-SPOT", "deribit:BTC-PERPETUAL", 0, 100
+    )
+
+
+def test_basis_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [100, 200],
+            "spot_price": [50000.0, 50100.0],
+            "perp_price": [50100.0, 50200.0],
+            "basis": [100.0, 100.0],
+            "basis_pct": [0.002, 0.001996],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        result = asyncio.run(
+            basis(
+                spot="deribit:BTC-SPOT",
+                perp="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 100
+    assert result[0]["spot_price"] == 50000.0
+    assert result[0]["perp_price"] == 50100.0
+    assert result[0]["basis"] == 100.0
+    assert result[1]["local_ts"] == 200
+    mock_client.spot_perp_basis.assert_called_once_with(
+        "deribit:BTC-SPOT", "deribit:BTC-PERPETUAL", 0, 1000
+    )
+
+
+def test_basis_strips_whitespace_symbols() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        asyncio.run(
+            basis(
+                spot="  deribit:BTC-SPOT  ",
+                perp="  deribit:BTC-PERPETUAL  ",
+                start=1,
+                end=2,
+            )
+        )
+    mock_client.spot_perp_basis.assert_called_once_with(
+        "deribit:BTC-SPOT", "deribit:BTC-PERPETUAL", 1, 2
+    )
+
+
+def test_basis_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3, 4, 5],
+            "spot_price": [100.0] * 5,
+            "perp_price": [101.0] * 5,
+            "basis": [1.0] * 5,
+            "basis_pct": [0.01] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        result = asyncio.run(
+            basis(spot="s", perp="p", start=0, end=99, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 1
+    assert result[1]["local_ts"] == 2
+
+
+def test_basis_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": list(range(20)),
+            "spot_price": [100.0] * 20,
+            "perp_price": [101.0] * 20,
+            "basis": [1.0] * 20,
+            "basis_pct": [0.01] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _BASIS_MAX_LIMIT, basis
+
+        result = asyncio.run(
+            basis(
+                spot="s",
+                perp="p",
+                start=0,
+                end=1,
+                limit=_BASIS_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.spot_perp_basis.assert_called_once()
+
+
+def test_basis_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3],
+            "spot_price": [100.0, 101.0, 102.0],
+            "perp_price": [101.0, 102.0, 103.0],
+            "basis": [1.0, 1.0, 1.0],
+            "basis_pct": [0.01, 0.01, 0.01],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        result = asyncio.run(basis(spot="s", perp="p", start=0, end=1, limit=0))
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 1
+
+
+def test_basis_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                basis(
+                    spot="deribit:BTC-SPOT",
+                    perp="deribit:BTC-PERPETUAL",
+                    start=0,
+                    end=1,
+                )
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Spot-perp basis query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_basis_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/basis."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/basis", ("GET",)) in paths
