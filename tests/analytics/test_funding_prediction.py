@@ -21,7 +21,7 @@ def test_predictor_fallback_rolling_mean_untrained_df() -> None:
     assert isinstance(preds, pl.Series)
     assert len(preds) == 5
 
-    # Check rolling mean with window_size=5, min_periods=1:
+    # Check rolling mean with window_size=5, min_samples=1:
     # index 0: mean([0.01]) = 0.01
     # index 1: mean([0.01, 0.02]) = 0.015
     # index 2: mean([0.01, 0.02, 0.03]) = 0.02

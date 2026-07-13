@@ -195,7 +195,7 @@ class XGBoostFundingPredictor:
             if self.target_col in current_features.columns:
                 try:
                     rolling_mean = current_features[self.target_col].rolling_mean(
-                        window_size=self.window_size, min_periods=1
+                        window_size=self.window_size, min_samples=1
                     )
                     if rolling_mean.null_count() > 0:
                         rolling_mean = rolling_mean.fill_null(self._fallback_mean)
