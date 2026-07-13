@@ -366,7 +366,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | REST `GET /api/v1/catalog/summary` → `{channels, exchanges_on_disk, exchange_count, channel_count}` + capabilities entry | DONE | `ab6b353253210e6b08b1cd70ae792edfed90dab4` |
 | 3 | Tests: empty lake + mock lists/counts; capabilities includes catalog/summary | DONE | `ab6b353253210e6b08b1cd70ae792edfed90dab4` |
 
-## Next rotation ideas (Wave 48+)
+## Wave 48 — Feature (MCP catalog_summary) + docs polish — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | MCP `catalog_summary` tool wrapping channels + exchanges_on_disk with counts (handler, TOOLS, tools/call, capabilities hint) | DONE | `43a246af61467e0567d9909010a1646dec53e7b9` |
+| 2 | Small fix: README discovery section lists MCP catalog tools (`list_exchanges_on_disk`, `catalog_summary`) | DONE | `43a246af61467e0567d9909010a1646dec53e7b9` |
+| 3 | Tests: MCP empty/data/delegate; capabilities includes catalog_summary | DONE | `43a246af61467e0567d9909010a1646dec53e7b9` |
+
+## Next rotation ideas (Wave 49+)
 
 Priority candidates for the next cycles:
 
@@ -374,7 +382,6 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **MCP catalog_summary** — mirror REST summary over MCP if agents need it without HTTP  
 
 
 
@@ -434,3 +441,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 45: REST `GET /api/v1/catalog/exchanges` via Catalog/Client `list_exchanges_on_disk` (filesystem exchange partition discovery; ≠ factory `list_exchanges`)
 - Wave 46: MCP `list_exchanges_on_disk` tool + filesystem `Catalog.list_channels` (empty partitions without DuckDB)
 - Wave 47: broad regression green (645→647 after +2 tests); REST `GET /api/v1/catalog/summary` agent discovery
+- Wave 48: MCP `catalog_summary` mirrors REST summary; README MCP discovery list updated
