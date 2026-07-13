@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–27 COMPLETE. Continuous loop still active → Wave 28+.
+**Status:** Waves 1–28 COMPLETE. Continuous loop still active → Wave 29+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -214,7 +214,14 @@
 | 1 | REST `GET /api/v1/resolve-symbols` (symbols/channel/ambiguous → client.resolve_symbols) | DONE | `08808cf` |
 | 2 | Fix `resolve_symbols` empty/whitespace channel treated as no filter | DONE | `3cf669d` |
 
-## Next rotation ideas (Wave 28+)
+## Wave 28 — Feature (health/status REST) + bugfix — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/health` + `/api/v1/status` (`ok`, `__version__`, `lake_channels` count; no payment) | DONE | `63e879b` |
+| 2 | Fix `Catalog.inventory` empty/whitespace channel/exchange treated as no filter | DONE | `ed1f812` |
+
+## Next rotation ideas (Wave 29+)
 
 Priority candidates for the next cycles:
 
@@ -259,4 +266,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 25: REST perp-basis (`client.perp_basis`); MCP `label_transfers`; skip bulk export HTTP
 - Wave 26: REST spot-future-basis (`client.spot_future_basis`); catalog search non-positive limit fix
 - Wave 27: REST resolve-symbols; empty-channel resolve_symbols fix
-- Post–waves 24–27: continuous loop still active; queue Wave 28+ (see Next rotation ideas)
+- Wave 28: REST health/status probe; catalog inventory empty filter fix
