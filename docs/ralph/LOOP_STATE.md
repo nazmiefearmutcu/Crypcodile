@@ -330,9 +330,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | `Catalog.list_dates(channel)` + client wrapper (filesystem hive `date=` partitions; path-safe) | DONE | (pending) |
-| 2 | REST `GET /api/v1/catalog/dates?channel=` + capabilities entry | DONE | (pending) |
-| 3 | Tests: store list_dates + API empty/mock/strip; capabilities includes dates | DONE | (pending) |
+| 1 | `Catalog.list_dates(channel)` + client wrapper (filesystem hive `date=` partitions; path-safe) | DONE | `992010d` |
+| 2 | REST `GET /api/v1/catalog/dates?channel=` + capabilities entry | DONE | `992010d` |
+| 3 | Tests: store list_dates + API empty/mock/strip; capabilities includes dates | DONE | `992010d` |
 
 ## Next rotation ideas (Wave 44+)
 
