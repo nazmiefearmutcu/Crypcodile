@@ -4191,3 +4191,73 @@ def test_resolve_symbols_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/resolve-symbols", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/health and /api/v1/status — lightweight probe (no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_health_empty_lake(tmp_path, monkeypatch) -> None:
+    """Empty / missing lake still reports ok with lake_channels=0."""
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile import __version__
+    from crypcodile.api_server import health
+
+    result = asyncio.run(health())
+    assert result == {
+        "ok": True,
+        "version": __version__,
+        "lake_channels": 0,
+    }
+
+
+def test_health_returns_channel_count() -> None:
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile import __version__
+        from crypcodile.api_server import health
+
+        result = asyncio.run(health())
+    assert result["ok"] is True
+    assert result["version"] == __version__
+    assert result["lake_channels"] == 2
+    mock_client.list_channels.assert_called_once_with()
+
+
+def test_status_alias_matches_health() -> None:
+    """GET /api/v1/status is the same payload as /api/v1/health."""
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import health, status
+
+        h = asyncio.run(health())
+        s = asyncio.run(status())
+    assert h == s
+    assert s["ok"] is True
+    assert s["lake_channels"] == 1
+
+
+def test_health_lake_failure_reports_not_ok() -> None:
+    mock_client = MagicMock()
+    mock_client.list_channels.side_effect = RuntimeError("disk failed")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile import __version__
+        from crypcodile.api_server import health
+
+        result = asyncio.run(health())
+    assert result["ok"] is False
+    assert result["version"] == __version__
+    assert result["lake_channels"] == 0
+    assert result["error"] == "lake_unavailable"
+
+
+def test_health_and_status_routes_registered() -> None:
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/health", ("GET",)) in paths
+    assert ("/api/v1/status", ("GET",)) in paths

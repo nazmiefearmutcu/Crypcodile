@@ -1370,6 +1370,49 @@ def _get_lake_client() -> Any:
     return CrypcodileClient(data_dir=Path(data_dir))
 
 
+async def _health_payload() -> dict[str, Any]:
+    """Build the lightweight health/status body (no payment).
+
+    Returns ``ok``, package ``version`` (``crypcodile.__version__``), and
+    ``lake_channels`` (count of channels registered in the local lake).
+    An empty or missing lake reports ``lake_channels: 0`` with ``ok: true``
+    so the process is still considered healthy for liveness probes.
+    """
+    client = _get_lake_client()
+    try:
+        channels = client.list_channels()
+        n = len(channels) if channels is not None else 0
+    except Exception as e:
+        log.warning("Health lake channel count failed: %s", e, exc_info=True)
+        return {
+            "ok": False,
+            "version": __version__,
+            "lake_channels": 0,
+            "error": "lake_unavailable",
+        }
+    return {
+        "ok": True,
+        "version": __version__,
+        "lake_channels": n,
+    }
+
+
+@app.get("/api/v1/health")
+async def health() -> dict[str, Any]:
+    """Lightweight liveness/readiness probe (read-only, no payment).
+
+    Response keys: ``ok`` (bool), ``version`` (str from
+    ``crypcodile.__version__``), ``lake_channels`` (int count).
+    """
+    return await _health_payload()
+
+
+@app.get("/api/v1/status")
+async def status() -> dict[str, Any]:
+    """Alias of :func:`health` (read-only, no payment)."""
+    return await _health_payload()
+
+
 @app.get("/api/v1/catalog/channels")
 async def catalog_list_channels() -> list[str]:
     """List data channels present in the local lake (read-only, no payment)."""
