@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–18 COMPLETE. Ready for Wave 19.
+**Status:** Waves 1–23 COMPLETE. Ready for Wave 24.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -165,11 +165,13 @@
 |---|------|--------|--------|
 | 1 | REST endpoint for open-interest aggregation | DONE | `8f80bd0` |
 
-## Wave 21 — Feature (OKX book resync) — COMPLETE
+## Wave 21 — Feature (OKX resync + risk REST + options surface) — COMPLETE
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST /market/books) | DONE | `71fec44` |
+| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST `/market/books`) | DONE | `71fec44` |
+| 2 | Base risk REST: `liquidity-depth`, `sequencer-latency`, `chaos-score`, `peg-deviation` | DONE | `73a8287` |
+| 3 | Options REST: `GET /api/v1/iv-surface`, `GET /api/v1/term-structure` | DONE | `7d41f7a` |
 
 ## Wave 22 — Feature (vol-skew + lending-stress REST) — COMPLETE
 
@@ -178,7 +180,13 @@
 | 1 | REST `GET /api/v1/vol-skew` (underlying/expiry_ns/at/rate/limit) | DONE | `fd92785` |
 | 2 | REST `GET /api/v1/lending-stress` pure CLI-matching query params | DONE | `fd92785` |
 
-## Next rotation ideas (Wave 23+)
+## Wave 23 — Feature (risk-reversal REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/risk-reversal` (vol_skew → risk_reversal_butterfly; target_delta) | DONE | `eb23611` |
+
+## Next rotation ideas (Wave 24+)
 
 Priority candidates for the next cycles:
 
@@ -186,8 +194,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
-5. **REST risk-reversal** — pair with vol-skew HTTP surface  
-6. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query/open-interest as needed  
+5. **Broader lake HTTP reads** — extend beyond catalog scan/inventory/query/open-interest as needed  
+6. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 ## Subagent policy
 
@@ -216,5 +224,6 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 18: REST open-interest endpoint (`GET /api/v1/open-interest`)
 - Wave 19: REST funding-apr / basis / indicators endpoints; MCP lending-stress / peg_deviation / MEV sandwich
 - Wave 20: REST OFI / whale-alerts / slippage endpoints
-- Wave 21: OKX book resync bridge (`OkxOrderBookSync` + REST `/market/books`)
+- Wave 21: OKX book resync bridge; base risk REST (depth/seq/chaos/peg); iv-surface / term-structure REST
 - Wave 22: REST vol-skew / lending-stress endpoints
+- Wave 23: REST risk-reversal (`vol_skew` → `risk_reversal_butterfly`)
