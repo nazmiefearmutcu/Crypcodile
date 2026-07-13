@@ -514,6 +514,28 @@ def handle_get_indicators(
     return df.to_dicts()
 
 
+def handle_get_liquidity_depth(
+    client: CrypcodileClient,
+    symbol: str,
+) -> list[dict[str, Any]]:
+    """Per-block bid/ask depth at ±1/2/5%; returns list of row dicts (empty → [])."""
+    df = client.calculate_block_liquidity_depth(symbol)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_get_sequencer_latency(
+    client: CrypcodileClient,
+    exchange: str = "base_onchain",
+) -> list[dict[str, Any]]:
+    """Sequencer production interval + ingestion delay; returns list of row dicts (empty → [])."""
+    df = client.calculate_sequencer_latency(exchange)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -975,6 +997,47 @@ TOOLS = [
             "required": ["symbol", "start", "end"],
         },
     },
+    {
+        "name": "get_liquidity_depth",
+        "description": (
+            "Calculate per-block bid/ask liquidity depth at ±1%, ±2%, ±5% from mid "
+            "using book snapshots. Columns: block, bid_depth_1pct, ask_depth_1pct, "
+            "bid_depth_2pct, ask_depth_2pct, bid_depth_5pct, ask_depth_5pct. "
+            "Empty lake / no snapshots → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical symbol (e.g. 'base_onchain:DEGEN-WETH')."
+                    ),
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+    {
+        "name": "get_sequencer_latency",
+        "description": (
+            "Measure sequencer block production intervals and local ingestion delay "
+            "from the data lake. Columns: metric, avg_seconds, max_seconds, "
+            "std_seconds. Empty lake / insufficient rows → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "exchange": {
+                    "type": "string",
+                    "description": (
+                        "Exchange name to measure (default 'base_onchain')."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1226,6 +1289,26 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"get_indicators failed: {e}"}
+                    elif tool_name == "get_liquidity_depth":
+                        try:
+                            tool_result = handle_get_liquidity_depth(
+                                client,
+                                arguments.get("symbol", ""),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_liquidity_depth failed: {e}"
+                            }
+                    elif tool_name == "get_sequencer_latency":
+                        try:
+                            tool_result = handle_get_sequencer_latency(
+                                client,
+                                arguments.get("exchange", "base_onchain"),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_sequencer_latency failed: {e}"
+                            }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
                     

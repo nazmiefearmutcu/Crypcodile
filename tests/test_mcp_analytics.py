@@ -16,8 +16,10 @@ from crypcodile.mcp_server import (
     handle_estimate_slippage,
     handle_get_indicators,
     handle_get_iv_surface,
+    handle_get_liquidity_depth,
     handle_get_perp_basis,
     handle_get_risk_reversal,
+    handle_get_sequencer_latency,
     handle_get_spot_perp_basis,
     handle_get_term_structure,
     handle_get_vol_skew,
@@ -35,6 +37,8 @@ _ANALYTICS_TOOLS = {
     "get_perp_basis",
     "get_spot_perp_basis",
     "get_indicators",
+    "get_liquidity_depth",
+    "get_sequencer_latency",
 }
 
 
@@ -277,6 +281,74 @@ def test_handle_get_indicators_empty() -> None:
     assert handle_get_indicators(client, "x", 0, 1) == []
 
 
+def test_handle_get_liquidity_depth_returns_dicts() -> None:
+    client = MagicMock()
+    client.calculate_block_liquidity_depth.return_value = pl.DataFrame(
+        {
+            "block": [1],
+            "bid_depth_1pct": [10.0],
+            "ask_depth_1pct": [12.0],
+            "bid_depth_2pct": [20.0],
+            "ask_depth_2pct": [22.0],
+            "bid_depth_5pct": [50.0],
+            "ask_depth_5pct": [55.0],
+        }
+    )
+    rows = handle_get_liquidity_depth(client, "base_onchain:DEGEN-WETH")
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["bid_depth_1pct"] == 10.0
+    assert rows[0]["block"] == 1
+    client.calculate_block_liquidity_depth.assert_called_once_with(
+        "base_onchain:DEGEN-WETH"
+    )
+
+
+def test_handle_get_liquidity_depth_empty() -> None:
+    client = MagicMock()
+    client.calculate_block_liquidity_depth.return_value = pl.DataFrame()
+    assert handle_get_liquidity_depth(client, "x") == []
+
+
+def test_handle_get_sequencer_latency_returns_dicts() -> None:
+    client = MagicMock()
+    client.calculate_sequencer_latency.return_value = pl.DataFrame(
+        {
+            "metric": ["production_interval", "ingestion_delay"],
+            "avg_seconds": [2.0, 0.1],
+            "max_seconds": [4.0, 0.5],
+            "std_seconds": [0.5, 0.05],
+        }
+    )
+    rows = handle_get_sequencer_latency(client, "base_onchain")
+    assert isinstance(rows, list)
+    assert len(rows) == 2
+    assert rows[0]["metric"] == "production_interval"
+    assert rows[0]["avg_seconds"] == 2.0
+    client.calculate_sequencer_latency.assert_called_once_with("base_onchain")
+
+
+def test_handle_get_sequencer_latency_default_exchange() -> None:
+    client = MagicMock()
+    client.calculate_sequencer_latency.return_value = pl.DataFrame(
+        {
+            "metric": ["production_interval"],
+            "avg_seconds": [2.0],
+            "max_seconds": [2.0],
+            "std_seconds": [0.0],
+        }
+    )
+    rows = handle_get_sequencer_latency(client)
+    assert len(rows) == 1
+    client.calculate_sequencer_latency.assert_called_once_with("base_onchain")
+
+
+def test_handle_get_sequencer_latency_empty() -> None:
+    client = MagicMock()
+    client.calculate_sequencer_latency.return_value = pl.DataFrame()
+    assert handle_get_sequencer_latency(client, "base_onchain") == []
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -330,3 +402,8 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "start",
         "end",
     }
+    assert set(by_name["get_liquidity_depth"]["inputSchema"]["required"]) == {
+        "symbol",
+    }
+    assert by_name["get_sequencer_latency"]["inputSchema"]["required"] == []
+    assert "exchange" in by_name["get_sequencer_latency"]["inputSchema"]["properties"]
