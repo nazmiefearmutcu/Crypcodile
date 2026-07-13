@@ -464,6 +464,33 @@ def handle_get_risk_reversal(
     return {"risk_reversal": rr, "butterfly": bf}
 
 
+def handle_get_perp_basis(
+    client: CrypcodileClient,
+    perp_symbol: str,
+    start: int,
+    end: int,
+) -> list[dict[str, Any]]:
+    """Perpetual mark-vs-index basis; returns list of row dicts (empty → [])."""
+    df = client.perp_basis(perp_symbol, start, end)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_get_spot_perp_basis(
+    client: CrypcodileClient,
+    spot_symbol: str,
+    perp_symbol: str,
+    start: int,
+    end: int,
+) -> list[dict[str, Any]]:
+    """Spot-vs-perp basis; returns list of row dicts (empty → [])."""
+    df = client.spot_perp_basis(spot_symbol, perp_symbol, start, end)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -818,6 +845,68 @@ TOOLS = [
             "required": ["underlying", "expiry_ns", "at"],
         },
     },
+    {
+        "name": "get_perp_basis",
+        "description": (
+            "Return perpetual basis (mark price vs index price) for a contract. "
+            "Columns: local_ts, mark_price, index_price, basis, basis_pct. "
+            "Empty lake / no data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "perp_symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical perpetual symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+            },
+            "required": ["perp_symbol", "start", "end"],
+        },
+    },
+    {
+        "name": "get_spot_perp_basis",
+        "description": (
+            "Return spot-perp basis via ASOF join of spot trades vs perp mark. "
+            "Columns: local_ts, spot_price, perp_price, basis, basis_pct. "
+            "Empty lake / no data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "spot_symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical spot symbol (e.g. 'deribit:BTC-SPOT')."
+                    ),
+                },
+                "perp_symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical perpetual symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+            },
+            "required": ["spot_symbol", "perp_symbol", "start", "end"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1032,6 +1121,29 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"get_risk_reversal failed: {e}"}
+                    elif tool_name == "get_perp_basis":
+                        try:
+                            tool_result = handle_get_perp_basis(
+                                client,
+                                arguments.get("perp_symbol", ""),
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"get_perp_basis failed: {e}"}
+                    elif tool_name == "get_spot_perp_basis":
+                        try:
+                            tool_result = handle_get_spot_perp_basis(
+                                client,
+                                arguments.get("spot_symbol", ""),
+                                arguments.get("perp_symbol", ""),
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_spot_perp_basis failed: {e}"
+                            }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
                     

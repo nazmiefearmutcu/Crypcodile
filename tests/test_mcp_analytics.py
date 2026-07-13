@@ -1,4 +1,4 @@
-"""Unit tests for MCP analytics tool handlers (slippage, OFI, whale, IV, skew).
+"""Unit tests for MCP analytics tool handlers (slippage, OFI, whale, IV, skew, basis).
 
 Exercises pure handlers with mocked clients; no stdio / live lake required.
 """
@@ -15,7 +15,9 @@ from crypcodile.mcp_server import (
     handle_calculate_ofi,
     handle_estimate_slippage,
     handle_get_iv_surface,
+    handle_get_perp_basis,
     handle_get_risk_reversal,
+    handle_get_spot_perp_basis,
     handle_get_term_structure,
     handle_get_vol_skew,
     handle_track_whale_alerts,
@@ -29,6 +31,8 @@ _ANALYTICS_TOOLS = {
     "get_term_structure",
     "get_vol_skew",
     "get_risk_reversal",
+    "get_perp_basis",
+    "get_spot_perp_basis",
 }
 
 
@@ -186,6 +190,58 @@ def test_handle_get_risk_reversal_empty_skew() -> None:
     client.risk_reversal_butterfly.assert_not_called()
 
 
+def test_handle_get_perp_basis_returns_dicts() -> None:
+    client = MagicMock()
+    client.perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1],
+            "mark_price": [100.5],
+            "index_price": [100.0],
+            "basis": [0.5],
+            "basis_pct": [0.005],
+        }
+    )
+    rows = handle_get_perp_basis(client, "deribit:BTC-PERPETUAL", 0, 100)
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["basis"] == 0.5
+    client.perp_basis.assert_called_once_with("deribit:BTC-PERPETUAL", 0, 100)
+
+
+def test_handle_get_perp_basis_empty() -> None:
+    client = MagicMock()
+    client.perp_basis.return_value = pl.DataFrame()
+    assert handle_get_perp_basis(client, "x", 0, 1) == []
+
+
+def test_handle_get_spot_perp_basis_returns_dicts() -> None:
+    client = MagicMock()
+    client.spot_perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1],
+            "spot_price": [100.0],
+            "perp_price": [100.5],
+            "basis": [0.5],
+            "basis_pct": [0.005],
+        }
+    )
+    rows = handle_get_spot_perp_basis(
+        client, "deribit:BTC-SPOT", "deribit:BTC-PERPETUAL", 0, 100
+    )
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["basis"] == 0.5
+    client.spot_perp_basis.assert_called_once_with(
+        "deribit:BTC-SPOT", "deribit:BTC-PERPETUAL", 0, 100
+    )
+
+
+def test_handle_get_spot_perp_basis_empty() -> None:
+    client = MagicMock()
+    client.spot_perp_basis.return_value = pl.DataFrame()
+    assert handle_get_spot_perp_basis(client, "s", "p", 0, 1) == []
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -222,4 +278,15 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "underlying",
         "expiry_ns",
         "at",
+    }
+    assert set(by_name["get_perp_basis"]["inputSchema"]["required"]) == {
+        "perp_symbol",
+        "start",
+        "end",
+    }
+    assert set(by_name["get_spot_perp_basis"]["inputSchema"]["required"]) == {
+        "spot_symbol",
+        "perp_symbol",
+        "start",
+        "end",
     }
