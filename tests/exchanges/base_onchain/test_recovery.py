@@ -17,6 +17,30 @@ def test_sync_recovery(tmp_path):
     assert recovery2.get_last_block("AERO-USDC") == 12345
 
 
+def test_save_last_block_co_persists_seen_logs(tmp_path):
+    """Cursor advance and seen-log set must land in one write (crash-safe)."""
+    state_path = str(tmp_path / "sync.json")
+    recovery = SyncRecovery(state_path)
+    seen = {("0xabc", 1): True, ("0xdef", 2): True}
+
+    recovery.save_last_block("WETH-USDC", 999, seen_logs=seen)
+
+    reloaded = SyncRecovery(state_path)
+    assert reloaded.get_last_block("WETH-USDC") == 999
+    assert reloaded.get_seen_logs() == seen
+
+
+def test_save_last_block_without_seen_logs_preserves_existing(tmp_path):
+    state_path = str(tmp_path / "sync.json")
+    recovery = SyncRecovery(state_path)
+    recovery.save_seen_logs({("0xkeep", 0): True})
+    recovery.save_last_block("WETH-USDC", 100)
+
+    reloaded = SyncRecovery(state_path)
+    assert reloaded.get_last_block("WETH-USDC") == 100
+    assert reloaded.get_seen_logs() == {("0xkeep", 0): True}
+
+
 def test_transport_sync_recovery_state_uses_exchange_name(tmp_path, monkeypatch):
     """SyncRecovery state file is per-exchange, not hardcoded base_onchain.json."""
     monkeypatch.setenv("HOME", str(tmp_path))

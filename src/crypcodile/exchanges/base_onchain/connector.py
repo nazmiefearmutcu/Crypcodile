@@ -1234,11 +1234,15 @@ class BaseOnchainTransport:
                                 "swaps": swaps
                             }
                             await self._queue.put(json.dumps(update_msg).encode())
-                            # Success! Mark logs as seen and update block number
+                            # Success! Mark logs as seen and update block number.
+                            # Co-persist seen_logs with the cursor so a crash after
+                            # advancing last_block cannot re-emit via overlap re-query.
                             for lk in new_seen_log_keys:
                                 self._add_seen_log(lk)
                             self._last_blocks[sym] = max(self._last_blocks[sym], last_block)
-                            self.sync_recovery.save_last_block(sym, self._last_blocks[sym])
+                            self.sync_recovery.save_last_block(
+                                sym, self._last_blocks[sym], seen_logs=self._seen_logs
+                            )
                             if logs_err is not None:
                                 raise logs_err
                         except Exception as e:
@@ -1352,7 +1356,11 @@ class BaseOnchainTransport:
                         
                         if lending_success:
                             self._last_lending_block = lending_end_block
-                            self.sync_recovery.save_last_block("lending", self._last_lending_block)
+                            self.sync_recovery.save_last_block(
+                                "lending",
+                                self._last_lending_block,
+                                seen_logs=self._seen_logs,
+                            )
 
                     # Poll for 1inch and 0x limit orders
                     if not hasattr(self, "_last_limit_order_block"):
@@ -1430,9 +1438,14 @@ class BaseOnchainTransport:
                         
                         if limit_success:
                             self._last_limit_order_block = limit_end_block
-                            self.sync_recovery.save_last_block("limit_orders", self._last_limit_order_block)
+                            self.sync_recovery.save_last_block(
+                                "limit_orders",
+                                self._last_limit_order_block,
+                                seen_logs=self._seen_logs,
+                            )
 
-                    # Persist seen logs to recovery once per loop cycle
+                    # End-of-cycle catch-all (e.g. partial failures that advanced
+                    # in-memory seen_logs without a cursor save).
                     self.sync_recovery.save_seen_logs(self._seen_logs)
                     
                 except Exception as e:
