@@ -507,6 +507,27 @@ def handle_get_spot_perp_basis(
     return df.to_dicts()
 
 
+def handle_get_spot_future_basis(
+    client: CrypcodileClient,
+    future_symbol: str,
+    spot_symbol: str,
+    start: int,
+    end: int,
+    expiry_ns: int | None = None,
+) -> list[dict[str, Any]]:
+    """Spot-vs-future basis via ASOF join; returns list of row dicts (empty → []).
+
+    When ``expiry_ns`` is provided, the client appends an ``annualized_pct``
+    column (mirrors CLI/REST spot-future basis).
+    """
+    df = client.spot_future_basis(
+        future_symbol, spot_symbol, start, end, expiry_ns=expiry_ns
+    )
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 def handle_get_indicators(
     client: CrypcodileClient,
     symbol: str,
@@ -1209,6 +1230,48 @@ TOOLS = [
         },
     },
     {
+        "name": "get_spot_future_basis",
+        "description": (
+            "Return spot-future basis via ASOF join of future trades vs spot trades. "
+            "Columns: local_ts, future_price, spot_price, basis, basis_pct "
+            "(plus annualized_pct when expiry_ns is set). "
+            "Empty lake / no data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "future_symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical futures symbol (e.g. 'deribit:BTC-27JUN25')."
+                    ),
+                },
+                "spot_symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical spot symbol (e.g. 'deribit:BTC-SPOT')."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+                "expiry_ns": {
+                    "type": "integer",
+                    "description": (
+                        "Optional futures expiry (nanoseconds UTC). When set, "
+                        "an annualized_pct column is appended."
+                    ),
+                },
+            },
+            "required": ["future_symbol", "spot_symbol", "start", "end"],
+        },
+    },
+    {
         "name": "get_indicators",
         "description": (
             "Calculate technical analysis indicators (SMA, EMA, RSI, MACD, BB) "
@@ -1896,6 +1959,24 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_spot_perp_basis failed: {e}"
+                            }
+                    elif tool_name == "get_spot_future_basis":
+                        try:
+                            raw_expiry = arguments.get("expiry_ns")
+                            expiry_ns = (
+                                int(raw_expiry) if raw_expiry is not None else None
+                            )
+                            tool_result = handle_get_spot_future_basis(
+                                client,
+                                arguments.get("future_symbol", ""),
+                                arguments.get("spot_symbol", ""),
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                                expiry_ns=expiry_ns,
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_spot_future_basis failed: {e}"
                             }
                     elif tool_name == "get_indicators":
                         try:

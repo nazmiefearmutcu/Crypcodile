@@ -28,6 +28,7 @@ from crypcodile.mcp_server import (
     handle_get_perp_basis,
     handle_get_risk_reversal,
     handle_get_sequencer_latency,
+    handle_get_spot_future_basis,
     handle_get_spot_perp_basis,
     handle_get_term_structure,
     handle_get_vol_skew,
@@ -46,6 +47,7 @@ _ANALYTICS_TOOLS = {
     "get_risk_reversal",
     "get_perp_basis",
     "get_spot_perp_basis",
+    "get_spot_future_basis",
     "get_indicators",
     "get_liquidity_depth",
     "get_sequencer_latency",
@@ -312,6 +314,65 @@ def test_handle_get_spot_perp_basis_empty() -> None:
     client = MagicMock()
     client.spot_perp_basis.return_value = pl.DataFrame()
     assert handle_get_spot_perp_basis(client, "s", "p", 0, 1) == []
+
+
+def test_handle_get_spot_future_basis_returns_dicts() -> None:
+    client = MagicMock()
+    client.spot_future_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1],
+            "future_price": [101.0],
+            "spot_price": [100.0],
+            "basis": [1.0],
+            "basis_pct": [0.01],
+        }
+    )
+    rows = handle_get_spot_future_basis(
+        client, "deribit:BTC-27JUN25", "deribit:BTC-SPOT", 0, 100
+    )
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["basis"] == 1.0
+    client.spot_future_basis.assert_called_once_with(
+        "deribit:BTC-27JUN25", "deribit:BTC-SPOT", 0, 100, expiry_ns=None
+    )
+
+
+def test_handle_get_spot_future_basis_with_expiry() -> None:
+    client = MagicMock()
+    client.spot_future_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1],
+            "future_price": [101.0],
+            "spot_price": [100.0],
+            "basis": [1.0],
+            "basis_pct": [0.01],
+            "annualized_pct": [0.05],
+        }
+    )
+    rows = handle_get_spot_future_basis(
+        client,
+        "deribit:BTC-27JUN25",
+        "deribit:BTC-SPOT",
+        0,
+        100,
+        expiry_ns=1_000_000_000,
+    )
+    assert len(rows) == 1
+    assert rows[0]["annualized_pct"] == 0.05
+    client.spot_future_basis.assert_called_once_with(
+        "deribit:BTC-27JUN25",
+        "deribit:BTC-SPOT",
+        0,
+        100,
+        expiry_ns=1_000_000_000,
+    )
+
+
+def test_handle_get_spot_future_basis_empty() -> None:
+    client = MagicMock()
+    client.spot_future_basis.return_value = pl.DataFrame()
+    assert handle_get_spot_future_basis(client, "f", "s", 0, 1) == []
 
 
 def test_handle_get_indicators_returns_dicts() -> None:
@@ -929,6 +990,13 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "start",
         "end",
     }
+    assert set(by_name["get_spot_future_basis"]["inputSchema"]["required"]) == {
+        "future_symbol",
+        "spot_symbol",
+        "start",
+        "end",
+    }
+    assert "expiry_ns" in by_name["get_spot_future_basis"]["inputSchema"]["properties"]
     assert set(by_name["get_indicators"]["inputSchema"]["required"]) == {
         "symbol",
         "start",

@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–30 COMPLETE. Continuous loop still active → Wave 31+.
+**Status:** Waves 1–31 COMPLETE. Continuous loop still active → Wave 32+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -236,7 +236,13 @@
 | 2 | Aave health factor: treat HF zero as zero, not infinity | DONE | `5afd87b` |
 | 3 | OKX/Bybit options: parse expiry from symbol when instrument unregistered | DONE | `8fb0a7d` |
 
-## Next rotation ideas (Wave 31+)
+## Wave 31 — Feature (MCP spot-future basis) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | MCP `get_spot_future_basis` (handler + TOOLS schema + dispatch; optional `expiry_ns`) | DONE | (pending) |
+
+## Next rotation ideas (Wave 32+)
 
 Priority candidates for the next cycles:
 
@@ -244,8 +250,7 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
-5. **MCP `get_spot_future_basis`** — mirror REST/CLI third basis mode on MCP  
-6. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 ## Subagent policy
 
@@ -284,3 +289,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 28: REST health/status probe; catalog inventory empty filter fix
 - Wave 29: portal detectBackend health fallback; REST `/api/v1/exchanges`
 - Wave 30: derive options ns timestamps; Aave HF zero≠∞; OKX/Bybit option expiry parse from symbol
+- Wave 31: MCP `get_spot_future_basis` (completes basis trio with perp + spot-perp)
