@@ -6061,6 +6061,7 @@ def test_capabilities_shape_and_contents() -> None:
         "list_exchanges_on_disk",
         "list_registered_exchanges",
         "catalog_summary",
+        "catalog_stats",
         "search_symbols",
         "list_symbols",
         "resolve_symbols",

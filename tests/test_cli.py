@@ -323,6 +323,202 @@ def test_cli_catalog_summary_uses_client_discovery(
 
 
 # ---------------------------------------------------------------------------
+# catalog-stats command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_catalog_stats_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``catalog-stats`` on empty lake prints zero counts; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-stats", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "channel_count:  0" in result.output
+    assert "row_counts: (none)" in result.output
+
+
+async def test_cli_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
+    """``catalog-stats`` lists per-channel COUNT(*) row counts."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-stats", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    # fixtures: book_snapshot, funding, trade (see _write_fixtures in test_cli)
+    assert "channel_count:  3" in result.output
+    assert "row_counts:" in result.output
+    assert "trade:" in result.output
+    assert "book_snapshot:" in result.output
+    assert "funding:" in result.output
+
+
+def test_cli_catalog_stats_uses_client(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI delegates to client list_channels + query COUNT(*)."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    import polars as pl
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
+
+    def _query(sql: str):
+        if "book_snapshot" in sql:
+            return pl.DataFrame({"n": [42]})
+        if "trade" in sql:
+            return pl.DataFrame({"n": [7]})
+        raise AssertionError(f"unexpected sql: {sql}")
+
+    mock_client.query.side_effect = _query
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_channels(self):
+            return mock_client.list_channels()
+
+        def query(self, sql: str):
+            return mock_client.query(sql)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr(
+        "crypcodile.cli.resolve_data_dir", lambda d: d
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-stats", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "channel_count:  2" in result.output
+    assert "book_snapshot: 42" in result.output
+    assert "trade: 7" in result.output
+    mock_client.list_channels.assert_called_once_with()
+    assert mock_client.query.call_count == 2
+
+
+def test_cli_catalog_stats_query_failure_reports_minus_one(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Query failure per channel reports -1 (REST/MCP parity)."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    import polars as pl
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade", "funding"]
+
+    def _query(sql: str):
+        if "trade" in sql:
+            return pl.DataFrame({"n": [10]})
+        raise RuntimeError("view missing")
+
+    mock_client.query.side_effect = _query
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_channels(self):
+            return mock_client.list_channels()
+
+        def query(self, sql: str):
+            return mock_client.query(sql)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr(
+        "crypcodile.cli.resolve_data_dir", lambda d: d
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-stats", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "channel_count:  2" in result.output
+    assert "trade: 10" in result.output
+    assert "funding: -1" in result.output
+
+
+def test_cli_catalog_stats_escapes_double_quotes(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Channel names with double quotes are SQL-escaped."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    import polars as pl
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ['odd"chan']
+    mock_client.query.return_value = pl.DataFrame({"n": [1]})
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_channels(self):
+            return mock_client.list_channels()
+
+        def query(self, sql: str):
+            return mock_client.query(sql)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr(
+        "crypcodile.cli.resolve_data_dir", lambda d: d
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-stats", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert 'odd"chan: 1' in result.output
+    sql = mock_client.query.call_args.args[0]
+    assert 'FROM "odd""chan"' in sql
+
+
+def test_cli_catalog_stats_in_main_help() -> None:
+    """``catalog-stats`` appears in top-level ``--help`` Commands listing."""
+    from typer.testing import CliRunner
+
+    import crypcodile.cli as cli_mod
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "catalog-stats" in result.output
+    assert "catalog-stats" in (cli_mod.__doc__ or "")
+
+
+# ---------------------------------------------------------------------------
 # catalog-dates command
 # ---------------------------------------------------------------------------
 

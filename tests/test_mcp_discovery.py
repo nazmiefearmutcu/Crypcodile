@@ -68,6 +68,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert "list_exchanges_on_disk" in names
     assert "list_registered_exchanges" in names
     assert "catalog_summary" in names
+    assert "catalog_stats" in names
     assert "search_symbols" in names
     assert "list_symbols" in names
     assert "resolve_symbols" in names
@@ -222,6 +223,104 @@ def test_catalog_summary_delegates_to_client() -> None:
     }
     client.list_channels.assert_called_once_with()
     client.list_exchanges_on_disk.assert_called_once_with()
+
+
+def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_catalog_stats, TOOLS
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_catalog_stats(client) == {
+        "row_counts": {},
+        "channel_count": 0,
+    }
+    names = {t["name"] for t in TOOLS}
+    assert "catalog_stats" in names
+    tool = next(t for t in TOOLS if t["name"] == "catalog_stats")
+    assert tool["inputSchema"]["required"] == []
+    assert tool["inputSchema"]["properties"] == {}
+
+
+async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_catalog_stats
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    result = handle_catalog_stats(client)
+    assert result["channel_count"] == 2
+    assert set(result["row_counts"].keys()) == {"book_snapshot", "trade"}
+    # Fixtures write 2 trades + 1 book_snapshot.
+    assert result["row_counts"]["trade"] == 2
+    assert result["row_counts"]["book_snapshot"] == 1
+
+
+def test_catalog_stats_returns_row_counts() -> None:
+    """Handler list_channels + per-channel COUNT(*) via client.query."""
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_catalog_stats
+
+    client = MagicMock()
+    client.list_channels.return_value = ["book_snapshot", "trade"]
+
+    def _query(sql: str):
+        if "book_snapshot" in sql:
+            return pl.DataFrame({"n": [42]})
+        if "trade" in sql:
+            return pl.DataFrame({"n": [7]})
+        raise AssertionError(f"unexpected sql: {sql}")
+
+    client.query.side_effect = _query
+    assert handle_catalog_stats(client) == {
+        "row_counts": {"book_snapshot": 42, "trade": 7},
+        "channel_count": 2,
+    }
+    client.list_channels.assert_called_once_with()
+    assert client.query.call_count == 2
+    sqls = [c.args[0] for c in client.query.call_args_list]
+    assert any('FROM "book_snapshot"' in s for s in sqls)
+    assert any('FROM "trade"' in s for s in sqls)
+
+
+def test_catalog_stats_query_failure_reports_minus_one() -> None:
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_catalog_stats
+
+    client = MagicMock()
+    client.list_channels.return_value = ["trade", "funding"]
+
+    def _query(sql: str):
+        if "trade" in sql:
+            return pl.DataFrame({"n": [10]})
+        raise RuntimeError("view missing")
+
+    client.query.side_effect = _query
+    assert handle_catalog_stats(client) == {
+        "row_counts": {"trade": 10, "funding": -1},
+        "channel_count": 2,
+    }
+
+
+def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
+    from unittest.mock import MagicMock
+
+    import polars as pl
+
+    from crypcodile.mcp_server import handle_catalog_stats
+
+    client = MagicMock()
+    client.list_channels.return_value = ['odd"chan']
+    client.query.return_value = pl.DataFrame({"n": [1]})
+    result = handle_catalog_stats(client)
+    assert result["row_counts"] == {'odd"chan': 1}
+    sql = client.query.call_args.args[0]
+    assert 'FROM "odd""chan"' in sql
 
 
 def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:

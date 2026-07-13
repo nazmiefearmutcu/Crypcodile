@@ -5,6 +5,7 @@ Commands
 query          -- Execute DuckDB SQL against the data lake; print result table.
 catalog        -- List channels (filesystem list_channels) with row counts; --symbols inventory.
 catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
+catalog-stats  -- Per-channel row counts via list_channels + COUNT(*) (-1 on fail).
 catalog-dates  -- List hive date= partitions for a channel (list_dates).
 catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
 catalog-exchanges -- List on-disk hive exchange= partitions.
@@ -40,6 +41,7 @@ Usage examples::
     crypcodile catalog --data-dir /data
     crypcodile catalog --symbols --data-dir /data
     crypcodile catalog-summary --data-dir /data
+    crypcodile catalog-stats --data-dir /data
     crypcodile catalog-dates --channel trade --data-dir /data
     crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
     crypcodile catalog-exchanges --data-dir /data
@@ -941,6 +943,48 @@ def catalog_summary(
         "exchanges_on_disk: "
         + (", ".join(exchanges_on_disk) if exchanges_on_disk else "(none)")
     )
+
+
+# ---------------------------------------------------------------------------
+# catalog-stats
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-stats")
+def catalog_stats(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print per-channel row counts for the local lake.
+
+    Mirrors REST ``GET /api/v1/catalog/stats`` / MCP ``catalog_stats``:
+    discovers channels via filesystem ``list_channels``, then runs a
+    lightweight ``COUNT(*)`` per channel through ``client.query``. Query
+    failure for a channel reports ``-1`` (missing view / empty partition)
+    so callers can distinguish unavailable from true zero-row channels.
+    Empty lake prints ``channel_count: 0`` and ``row_counts: (none)``;
+    exit 0. Avoids heavy inventory aggregation.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+
+    channels = client.list_channels()
+    channel_count = len(channels)
+    typer.echo(f"channel_count:  {channel_count}")
+    if not channels:
+        typer.echo("row_counts: (none)")
+        raise typer.Exit(code=0)
+
+    typer.echo("row_counts:")
+    for ch in channels:
+        try:
+            escaped = str(ch).replace('"', '""')
+            row_df = client.query(f'SELECT count(*) AS n FROM "{escaped}"')
+            n = int(row_df["n"][0])
+        except Exception:
+            n = -1
+        typer.echo(f"  {ch}: {n}")
 
 
 # ---------------------------------------------------------------------------

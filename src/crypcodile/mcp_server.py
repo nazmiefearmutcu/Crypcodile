@@ -407,6 +407,43 @@ def handle_catalog_summary(client: CrypcodileClient) -> dict[str, object]:
     }
 
 
+def handle_catalog_stats(client: CrypcodileClient) -> dict[str, object]:
+    """Per-channel row counts for the local lake (agent discovery).
+
+    Mirrors REST ``GET /api/v1/catalog/stats``::
+
+        {
+            "row_counts": {"trade": 1234, "book_snapshot": 0, ...},
+            "channel_count": int,
+        }
+
+    Discovers channels via filesystem :meth:`~CrypcodileClient.list_channels`,
+    then runs a lightweight ``COUNT(*)`` per channel through
+    :meth:`~CrypcodileClient.query` (registered DuckDB views). Avoids the
+    heavier per-symbol :meth:`~CrypcodileClient.inventory` aggregate.
+
+    On query failure for a channel (missing view, empty partition without
+    parquet, DuckDB error), that channel reports ``-1`` so callers can
+    distinguish "unknown/unavailable" from a true zero-row channel.
+
+    Empty lake yields ``row_counts: {}`` and ``channel_count: 0``. Channel
+    keys follow ``list_channels`` order (sorted).
+    """
+    channels = client.list_channels()
+    row_counts: dict[str, int] = {}
+    for ch in channels:
+        try:
+            escaped = str(ch).replace('"', '""')
+            row_df = client.query(f'SELECT count(*) AS n FROM "{escaped}"')
+            row_counts[ch] = int(row_df["n"][0])
+        except Exception:
+            row_counts[ch] = -1
+    return {
+        "row_counts": row_counts,
+        "channel_count": len(channels),
+    }
+
+
 def handle_search_symbols(
     client: CrypcodileClient,
     q: str,
@@ -1101,6 +1138,22 @@ TOOLS = [
             "their counts (channel_count, exchange_count). Empty lake returns "
             "empty lists and zero counts. Combines list_data_channels + "
             "list_exchanges_on_disk for agent discovery without HTTP."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "catalog_stats",
+        "description": (
+            "Per-channel row counts for the local lake. Discovers channels via "
+            "filesystem list_channels, then runs lightweight COUNT(*) per "
+            "channel (registered DuckDB views). Query failure for a channel "
+            "reports -1 (missing view / empty partition). Returns "
+            "{row_counts, channel_count}. Empty lake → {} / 0. Avoids heavy "
+            "inventory aggregation. Mirrors REST GET /api/v1/catalog/stats."
         ),
         "inputSchema": {
             "type": "object",
@@ -2142,6 +2195,13 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"catalog_summary failed: {e}"
+                            }
+                    elif tool_name == "catalog_stats":
+                        try:
+                            tool_result = handle_catalog_stats(client)
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"catalog_stats failed: {e}"
                             }
                     elif tool_name == "search_symbols":
                         try:
