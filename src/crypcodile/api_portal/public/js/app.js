@@ -1627,8 +1627,10 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         try {
-            // Prefer public Python-only probes (stable when ADMIN_API_KEY is unset)
-            for (const path of ['/api/v1/catalog/channels', '/metrics']) {
+            // Prefer public Python-only probes (stable when ADMIN_API_KEY is unset).
+            // /api/v1/health is a lightweight fallback when catalog/metrics are
+            // unavailable (e.g. lake mount issues) but the FastAPI process is up.
+            for (const path of ['/api/v1/catalog/channels', '/metrics', '/api/v1/health']) {
                 try {
                     const probe = await fetch(path);
                     if (probe.status === 200) {
