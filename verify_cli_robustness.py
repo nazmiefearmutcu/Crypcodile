@@ -108,16 +108,20 @@ class TestCliAdversarial(unittest.TestCase):
             basis_cmd(perp=None, future=None, spot=None, data_dir=data_dir)
         self.assertEqual(cm.exception.exit_code, 1)
         out, err = self.get_output()
-        self.assertIn("Error: Either --perp, or both --future and --spot must be specified in non-interactive mode", out + err)
+        self.assertIn(
+            "Error: Specify one of: --perp; both --future and --spot; "
+            "or both --spot and --perp in non-interactive mode",
+            out + err,
+        )
         self.stdout_capture.seek(0); self.stdout_capture.truncate()
         self.stderr_capture.seek(0); self.stderr_capture.truncate()
 
-        # basis with perp and future/spot (mutually exclusive)
+        # basis with perp and future (mutually exclusive)
         with self.assertRaises(typer.Exit) as cm:
             basis_cmd(perp="BTC-PERPETUAL", future="BTC-FUTURE", spot="BTC-SPOT", data_dir=data_dir)
         self.assertEqual(cm.exception.exit_code, 1)
         out, err = self.get_output()
-        self.assertIn("Error: --perp and --future/--spot are mutually exclusive", out + err)
+        self.assertIn("Error: --perp and --future are mutually exclusive", out + err)
         self.stdout_capture.seek(0); self.stdout_capture.truncate()
         self.stderr_capture.seek(0); self.stderr_capture.truncate()
 

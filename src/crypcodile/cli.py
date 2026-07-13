@@ -10,7 +10,7 @@ replay         -- Stream canonical Records from the data lake, printed to stdout
 collect        -- Run live connectors and write data to the Parquet lake.
 backfill       -- Fetch historical REST data into the Parquet lake.
 funding-apr    -- Print per-event funding APR for a perpetual symbol.
-basis          -- Print spot-future or perpetual basis.
+basis          -- Print spot-future, spot-perp, or mark/index perpetual basis.
 iv-surface     -- Print the implied-vol surface snapshot.
 term-structure -- Print the ATM IV term structure.
 vol-skew       -- Print per-strike IV and delta for a single expiry.
@@ -41,6 +41,8 @@ Usage examples::
     crypcodile basis --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \\
                     --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile basis --perp deribit:BTC-PERPETUAL \\
+                    --start 0 --end 9999999999999999999 --data-dir /data
+    crypcodile basis --spot binance-spot:BTCUSDT --perp deribit:BTC-PERPETUAL \\
                     --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile iv-surface --underlying BTC --at 1704067200000000000 --data-dir /data
     crypcodile term-structure --underlying BTC --at 1704067200000000000 --data-dir /data
@@ -1887,11 +1889,17 @@ def basis_cmd(
     ] = None,
     spot: Annotated[
         str | None,
-        typer.Option("--spot", help="Canonical spot symbol (spot-future mode)."),
+        typer.Option(
+            "--spot",
+            help="Canonical spot symbol (spot-future or spot-perp mode).",
+        ),
     ] = None,
     perp: Annotated[
         str | None,
-        typer.Option("--perp", help="Canonical perpetual symbol (perp mode)."),
+        typer.Option(
+            "--perp",
+            help="Canonical perpetual symbol (mark/index mode alone, or spot-perp with --spot).",
+        ),
     ] = None,
     expiry: Annotated[
         int | None,
@@ -1899,9 +1907,12 @@ def basis_cmd(
     ] = None,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
-    """Print spot-future or perpetual basis.
+    """Print spot-future, spot-perp, or mark/index perpetual basis.
 
-    Use --future/--spot for spot-future mode, or --perp for perpetual mode.
+    Modes:
+      --perp alone              mark vs index (derivative_ticker)
+      --future and --spot       spot-future basis (trade ASOF join)
+      --spot and --perp         true spot-perp basis (spot vs perp mark)
     """
     from crypcodile.client.client import CrypcodileClient
 
@@ -1920,24 +1931,36 @@ def basis_cmd(
         if not spot:
             spot = None
 
-    # We will prompt for time range after mode/symbols are resolved
-
-    if perp is not None and (future is not None or spot is not None):
-        typer.echo("Error: --perp and --future/--spot are mutually exclusive.", err=True)
+    # --perp and --future cannot be combined; --spot + --perp is spot-perp mode.
+    if perp is not None and future is not None:
+        typer.echo(
+            "Error: --perp and --future are mutually exclusive "
+            "(use --spot with --perp for spot-perp basis, or --future with --spot "
+            "for spot-future basis).",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
+    # Classify mode once symbols are known (None after empty-strip).
+    def _basis_mode(
+        p: str | None, f: str | None, s: str | None
+    ) -> str | None:
+        if p is not None and s is not None and f is None:
+            return "spot_perp"
+        if p is not None and s is None and f is None:
+            return "perp"
+        if f is not None and s is not None and p is None:
+            return "spot_future"
+        return None
+
     if not is_interactive_stdin():
-        if perp is None and (future is None or spot is None):
-            typer.echo("Error: Either --perp, or both --future and --spot must be specified in non-interactive mode.", err=True)
-            raise typer.Exit(code=1)
-        if perp is not None and not perp:
-            typer.echo("Error: --perp symbol is empty.", err=True)
-            raise typer.Exit(code=1)
-        if future is not None and not future:
-            typer.echo("Error: --future symbol is empty.", err=True)
-            raise typer.Exit(code=1)
-        if spot is not None and not spot:
-            typer.echo("Error: --spot symbol is empty.", err=True)
+        mode = _basis_mode(perp, future, spot)
+        if mode is None:
+            typer.echo(
+                "Error: Specify one of: --perp; both --future and --spot; "
+                "or both --spot and --perp in non-interactive mode.",
+                err=True,
+            )
             raise typer.Exit(code=1)
         if start is None:
             start = 0
@@ -1945,9 +1968,10 @@ def basis_cmd(
             end = 9999999999999999999
     else:
         # Interactive
-        # If perp is None and only one of future or spot is specified, skip prompting for mode
-        if perp is None and (future is not None or spot is not None):
-            # Skip prompting, set mode implicitly to futures/spot, and only prompt for the missing futures/spot symbol
+        mode = _basis_mode(perp, future, spot)
+
+        # Partial spot-future: only one of future/spot given (no perp)
+        if mode is None and perp is None and (future is not None or spot is not None):
             if not future:
                 _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
                 if selected_futures:
@@ -1960,16 +1984,55 @@ def basis_cmd(
                     spot = selected_spots[0]
                 if not spot:
                     spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
-        # If neither perp nor future/spot is specified, ask user what mode they want
-        elif perp is None and future is None and spot is None:
-            mode = typer.prompt("Basis mode", default="perp")
-            if mode == "perp":
-                _, selected_symbols = select_symbols_interactively(data_dir, channel="derivative_ticker")
-                if selected_symbols:
-                    perp = selected_symbols[0]
+            mode = _basis_mode(perp, future, spot)
+
+        # Partial spot-perp: only one of spot/perp given (no future)
+        elif mode is None and future is None and (perp is not None or spot is not None):
+            if not perp:
+                _, selected_perps = select_symbols_interactively(
+                    data_dir, channel="derivative_ticker"
+                )
+                if selected_perps:
+                    perp = selected_perps[0]
                 if not perp:
-                    perp = prompt_symbol("Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker")
-            else:
+                    perp = prompt_symbol(
+                        "Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker"
+                    )
+            if not spot:
+                _, selected_spots = select_symbols_interactively(
+                    data_dir, channel="trade"
+                )
+                if selected_spots:
+                    spot = selected_spots[0]
+                if not spot:
+                    spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+            mode = _basis_mode(perp, future, spot)
+
+        # Nothing specified: ask for mode
+        elif mode is None and perp is None and future is None and spot is None:
+            mode_choice = typer.prompt(
+                "Basis mode (perp | spot-future | spot-perp)",
+                default="perp",
+            ).strip().lower()
+            if mode_choice in ("spot-perp", "spot_perp", "spotperp"):
+                typer.echo("\nSelect spot symbol:")
+                _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
+                if selected_spots:
+                    spot = selected_spots[0]
+                typer.echo("\nSelect perpetual symbol:")
+                _, selected_perps = select_symbols_interactively(
+                    data_dir, channel="derivative_ticker"
+                )
+                if selected_perps:
+                    perp = selected_perps[0]
+                if not spot:
+                    spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+                if not perp:
+                    perp = prompt_symbol(
+                        "Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker"
+                    )
+                mode = "spot_perp"
+            elif mode_choice in ("spot-future", "spot_future", "future", "futures"):
                 typer.echo("\nSelect futures symbol:")
                 _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
                 if selected_futures:
@@ -1978,45 +2041,81 @@ def basis_cmd(
                 _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
                 if selected_spots:
                     spot = selected_spots[0]
-                
                 if not future:
                     future = prompt_symbol("Futures symbol (e.g. BTC)", data_dir, channel="trade")
                 if not spot:
                     spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+                mode = "spot_future"
+            else:
+                # Default / "perp"
+                _, selected_symbols = select_symbols_interactively(
+                    data_dir, channel="derivative_ticker"
+                )
+                if selected_symbols:
+                    perp = selected_symbols[0]
+                if not perp:
+                    perp = prompt_symbol(
+                        "Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker"
+                    )
+                mode = "perp"
 
         if start is None or end is None:
-            ch = "derivative_ticker" if perp is not None else "trade"
-            syms = [perp] if perp is not None else ([future, spot] if future and spot else None)
-            resolved_start, resolved_end = prompt_time_range_helper(data_dir, ch, syms, default_start=0, default_end=9999999999999999999)
+            if mode == "perp":
+                ch = "derivative_ticker"
+                syms = [perp] if perp else None
+            elif mode == "spot_perp":
+                ch = "derivative_ticker"
+                syms = [p for p in (perp, spot) if p]
+            else:
+                ch = "trade"
+                syms = [s for s in (future, spot) if s] or None
+            resolved_start, resolved_end = prompt_time_range_helper(
+                data_dir, ch, syms, default_start=0, default_end=9999999999999999999
+            )
             if start is None:
                 start = resolved_start
             if end is None:
                 end = resolved_end
+
+        if mode is None:
+            mode = _basis_mode(perp, future, spot)
 
     if perp:
         resolved = resolve_input_symbols(data_dir, [perp], ["derivative_ticker", "ticker"])
         if resolved:
             perp = resolved[0]
     if future:
-        resolved = resolve_input_symbols(data_dir, [future], ["trade", "derivative_ticker", "ticker"])
+        resolved = resolve_input_symbols(
+            data_dir, [future], ["trade", "derivative_ticker", "ticker"]
+        )
         if resolved:
             future = resolved[0]
     if spot:
-        resolved = resolve_input_symbols(data_dir, [spot], ["trade", "ticker"])
+        # Spot-perp may use trade or book_snapshot mid; include book_snapshot for resolve.
+        spot_channels = ["trade", "ticker", "book_snapshot"]
+        resolved = resolve_input_symbols(data_dir, [spot], spot_channels)
         if resolved:
             spot = resolved[0]
+
+    # Re-derive mode after resolution (symbols may still be None if resolve failed).
+    mode = _basis_mode(perp, future, spot)
 
     client = CrypcodileClient(data_dir=data_dir)
 
     try:
-        if perp is not None:
+        if mode == "spot_perp":
+            assert perp is not None and spot is not None
+            df = client.spot_perp_basis(spot, perp, start, end)
+        elif mode == "perp":
+            assert perp is not None
             df = client.perp_basis(perp, start, end)
-        elif future is not None and spot is not None:
+        elif mode == "spot_future":
+            assert future is not None and spot is not None
             df = client.spot_future_basis(future, spot, start, end, expiry_ns=expiry)
         else:
             typer.echo(
-                "Error: provide either --perp <symbol> or both --future <symbol> and "
-                "--spot <symbol>.",
+                "Error: provide either --perp <symbol>; both --future <symbol> and "
+                "--spot <symbol>; or both --spot <symbol> and --perp <symbol>.",
                 err=True,
             )
             raise typer.Exit(code=1)

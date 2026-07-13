@@ -42,9 +42,10 @@ def test_invalid_selection_indexes_in_wizard():
         assert symbols == ["INVALID_SYM"]
 
 def test_incomplete_basis_combinations(tmp_path):
-    """Verify basis command exits with 1 when incomplete spot-future options are passed."""
+    """Verify basis command exits with 1 when incomplete options are passed."""
     runner = CliRunner()
-    
+    err_snippet = "Specify one of: --perp; both --future and --spot; or both --spot and --perp"
+
     # 1. Spot-Future mode but spot is missing
     result = runner.invoke(
         app,
@@ -53,13 +54,13 @@ def test_incomplete_basis_combinations(tmp_path):
     )
     # Since stdin is not interactive, this should fail with error code 1
     assert result.exit_code == 1
-    assert "Either --perp, or both --future and --spot must be specified" in result.output or "Either --perp, or both --future and --spot must be specified" in result.stderr
+    assert err_snippet in result.output or err_snippet in result.stderr
 
-    # 2. Spot-Future mode but future is missing
+    # 2. Spot alone is incomplete (need --future or --perp)
     result = runner.invoke(
         app,
         ["basis", "--spot", "binance-spot:BTCUSDT", "--data-dir", str(tmp_path)],
         env={"PYTHONUNBUFFERED": "1"}
     )
     assert result.exit_code == 1
-    assert "Either --perp, or both --future and --spot must be specified" in result.output or "Either --perp, or both --future and --spot must be specified" in result.stderr
+    assert err_snippet in result.output or err_snippet in result.stderr

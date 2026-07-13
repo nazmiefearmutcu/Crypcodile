@@ -365,6 +365,109 @@ def test_cli_basis_future_exits_0(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CrypcodileClient — spot_perp_basis
+# ---------------------------------------------------------------------------
+
+
+def test_client_spot_perp_basis_returns_dataframe(tmp_path: Path) -> None:
+    """spot_perp_basis on an empty lake must return empty pl.DataFrame."""
+    client = CrypcodileClient(tmp_path)
+    df = client.spot_perp_basis(_SPOT_SYMBOL, _PERP_SYMBOL, _BASE_NS, _BASE_NS + _8H_NS)
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) == 0
+
+
+# ---------------------------------------------------------------------------
+# CLI: basis --spot/--perp (true spot-perp basis)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_basis_spot_perp_exits_0(tmp_path: Path) -> None:
+    """CLI basis --spot/--perp on empty lake must exit 0 (graceful empty)."""
+    result = _RUNNER.invoke(
+        app,
+        [
+            "basis",
+            "--spot", _SPOT_SYMBOL,
+            "--perp", _PERP_SYMBOL,
+            "--start", str(_BASE_NS),
+            "--end", str(_BASE_NS + _8H_NS),
+            "--data-dir", str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert "No basis data found." in result.output
+
+
+def test_cli_basis_spot_perp_calls_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI --spot + --perp must invoke spot_perp_basis, not mark/index perp_basis."""
+    calls: list[tuple[str, str]] = []
+
+    def _fake_spot_perp(self, spot_symbol, perp_symbol, start_ns, end_ns):  # noqa: ANN001
+        calls.append((spot_symbol, perp_symbol))
+        return pl.DataFrame(
+            {
+                "local_ts": [int(_BASE_NS)],
+                "spot_price": [100.0],
+                "perp_price": [101.0],
+                "basis": [1.0],
+                "basis_pct": [0.01],
+            }
+        )
+
+    def _fake_perp(self, perp_symbol, start_ns, end_ns):  # noqa: ANN001
+        raise AssertionError("perp_basis must not be used for --spot/--perp mode")
+
+    monkeypatch.setattr(CrypcodileClient, "spot_perp_basis", _fake_spot_perp)
+    monkeypatch.setattr(CrypcodileClient, "perp_basis", _fake_perp)
+
+    result = _RUNNER.invoke(
+        app,
+        [
+            "basis",
+            "--spot", _SPOT_SYMBOL,
+            "--perp", _PERP_SYMBOL,
+            "--start", str(_BASE_NS),
+            "--end", str(_BASE_NS + _8H_NS),
+            "--data-dir", str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert calls == [(_SPOT_SYMBOL, _PERP_SYMBOL)]
+    assert "basis" in result.output.lower()
+
+
+def test_cli_basis_perp_alone_still_mark_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI --perp alone must still use mark/index perp_basis."""
+    called: list[str] = []
+
+    def _fake_perp(self, perp_symbol, start_ns, end_ns):  # noqa: ANN001
+        called.append(perp_symbol)
+        return pl.DataFrame()
+
+    def _fake_spot_perp(self, spot_symbol, perp_symbol, start_ns, end_ns):  # noqa: ANN001
+        raise AssertionError("spot_perp_basis must not be used for --perp alone")
+
+    monkeypatch.setattr(CrypcodileClient, "perp_basis", _fake_perp)
+    monkeypatch.setattr(CrypcodileClient, "spot_perp_basis", _fake_spot_perp)
+
+    result = _RUNNER.invoke(
+        app,
+        [
+            "basis",
+            "--perp", _PERP_SYMBOL,
+            "--start", str(_BASE_NS),
+            "--end", str(_BASE_NS + _8H_NS),
+            "--data-dir", str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert called == [_PERP_SYMBOL]
+
+
+# ---------------------------------------------------------------------------
 # CLI: iv-surface
 # ---------------------------------------------------------------------------
 

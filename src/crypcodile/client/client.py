@@ -50,6 +50,9 @@ spot_future_basis(future_symbol, spot_symbol, start_ns, end_ns, expiry_ns=None)
 perp_basis(perp_symbol, start_ns, end_ns)
     Perpetual basis (mark price vs index price).
 
+spot_perp_basis(spot_symbol, perp_symbol, start_ns, end_ns)
+    Spot-perp basis via ASOF JOIN (spot trades vs perp mark).
+
 iv_surface(underlying, at_ns, rate=0.0)
     Implied-vol surface snapshot at ``at_ns``.
 
@@ -515,6 +518,32 @@ class CrypcodileClient:
         from crypcodile.analytics.basis import perp_basis as _perp_basis
 
         return _perp_basis(self._catalog, perp_symbol, start_ns, end_ns)
+
+    def spot_perp_basis(
+        self,
+        spot_symbol: str,
+        perp_symbol: str,
+        start_ns: int,
+        end_ns: int,
+    ) -> pl.DataFrame:
+        """Return spot-perp basis via ASOF JOIN on spot trades vs perp mark.
+
+        Thin wrapper over :func:`crypcodile.analytics.basis.spot_perp_basis`.
+
+        Args:
+            spot_symbol: Canonical symbol for the spot leg.
+            perp_symbol: Canonical perpetual contract symbol.
+            start_ns:    Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+            end_ns:      Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``local_ts, spot_price, perp_price, basis, basis_pct``.
+            Returns an empty DataFrame when either leg has no data.
+        """
+        from crypcodile.analytics.basis import spot_perp_basis as _spb
+
+        return _spb(self._catalog, spot_symbol, perp_symbol, start_ns, end_ns)
 
     def iv_surface(
         self,
