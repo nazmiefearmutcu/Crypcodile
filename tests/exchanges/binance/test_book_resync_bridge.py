@@ -174,6 +174,45 @@ async def test_bootstrap_emits_snapshot_then_applies_delta() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_retries_after_failed_fetch() -> None:
+    """First REST bootstrap fails; later depth still bootstraps and APPLYs.
+
+    Regression: registering the bridge before a successful snapshot left the
+    symbol permanently DROP'd (key present, sync never seeded).
+    """
+    conn, sink, _ = _make_connector(rest_seq=100)
+    attempts = 0
+
+    async def _flaky_fetch(symbol: str) -> BookSnapshot:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("simulated REST depth failure")
+        return parse_rest_depth_snapshot(
+            _rest_depth(100),
+            symbol_raw=symbol,
+            venue=conn._venue,
+            local_ts=0,
+            registry=conn.registry,
+        )
+
+    conn.fetch_book_snapshot = _flaky_fetch  # type: ignore[method-assign]
+    frames = [
+        _depth_ws(U=101, u=105),  # bootstrap fails → DLQ, no bridge registered
+        _depth_ws(U=101, u=105),  # retry: bootstrap succeeds + APPLY
+    ]
+    conn.transport = FakeTransport(frames=frames)
+    await conn.run(max_reconnects=0)
+
+    assert attempts == 2
+    assert "BTCUSDT" in conn._book_bridges
+    assert isinstance(sink.records[0], BookSnapshot)
+    assert sink.records[0].sequence_id == 100
+    assert isinstance(sink.records[1], BookDelta)
+    assert sink.records[1].seq_id == 105
+
+
+@pytest.mark.asyncio
 async def test_sequence_gap_triggers_resync_bridge() -> None:
     """Gap in U continuity → BookResyncBridge complete_resync path."""
     # bootstrap seq=100, resync seq=200

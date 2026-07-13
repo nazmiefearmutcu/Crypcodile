@@ -218,6 +218,8 @@ class BinanceConnector(Connector):
         """Return (create if needed) OrderBookSync + BookResyncBridge for *symbol_raw*.
 
         On first use: REST-fetch a snapshot, emit it, and seed the sync machine.
+        Bridges are registered only after a successful bootstrap with a usable
+        ``sequence_id`` so a failed fetch does not permanently DROP the symbol.
         """
         key = symbol_raw.upper()
         if key not in self._book_bridges:
@@ -227,14 +229,19 @@ class BinanceConnector(Connector):
                 fetch_snapshot=self.fetch_book_snapshot,
                 symbol=key,
             )
-            self._book_syncs[key] = sync
-            self._book_bridges[key] = bridge
 
             # Bootstrap anchor so the first depth diffs can APPLY.
+            # Register only after success — a failed fetch must leave the key
+            # absent so the next depth message retries bootstrap.
             snap = await self.fetch_book_snapshot(key)
-            if snap.sequence_id is not None:
-                sync.set_snapshot(last_update_id=snap.sequence_id)
+            if snap.sequence_id is None:
+                raise ValueError(
+                    f"Binance book bootstrap [{key}]: snapshot missing sequence_id"
+                )
+            sync.set_snapshot(last_update_id=snap.sequence_id)
             await self.out.put(snap)
+            self._book_syncs[key] = sync
+            self._book_bridges[key] = bridge
             log.info(
                 "Binance book bootstrap [%s]: snapshot seq=%s",
                 key,
