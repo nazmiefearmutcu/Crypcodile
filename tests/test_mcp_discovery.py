@@ -66,6 +66,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert "list_data_channels" in names
     assert "search_symbols" in names
     assert "data_coverage" in names
+    assert "inventory_snapshot" in names
 
 
 async def test_list_data_channels_with_data(tmp_path: pathlib.Path) -> None:
@@ -147,3 +148,54 @@ async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
     assert len(rows) == 1
     assert rows[0]["channel"] == "trade"
     assert rows[0]["row_count"] == 2
+
+
+def test_inventory_snapshot_empty_lake(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_inventory_snapshot
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_inventory_snapshot(client) == []
+
+
+async def test_inventory_snapshot_returns_rows(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_inventory_snapshot
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    rows = handle_inventory_snapshot(client)
+    assert len(rows) >= 2  # trade + book_snapshot
+    channels = {r["channel"] for r in rows}
+    assert "trade" in channels
+    assert "book_snapshot" in channels
+    for r in rows:
+        assert r["exchange"] == "deribit"
+        assert r["symbol"] == "deribit:BTC-PERPETUAL"
+        assert "min_ts" in r
+        assert "max_ts" in r
+        assert "row_count" in r
+
+
+async def test_inventory_snapshot_channel_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_inventory_snapshot
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    rows = handle_inventory_snapshot(client, channel="trade")
+    assert len(rows) == 1
+    assert rows[0]["channel"] == "trade"
+    assert rows[0]["row_count"] == 2
+
+
+async def test_inventory_snapshot_exchange_filter(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_inventory_snapshot
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    rows = handle_inventory_snapshot(client, exchange="deribit")
+    assert len(rows) >= 2
+    assert all(r["exchange"] == "deribit" for r in rows)
+    assert handle_inventory_snapshot(client, exchange="binance") == []

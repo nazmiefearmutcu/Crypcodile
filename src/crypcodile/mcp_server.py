@@ -367,6 +367,22 @@ def handle_data_coverage(
     return matched.to_dicts()
 
 
+def handle_inventory_snapshot(
+    client: CrypcodileClient,
+    channel: str | None = None,
+    exchange: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return full lake inventory rows with optional channel/exchange filters.
+
+    Empty lake / no match → ``[]``. Columns: exchange, channel, symbol,
+    min_ts, max_ts, row_count.
+    """
+    inv = client.inventory(channel=channel, exchange=exchange)
+    if len(inv) == 0:
+        return []
+    return inv.to_dicts()
+
+
 def handle_estimate_slippage(
     client: CrypcodileClient,
     symbol: str,
@@ -901,6 +917,28 @@ TOOLS = [
                 },
             },
             "required": ["symbol"],
+        },
+    },
+    {
+        "name": "inventory_snapshot",
+        "description": (
+            "Return the full data-lake inventory snapshot: exchange, channel, "
+            "symbol, min_ts, max_ts, row_count. Optional channel and exchange "
+            "filters. Empty lake or no matches returns []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "description": "Optional channel filter (e.g. 'trade').",
+                },
+                "exchange": {
+                    "type": "string",
+                    "description": "Optional exchange filter (e.g. 'deribit').",
+                },
+            },
+            "required": [],
         },
     },
     {
@@ -1748,6 +1786,17 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"data_coverage failed: {e}"}
+                    elif tool_name == "inventory_snapshot":
+                        try:
+                            ch = arguments.get("channel")
+                            ex = arguments.get("exchange")
+                            tool_result = handle_inventory_snapshot(
+                                client, channel=ch, exchange=ex
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"inventory_snapshot failed: {e}"
+                            }
                     elif tool_name == "estimate_slippage":
                         try:
                             tool_result = handle_estimate_slippage(
