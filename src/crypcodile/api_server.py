@@ -1060,17 +1060,16 @@ async def get_market_data(
                         detail="USDC payment validation failed."
                     )
                     
-                # Re-acquire lock to write to DB
+                # Re-acquire lock to write to DB — only pending → paid
                 async with db_lock:
                     record = await PAYMENTS_DB.get_async(pid)
-                    if record:
-                        if record.get("status") == "paid":
-                            raise HTTPException(status_code=400, detail="Payment already processed.")
-                        record["status"] = "paid"
-                        record["tx_hash"] = tx_hash
-                        record["sender"] = tx_from
-                        record["signature"] = signature
-                        await PAYMENTS_DB.set_async(pid, record)
+                    if not record or record.get("status") != "pending":
+                        raise HTTPException(status_code=400, detail="Payment already processed.")
+                    record["status"] = "paid"
+                    record["tx_hash"] = tx_hash
+                    record["sender"] = tx_from
+                    record["signature"] = signature
+                    await PAYMENTS_DB.set_async(pid, record)
             finally:
                 async with db_lock:
                     VERIFYING_TXS.discard(tx_hash)
@@ -1180,23 +1179,29 @@ async def simulate_payment(payload: PaymentSignature, request: Request = None) -
     async with db_lock:
         if not await PAYMENTS_DB.contains_async(pid):
             raise HTTPException(status_code=404, detail="Payment ID not found.")
-            
+
         items = await PAYMENTS_DB.items_async()
         for db_pid, db_record in items.items():
             if db_pid != pid and db_record.get("status") in ("paid", "spent") and db_record.get("tx_hash") == tx_hash:
                 raise HTTPException(status_code=400, detail="Transaction hash already processed.")
-                
+
         if tx_hash in VERIFYING_TXS:
             raise HTTPException(status_code=400, detail="Transaction hash is currently being verified.")
-            
+
+        # Only allow pending → paid; reject paid/spent/missing under lock
         record = await PAYMENTS_DB.get_async(pid)
+        if not record:
+            raise HTTPException(status_code=400, detail="Invalid or expired payment ID.")
+        if record.get("status") != "pending":
+            raise HTTPException(status_code=400, detail="Payment already processed.")
+
         record["status"] = "paid"
         record["tx_hash"] = tx_hash
         record["sender"] = signer_address
         record["signature"] = signature
-        
+
         await PAYMENTS_DB.set_async(pid, record)
-        
+
         return {
             "status": "success",
             "message": f"Payment {pid} successfully simulated as paid on Base mainnet.",

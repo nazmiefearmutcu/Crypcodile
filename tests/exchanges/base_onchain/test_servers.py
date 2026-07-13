@@ -933,3 +933,170 @@ async def test_simulate_payment_disabled_without_env() -> None:
             os.environ.pop("ALLOW_SIMULATION", None)
         else:
             os.environ["ALLOW_SIMULATION"] = prev_sim
+
+
+@pytest.mark.asyncio
+async def test_simulate_payment_rejects_paid_and_spent() -> None:
+    """simulate_payment only allows pending → paid; paid/spent return 400."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import PaymentSignature, db_lock
+
+    PAYMENTS_DB.clear()
+
+    private_key = "0x" + "5" * 64
+    account = Account.from_key(private_key)
+
+    # --- paid record: second simulate must fail ---
+    response = Response()
+    await get_market_data(symbol="cbBTC-USDC", response=response, payment_signature=None)
+    payment_id = json.loads(response.headers["Payment-Required"])["payment_id"]
+
+    msg = encode_defunct(text=payment_id)
+    sig = account.sign_message(msg).signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+
+    payload = PaymentSignature(
+        payment_id=payment_id, tx_hash="0xsim_paid_once", signature=sig
+    )
+    sim_res = await simulate_payment(payload)
+    assert sim_res["status"] == "success"
+    assert PAYMENTS_DB[payment_id]["status"] == "paid"
+
+    with pytest.raises(HTTPException) as exc_paid:
+        await simulate_payment(payload)
+    assert exc_paid.value.status_code == 400
+    assert exc_paid.value.detail == "Payment already processed."
+    assert PAYMENTS_DB[payment_id]["status"] == "paid"
+
+    # --- spent record: simulate must fail ---
+    spent_pid = "sim-spent-pid"
+    spent_msg = encode_defunct(text=spent_pid)
+    spent_sig = account.sign_message(spent_msg).signature.hex()
+    if not spent_sig.startswith("0x"):
+        spent_sig = "0x" + spent_sig
+
+    async with db_lock:
+        await PAYMENTS_DB.set_async(spent_pid, {
+            "status": "spent",
+            "symbol": "cbBTC-USDC",
+            "tx_hash": "0xsim_spent_tx",
+            "sender": account.address,
+            "signature": spent_sig,
+            "price": "0.001",
+            "currency": "USDC",
+            "recipient": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        })
+
+    spent_payload = PaymentSignature(
+        payment_id=spent_pid, tx_hash="0xsim_spent_new", signature=spent_sig
+    )
+    with pytest.raises(HTTPException) as exc_spent:
+        await simulate_payment(spent_payload)
+    assert exc_spent.value.status_code == 400
+    assert exc_spent.value.detail == "Payment already processed."
+    assert PAYMENTS_DB[spent_pid]["status"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_spent_cannot_be_repaid_via_verify_path() -> None:
+    """Spent records cannot be re-paid: early gate + pending-only write after verify."""
+    from crypcodile.api_server import db_lock, VERIFYING_TXS
+
+    PAYMENTS_DB.clear()
+    VERIFYING_TXS.clear()
+
+    # --- A: spent at entry → Payment already spent (never re-verify) ---
+    response = Response()
+    await get_market_data(symbol="cbBTC-USDC", response=response, payment_signature=None)
+    payment_id = json.loads(response.headers["Payment-Required"])["payment_id"]
+    sig, address = generate_signature(payment_id)
+    tx_hash = "0x" + "e" * 64
+
+    async with db_lock:
+        rec = await PAYMENTS_DB.get_async(payment_id)
+        rec["status"] = "spent"
+        rec["tx_hash"] = tx_hash
+        rec["sender"] = address
+        rec["signature"] = sig
+        await PAYMENTS_DB.set_async(payment_id, rec)
+
+    payment_sig_header = json.dumps({
+        "payment_id": payment_id,
+        "tx_hash": tx_hash,
+        "signature": sig,
+    })
+    with pytest.raises(HTTPException) as exc_spent:
+        await get_market_data(
+            symbol="cbBTC-USDC",
+            response=Response(),
+            payment_signature=payment_sig_header,
+        )
+    assert exc_spent.value.status_code == 400
+    assert exc_spent.value.detail == "Payment already spent."
+    assert PAYMENTS_DB[payment_id]["status"] == "spent"
+
+    # --- B: status flipped to spent during on-chain verify → pending-only write rejects ---
+    PAYMENTS_DB.clear()
+    VERIFYING_TXS.clear()
+
+    response2 = Response()
+    await get_market_data(symbol="cbBTC-USDC", response=response2, payment_signature=None)
+    payment_id2 = json.loads(response2.headers["Payment-Required"])["payment_id"]
+    sig2, address2 = generate_signature(payment_id2)
+    tx_hash2 = "0x" + "f" * 64
+
+    mock_receipt = {
+        "status": 1,
+        "blockNumber": 100,
+        "logs": [
+            {
+                "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+                "topics": [
+                    bytes.fromhex("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"),
+                    bytes.fromhex("000000000000000000000000" + address2[2:]),
+                    bytes.fromhex(
+                        "00000000000000000000000070997970C51812dc3A010C7d01b50e0d17dc79C8"[2:]
+                    ),
+                ],
+                "data": bytes.fromhex(
+                    "00000000000000000000000000000000000000000000000000000000000003e8"
+                ),
+            }
+        ],
+    }
+
+    async def flip_to_spent_then_receipt(*args, **kwargs):
+        async with db_lock:
+            rec = await PAYMENTS_DB.get_async(payment_id2)
+            rec["status"] = "spent"
+            await PAYMENTS_DB.set_async(payment_id2, rec)
+        return mock_receipt
+
+    with patch("crypcodile.api_server.get_w3") as mock_get_w3:
+        mock_w3 = MagicMock()
+        mock_w3.eth.chain_id = AwaitableValue(8453)
+        mock_w3.eth.get_transaction = AsyncMock(
+            return_value={"from": address2, "chainId": 8453}
+        )
+        mock_w3.eth.get_block = AsyncMock(return_value={"timestamp": 1000})
+        mock_w3.eth.get_transaction_receipt = AsyncMock(
+            side_effect=flip_to_spent_then_receipt
+        )
+        mock_get_w3.return_value = mock_w3
+
+        payment_sig_header2 = json.dumps({
+            "payment_id": payment_id2,
+            "tx_hash": tx_hash2,
+            "signature": sig2,
+        })
+        with pytest.raises(HTTPException) as exc_repay:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header2,
+            )
+        assert exc_repay.value.status_code == 400
+        assert exc_repay.value.detail == "Payment already processed."
+        assert PAYMENTS_DB[payment_id2]["status"] == "spent"
