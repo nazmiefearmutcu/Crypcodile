@@ -31,11 +31,11 @@ def test_corrupted_timestamp_inputs(tmp_path):
 
 def test_invalid_selection_indexes_in_wizard():
     """Verify that selection wizard digits checking handles bad input correctly."""
-    # Custom choices list for collect:
-    # 1. Exchange choice is invalid index '99' -> then valid '1' (binance).
+    # Custom choices list for collect (list_exchanges is sorted):
+    # 1. Exchange choice is invalid index '99' -> then valid '2' (binance).
     # 2. Channel choice is invalid index '99' -> then valid '1' (trade).
     # 3. Symbol choice is 'c' -> then custom symbol 'INVALID_SYM'.
-    with patch("typer.prompt", side_effect=["99", "1", "99", "1", "c", "INVALID_SYM"]):
+    with patch("typer.prompt", side_effect=["99", "2", "99", "1", "c", "INVALID_SYM"]):
         exchange, symbols, channels = select_collect_params_interactively(None, None, None)
         assert exchange == "binance"
         assert channels == ["trade"]

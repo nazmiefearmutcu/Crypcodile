@@ -208,11 +208,11 @@ def test_collect_cli_wizard(tmp_path: pathlib.Path) -> None:
                 "collect",
                 "--data-dir", str(tmp_path),
             ],
-            # Inputs:
-            # 1. Select exchange: '4' for deribit.
+            # Inputs (list_exchanges is sorted: 5=deribit):
+            # 1. Select exchange: '5' for deribit.
             # 2. Select channels: '1' for trade.
             # 3. Select symbol: '1' for BTC-PERPETUAL.
-            input="4\n1\n1\n",
+            input="5\n1\n1\n",
         )
 
     assert result.exit_code == 0, f"stdout:\n{result.output}"

@@ -48,6 +48,11 @@ _REGISTRY: dict[str, type[Connector]] = {
 _VALID_NAMES = sorted(_REGISTRY)
 
 
+def list_exchanges() -> list[str]:
+    """Sorted registered exchange names."""
+    return list(_VALID_NAMES)
+
+
 def make_connector(
     exchange: str,
     symbols: list[str],

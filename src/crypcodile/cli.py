@@ -383,7 +383,7 @@ def prompt_time_range_helper(
 # ---------------------------------------------------------------------------
 from crypcodile.client.backfill import run_historical_backfill
 from crypcodile.client.collect import collect as collect_live
-from crypcodile.exchanges.factory import make_connector
+from crypcodile.exchanges.factory import list_exchanges, make_connector
 from crypcodile.ingest.transport import AiohttpWsTransport
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.store.parquet_sink import ParquetSink
@@ -1099,16 +1099,8 @@ def select_collect_params_interactively(
 ) -> tuple[str, list[str], list[str]]:
     """Select exchange, channels, and symbols interactively for live data collection."""
     import sys
-    
-    valid_exchanges = [
-        "binance",
-        "bybit",
-        "coinbase",
-        "deribit",
-        "okx",
-        "base_onchain",
-        "gmx_synthetix",
-    ]
+
+    valid_exchanges = list_exchanges()
     valid_channels = ["trade", "book_ticker", "book_snapshot", "book_delta"]
     
     suggested_symbols = {

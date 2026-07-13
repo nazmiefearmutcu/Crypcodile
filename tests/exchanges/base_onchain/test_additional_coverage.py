@@ -100,13 +100,13 @@ def test_basis_cmd_empty_strings(tmp_path: Path) -> None:
 def test_custom_channel_interactive_selection() -> None:
     """Verify select_collect_params_interactively allows custom channels."""
     # We select exchange, then custom channel, then default symbol
-    # Mock inputs:
-    # 1. Exchange selection: "1" (binance)
+    # Mock inputs (list_exchanges is sorted: 2=binance):
+    # 1. Exchange selection: "2" (binance)
     # 2. Channel selection: "C" (custom)
     # 3. Custom channel text: "custom_channel_1, custom_channel_2"
     # 4. Symbol selection: "1" (BTCUSDT)
-    inputs = ["1", "C", "custom_channel_1, custom_channel_2", "1"]
-    
+    inputs = ["2", "C", "custom_channel_1, custom_channel_2", "1"]
+
     with patch("typer.prompt", side_effect=inputs), \
          patch("crypcodile.cli.prompt_with_autocomplete", return_value="BTCUSDT"):
         exchange, symbols, channels = select_collect_params_interactively(None, None, None)

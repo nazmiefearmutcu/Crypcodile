@@ -1,6 +1,7 @@
-"""Tests for exchanges.factory.make_connector (Task T7a).
+"""Tests for exchanges.factory (Task T7a + list_exchanges).
 
 No live network calls.  Tests cover:
+- list_exchanges returns sorted registered names
 - make_connector returns the correct Connector subclass for each known exchange name
 - Unknown exchange name raises ValueError with a clear message listing valid names
 """
@@ -24,6 +25,47 @@ def _make(exchange: str, **kw):  # type: ignore[no-untyped-def]
         registry=InstrumentRegistry(),
         **kw,
     )
+
+
+# ---------------------------------------------------------------------------
+# list_exchanges
+# ---------------------------------------------------------------------------
+
+
+def test_list_exchanges_sorted() -> None:
+    from crypcodile.exchanges.factory import list_exchanges
+
+    names = list_exchanges()
+    assert names == sorted(names)
+    assert names == [
+        "base_onchain",
+        "binance",
+        "bybit",
+        "coinbase",
+        "deribit",
+        "gmx_synthetix",
+        "okx",
+    ]
+
+
+def test_list_exchanges_returns_copy() -> None:
+    """Callers can mutate the returned list without affecting the registry."""
+    from crypcodile.exchanges.factory import list_exchanges
+
+    a = list_exchanges()
+    a.append("not-an-exchange")
+    b = list_exchanges()
+    assert "not-an-exchange" not in b
+    assert a is not b
+
+
+def test_list_exchanges_usable_with_make_connector() -> None:
+    """Every name from list_exchanges constructs without ValueError."""
+    from crypcodile.exchanges.factory import list_exchanges
+
+    for name in list_exchanges():
+        conn = _make(name)
+        assert conn is not None
 
 
 # ---------------------------------------------------------------------------

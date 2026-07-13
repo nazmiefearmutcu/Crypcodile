@@ -177,12 +177,12 @@ class TestCliAdversarial(unittest.TestCase):
 
     def test_collect_wizard_invalid_inputs(self):
         """4a. Test exchange/symbol/channel selection wizards with invalid inputs (digit and non-digit) for collect"""
-        # 1. Exchange selection:
-        # Input sequence: 
-        # - "99" (invalid exchange index) -> "abc" (invalid exchange name) -> "1" (valid index for binance)
+        # 1. Exchange selection (list_exchanges is sorted: 2=binance):
+        # Input sequence:
+        # - "99" (invalid exchange index) -> "abc" (invalid exchange name) -> "2" (valid index for binance)
         # - "99" (invalid channel index) -> "abc" (invalid channel name) -> "1" (valid index for trade)
         # - "c" (custom symbol choice) -> "BTC"
-        with patch("typer.prompt", side_effect=["99", "abc", "1", "99", "abc", "1", "c", "BTC"]):
+        with patch("typer.prompt", side_effect=["99", "abc", "2", "99", "abc", "1", "c", "BTC"]):
             exchange, symbols, channels = select_collect_params_interactively(None, None, None)
             self.assertEqual(exchange, "binance")
             self.assertEqual(channels, ["trade"])
