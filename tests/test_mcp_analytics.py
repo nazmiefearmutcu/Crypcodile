@@ -15,6 +15,7 @@ import pytest
 from crypcodile.mcp_server import (
     TOOLS,
     handle_calculate_ofi,
+    handle_detect_mev_sandwiches,
     handle_estimate_slippage,
     handle_get_chaos_score,
     handle_get_funding_prediction,
@@ -47,7 +48,39 @@ _ANALYTICS_TOOLS = {
     "get_open_interest",
     "get_funding_prediction",
     "get_chaos_score",
+    "detect_mev_sandwiches",
 }
+
+_MEV_SANDWICH_TRADES = [
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 10,
+        "sender": "0xattacker",
+        "is_buy": True,
+    },
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 11,
+        "sender": "0xvictim",
+        "is_buy": True,
+    },
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 12,
+        "sender": "0xattacker",
+        "is_buy": False,
+    },
+    {
+        "block": 100,
+        "pool": "AERO-USDC",
+        "log_index": 13,
+        "sender": "0xnormal",
+        "is_buy": True,
+    },
+]
 
 
 def test_tools_contains_analytics_names() -> None:
@@ -452,6 +485,68 @@ def test_handle_get_chaos_score_high_risk_bounded() -> None:
     assert result["chaos_score"] > 50.0
 
 
+def test_handle_detect_mev_sandwiches_positive() -> None:
+    rows = handle_detect_mev_sandwiches(_MEV_SANDWICH_TRADES)
+    assert isinstance(rows, list)
+    assert len(rows) == 4
+    flags = [r["is_sandwich"] for r in rows]
+    assert flags == [True, True, True, False]
+    assert rows[0]["sender"] == "0xattacker"
+    assert rows[1]["sender"] == "0xvictim"
+    assert rows[3]["sender"] == "0xnormal"
+
+
+def test_handle_detect_mev_sandwiches_negative_across_blocks() -> None:
+    trades = [
+        {
+            "block": 100,
+            "pool": "AERO-USDC",
+            "log_index": 10,
+            "sender": "0xattacker",
+            "is_buy": True,
+        },
+        {
+            "block": 101,
+            "pool": "AERO-USDC",
+            "log_index": 11,
+            "sender": "0xvictim",
+            "is_buy": True,
+        },
+        {
+            "block": 102,
+            "pool": "AERO-USDC",
+            "log_index": 12,
+            "sender": "0xattacker",
+            "is_buy": False,
+        },
+    ]
+    rows = handle_detect_mev_sandwiches(trades)
+    assert len(rows) == 3
+    assert not any(r["is_sandwich"] for r in rows)
+
+
+def test_handle_detect_mev_sandwiches_empty() -> None:
+    assert handle_detect_mev_sandwiches([]) == []
+
+
+def test_handle_detect_mev_sandwiches_missing_cols_raises() -> None:
+    with pytest.raises(ValueError, match="missing required columns"):
+        handle_detect_mev_sandwiches([{"block": 1}])
+
+
+def test_handle_detect_mev_sandwiches_not_list_raises() -> None:
+    with pytest.raises(TypeError, match="list of dicts"):
+        handle_detect_mev_sandwiches({"block": 1})  # type: ignore[arg-type]
+
+
+def test_handle_detect_mev_sandwiches_matches_analytics() -> None:
+    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+
+    rows = handle_detect_mev_sandwiches(_MEV_SANDWICH_TRADES)
+    expected = detect_sandwiches(pl.DataFrame(_MEV_SANDWICH_TRADES)).to_dicts()
+    assert rows == expected
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -540,3 +635,18 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "sequencer_delay",
     ):
         assert chaos_props[key]["type"] == "number"
+    assert set(by_name["detect_mev_sandwiches"]["inputSchema"]["required"]) == {
+        "trades",
+    }
+    trades_schema = by_name["detect_mev_sandwiches"]["inputSchema"]["properties"][
+        "trades"
+    ]
+    assert trades_schema["type"] == "array"
+    assert trades_schema["items"]["type"] == "object"
+    assert set(trades_schema["items"]["required"]) == {
+        "block",
+        "pool",
+        "log_index",
+        "sender",
+        "is_buy",
+    }

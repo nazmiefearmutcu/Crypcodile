@@ -591,6 +591,33 @@ def handle_get_chaos_score(
     }
 
 
+def handle_detect_mev_sandwiches(
+    trades: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Detect MEV sandwich patterns in an offline trade sequence.
+
+    Wraps :func:`crypcodile.analytics.mev_sandwich.detect_sandwiches`.
+    Accepts a list of trade dicts with columns ``block``, ``pool``,
+    ``log_index``, ``sender``, ``is_buy``. Returns the same rows as dicts
+    with an ``is_sandwich`` flag. Empty input → ``[]``.
+    """
+    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+
+    if not isinstance(trades, list):
+        raise TypeError("trades must be a list of dicts")
+    if len(trades) == 0:
+        return []
+    for i, row in enumerate(trades):
+        if not isinstance(row, dict):
+            raise TypeError(f"trades[{i}] must be a dict, got {type(row).__name__}")
+
+    df = pl.DataFrame(trades)
+    out = detect_sandwiches(df)
+    if len(out) == 0:
+        return []
+    return out.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -1198,6 +1225,64 @@ TOOLS = [
             ],
         },
     },
+    {
+        "name": "detect_mev_sandwiches",
+        "description": (
+            "Detect MEV sandwich attack patterns in an offline trade sequence "
+            "(no data lake / RPC). Each trade needs block, pool, log_index, "
+            "sender, and is_buy. Returns the same rows with an is_sandwich "
+            "flag on frontrun, victim, and backrun legs of same-block "
+            "same-pool sandwiches."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "trades": {
+                    "type": "array",
+                    "description": (
+                        "List of trade objects with fields: block (int), "
+                        "pool (string), log_index (int), sender (string), "
+                        "is_buy (bool or 0/1/true/false/yes/buy)."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "block": {
+                                "type": "integer",
+                                "description": "Block number of the trade.",
+                            },
+                            "pool": {
+                                "type": "string",
+                                "description": "Pool / pair identifier.",
+                            },
+                            "log_index": {
+                                "type": "integer",
+                                "description": "Log index within the block.",
+                            },
+                            "sender": {
+                                "type": "string",
+                                "description": "Trade sender / wallet address.",
+                            },
+                            "is_buy": {
+                                "description": (
+                                    "True if buy side (bool, 0/1, or "
+                                    "true/false/yes/buy strings)."
+                                ),
+                            },
+                        },
+                        "required": [
+                            "block",
+                            "pool",
+                            "log_index",
+                            "sender",
+                            "is_buy",
+                        ],
+                    },
+                },
+            },
+            "required": ["trades"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1512,6 +1597,20 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_chaos_score failed: {e}"
+                            }
+                    elif tool_name == "detect_mev_sandwiches":
+                        try:
+                            raw_trades = arguments.get("trades", [])
+                            if not isinstance(raw_trades, (list, tuple)):
+                                raise TypeError(
+                                    "trades must be an array of objects"
+                                )
+                            tool_result = handle_detect_mev_sandwiches(
+                                list(raw_trades)
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"detect_mev_sandwiches failed: {e}"
                             }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
