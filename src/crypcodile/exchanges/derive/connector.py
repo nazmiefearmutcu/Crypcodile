@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from web3 import Web3
 
 from crypcodile.analytics.blackscholes import GreeksSolverAdapter
+from crypcodile.exchanges.base import Connector, backoff_delays
+from crypcodile.ingest.transport import Transport
+from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
 from crypcodile.schema.enums import OptType
-from crypcodile.schema.records import OptionsChain
+from crypcodile.schema.records import OptionsChain, Record
+from crypcodile.sink.base import Sink
 
 log = logging.getLogger(__name__)
+
+# Default public Base RPC — Derive/Lyra V2 markets live on Base L2.
+_DEFAULT_RPC_URL = "https://base-rpc.publicnode.com"
+_DEFAULT_VIEWER = "0xDe711De711De711De711De711De711De711De711"
+_DEFAULT_POLL_INTERVAL = 30.0
 
 # ABI for querying the option markets.
 # Matches common Lyra V2/Derive viewer contract design for fetching option markets data.
@@ -45,11 +57,15 @@ MARKET_VIEWER_ABI = [
 
 
 class DeriveConnector:
-    """Web3-based connector for Derive/Lyra options chain."""
+    """Web3-based client for Derive/Lyra options chain (pull / RPC).
+
+    Not a :class:`~crypcodile.exchanges.base.Connector` by itself — use
+    :class:`DerivePollConnector` for collect/factory integration.
+    """
 
     def __init__(self, rpc_url: str, viewer_address: str | None = None) -> None:
         self.rpc_url = rpc_url
-        self.viewer_address = viewer_address or "0xDe711De711De711De711De711De711De711De711"
+        self.viewer_address = viewer_address or _DEFAULT_VIEWER
         self.w3: Web3 | None = None
         self.viewer_contract: Any = None
 
@@ -180,3 +196,173 @@ class DeriveConnector:
             chains.append(record)
 
         return chains
+
+
+def _underlying_from_symbol(symbol: str) -> str:
+    """Map a collect symbol to a Derive underlying ticker.
+
+    Accepts plain underlyings (``BTC``, ``ETH``) and common prefixed forms
+    (``BTC-USD``, ``DERIVE:BTC``).
+    """
+    core = symbol.split(":")[-1]
+    return core.split("-")[0].upper()
+
+
+class DerivePollConnector(Connector):
+    """Poll-style :class:`~crypcodile.exchanges.base.Connector` for Derive options.
+
+    Wraps :class:`DeriveConnector`: each poll cycle calls
+    :meth:`DeriveConnector.fetch_options_chain` for every configured underlying
+    and writes :class:`~crypcodile.schema.records.OptionsChain` records into
+    the sink.  No websocket transport is used; :meth:`run` owns the loop.
+
+    Factory / constructor kwargs
+    ----------------------------
+    rpc_url:
+        Web3 HTTP RPC endpoint (default: Base public RPC).
+    viewer_address:
+        Market viewer contract address (optional; placeholder default).
+    poll_interval:
+        Seconds between successful poll cycles (default ``30.0``).
+    underlying_price:
+        Spot/forward used for record fields and optional greeks (default
+        ``60000.0``).  Prefer per-underlying maps in a future revision.
+    greeks_solver:
+        Optional :class:`~crypcodile.analytics.blackscholes.GreeksSolverAdapter`.
+    rate:
+        Risk-free rate for greeks (default ``0.0``).
+    """
+
+    name = "derive"
+    ws_url = ""
+    rest_url = _DEFAULT_RPC_URL
+
+    def __init__(
+        self,
+        symbols: list[str],
+        channels: list[str],
+        out: Sink,
+        registry: InstrumentRegistry,
+        *,
+        rpc_url: str = _DEFAULT_RPC_URL,
+        viewer_address: str | None = None,
+        poll_interval: float = _DEFAULT_POLL_INTERVAL,
+        underlying_price: float = 60000.0,
+        greeks_solver: GreeksSolverAdapter | None = None,
+        rate: float = 0.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            symbols=symbols,
+            channels=channels,
+            out=out,
+            registry=registry,
+        )
+        self.rpc_url = rpc_url
+        self.viewer_address = viewer_address or _DEFAULT_VIEWER
+        self.poll_interval = poll_interval
+        self.underlying_price = underlying_price
+        self.greeks_solver = greeks_solver
+        self.rate = rate
+        # Low-level Web3 pull client; connect() is deferred to run().
+        self.client = DeriveConnector(
+            rpc_url=self.rpc_url,
+            viewer_address=self.viewer_address,
+        )
+        # No WS transport — run() polls directly.
+        self.transport = None
+
+    def normalize(self, msg: object, local_ts: int) -> Iterable[Record]:
+        """No-op: options records are produced by :meth:`fetch_options_chain`."""
+        return ()
+
+    async def list_instruments(self) -> list[Instrument]:
+        instruments: list[Instrument] = []
+        for symbol in self.symbols:
+            underlying = _underlying_from_symbol(symbol)
+            instruments.append(
+                Instrument(
+                    canonical=symbol,
+                    exchange=self.name,
+                    symbol_raw=symbol,
+                    kind=Kind.OPTION,
+                    base=underlying,
+                    quote="USD",
+                )
+            )
+        return instruments
+
+    def subscribe_channels(self) -> list[str]:
+        return list(self.channels) if self.channels else ["options_chain"]
+
+    async def _subscribe(self, transport: Transport) -> None:
+        """No-op — Derive is pull-only (no websocket subscribe)."""
+
+    async def _poll_once(self) -> int:
+        """Fetch options for all symbols; put each chain into the sink.
+
+        Returns the number of records written.
+        """
+        if self.client.w3 is None or self.client.viewer_contract is None:
+            await asyncio.to_thread(self.client.connect)
+
+        written = 0
+        for symbol in self.symbols:
+            underlying = _underlying_from_symbol(symbol)
+            chains = await asyncio.to_thread(
+                self.client.fetch_options_chain,
+                underlying,
+                self.underlying_price,
+                self.greeks_solver,
+                self.rate,
+            )
+            for rec in chains:
+                await self.out.put(rec)
+                written += 1
+        return written
+
+    async def run(self, max_reconnects: int = -1) -> None:
+        """Supervised poll loop: fetch options chain → sink → sleep.
+
+        Honours *max_reconnects* for consecutive poll failures (``-1`` =
+        unlimited, ``0`` = fail after first error without retry).  Successful
+        cycles reset the failure counter.  Cancel with task cancellation
+        (SIGINT / collect shutdown).
+        """
+        attempt = 0
+        try:
+            while True:
+                try:
+                    n = await self._poll_once()
+                    log.debug(
+                        "derive: polled %d OptionsChain record(s) for %s",
+                        n,
+                        self.symbols,
+                    )
+                    attempt = 0
+                    await asyncio.sleep(self.poll_interval)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.warning(
+                        "Connector %s poll error (attempt %d): %s",
+                        self.name,
+                        attempt,
+                        exc,
+                    )
+                    if max_reconnects == 0 or (
+                        max_reconnects > 0 and attempt >= max_reconnects
+                    ):
+                        raise
+                    delay = backoff_delays(
+                        attempt, jitter=0.25, rand=random.random()
+                    )
+                    log.info("derive: retrying poll in %.2fs...", delay)
+                    await asyncio.sleep(delay)
+                    attempt += 1
+                    # Force reconnect on next poll.
+                    self.client.w3 = None
+                    self.client.viewer_contract = None
+        finally:
+            if self._session is not None and not self._session.closed:
+                await self._session.close()

@@ -14,9 +14,10 @@ Usage::
     )
 
 Valid exchange names: ``binance``, ``bybit``, ``coinbase``, ``deribit``,
-``okx``, ``base_onchain``, ``gmx_synthetix``, ``superchain``.
+``okx``, ``base_onchain``, ``derive``, ``gmx_synthetix``, ``superchain``.
 Extra keyword arguments (e.g. ``market`` for Binance, ``category`` for Bybit,
-``region`` for OKX) are forwarded to the connector constructor unchanged.
+``region`` for OKX, ``rpc_url`` / ``viewer_address`` for Derive) are
+forwarded to the connector constructor unchanged.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from crypcodile.exchanges.binance.connector import BinanceConnector
 from crypcodile.exchanges.bybit.connector import BybitConnector
 from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
 from crypcodile.exchanges.deribit.connector import DeribitConnector
+from crypcodile.exchanges.derive.connector import DerivePollConnector
 from crypcodile.exchanges.okx.connector import OKXConnector
 from crypcodile.exchanges.gmx_synthetix.connector import GMXSynthetixConnector
 from crypcodile.exchanges.superchain.connector import SuperchainConnector
@@ -40,6 +42,7 @@ _REGISTRY: dict[str, type[Connector]] = {
     "bybit": BybitConnector,
     "coinbase": CoinbaseConnector,
     "deribit": DeribitConnector,
+    "derive": DerivePollConnector,
     "okx": OKXConnector,
     "base_onchain": BaseOnchainConnector,
     "gmx_synthetix": GMXSynthetixConnector,
@@ -69,7 +72,7 @@ def make_connector(
     ----------
     exchange:
         Lowercase exchange name.  Valid values: ``binance``, ``bybit``,
-        ``coinbase``, ``deribit``, ``okx``, ``base_onchain``,
+        ``coinbase``, ``deribit``, ``derive``, ``okx``, ``base_onchain``,
         ``gmx_synthetix``, ``superchain``.
     symbols:
         List of symbol strings to subscribe to (exchange-native format).
@@ -82,7 +85,7 @@ def make_connector(
     **kw:
         Extra keyword arguments forwarded verbatim to the connector constructor
         (e.g. ``market="usdm"`` for Binance, ``category="spot"`` for Bybit,
-        ``region="us"`` for OKX).
+        ``region="us"`` for OKX, ``rpc_url`` / ``viewer_address`` for Derive).
 
     Raises
     ------

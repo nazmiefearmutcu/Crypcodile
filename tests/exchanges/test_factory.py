@@ -43,11 +43,12 @@ def test_list_exchanges_sorted() -> None:
         "bybit",
         "coinbase",
         "deribit",
+        "derive",
         "gmx_synthetix",
         "okx",
         "superchain",
     ]
-    assert "superchain" in names
+    assert "derive" in names
 
 
 def test_list_exchanges_returns_copy() -> None:
@@ -110,6 +111,20 @@ def test_make_connector_deribit() -> None:
     assert isinstance(conn, DeribitConnector)
 
 
+def test_make_connector_derive() -> None:
+    from crypcodile.exchanges.derive.connector import DerivePollConnector
+
+    conn = _make(
+        "derive",
+        rpc_url="http://dummy-rpc.example",
+        viewer_address="0x1111111111111111111111111111111111111111",
+    )
+    assert isinstance(conn, DerivePollConnector)
+    assert conn.name == "derive"
+    assert conn.rpc_url == "http://dummy-rpc.example"
+    assert conn.viewer_address == "0x1111111111111111111111111111111111111111"
+
+
 def test_make_connector_base_onchain() -> None:
     from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
 
@@ -160,6 +175,7 @@ def test_make_connector_unknown_raises() -> None:
         "okx",
         "coinbase",
         "deribit",
+        "derive",
         "base_onchain",
         "superchain",
     ):

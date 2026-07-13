@@ -1599,8 +1599,8 @@ def collect(
     e.g. ``BTC`` → ``BTCUSDT`` on binance and ``BTC-PERPETUAL`` on deribit).
     Per-exchange symbol maps are not supported yet.
 
-    Valid exchange names: binance, bybit, coinbase, deribit, okx,
-    base_onchain, gmx_synthetix.
+    Valid exchange names: binance, bybit, coinbase, deribit, derive, okx,
+    base_onchain, gmx_synthetix, superchain.
 
     Examples::
 
