@@ -4,6 +4,7 @@ Commands
 --------
 query          -- Execute DuckDB SQL against the data lake; print result table.
 catalog        -- List all channels present in the data lake with row counts.
+search         -- Ranked symbol search over the data lake inventory.
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
 collect        -- Run live connectors and write data to the Parquet lake.
@@ -16,6 +17,8 @@ Usage examples::
 
     crypcodile query "SELECT count(*) FROM trade" --data-dir /data
     crypcodile catalog --data-dir /data
+    crypcodile catalog --symbols --data-dir /data
+    crypcodile search BTC --data-dir /data
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
                      --fmt csv --dest out/trades.csv --data-dir /data
     crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL \\
@@ -744,14 +747,44 @@ def query(
 @app.command()
 def catalog(
     data_dir: _DataDirOpt = Path("data"),
+    symbols: Annotated[
+        bool,
+        typer.Option(
+            "--symbols",
+            help="Print inventory summary (exchange, channel, symbol, coverage).",
+        ),
+    ] = False,
 ) -> None:
-    """List channels present in the data lake with their row counts."""
+    """List channels present in the data lake with their row counts.
+
+    Use ``--symbols`` to print a per-symbol inventory summary instead.
+    """
     from crypcodile.client.client import CrypcodileClient
     from crypcodile.store.catalog import Catalog
 
     data_dir = resolve_data_dir(data_dir)
 
-    cat: Catalog = CrypcodileClient(data_dir=data_dir)._catalog
+    client = CrypcodileClient(data_dir=data_dir)
+    cat: Catalog = client._catalog
+
+    if symbols:
+        inv = client.inventory()
+        if len(inv) == 0:
+            typer.echo("No data found in: " + str(data_dir))
+            raise typer.Exit(code=0)
+        # Inventory summary table.
+        cols = ["exchange", "channel", "symbol", "min_ts", "max_ts", "row_count"]
+        typer.echo(
+            f"{'exchange':<16}  {'channel':<16}  {'symbol':<32}  "
+            f"{'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+        )
+        typer.echo("-" * 128)
+        for row in inv.select(cols).iter_rows(named=True):
+            typer.echo(
+                f"{row['exchange']:<16}  {row['channel']:<16}  {row['symbol']:<32}  "
+                f"{row['min_ts']:>20}  {row['max_ts']:>20}  {row['row_count']:>10,}"
+            )
+        raise typer.Exit(code=0)
 
     # Discover channels from the registered views.
     channels: list[str] = sorted(cat._registered_channels)
@@ -769,6 +802,66 @@ def catalog(
         except Exception:
             n = -1
         typer.echo(f"{ch:<24}  {n:>10,}")
+
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="Symbol search query.")] = "",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Maximum number of results."),
+    ] = 20,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Ranked symbol search over the data lake inventory.
+
+    Prints a table of matching symbols with score and coverage.  Empty
+    results print ``No matches.`` and exit 0.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not query:
+        if is_interactive_stdin():
+            query = typer.prompt("Search query").strip()
+        if not query:
+            typer.echo("Error: search query is required.", err=True)
+            raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    df = client.search_symbols(
+        query, channel=channel, exchange=exchange, limit=limit
+    )
+
+    if len(df) == 0:
+        typer.echo("No matches.")
+        raise typer.Exit(code=0)
+
+    typer.echo(
+        f"{'symbol':<32}  {'exchange':<12}  {'channels':<24}  "
+        f"{'score':>5}  {'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+    )
+    typer.echo("-" * 140)
+    for row in df.iter_rows(named=True):
+        typer.echo(
+            f"{row['symbol']:<32}  {row['exchange']:<12}  {row['channels']:<24}  "
+            f"{row['score']:>5}  {row['min_ts']:>20}  {row['max_ts']:>20}  "
+            f"{row['row_count']:>10,}"
+        )
 
 
 # ---------------------------------------------------------------------------

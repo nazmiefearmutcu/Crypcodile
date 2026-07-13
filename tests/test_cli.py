@@ -102,6 +102,113 @@ async def test_cli_catalog_exits_zero_lists_channels(tmp_path: pathlib.Path) -> 
     assert "book_snapshot" in result.output
 
 
+async def test_cli_catalog_symbols_inventory(tmp_path: pathlib.Path) -> None:
+    """``catalog --symbols`` prints inventory summary rows."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog", "--symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "symbol" in result.output
+    assert "row_count" in result.output
+    assert "trade" in result.output
+
+
+def test_cli_catalog_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog", "--symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No data found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# search command
+# ---------------------------------------------------------------------------
+
+
+async def test_cli_search_finds_symbol(tmp_path: pathlib.Path) -> None:
+    """``search BTC`` returns matching rows with score columns."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["search", "BTC", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "score" in result.output
+    assert "exchange" in result.output
+    assert "channels" in result.output
+
+
+async def test_cli_search_no_matches(tmp_path: pathlib.Path) -> None:
+    """Empty / no-match search prints 'No matches.' and exits 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["search", "ZZZZ-NO-MATCH", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No matches." in result.output
+
+
+def test_cli_search_empty_lake(tmp_path: pathlib.Path) -> None:
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["search", "BTC", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No matches." in result.output
+
+
+async def test_cli_search_channel_filter(tmp_path: pathlib.Path) -> None:
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "BTC",
+            "--channel",
+            "trade",
+            "--limit",
+            "5",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "trade" in result.output
+
+
 # ---------------------------------------------------------------------------
 # export command
 # ---------------------------------------------------------------------------

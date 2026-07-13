@@ -27,6 +27,18 @@ export(channel, symbols, frm, to, fmt, dest)
     specified format.  Supported formats: ``parquet``, ``csv``, ``arrow``,
     ``json``, ``jsonl``.  Parent directories are created automatically.
 
+list_channels()
+    Sorted channel names present in the lake.
+
+inventory(channel=None, exchange=None)
+    Per-symbol coverage summary DataFrame.
+
+search_symbols(q, channel=None, exchange=None, limit=20)
+    Ranked symbol search over the inventory.
+
+resolve_symbols(symbols, channel=None, ambiguous="error"|"first"|"all")
+    Map free-form inputs to canonical catalog symbols.
+
 Analytics methods (Task 6.5)
 ----------------------------
 funding_apr(symbol, start_ns, end_ns)
@@ -55,6 +67,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import polars as pl
 
@@ -64,6 +77,10 @@ from crypcodile.replay.merge import replay as _kway_merge
 from crypcodile.schema.records import Record
 from crypcodile.store.catalog import Catalog
 from crypcodile.store.rows import from_row
+
+# Minimum search score for resolve_symbols (substring match = 40).
+_RESOLVE_SCORE_THRESHOLD = 40
+_AmbiguousMode = Literal["error", "first", "all"]
 
 
 def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
@@ -117,6 +134,143 @@ class CrypcodileClient:
             A Polars DataFrame containing the query result.
         """
         return self._catalog.query(sql)
+
+    # ------------------------------------------------------------------
+    # Discovery / search façade (Wave 2 Task 3)
+    # ------------------------------------------------------------------
+
+    def list_channels(self) -> list[str]:
+        """Return sorted channel names present in the lake.
+
+        Thin wrapper over :meth:`Catalog.list_channels`.  Empty lake → ``[]``.
+        """
+        return self._catalog.list_channels()
+
+    def inventory(
+        self,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> pl.DataFrame:
+        """Summarise symbols present in the lake.
+
+        Thin wrapper over :meth:`Catalog.inventory`.
+
+        Columns (stable schema even when empty)::
+
+            exchange, channel, symbol, min_ts, max_ts, row_count
+        """
+        return self._catalog.inventory(channel=channel, exchange=exchange)
+
+    def search_symbols(
+        self,
+        q: str,
+        *,
+        channel: str | None = None,
+        exchange: str | None = None,
+        limit: int = 20,
+    ) -> pl.DataFrame:
+        """Ranked symbol search over the catalog inventory.
+
+        Thin wrapper over :meth:`Catalog.search_symbols`.
+
+        Columns::
+
+            symbol, exchange, channels, score, min_ts, max_ts, row_count
+        """
+        return self._catalog.search_symbols(
+            q, channel=channel, exchange=exchange, limit=limit
+        )
+
+    def resolve_symbols(
+        self,
+        symbols: list[str],
+        *,
+        channel: str | None = None,
+        ambiguous: _AmbiguousMode = "error",
+    ) -> list[str]:
+        """Resolve free-form symbol inputs to canonical catalog symbols.
+
+        Rules
+        -----
+        1. If an input already contains ``:`` and appears exactly in the
+           inventory (optionally filtered by *channel*), it is passed through.
+        2. Otherwise :meth:`search_symbols` is used with ``limit=20`` and a
+           minimum score of 40 (substring match or better).
+        3. *ambiguous* controls multi-match behaviour:
+           - ``"error"``: raise ``ValueError`` listing the matches
+           - ``"first"``: take the highest-score match
+           - ``"all"``: include every matched symbol
+
+        Args:
+            symbols: Free-form symbol strings to resolve.
+            channel: Optional channel filter for inventory / search.
+            ambiguous: Multi-match policy (default ``"error"``).
+
+        Returns:
+            Ordered list of canonical symbols (may be longer than *symbols*
+            when ``ambiguous="all"``).
+
+        Raises:
+            ValueError: On unknown *ambiguous* mode, no matches, or
+                multi-match when ``ambiguous="error"``.
+        """
+        if ambiguous not in ("error", "first", "all"):
+            raise ValueError(
+                f"ambiguous must be 'error', 'first', or 'all'; got {ambiguous!r}"
+            )
+
+        if not symbols:
+            return []
+
+        inv = self.inventory(channel=channel)
+        known: set[str] = set()
+        if len(inv) > 0:
+            known = set(inv["symbol"].to_list())
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+
+        def _append(sym: str) -> None:
+            if sym not in seen:
+                seen.add(sym)
+                resolved.append(sym)
+
+        for raw in symbols:
+            s = raw.strip() if isinstance(raw, str) else str(raw).strip()
+            if not s:
+                continue
+
+            # Exact pass-through for already-canonical symbols present in lake.
+            if ":" in s and s in known:
+                _append(s)
+                continue
+
+            hits = self.search_symbols(s, channel=channel, limit=20)
+            if len(hits) > 0:
+                hits = hits.filter(pl.col("score") >= _RESOLVE_SCORE_THRESHOLD)
+
+            if len(hits) == 0:
+                raise ValueError(f"No symbols matched {s!r}")
+
+            match_syms = hits["symbol"].to_list()
+            if len(match_syms) == 1:
+                _append(match_syms[0])
+                continue
+
+            if ambiguous == "error":
+                listed = ", ".join(f"{row['symbol']} (score={row['score']})"
+                                   for row in hits.iter_rows(named=True))
+                raise ValueError(
+                    f"Ambiguous symbol {s!r}: {len(match_syms)} matches: {listed}"
+                )
+            if ambiguous == "first":
+                # search_symbols already ranks by score descending.
+                _append(match_syms[0])
+            else:  # "all"
+                for m in match_syms:
+                    _append(m)
+
+        return resolved
 
     def scan(
         self,

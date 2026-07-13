@@ -7,6 +7,7 @@ import traceback
 from pathlib import Path
 from typing import Any, cast
 
+import polars as pl
 import web3
 from web3 import AsyncHTTPProvider
 
@@ -325,6 +326,47 @@ async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) 
     except Exception as e:
         return {"error": f"Failed fetching 1h volume: {e}"}
 
+# ---------------------------------------------------------------------------
+# Discovery tool handlers (pure; unit-testable without stdio)
+# ---------------------------------------------------------------------------
+
+
+def handle_list_data_channels(client: CrypcodileClient) -> list[str]:
+    """Return sorted channel names present in the data lake. Empty lake → []."""
+    return client.list_channels()
+
+
+def handle_search_symbols(
+    client: CrypcodileClient,
+    q: str,
+    channel: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Ranked symbol search; returns list of row dicts (empty lake / no match → [])."""
+    df = client.search_symbols(q, channel=channel, limit=limit)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
+def handle_data_coverage(
+    client: CrypcodileClient,
+    symbol: str,
+    channel: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return inventory coverage rows for *symbol* (and optional *channel*).
+
+    Empty lake / no match → ``[]``.
+    """
+    inv = client.inventory(channel=channel)
+    if len(inv) == 0:
+        return []
+    matched = inv.filter(pl.col("symbol") == symbol)
+    if len(matched) == 0:
+        return []
+    return matched.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -411,7 +453,69 @@ TOOLS = [
             },
             "required": ["symbol", "start", "end"]
         }
-    }
+    },
+    {
+        "name": "list_data_channels",
+        "description": (
+            "List data channels present in the Crypcodile parquet data lake "
+            "(e.g. trade, book_snapshot, funding). Empty lake returns []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "search_symbols",
+        "description": (
+            "Ranked symbol search over the data lake inventory. Returns symbol, "
+            "exchange, channels, score, min_ts, max_ts, row_count. Empty lake "
+            "or no matches returns []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "q": {
+                    "type": "string",
+                    "description": "Search query (full symbol, raw name, or substring).",
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "Optional channel filter (e.g. 'trade').",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default 20).",
+                },
+            },
+            "required": ["q"],
+        },
+    },
+    {
+        "name": "data_coverage",
+        "description": (
+            "Return coverage inventory for a canonical symbol: exchange, channel, "
+            "min_ts, max_ts, row_count per channel. Empty lake or unknown symbol "
+            "returns []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "Optional channel filter.",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -500,6 +604,30 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"Funding APR analysis failed: {e}"}
+                    elif tool_name == "list_data_channels":
+                        try:
+                            tool_result = handle_list_data_channels(client)
+                        except Exception as e:
+                            tool_result = {"error": f"list_data_channels failed: {e}"}
+                    elif tool_name == "search_symbols":
+                        try:
+                            q = arguments.get("q", "")
+                            ch = arguments.get("channel")
+                            lim = int(arguments.get("limit", 20))
+                            tool_result = handle_search_symbols(
+                                client, q, channel=ch, limit=lim
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"search_symbols failed: {e}"}
+                    elif tool_name == "data_coverage":
+                        try:
+                            sym = arguments.get("symbol", "")
+                            ch = arguments.get("channel")
+                            tool_result = handle_data_coverage(
+                                client, sym, channel=ch
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"data_coverage failed: {e}"}
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
                     
