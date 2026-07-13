@@ -1,4 +1,4 @@
-"""CLI exposure tests for Base risk analytics (open-interest, peg-deviation, gas-vol)."""
+"""CLI exposure tests for Base risk analytics (open-interest, peg-deviation, chaos-score, gas-vol)."""
 
 from __future__ import annotations
 
@@ -214,6 +214,69 @@ def test_cli_peg_deviation_missing_args_exits_1() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CLI: chaos-score (pure numeric kwargs)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_chaos_score_zeros() -> None:
+    result = _RUNNER.invoke(app, ["chaos-score"])
+    assert result.exit_code == 0, result.output
+    assert "chaos_score: 0.0" in result.output
+
+
+def test_cli_chaos_score_metrics() -> None:
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    vol, dev, imb, delay = 0.05, 0.002, 0.1, 1.0
+    expected = calculate_chaos_score(vol, dev, imb, delay)
+    result = _RUNNER.invoke(
+        app,
+        [
+            "chaos-score",
+            "--volatility",
+            str(vol),
+            "--stablecoin-deviation",
+            str(dev),
+            "--orderbook-imbalance",
+            str(imb),
+            "--sequencer-delay",
+            str(delay),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert f"chaos_score: {expected}" in result.output
+    assert "volatility: 0.05" in result.output
+    assert "stablecoin_deviation: 0.002" in result.output
+    assert "orderbook_imbalance: 0.1" in result.output
+    assert "sequencer_delay: 1.0" in result.output
+
+
+def test_cli_chaos_score_high_risk_near_100() -> None:
+    result = _RUNNER.invoke(
+        app,
+        [
+            "chaos-score",
+            "--volatility",
+            "1000",
+            "--stablecoin-deviation",
+            "1000",
+            "--orderbook-imbalance",
+            "1",
+            "--sequencer-delay",
+            "1000",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Parse chaos_score line
+    score_line = next(
+        line for line in result.output.splitlines() if line.startswith("chaos_score:")
+    )
+    score = float(score_line.split(":", 1)[1].strip())
+    assert 0.0 <= score <= 100.0
+    assert score > 90.0
+
+
+# ---------------------------------------------------------------------------
 # CLI: gas-vol
 # ---------------------------------------------------------------------------
 
@@ -268,4 +331,5 @@ def test_cli_commands_registered() -> None:
     assert result.exit_code == 0
     assert "open-interest" in result.output
     assert "peg-deviation" in result.output
+    assert "chaos-score" in result.output
     assert "gas-vol" in result.output

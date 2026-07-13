@@ -17,6 +17,7 @@ vol-skew       -- Print per-strike IV and delta for a single expiry.
 risk-reversal  -- Print risk-reversal and butterfly from vol skew.
 open-interest  -- Aggregate open interest across exchanges from the lake.
 peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
+chaos-score    -- Normalized [0, 100] chaos score from pure risk metrics.
 gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
 smart-money    -- Summarize smart-money net flow from transfers CSV + watchlist.
 label-transfers -- Label/filter transfer CSV rows via watchlist JSON (no RPC).
@@ -51,6 +52,8 @@ Usage examples::
                             --data-dir /data
     crypcodile peg-deviation --price 0.98 --threshold 0.01
     crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
+    crypcodile chaos-score --volatility 0.05 --stablecoin-deviation 0.002 \\
+                          --orderbook-imbalance 0.1 --sequencer-delay 1.0
     crypcodile gas-vol --gas-file gas.csv --vol-file vol.csv
     crypcodile smart-money --transfers transfers.csv --watchlist watchlist.json
     crypcodile label-transfers --transfers transfers.csv --watchlist watchlist.json \\
@@ -3040,6 +3043,60 @@ def peg_deviation_cmd(
         typer.echo("No peg deviation data found.")
         raise typer.Exit(code=0)
     typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# chaos-score (Base risk analytics — pure numeric inputs)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="chaos-score")
+def chaos_score_cmd(
+    volatility: Annotated[
+        float,
+        typer.Option(
+            "--volatility",
+            help="Realized or implied volatility (soft-thresholded; higher -> more chaos).",
+        ),
+    ] = 0.0,
+    stablecoin_deviation: Annotated[
+        float,
+        typer.Option(
+            "--stablecoin-deviation",
+            help="Absolute peg deviation from $1.00 (e.g. 0.02 = 2 cents).",
+        ),
+    ] = 0.0,
+    orderbook_imbalance: Annotated[
+        float,
+        typer.Option(
+            "--orderbook-imbalance",
+            help="Order book imbalance in [-1, 1] (abs used; higher -> more chaos).",
+        ),
+    ] = 0.0,
+    sequencer_delay: Annotated[
+        float,
+        typer.Option(
+            "--sequencer-delay",
+            help="Sequencer / exchange latency in seconds.",
+        ),
+    ] = 0.0,
+) -> None:
+    """Compute a normalized [0, 100] chaos score from pure risk metrics (no lake)."""
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    score = calculate_chaos_score(
+        volatility=volatility,
+        stablecoin_deviation=stablecoin_deviation,
+        orderbook_imbalance=orderbook_imbalance,
+        sequencer_delay=sequencer_delay,
+    )
+    typer.echo(
+        f"volatility: {volatility}\n"
+        f"stablecoin_deviation: {stablecoin_deviation}\n"
+        f"orderbook_imbalance: {orderbook_imbalance}\n"
+        f"sequencer_delay: {sequencer_delay}\n"
+        f"chaos_score: {score}"
+    )
 
 
 # ---------------------------------------------------------------------------
