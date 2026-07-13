@@ -56,6 +56,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **CLI symbol resolution**: Resolve symbols via `client.resolve_symbols` for consistent catalog-backed lookup.
 - **Bybit book resync deferred**: Shared book-sync helpers land for multi-venue use; Bybit `BookResyncBridge` wiring deferred (REST `u` aligns with `orderbook.1000` while the connector uses `orderbook.50`; recovery remains re-snapshot/re-subscribe).
 - **Exchange list alignment**: Align CLI exchange lists with the factory registry.
+- **CLI exchange lists via registry**: Collect help and interactive suggestions include `derive` and `superchain` via `list_exchanges()`.
 - **Search docs**: Document search and discovery commands in the README.
 
 ## [0.1.043] - 2026-07-09

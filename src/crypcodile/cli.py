@@ -1121,9 +1121,11 @@ def select_collect_params_interactively(
         "bybit": ["BTCUSDT", "ETHUSDT"],
         "coinbase": ["BTC-USD", "ETH-USD"],
         "deribit": ["BTC-PERPETUAL", "ETH-PERPETUAL", "SOL-PERPETUAL"],
+        "derive": ["BTC", "ETH"],
         "okx": ["BTC-USDT", "ETH-USDT"],
         "base_onchain": ["cbBTC-USDC", "AERO-USDC", "WETH-USDC", "DEGEN-WETH", "WELL-WETH"],
         "gmx_synthetix": ["GMX:BTC-USD", "GMX:ETH-USD", "SYNTHETIX:ETH-USD"],
+        "superchain": ["WETH-USDC", "USDC-USDT", "OP-USDC"],
     }
 
     # 1. Select Exchange
@@ -1540,9 +1542,11 @@ def collect(
         typer.Option(
             "--exchange",
             help=(
-                "Exchange name(s), e.g. deribit. Repeat the flag and/or use "
-                "commas for multi-exchange collect (same symbols/channels for "
-                "every exchange; symbols are normalized per exchange)."
+                "Exchange name(s). Repeat the flag and/or use commas for "
+                "multi-exchange collect (same symbols/channels for every "
+                "exchange; symbols are normalized per exchange). Valid: "
+                + ", ".join(list_exchanges())
+                + "."
             ),
         ),
     ] = None,
@@ -1599,8 +1603,7 @@ def collect(
     e.g. ``BTC`` → ``BTCUSDT`` on binance and ``BTC-PERPETUAL`` on deribit).
     Per-exchange symbol maps are not supported yet.
 
-    Valid exchange names: binance, bybit, coinbase, deribit, derive, okx,
-    base_onchain, gmx_synthetix, superchain.
+    Valid exchange names: {exchanges}.
 
     Examples::
 
@@ -1787,6 +1790,12 @@ def collect(
             pass
 
     typer.echo("Collection stopped. Data written to: " + str(data_dir))
+
+
+# Fill collect help from the factory registry (includes derive, superchain, …).
+collect.__doc__ = (collect.__doc__ or "").format(
+    exchanges=", ".join(list_exchanges())
+)
 
 
 # ---------------------------------------------------------------------------
