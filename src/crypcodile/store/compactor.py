@@ -56,6 +56,9 @@ class ParquetCompactor:
             return
 
         self._running = False
+        # Snapshot BEFORE cancelling the loop task. Cancel can tear down compact()
+        # finally and clear self._inflight while the executor thread still runs.
+        inflight = self._inflight
         if self._task is not None:
             self._task.cancel()
             try:
@@ -64,8 +67,7 @@ class ParquetCompactor:
                 pass
             self._task = None
 
-        # Await any in-flight compact/executor work so we never leave half-done state.
-        inflight = self._inflight
+        # Await the snapshotted future so we never leave half-done compact state.
         if inflight is not None and not inflight.done():
             try:
                 await inflight
@@ -97,7 +99,14 @@ class ParquetCompactor:
             fut = loop.run_in_executor(None, self._compact_sync)
             self._inflight = fut
             try:
-                await fut
+                # shield: cancel of the outer loop task must not drop the await
+                # of the executor Future; we still hold the lock until done.
+                await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                # Still wait for executor work to finish before releasing the lock.
+                if not fut.done():
+                    await fut
+                raise
             finally:
                 if self._inflight is fut:
                     self._inflight = None

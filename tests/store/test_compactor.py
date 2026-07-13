@@ -195,3 +195,56 @@ async def test_stop_awaits_inflight_compact(tmp_path: pathlib.Path) -> None:
     assert len(post_files) == 1
     assert post_files[0].name.startswith("part-compacted-")
 
+
+@pytest.mark.asyncio
+async def test_stop_awaits_inflight_when_started(tmp_path: pathlib.Path) -> None:
+    """stop() after start() must wait for in-flight compact even when cancel races."""
+    import threading
+
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=2, flush_interval_seconds=9999)
+    await sink.put(_trade(10.0))
+    await sink.put(_trade(20.0))
+    await sink.flush()
+    await sink.put(_trade(30.0))
+    await sink.put(_trade(40.0))
+    await sink.flush()
+
+    # Short poll so the background loop enters compact quickly; long enough
+    # that it does not re-enter while we hold the worker blocked.
+    compactor = ParquetCompactor(data_dir=tmp_path, min_age_seconds=0.0, poll_interval=60.0)
+    worker_entered = threading.Event()
+    worker_release = threading.Event()
+    original_compact_sync = compactor._compact_sync
+
+    def blocking_compact_sync() -> None:
+        worker_entered.set()
+        # Block the executor thread until stop() is known to be waiting.
+        assert worker_release.wait(timeout=10.0), "worker was not released in time"
+        original_compact_sync()
+
+    compactor._compact_sync = blocking_compact_sync  # type: ignore[method-assign]
+    compactor.start()
+
+    # Wait until background loop has scheduled the executor job.
+    deadline = time.monotonic() + 5.0
+    while compactor._inflight is None and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert worker_entered.wait(timeout=5.0), "executor never entered _compact_sync"
+    assert compactor._inflight is not None
+
+    stop_task = asyncio.create_task(compactor.stop())
+    # Give stop a chance to cancel the loop task and (bug) return early.
+    await asyncio.sleep(0.1)
+    assert not stop_task.done(), "stop() returned before in-flight executor finished"
+
+    worker_release.set()
+    await stop_task
+
+    assert not compactor._running
+    assert compactor._task is None
+    assert compactor._inflight is None or compactor._inflight.done()
+
+    post_files = list(tmp_path.rglob("part-*.parquet"))
+    assert len(post_files) == 1
+    assert post_files[0].name.startswith("part-compacted-")
+
