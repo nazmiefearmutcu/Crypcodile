@@ -352,6 +352,18 @@ def handle_list_dates(client: CrypcodileClient, channel: str) -> list[str]:
     return client.list_dates(channel)
 
 
+def handle_list_exchanges_on_disk(client: CrypcodileClient) -> list[str]:
+    """Return sorted distinct exchange partitions present in the lake.
+
+    Mirrors REST ``GET /api/v1/catalog/exchanges`` via
+    :meth:`CrypcodileClient.list_exchanges_on_disk` (hive ``exchange=``
+    partitions on disk). Empty lake → ``[]``.
+
+    Distinct from factory ``list_exchanges`` (registered connectors).
+    """
+    return client.list_exchanges_on_disk()
+
+
 def handle_search_symbols(
     client: CrypcodileClient,
     q: str,
@@ -941,6 +953,19 @@ TOOLS = [
                 },
             },
             "required": ["channel"],
+        },
+    },
+    {
+        "name": "list_exchanges_on_disk",
+        "description": (
+            "List distinct hive exchange partitions present in the Crypcodile "
+            "parquet data lake (e.g. deribit, binance). Sorted ascending. "
+            "Empty lake returns []. Distinct from registered connector names."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
     {
@@ -1892,6 +1917,13 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             )
                         except Exception as e:
                             tool_result = {"error": f"list_dates failed: {e}"}
+                    elif tool_name == "list_exchanges_on_disk":
+                        try:
+                            tool_result = handle_list_exchanges_on_disk(client)
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"list_exchanges_on_disk failed: {e}"
+                            }
                     elif tool_name == "search_symbols":
                         try:
                             q = arguments.get("q", "")

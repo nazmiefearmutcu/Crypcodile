@@ -237,10 +237,54 @@ class Catalog:
     def list_channels(self) -> list[str]:
         """Return sorted channel names present in the lake.
 
-        Empty lake → ``[]``.
+        Walks the hive layout ``exchange=*/channel=*`` on the filesystem
+        (no DuckDB scan).  Useful discovery even when channel directories
+        exist but views cannot be registered yet (empty partitions / no
+        parquet parts).
+
+        Empty lake or missing data directory yields ``[]``. Channel names
+        are the raw partition suffixes (e.g. ``trade``, ``book_snapshot``),
+        deduplicated across exchanges and sorted ascending. Non-directory
+        entries and names that are not ``channel=...`` are ignored.
         """
-        self._refresh_views()
-        return sorted(self._registered_channels)
+        if not self._data_dir.exists() or not self._data_dir.is_dir():
+            return []
+
+        try:
+            data_root = self._data_dir.resolve()
+        except OSError:
+            return []
+
+        channels: set[str] = set()
+        try:
+            exchange_dirs = list(self._data_dir.iterdir())
+        except OSError:
+            return []
+
+        for exchange_dir in exchange_dirs:
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith(
+                "exchange="
+            ):
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                exchange_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            try:
+                children = list(exchange_dir.iterdir())
+            except OSError:
+                continue
+            for chan_dir in children:
+                if not chan_dir.is_dir() or not chan_dir.name.startswith(
+                    "channel="
+                ):
+                    continue
+                channel_str = chan_dir.name[len("channel=") :]
+                if channel_str and channel_str not in (".", ".."):
+                    channels.add(channel_str)
+
+        return sorted(channels)
 
     def list_dates(self, channel: str) -> list[str]:
         """Return sorted distinct ``date=`` partition values for *channel*.
@@ -577,6 +621,9 @@ class Catalog:
                 if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
                     continue
                 channel = chan_dir.name[len("channel="):]
+                # Skip empty / relative partition suffixes (invalid view names).
+                if not channel or channel in (".", ".."):
+                    continue
                 if channel not in self._registered_channels:
                     self._create_view(channel)
 

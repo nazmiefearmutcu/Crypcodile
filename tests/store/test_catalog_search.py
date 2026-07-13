@@ -79,6 +79,34 @@ def test_list_channels_empty_lake(tmp_path: pathlib.Path) -> None:
     assert cat.list_channels() == []
 
 
+def test_list_channels_missing_data_dir(tmp_path: pathlib.Path) -> None:
+    """Missing data directory → []."""
+    cat = Catalog(tmp_path / "no_such_dir")
+    assert cat.list_channels() == []
+
+
+def test_list_channels_empty_partition_dirs_without_parquet(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Channel dirs without parquet still appear (filesystem, no DuckDB view).
+
+    Construct Catalog on an empty lake first: ``_refresh_views`` / DuckDB
+    cannot register views for globs with no parquet parts. Filesystem
+    ``list_channels`` still discovers later-created empty partitions.
+    """
+    cat = Catalog(tmp_path)
+    assert cat.list_channels() == []
+
+    (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "exchange=deribit" / "channel=funding").mkdir(parents=True)
+    (tmp_path / "exchange=binance" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "not_an_exchange" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "exchange=deribit" / "channel=").mkdir(parents=True)  # empty suffix
+    (tmp_path / "exchange=deribit" / "readme.txt").write_text("ignore")
+
+    assert cat.list_channels() == ["funding", "trade"]
+
+
 async def test_list_channels_with_fixtures(tmp_path: pathlib.Path) -> None:
     """After writing trades + snapshots, both channels are listed sorted."""
     await _write_fixtures(tmp_path)

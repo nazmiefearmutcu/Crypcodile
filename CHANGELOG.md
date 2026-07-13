@@ -6,9 +6,13 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **MCP list_exchanges_on_disk tool**: `list_exchanges_on_disk` wraps `CrypcodileClient.list_exchanges_on_disk` for hive `exchange=` partition discovery over MCP (empty lake → `[]`; listed in capabilities `mcp_tools_hint`). Distinct from factory connector registry.
 - **API catalog exchanges discovery**: `GET /api/v1/catalog/exchanges` lists distinct hive `exchange=` partitions present on disk (sorted; empty lake → `[]`). Wired through `Catalog.list_exchanges_on_disk` / `CrypcodileClient.list_exchanges_on_disk` and listed in capabilities. Distinct from `GET /api/v1/exchanges` (factory registry of registered connectors).
 - **MCP list_dates tool**: `list_dates` wraps `CrypcodileClient.list_dates(channel)` for hive `date=` partition discovery over MCP (strip empty channel → `[]`; listed in capabilities `mcp_tools_hint`).
 - **Shared `crypcodile.util.json_safe`**: `json_safe_float` / `json_safe_records` extracted once and re-exported by `api_server` and `mcp_server` (dedupe of prior private copies).
+
+### Changed
+- **Catalog.list_channels filesystem discovery**: walks hive `exchange=*/channel=*` without requiring DuckDB view registration, so empty partition dirs (no parquet yet) still appear in channel listings; `_refresh_views` skips empty / relative `channel=` suffixes.
 
 ### Fixed
 - **MCP list[dict] DF JSON safety**: `_json_safe_records` on MCP handlers that return DataFrame row dicts (OFI, slippage, whale alerts, vol suite, basis trio, indicators, depth, sequencer latency, open interest, discovery search/coverage/inventory, MEV sandwiches, smart-money, label-transfers) plus inline `query_market_data` / `get_funding_apr` tools/call paths — NaN/±Inf floats encode as JSON `null` (parity with REST).

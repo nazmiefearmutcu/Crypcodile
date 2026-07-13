@@ -65,6 +65,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     names = {t["name"] for t in TOOLS}
     assert "list_data_channels" in names
     assert "list_dates" in names
+    assert "list_exchanges_on_disk" in names
     assert "search_symbols" in names
     assert "data_coverage" in names
     assert "inventory_snapshot" in names
@@ -77,6 +78,39 @@ async def test_list_data_channels_with_data(tmp_path: pathlib.Path) -> None:
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_list_data_channels(client) == ["book_snapshot", "trade"]
+
+
+def test_list_exchanges_on_disk_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_exchanges_on_disk, TOOLS
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_exchanges_on_disk(client) == []
+    names = {t["name"] for t in TOOLS}
+    assert "list_exchanges_on_disk" in names
+    tool = next(t for t in TOOLS if t["name"] == "list_exchanges_on_disk")
+    assert tool["inputSchema"]["required"] == []
+
+
+async def test_list_exchanges_on_disk_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_exchanges_on_disk
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_exchanges_on_disk(client) == ["deribit"]
+
+
+def test_list_exchanges_on_disk_delegates_to_client() -> None:
+    """Handler is a thin wrapper over client.list_exchanges_on_disk."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_list_exchanges_on_disk
+
+    client = MagicMock()
+    client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
+    assert handle_list_exchanges_on_disk(client) == ["binance", "deribit"]
+    client.list_exchanges_on_disk.assert_called_once_with()
 
 
 def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:

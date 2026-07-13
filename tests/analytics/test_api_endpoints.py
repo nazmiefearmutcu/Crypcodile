@@ -5723,6 +5723,7 @@ def test_capabilities_shape_and_contents() -> None:
     for tool in (
         "list_data_channels",
         "list_dates",
+        "list_exchanges_on_disk",
         "search_symbols",
         "get_indicators",
         "get_spot_future_basis",
