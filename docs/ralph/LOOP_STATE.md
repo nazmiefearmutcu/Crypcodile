@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–62 COMPLETE. Continuous loop still active → Wave 63+.
+**Status:** Waves 1–63 COMPLETE. Continuous loop still active → Wave 64+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -489,7 +489,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | CLI `catalog-inventory` with optional `--channel` / `--exchange` (strip empty → no filter; empty → `No inventory.`; table columns match `catalog --symbols` / `data-coverage`; REST inventory + MCP `inventory_snapshot` parity) | DONE | `b099afe` |
 | 3 | Tests: empty/data/channel/exchange hit-miss/strip/delegate/help — **7 passed**; post-feature critical suites **846 passed** (+7) | DONE | `b099afe` |
 
-## Next rotation ideas (Wave 63+)
+## Wave 63 — Feature (Client.catalog_summary DRY) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Skip CLI inventory / catalog-coverage aliases (catalog-inventory + data-coverage already exist; not redundant-useful) | DONE | skip |
+| 2 | `CrypcodileClient.catalog_summary()` composes list_channels + list_exchanges_on_disk with counts; REST/MCP/CLI all wire to it | DONE | `ad807ca` |
+| 3 | Tests: client empty/data/compose; REST/MCP/CLI delegate to catalog_summary; discovery/CLI regression **527 passed** | DONE | `ad807ca` |
+
+## Next rotation ideas (Wave 64+)
 
 Priority candidates for the next cycles:
 
@@ -497,7 +505,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **data-coverage exchange filter** — optional exchange on REST/MCP/CLI coverage (parity with inventory filters)
+5. **data-coverage exchange filter** — optional exchange on REST/MCP/CLI coverage (parity with inventory filters)  
+6. **Client.catalog_stats() DRY** — same pattern as catalog_summary for REST/MCP/CLI stats
 
 
 
@@ -574,3 +583,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 60: REST `GET /api/v1/catalog/stats` per-channel row counts (list_channels + COUNT(*); -1 on fail; no inventory)
 - Wave 61: MCP `catalog_stats` + CLI `catalog-stats` (REST stats parity for agents/CLI)
 - Wave 62: broad regression green (839→846 after +7 tests); CLI `catalog-inventory` (REST inventory / MCP inventory_snapshot parity with channel/exchange filters)
+- Wave 63: Client `catalog_summary()` DRY — REST/MCP/CLI delegate; skip redundant inventory/coverage CLI aliases
