@@ -1365,6 +1365,25 @@ async def catalog_search_symbols(q: str = "", limit: int = 20) -> list[dict[str,
     return df.to_dicts()
 
 
+@app.get("/api/v1/catalog/inventory")
+async def catalog_inventory(
+    channel: str = "",
+    exchange: str = "",
+) -> list[dict[str, Any]]:
+    """Summarise symbols present in the local lake (read-only, no payment).
+
+    Optional ``channel`` and ``exchange`` query filters. Empty lake or no
+    matching rows yields ``[]``.
+    """
+    client = _get_lake_client()
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+    df = client.inventory(channel=ch, exchange=ex)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 # Hard max rows for lake scan HTTP responses (bounded discovery).
 _CATALOG_SCAN_MAX_LIMIT = 10_000
 

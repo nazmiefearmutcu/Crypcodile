@@ -252,6 +252,81 @@ def test_catalog_search_clamps_limit_minimum() -> None:
     mock_client.search_symbols.assert_called_once_with("x", limit=1)
 
 
+def test_catalog_inventory_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_inventory
+
+    result = asyncio.run(catalog_inventory())
+    assert result == []
+
+
+def test_catalog_inventory_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_inventory
+
+        result = asyncio.run(catalog_inventory())
+    assert result == []
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
+def test_catalog_inventory_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_inventory
+
+        result = asyncio.run(
+            catalog_inventory(channel="trade", exchange="deribit")
+        )
+    assert len(result) == 1
+    assert result[0]["symbol"] == "deribit:BTC-PERPETUAL"
+    assert result[0]["exchange"] == "deribit"
+    assert result[0]["channel"] == "trade"
+    assert result[0]["row_count"] == 10
+    mock_client.inventory.assert_called_once_with(
+        channel="trade", exchange="deribit"
+    )
+
+
+def test_catalog_inventory_strips_empty_filters() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_inventory
+
+        asyncio.run(catalog_inventory(channel="  ", exchange=""))
+    mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
+
+
 def test_get_lake_client_uses_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
     from crypcodile.api_server import _get_lake_client
