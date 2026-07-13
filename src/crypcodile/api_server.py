@@ -1408,10 +1408,11 @@ async def catalog_inventory(
     return df.to_dicts()
 
 
-# Hard max rows for lake scan / SQL query / OI HTTP responses (bounded discovery).
+# Hard max rows for lake scan / SQL query / OI / funding-APR HTTP responses (bounded discovery).
 _CATALOG_SCAN_MAX_LIMIT = 10_000
 _QUERY_MAX_LIMIT = 10_000
 _OPEN_INTEREST_MAX_LIMIT = 10_000
+_FUNDING_APR_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1540,6 +1541,46 @@ async def open_interest(
         raise HTTPException(
             status_code=500,
             detail="Open interest aggregation failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/funding-apr")
+async def funding_apr(
+    symbol: str = "",
+    start: int = 0,
+    end: int = 0,
+    limit: int = _FUNDING_APR_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Per-event funding APR and cumulative funding (read-only, no payment).
+
+    Query params: ``symbol`` (canonical, e.g. ``deribit:BTC-PERPETUAL``),
+    ``start`` / ``end`` as nanoseconds UTC (inclusive bounds on ``local_ts``).
+
+    Returns at most ``limit`` rows (default and hard max: 10000). Empty symbol,
+    empty lake, or no matching rows yields ``[]``.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _FUNDING_APR_MAX_LIMIT:
+        limit = _FUNDING_APR_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.funding_apr(sym, start, end)
+    except Exception as e:
+        log.error("Funding APR query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Funding APR query failed.",
         ) from e
 
     if len(df) == 0:

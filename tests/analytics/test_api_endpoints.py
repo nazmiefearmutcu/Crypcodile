@@ -925,3 +925,172 @@ def test_open_interest_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/open-interest", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/funding-apr — per-event funding APR (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_funding_apr_empty_symbol_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        result = asyncio.run(funding_apr(symbol="", start=0, end=100))
+        result_ws = asyncio.run(funding_apr(symbol="  ", start=0, end=100))
+    assert result == []
+    assert result_ws == []
+    mock_client.funding_apr.assert_not_called()
+
+
+def test_funding_apr_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import funding_apr
+
+    result = asyncio.run(
+        funding_apr(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18)
+    )
+    assert result == []
+
+
+def test_funding_apr_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        result = asyncio.run(
+            funding_apr(symbol="deribit:BTC-PERPETUAL", start=0, end=100)
+        )
+    assert result == []
+    mock_client.funding_apr.assert_called_once_with("deribit:BTC-PERPETUAL", 0, 100)
+
+
+def test_funding_apr_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame(
+        {
+            "funding_ts": [100, 200],
+            "funding_rate": [0.0001, 0.0002],
+            "interval_hours": [8.0, 8.0],
+            "apr": [0.1095, 0.219],
+            "cumulative_funding": [0.0001, 0.0003],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        result = asyncio.run(
+            funding_apr(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["funding_ts"] == 100
+    assert result[0]["funding_rate"] == 0.0001
+    assert result[0]["apr"] == 0.1095
+    assert result[1]["cumulative_funding"] == 0.0003
+    mock_client.funding_apr.assert_called_once_with("deribit:BTC-PERPETUAL", 0, 1000)
+
+
+def test_funding_apr_strips_whitespace_symbol() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        asyncio.run(funding_apr(symbol="  binance:BTCUSDT  ", start=1, end=2))
+    mock_client.funding_apr.assert_called_once_with("binance:BTCUSDT", 1, 2)
+
+
+def test_funding_apr_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame(
+        {
+            "funding_ts": [1, 2, 3, 4, 5],
+            "funding_rate": [0.0001] * 5,
+            "interval_hours": [8.0] * 5,
+            "apr": [0.1] * 5,
+            "cumulative_funding": [0.0001 * i for i in range(1, 6)],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        result = asyncio.run(
+            funding_apr(symbol="x", start=0, end=99, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["funding_ts"] == 1
+    assert result[1]["funding_ts"] == 2
+
+
+def test_funding_apr_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame(
+        {
+            "funding_ts": list(range(20)),
+            "funding_rate": [0.0001] * 20,
+            "interval_hours": [8.0] * 20,
+            "apr": [0.1] * 20,
+            "cumulative_funding": [0.0001] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _FUNDING_APR_MAX_LIMIT, funding_apr
+
+        result = asyncio.run(
+            funding_apr(
+                symbol="x",
+                start=0,
+                end=1,
+                limit=_FUNDING_APR_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.funding_apr.assert_called_once()
+
+
+def test_funding_apr_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame(
+        {
+            "funding_ts": [1, 2, 3],
+            "funding_rate": [0.0001, 0.0002, 0.0003],
+            "interval_hours": [8.0, 8.0, 8.0],
+            "apr": [0.1, 0.2, 0.3],
+            "cumulative_funding": [0.0001, 0.0003, 0.0006],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        result = asyncio.run(funding_apr(symbol="x", start=0, end=1, limit=0))
+    assert len(result) == 1
+    assert result[0]["funding_ts"] == 1
+
+
+def test_funding_apr_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.funding_apr.side_effect = RuntimeError("internal path /secret/lake")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(funding_apr(symbol="deribit:BTC-PERPETUAL", start=0, end=1))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Funding APR query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_funding_apr_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/funding-apr."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/funding-apr", ("GET",)) in paths
