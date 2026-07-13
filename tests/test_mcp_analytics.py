@@ -14,6 +14,7 @@ import pytest
 
 from crypcodile.mcp_server import (
     TOOLS,
+    _json_safe_records,
     handle_calculate_ofi,
     handle_detect_mev_sandwiches,
     handle_estimate_slippage,
@@ -115,6 +116,54 @@ def test_tools_contains_analytics_names() -> None:
     assert _ANALYTICS_TOOLS.issubset(names)
 
 
+def test_json_safe_records_sanitizes_float_fields() -> None:
+    """MCP helper: NaN/±Inf floats → None; ints/str/None/bool unchanged."""
+    import json
+
+    rows = [
+        {
+            "local_ts": 100,
+            "symbol": "deribit:BTC-PERPETUAL",
+            "ofi": float("inf"),
+            "apr": float("nan"),
+            "basis_pct": float("-inf"),
+            "total_oi": 1500.0,
+            "flag": True,
+            "note": None,
+        },
+        {
+            "local_ts": 200,
+            "symbol": "x",
+            "ofi": 1.25,
+            "apr": 0.0,
+            "basis_pct": -0.5,
+            "total_oi": 0.0,
+            "flag": False,
+            "note": "ok",
+        },
+    ]
+    out = _json_safe_records(rows)
+    assert out[0]["local_ts"] == 100
+    assert out[0]["symbol"] == "deribit:BTC-PERPETUAL"
+    assert out[0]["ofi"] is None
+    assert out[0]["apr"] is None
+    assert out[0]["basis_pct"] is None
+    assert out[0]["total_oi"] == 1500.0
+    assert out[0]["flag"] is True
+    assert out[0]["note"] is None
+    assert out[1]["ofi"] == 1.25
+    assert out[1]["apr"] == 0.0
+    assert out[1]["basis_pct"] == -0.5
+    assert out[1]["total_oi"] == 0.0
+    assert out[1]["flag"] is False
+    assert out[1]["note"] == "ok"
+    assert _json_safe_records([]) == []
+    encoded = json.dumps(out)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
+
+
 def test_handle_estimate_slippage_returns_dicts() -> None:
     client = MagicMock()
     client.estimate_slippage.return_value = pl.DataFrame(
@@ -135,6 +184,29 @@ def test_handle_estimate_slippage_empty() -> None:
     assert handle_estimate_slippage(client, "x", "buy", 1.0) == []
 
 
+def test_handle_estimate_slippage_non_finite_json_safe_null() -> None:
+    """Slippage DF edge floats map to None for JSON-RPC safety."""
+    import json
+
+    client = MagicMock()
+    client.estimate_slippage.return_value = pl.DataFrame(
+        {
+            "mid": [100.0],
+            "avg_price": [float("inf")],
+            "slippage_bps": [float("nan")],
+        }
+    )
+    rows = handle_estimate_slippage(client, "deribit:BTC-PERPETUAL", "buy", 1.0)
+    assert len(rows) == 1
+    assert rows[0]["mid"] == 100.0
+    assert rows[0]["avg_price"] is None
+    assert rows[0]["slippage_bps"] is None
+    encoded = json.dumps(rows)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
+
+
 def test_handle_calculate_ofi_returns_dicts() -> None:
     client = MagicMock()
     client.calculate_ofi.return_value = pl.DataFrame(
@@ -153,6 +225,28 @@ def test_handle_calculate_ofi_empty() -> None:
     client = MagicMock()
     client.calculate_ofi.return_value = pl.DataFrame()
     assert handle_calculate_ofi(client, "x", 0, 1, "1m") == []
+
+
+def test_handle_calculate_ofi_non_finite_json_safe_null() -> None:
+    """OFI bin rows with inf/nan ofi → None at MCP boundary."""
+    import json
+
+    client = MagicMock()
+    client.calculate_ofi.return_value = pl.DataFrame(
+        {
+            "bin_start": [1, 2],
+            "ofi": [float("inf"), float("nan")],
+        }
+    )
+    rows = handle_calculate_ofi(client, "deribit:BTC-PERPETUAL", 0, 100, "1m")
+    assert len(rows) == 2
+    assert rows[0]["bin_start"] == 1
+    assert rows[0]["ofi"] is None
+    assert rows[1]["ofi"] is None
+    encoded = json.dumps(rows)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
 
 
 def test_handle_track_whale_alerts_returns_dicts() -> None:
@@ -508,6 +602,85 @@ def test_handle_get_open_interest_empty() -> None:
     client = MagicMock()
     client.aggregate_open_interest.return_value = pl.DataFrame()
     assert handle_get_open_interest(client, "BTC", 0, 1) == []
+
+
+def test_handle_get_open_interest_non_finite_json_safe_null() -> None:
+    """OI aggregation may yield inf/nan; MCP maps them to None."""
+    import json
+
+    client = MagicMock()
+    client.aggregate_open_interest.return_value = pl.DataFrame(
+        {
+            "local_ts": [100],
+            "binance": [float("inf")],
+            "bybit": [float("nan")],
+            "total_oi": [float("-inf")],
+        }
+    )
+    rows = handle_get_open_interest(client, "BTC", 0, 100)
+    assert len(rows) == 1
+    assert rows[0]["local_ts"] == 100
+    assert rows[0]["binance"] is None
+    assert rows[0]["bybit"] is None
+    assert rows[0]["total_oi"] is None
+    encoded = json.dumps(rows)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
+
+
+def test_handle_get_perp_basis_non_finite_json_safe_null() -> None:
+    """Basis DF non-finite floats → None for JSON-RPC."""
+    import json
+
+    client = MagicMock()
+    client.perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1],
+            "mark_price": [100.5],
+            "index_price": [100.0],
+            "basis": [float("inf")],
+            "basis_pct": [float("nan")],
+        }
+    )
+    rows = handle_get_perp_basis(client, "deribit:BTC-PERPETUAL", 0, 100)
+    assert rows[0]["mark_price"] == 100.5
+    assert rows[0]["basis"] is None
+    assert rows[0]["basis_pct"] is None
+    encoded = json.dumps(rows)
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
+
+
+def test_handle_get_indicators_non_finite_json_safe_null() -> None:
+    """Indicator rows with NaN SMA (warmup) → None at MCP boundary."""
+    import json
+
+    client = MagicMock()
+    client.get_indicators.return_value = pl.DataFrame(
+        {"bar": [1], "close": [100.0], "sma": [float("nan")]}
+    )
+    rows = handle_get_indicators(client, "x", 0, 1, indicator="sma")
+    assert rows[0]["close"] == 100.0
+    assert rows[0]["sma"] is None
+    encoded = json.dumps(rows)
+    assert "NaN" not in encoded
+
+
+def test_handle_track_whale_alerts_non_finite_json_safe_null() -> None:
+    """Whale alert non-finite notionals → None."""
+    import json
+
+    client = MagicMock()
+    client.track_whale_alerts.return_value = pl.DataFrame(
+        {"price": [float("inf")], "usd_notional": [float("nan")]}
+    )
+    rows = handle_track_whale_alerts(client, "x", 0, 1, 100.0)
+    assert rows[0]["price"] is None
+    assert rows[0]["usd_notional"] is None
+    encoded = json.dumps(rows)
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
 
 
 def test_handle_get_funding_prediction_returns_dict() -> None:

@@ -346,7 +346,7 @@ def handle_search_symbols(
     df = client.search_symbols(q, channel=channel, limit=limit)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_data_coverage(
@@ -364,7 +364,7 @@ def handle_data_coverage(
     matched = inv.filter(pl.col("symbol") == symbol)
     if len(matched) == 0:
         return []
-    return matched.to_dicts()
+    return _json_safe_records(matched.to_dicts())
 
 
 def handle_inventory_snapshot(
@@ -380,7 +380,7 @@ def handle_inventory_snapshot(
     inv = client.inventory(channel=channel, exchange=exchange)
     if len(inv) == 0:
         return []
-    return inv.to_dicts()
+    return _json_safe_records(inv.to_dicts())
 
 
 def handle_estimate_slippage(
@@ -393,7 +393,7 @@ def handle_estimate_slippage(
     df = client.estimate_slippage(symbol, side, size)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_calculate_ofi(
@@ -407,7 +407,7 @@ def handle_calculate_ofi(
     df = client.calculate_ofi(symbol, start, end, interval)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_track_whale_alerts(
@@ -421,7 +421,7 @@ def handle_track_whale_alerts(
     df = client.track_whale_alerts(symbol, start, end, min_usd)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_iv_surface(
@@ -434,7 +434,7 @@ def handle_get_iv_surface(
     df = client.iv_surface(underlying, at, rate=rate)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_term_structure(
@@ -447,7 +447,7 @@ def handle_get_term_structure(
     df = client.term_structure(underlying, at, rate=rate)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_vol_skew(
@@ -461,7 +461,7 @@ def handle_get_vol_skew(
     df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_risk_reversal(
@@ -490,7 +490,7 @@ def handle_get_perp_basis(
     df = client.perp_basis(perp_symbol, start, end)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_spot_perp_basis(
@@ -504,7 +504,7 @@ def handle_get_spot_perp_basis(
     df = client.spot_perp_basis(spot_symbol, perp_symbol, start, end)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_spot_future_basis(
@@ -525,7 +525,7 @@ def handle_get_spot_future_basis(
     )
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_indicators(
@@ -548,7 +548,7 @@ def handle_get_indicators(
     )
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_liquidity_depth(
@@ -559,7 +559,7 @@ def handle_get_liquidity_depth(
     df = client.calculate_block_liquidity_depth(symbol)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_sequencer_latency(
@@ -570,7 +570,7 @@ def handle_get_sequencer_latency(
     df = client.calculate_sequencer_latency(exchange)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def handle_get_open_interest(
@@ -583,7 +583,7 @@ def handle_get_open_interest(
     df = client.aggregate_open_interest(symbols, start, end)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def _json_safe_float(value: float) -> float | None:
@@ -598,6 +598,26 @@ def _json_safe_float(value: float) -> float | None:
     if math.isnan(f) or math.isinf(f):
         return None
     return f
+
+
+def _json_safe_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitize non-finite floats in DataFrame row dicts for JSON-RPC encoding.
+
+    Walks each row's values; NaN/±Inf floats become ``None`` (JSON null).
+    Non-float values (ints, strs, None, bools) pass through unchanged.
+    Mirrors REST :func:`crypcodile.api_server._json_safe_records` so MCP tools
+    that return lake/analytics DF rows stay JSON-compliant over stdio.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        cleaned: dict[str, Any] = {}
+        for key, value in row.items():
+            if isinstance(value, float):
+                cleaned[key] = _json_safe_float(value)
+            else:
+                cleaned[key] = value
+        out.append(cleaned)
+    return out
 
 
 def handle_get_funding_prediction(
@@ -675,7 +695,7 @@ def handle_detect_mev_sandwiches(
     out = detect_sandwiches(df)
     if len(out) == 0:
         return []
-    return out.to_dicts()
+    return _json_safe_records(out.to_dicts())
 
 
 def handle_smart_money_summary(
@@ -710,7 +730,7 @@ def handle_smart_money_summary(
     labels = normalize_watchlist(watchlist)
     if not labels:
         return []
-    return summarize_smart_money(transfers, labels)
+    return _json_safe_records(summarize_smart_money(transfers, labels))
 
 
 def handle_get_lending_stress(
@@ -793,7 +813,7 @@ def handle_label_transfers(
     labeled = label_transfer_addresses(rows, labels)
     if known_only:
         labeled = [r for r in labeled if r.get("is_known")]
-    return labeled
+    return _json_safe_records(labeled)
 
 
 def handle_get_peg_deviation(
@@ -1838,10 +1858,11 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         try:
                             df = client.query(sql)
                             # Convert polars/pandas DataFrame to dict list
-                            tool_result = (
+                            raw_rows = (
                                 df.to_dicts() if hasattr(df, "to_dicts")
                                 else cast(Any, df).to_dict(orient="records")
                             )
+                            tool_result = _json_safe_records(raw_rows)
                         except Exception as e:
                             tool_result = {"error": f"SQL execution failed: {e}"}
                     elif tool_name == "get_funding_apr":
@@ -1850,10 +1871,11 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         end = arguments.get("end", 0)
                         try:
                             df = client.funding_apr(sym, start, end)
-                            tool_result = (
+                            raw_rows = (
                                 df.to_dicts() if hasattr(df, "to_dicts")
                                 else cast(Any, df).to_dict(orient="records")
                             )
+                            tool_result = _json_safe_records(raw_rows)
                         except Exception as e:
                             tool_result = {"error": f"Funding APR analysis failed: {e}"}
                     elif tool_name == "list_data_channels":

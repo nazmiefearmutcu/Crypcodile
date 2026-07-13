@@ -6,6 +6,6 @@
 
 ## Ralph continuous-dev (0.1.044)
 
-On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 39 audited pure free REST/MCP float endpoints and applied **`_json_safe_float`** so NaN/±Inf serialize as JSON `null` (`chaos-score`, `peg-deviation`, `funding-predict`, `gas-vol`; MCP mirrors) and added missing MCP capability hints (`get_onchain_price`, `get_base_market_data`). Wave 38 expanded capabilities free lists and fixed lending-stress HF. Remaining candidates: Bybit book resync, portal/payment polish, more indicator CLI modes.
+On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 42 applied **`_json_safe_records`** to MCP list[dict] DF handlers (OFI, slippage, whale, vol/basis/indicators/OI, discovery, MEV, smart-money/label-transfers, query/funding_apr) for REST parity. Waves 40–41 covered REST lake/POST row lists; Wave 39 pure floats. Remaining candidates: Bybit book resync, portal/payment polish, more indicator CLI modes, shared util dedupe for JSON-safe helpers.
 
 See `docs/ralph/LOOP_STATE.md` for full wave tables and commits.
