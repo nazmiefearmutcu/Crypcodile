@@ -1,14 +1,18 @@
 # Progress Log
 
-- Last visited: 2026-06-18T20:55:00+03:00
-- Status: Analyzed `src/crypcodile/cli.py` and test suite structures. Preparing to run local pytest suite.
+- Last visited: 2026-07-13
+- Branch: `ralph/continuous-dev`
+- Status: Continuous loop Waves 1–7 COMPLETE (since `66b44af`). Version `0.1.044`. HEAD `605ac34`.
 
-## Checklist
-- [x] Read and analyze `src/crypcodile/cli.py` commands
-- [x] Read existing CLI tests in `tests/test_cli.py`, `tests/test_cli_collect.py`, and `tests/analytics/test_client_cli.py`
-- [ ] Audit for structural bugs, syntax errors, and TODOs
-- [ ] Audit for input validation errors
-- [ ] Audit for unhandled exceptions (empty lake, network, schema)
-- [ ] Audit for interactive prompt safety
-- [ ] Generate `handoff.md` with structured findings
-- [ ] Send message to parent agent
+## Ralph continuous-dev (brief)
+
+- [x] Wave 1 — Bug hunt (compactor, payments CAS, MCP EOF)
+- [x] Wave 2 — Search system (catalog → client → CLI → MCP)
+- [x] Wave 3 — Hardening + surfaces (sink, path sanitize, MCP analytics, vol-skew CLI)
+- [x] Wave 4 — Analytics/catalog (base risk CLI, get_vol_skew, catalog limits)
+- [x] Wave 5 — Ingest reliability (DLQ drain, aiohttp session close)
+- [x] Wave 6 — Book resync bridge (Binance sequence gap)
+- [x] Wave 7 — Docs + smart-money / whale-transfer CLI
+- [ ] Wave 8+ — next ideas: bybit book resync, chaos-score CLI, basis spot-perp mode, REST lake endpoints, multi-partition sink atomic flush
+
+See `docs/ralph/LOOP_STATE.md` for full wave tables and commits.
