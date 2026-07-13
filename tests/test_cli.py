@@ -855,6 +855,488 @@ async def test_cli_search_channel_filter(tmp_path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# resolve-symbols command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_resolve_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``resolve-symbols`` on empty lake yields no-match error (exit 1)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "resolve-symbols",
+            "BTC-PERPETUAL",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 1, f"stdout:\n{result.output}"
+    assert "Error:" in result.output
+
+
+async def test_cli_resolve_symbols_with_data(tmp_path: pathlib.Path) -> None:
+    """``resolve-symbols BTC-PERPETUAL`` prints canonical symbol."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "resolve-symbols",
+            "BTC-PERPETUAL",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert "deribit:BTC-PERPETUAL" in lines
+
+
+async def test_cli_resolve_symbols_comma_separated(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Comma-separated free-form inputs resolve to canonical symbols."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "resolve-symbols",
+            "BTC-PERPETUAL,deribit:BTC-PERPETUAL",
+            "--ambiguous",
+            "first",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    # Deduped: exact pass-through + search both map to same canonical.
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["deribit:BTC-PERPETUAL"]
+
+
+async def test_cli_resolve_symbols_channel_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``--channel trade`` still resolves trade-backed symbols."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "resolve-symbols",
+            "BTC-PERPETUAL",
+            "--channel",
+            "trade",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+
+
+def test_cli_resolve_symbols_missing_arg(tmp_path: pathlib.Path) -> None:
+    """Missing symbols argument exits non-zero."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["resolve-symbols", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+
+
+def test_cli_resolve_symbols_strips_channel_and_default_ambiguous(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Whitespace channel → None; blank ambiguous → error."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def resolve_symbols(self, symbols, *, channel=None, ambiguous="error"):
+            return mock_client.resolve_symbols(
+                symbols, channel=channel, ambiguous=ambiguous
+            )
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "resolve-symbols",
+            "  BTC-PERPETUAL  ,  ETH  ",
+            "--channel",
+            "  trade  ",
+            "--ambiguous",
+            "   ",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    mock_client.resolve_symbols.assert_called_once_with(
+        ["BTC-PERPETUAL", "ETH"], channel="trade", ambiguous="error"
+    )
+
+
+def test_cli_resolve_symbols_value_error_exits_1(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Client ValueError (no match / ambiguous / invalid mode) → exit 1."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.side_effect = ValueError(
+        "no matches for 'ZZZ'"
+    )
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def resolve_symbols(self, symbols, *, channel=None, ambiguous="error"):
+            return mock_client.resolve_symbols(
+                symbols, channel=channel, ambiguous=ambiguous
+            )
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["resolve-symbols", "ZZZ", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 1, f"stdout:\n{result.output}"
+    assert "Error: no matches for 'ZZZ'" in result.output
+
+
+def test_cli_resolve_symbols_uses_client(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI is a thin wrapper over client.resolve_symbols."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.resolve_symbols.return_value = [
+        "deribit:BTC-PERPETUAL",
+        "deribit:ETH-PERPETUAL",
+    ]
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def resolve_symbols(self, symbols, *, channel=None, ambiguous="error"):
+            return mock_client.resolve_symbols(
+                symbols, channel=channel, ambiguous=ambiguous
+            )
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "resolve-symbols",
+            "BTC,ETH",
+            "--channel",
+            "trade",
+            "--ambiguous",
+            "all",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["deribit:BTC-PERPETUAL", "deribit:ETH-PERPETUAL"]
+    mock_client.resolve_symbols.assert_called_once_with(
+        ["BTC", "ETH"], channel="trade", ambiguous="all"
+    )
+
+
+# ---------------------------------------------------------------------------
+# data-coverage command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``data-coverage`` on empty lake prints No coverage.; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No coverage." in result.output
+
+
+async def test_cli_data_coverage_with_data(tmp_path: pathlib.Path) -> None:
+    """``data-coverage --symbol`` prints inventory rows for that symbol."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "trade" in result.output
+    assert "funding" in result.output
+    assert "row_count" in result.output
+    assert "No coverage." not in result.output
+
+
+async def test_cli_data_coverage_channel_filter(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``--channel trade`` restricts coverage to trade inventory rows."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--channel",
+            "trade",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "trade" in result.output
+    assert "deribit:BTC-PERPETUAL" in result.output
+    # funding channel should not appear when filtered to trade.
+    lines = [
+        ln
+        for ln in result.output.splitlines()
+        if "deribit:BTC-PERPETUAL" in ln
+    ]
+    assert lines
+    assert all("funding" not in ln for ln in lines)
+
+
+async def test_cli_data_coverage_no_symbol_match(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Unknown exact symbol yields No coverage. (exit 0)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:NO-SUCH-SYMBOL",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No coverage." in result.output
+
+
+def test_cli_data_coverage_missing_symbol(tmp_path: pathlib.Path) -> None:
+    """Missing --symbol exits non-zero."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["data-coverage", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+
+
+def test_cli_data_coverage_strips_empty_channel(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Whitespace --channel treated as no filter."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [0],
+            "max_ts": [1],
+            "row_count": [3],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = inv
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def inventory(self, **kwargs):  # noqa: ANN003
+            return mock_client.inventory(**kwargs)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--channel",
+            "   ",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    mock_client.inventory.assert_called_once_with(channel=None)
+
+
+def test_cli_data_coverage_uses_inventory(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI filters client.inventory by exact symbol match."""
+    import polars as pl
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    inv = pl.DataFrame(
+        {
+            "exchange": ["deribit", "deribit", "binance"],
+            "channel": ["trade", "funding", "trade"],
+            "symbol": [
+                "deribit:BTC-PERPETUAL",
+                "deribit:BTC-PERPETUAL",
+                "binance:BTCUSDT",
+            ],
+            "min_ts": [0, 0, 0],
+            "max_ts": [1, 2, 3],
+            "row_count": [3, 1, 9],
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = inv
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def inventory(self, **kwargs):  # noqa: ANN003
+            return mock_client.inventory(**kwargs)
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "data-coverage",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--channel",
+            "trade",
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "deribit:BTC-PERPETUAL" in result.output
+    assert "binance:BTCUSDT" not in result.output
+    mock_client.inventory.assert_called_once_with(channel="trade")
+
+
+# ---------------------------------------------------------------------------
 # export command
 # ---------------------------------------------------------------------------
 

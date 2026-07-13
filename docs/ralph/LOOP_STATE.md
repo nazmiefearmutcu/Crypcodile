@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–55 COMPLETE. Continuous loop still active → Wave 56+.
+**Status:** Waves 1–56 COMPLETE. Continuous loop still active → Wave 57+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -433,15 +433,22 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | MCP `resolve_symbols` wrapping `client.resolve_symbols` (list or comma-separated symbols; optional channel + ambiguous; empty → `[]`; ValueError → `{error}`; TOOLS + tools/call + capabilities hint) | DONE | `982de65` |
 | 3 | Tests: empty/data/comma/strip/error/delegate + capabilities includes `resolve_symbols`; post-feature critical suites **675 passed** | DONE | `982de65` |
 
-## Next rotation ideas (Wave 56+)
+## Wave 56 — Feature (CLI resolve-symbols / data-coverage) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | CLI `resolve-symbols` wrapping `client.resolve_symbols` (`--channel`, `--ambiguous=error\|first\|all`; comma-separated arg; ValueError → exit 1) | DONE | `PLACEHOLDER_FEAT` |
+| 2 | CLI `data-coverage --symbol` optional `--channel` wrapping inventory exact-symbol filter (empty → `No coverage.`) | DONE | `PLACEHOLDER_FEAT` |
+| 3 | Tests: empty/data/comma/channel/strip/error/delegate for resolve-symbols; empty/data/channel/no-match/strip/delegate for data-coverage — **15 passed**; CLI+discovery regression green | DONE | `PLACEHOLDER_FEAT` |
+
+## Next rotation ideas (Wave 57+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
-2. **CLI resolve-symbols / data-coverage** — parity with REST/MCP discovery  
-3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-4. **Payment / portal polish** — remaining API portal UX beyond backend detection  
-5. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
+3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
+4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 
 
@@ -509,3 +516,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 53: MCP `list_symbols` (inventory distinct symbols + channel/exchange filters; REST catalog/symbols parity); broad discovery regression 537 passed
 - Wave 54: CLI `catalog-dates` / `catalog-symbols` / `catalog-exchanges` (list_dates + inventory symbols + exchanges_on_disk; REST/MCP parity)
 - Wave 55: broad regression green (667→675 after +8 tests); MCP `resolve_symbols` (REST resolve-symbols parity for agents)
+- Wave 56: CLI `resolve-symbols` + `data-coverage` (REST/MCP discovery parity; 15 new tests)

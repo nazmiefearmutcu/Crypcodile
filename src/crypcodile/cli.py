@@ -9,6 +9,8 @@ catalog-dates  -- List hive date= partitions for a channel (list_dates).
 catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
 catalog-exchanges -- List on-disk hive exchange= partitions.
 search         -- Ranked symbol search over the data lake inventory.
+resolve-symbols -- Resolve free-form symbols to canonical catalog ids.
+data-coverage  -- Inventory coverage rows for one symbol (optional channel).
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
 collect        -- Run live connectors and write data to the Parquet lake.
@@ -41,6 +43,8 @@ Usage examples::
     crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
     crypcodile catalog-exchanges --data-dir /data
     crypcodile search BTC --data-dir /data
+    crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
+    crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
                      --fmt csv --dest out/trades.csv --data-dir /data
     crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL \\
@@ -1113,6 +1117,146 @@ def search(
             f"{row['symbol']:<32}  {row['exchange']:<12}  {row['channels']:<24}  "
             f"{row['score']:>5}  {row['min_ts']:>20}  {row['max_ts']:>20}  "
             f"{row['row_count']:>10,}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# resolve-symbols
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="resolve-symbols")
+def resolve_symbols_cmd(
+    symbols: Annotated[
+        str,
+        typer.Argument(
+            help="Comma-separated free-form symbol(s) to resolve.",
+        ),
+    ] = "",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    ambiguous: Annotated[
+        str,
+        typer.Option(
+            "--ambiguous",
+            help="Multi-match policy: error (default), first, or all.",
+        ),
+    ] = "error",
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Resolve free-form symbol inputs to canonical catalog symbols.
+
+    Mirrors REST ``GET /api/v1/resolve-symbols`` / MCP ``resolve_symbols`` via
+    :meth:`CrypcodileClient.resolve_symbols`.
+
+    *symbols* is comma-separated (e.g. ``BTC-PERPETUAL,ETH-PERPETUAL``).
+    Empty/whitespace *channel* → no filter. *ambiguous* defaults to
+    ``error`` (also used when blank). Success prints one canonical symbol
+    per line. Empty input after strip exits non-zero. No match, ambiguous
+    multi-match when ``ambiguous=error``, or invalid mode prints the error
+    and exits 1.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    raw = (symbols or "").strip()
+    if not raw:
+        if is_interactive_stdin():
+            raw = typer.prompt("Symbols (comma-separated)").strip()
+        if not raw:
+            typer.echo("Error: symbols argument is required.", err=True)
+            raise typer.Exit(code=1)
+
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        typer.echo("Error: symbols argument is required.", err=True)
+        raise typer.Exit(code=1)
+
+    ch = (channel or "").strip() or None
+    mode = (ambiguous or "").strip() or "error"
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        resolved = client.resolve_symbols(parts, channel=ch, ambiguous=mode)  # type: ignore[arg-type]
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    if not resolved:
+        typer.echo("No matches.")
+        raise typer.Exit(code=0)
+    for sym in resolved:
+        typer.echo(sym)
+
+
+# ---------------------------------------------------------------------------
+# data-coverage
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="data-coverage")
+def data_coverage_cmd(
+    symbol: Annotated[
+        str,
+        typer.Option(
+            "--symbol",
+            help="Exact catalog symbol (e.g. deribit:BTC-PERPETUAL).",
+        ),
+    ] = "",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print inventory coverage rows for one symbol.
+
+    Mirrors REST ``GET /api/v1/data-coverage`` / MCP ``data_coverage``:
+    lake inventory filtered to an exact ``symbol`` match, with optional
+    ``--channel`` (empty/whitespace → no filter). Empty / missing symbol
+    after strip exits non-zero. Empty lake or no match prints
+    ``No coverage.`` and exits 0. Columns match ``catalog --symbols``
+    inventory summary.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    symbol = (symbol or "").strip()
+    if not symbol:
+        if is_interactive_stdin():
+            symbol = typer.prompt("Symbol").strip()
+        if not symbol:
+            typer.echo("Error: --symbol is required.", err=True)
+            raise typer.Exit(code=1)
+
+    ch = (channel or "").strip() or None
+
+    import polars as pl
+
+    client = CrypcodileClient(data_dir=data_dir)
+    inv = client.inventory(channel=ch)
+    if len(inv) == 0:
+        typer.echo("No coverage.")
+        raise typer.Exit(code=0)
+
+    matched = inv.filter(pl.col("symbol") == symbol)
+    if len(matched) == 0:
+        typer.echo("No coverage.")
+        raise typer.Exit(code=0)
+
+    cols = ["exchange", "channel", "symbol", "min_ts", "max_ts", "row_count"]
+    typer.echo(
+        f"{'exchange':<16}  {'channel':<16}  {'symbol':<32}  "
+        f"{'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+    )
+    typer.echo("-" * 128)
+    for row in matched.select(cols).iter_rows(named=True):
+        typer.echo(
+            f"{row['exchange']:<16}  {row['channel']:<16}  {row['symbol']:<32}  "
+            f"{row['min_ts']:>20}  {row['max_ts']:>20}  {row['row_count']:>10,}"
         )
 
 

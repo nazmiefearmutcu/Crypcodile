@@ -90,6 +90,8 @@ crypcodile catalog-summary   # channels + exchanges_on_disk counts (mirrors REST
 crypcodile catalog-dates --channel trade          # hive date= partitions (list_dates)
 crypcodile catalog-symbols --channel trade --exchange deribit  # distinct inventory symbols
 crypcodile catalog-exchanges  # on-disk hive exchange= partitions
+crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
+crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
 crypcodile mcp  # tools: search_symbols, list_symbols, resolve_symbols, list_data_channels, list_exchanges_on_disk, list_dates, catalog_summary, data_coverage
 ```
 
