@@ -280,48 +280,44 @@ async def test_mcp_server_serve_stdio(tmp_path) -> None:
             "params": {"name": "get_onchain_price", "arguments": {"symbol": "cbBTC-USDC"}}
         }
     ]
-    
-    input_bytes = b"".join(json.dumps(r).encode() + b"\n" for r in requests)
-    
-    # We mock stream reader and sys.stdout
-    mock_reader = asyncio.StreamReader()
-    mock_reader.feed_data(input_bytes)
-    mock_reader.feed_eof()
-    
-    # Mock sys.stdout.write and flush
-    stdout_writes = []
-    def mock_write(s):
+
+    lines = [json.dumps(r).encode() + b"\n" for r in requests]
+    # Final empty read = EOF so serve_stdio exits cleanly.
+    lines.append(b"")
+
+    mock_buffer = MagicMock()
+    mock_buffer.readline = MagicMock(side_effect=lines)
+    mock_stdin = MagicMock()
+    mock_stdin.buffer = mock_buffer
+
+    stdout_writes: list[str] = []
+
+    def mock_write(s: str) -> int:
         stdout_writes.append(s)
-    
-    loop = asyncio.get_running_loop()
-    
-    with patch("asyncio.StreamReader", return_value=mock_reader), \
-         patch("sys.stdin", MagicMock()), \
+        return len(s)
+
+    with patch("sys.stdin", mock_stdin), \
          patch("sys.stdout.write", mock_write), \
          patch("sys.stdout.flush", MagicMock()), \
-         patch.object(loop, "connect_read_pipe", new_callable=AsyncMock) as mock_connect, \
          patch("crypcodile.mcp_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
-         
+
          mock_get_price.return_value = {
              "symbol": "cbBTC-USDC",
              "price": 50000.0
          }
-         mock_connect.return_value = (MagicMock(), MagicMock())
-         
-         # Run serve_stdio with a temporary folder
+
          await serve_stdio(data_dir=tmp_path)
-         
-         # Check the responses written to stdout
+
          assert len(stdout_writes) == 3
-         
+
          resp_1 = json.loads(stdout_writes[0])
          assert resp_1["id"] == 1
          assert "protocolVersion" in resp_1["result"]
-         
+
          resp_2 = json.loads(stdout_writes[1])
          assert resp_2["id"] == 2
          assert "tools" in resp_2["result"]
-         
+
          resp_3 = json.loads(stdout_writes[2])
          assert resp_3["id"] == 3
          tool_content = json.loads(resp_3["result"]["content"][0]["text"])

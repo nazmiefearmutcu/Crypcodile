@@ -728,25 +728,50 @@ TOOLS = [
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
-    """Run the MCP JSON-RPC loop over stdin/stdout."""
+    """Run the MCP JSON-RPC loop over stdin/stdout.
+
+    Stdin is read on a *private* ThreadPoolExecutor (never the asyncio default
+    executor). Empty readline / binary EOF ends the loop cleanly. We deliberately
+    avoid ``loop.shutdown_default_executor()`` — that join has no timeout and
+    hangs if a default-executor thread is still blocked on text-mode stdin.
+    """
     import logging
+    from concurrent.futures import ThreadPoolExecutor
+
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, force=True)
     for handler in logging.root.handlers:
         if getattr(handler, "stream", None) is sys.stdout:
             handler.stream = sys.stderr
 
     client = CrypcodileClient(data_dir=data_dir)
-    loop = asyncio.get_event_loop()
-    
+    loop = asyncio.get_running_loop()
+
     def read_line_sync() -> str:
-        return sys.stdin.readline()
+        # Prefer binary buffer: pipe EOF is reliable empty bytes. Text-mode
+        # ``sys.stdin.readline`` has hung on executor/interpreter shutdown with
+        # closed pipes on some platforms.
+        try:
+            raw = sys.stdin.buffer.readline()
+        except (AttributeError, ValueError, OSError):
+            return ""
+        if not raw:
+            return ""
+        return raw.decode("utf-8", errors="replace")
+
+    # Private pool so asyncio.run's default-executor shutdown never waits on us.
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mcp-stdin")
 
     try:
         while True:
-            line_str = await loop.run_in_executor(None, read_line_sync)
-            if not line_str:
+            try:
+                line_str = await loop.run_in_executor(executor, read_line_sync)
+            except RuntimeError:
+                # Executor shut down while we were waiting.
                 break
-            
+            if not line_str:
+                # EOF: peer closed stdin — exit the JSON-RPC loop cleanly.
+                break
+
             try:
                 req = json.loads(line_str.strip())
                 if not isinstance(req, dict) or "method" not in req:
@@ -928,9 +953,7 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                 sys.stdout.write(json.dumps(err_resp) + "\n")
                 sys.stdout.flush()
     finally:
-        try:
-            await loop.shutdown_default_executor()
-        except Exception:
-            pass
+        # Never join a possibly-blocked stdin thread (no hang on shutdown).
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
