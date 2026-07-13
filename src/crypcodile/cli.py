@@ -8,6 +8,7 @@ search         -- Ranked symbol search over the data lake inventory.
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
 collect        -- Run live connectors and write data to the Parquet lake.
+backfill       -- Fetch historical REST data into the Parquet lake.
 funding-apr    -- Print per-event funding APR for a perpetual symbol.
 basis          -- Print spot-future or perpetual basis.
 iv-surface     -- Print the implied-vol surface snapshot.
@@ -32,6 +33,8 @@ Usage examples::
                      --from 0 --to 9e18 --data-dir /data
     crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \\
                       --channels trade --data-dir /data
+    crypcodile backfill --exchange binance --channel trade --symbols BTCUSDT \\
+                       --from 1700000000000000000 --to 1700000100000000000 --data-dir /data
     crypcodile funding-apr --symbol deribit:BTC-PERPETUAL \\
                           --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile basis --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \\
@@ -369,6 +372,7 @@ def prompt_time_range_helper(
 # Top-level imports used by collect (kept at module scope so tests can patch
 # them without reloading the module).
 # ---------------------------------------------------------------------------
+from crypcodile.client.backfill import run_historical_backfill
 from crypcodile.client.collect import collect as collect_live
 from crypcodile.exchanges.factory import make_connector
 from crypcodile.ingest.transport import AiohttpWsTransport
@@ -1615,6 +1619,176 @@ def collect(
             pass
 
     typer.echo("Collection stopped. Data written to: " + str(data_dir))
+
+
+# ---------------------------------------------------------------------------
+# backfill  — historical REST data into the Parquet lake
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def backfill(
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Exchange name: binance, bybit, okx, deribit."),
+    ] = None,
+    channel: Annotated[
+        str | None,
+        typer.Option(
+            "--channel",
+            help="Channel to backfill: trade, funding, ohlcv, open_interest.",
+        ),
+    ] = None,
+    symbols: Annotated[
+        list[str] | None,
+        typer.Option("--symbols", help="Symbol(s) to backfill. Repeat for multiple."),
+    ] = None,
+    frm: Annotated[
+        int | None,
+        typer.Option("--from", "--start", help="Start of time range (nanoseconds UTC)."),
+    ] = None,
+    to: Annotated[
+        int | None,
+        typer.Option("--to", "--end", help="End of time range (nanoseconds UTC)."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+    market: Annotated[
+        str,
+        typer.Option("--market", help="Binance market: spot|usdm|coinm."),
+    ] = "spot",
+    category: Annotated[
+        str,
+        typer.Option("--category", help="Bybit category: spot|linear|inverse."),
+    ] = "linear",
+    inst_type: Annotated[
+        str,
+        typer.Option("--inst-type", help="OKX instType: SPOT|SWAP|FUTURES."),
+    ] = "SWAP",
+    interval: Annotated[
+        str,
+        typer.Option("--interval", help="OHLCV interval for Binance klines (e.g. 1m)."),
+    ] = "1m",
+    period: Annotated[
+        str,
+        typer.Option("--period", help="Open-interest hist period for Binance (e.g. 5m)."),
+    ] = "5m",
+) -> None:
+    """Fetch historical market data via REST and write to the Parquet data lake.
+
+    Supported exchanges: binance, bybit, okx, deribit.
+    Channel availability depends on the exchange:
+
+    - binance: trade, ohlcv, open_interest
+    - bybit:   trade, funding, open_interest
+    - okx:     trade, funding, open_interest
+    - deribit: trade, funding
+
+    Time bounds accept ``--from``/``--to`` or aliases ``--start``/``--end``
+    (nanoseconds UTC).
+
+    Example::
+
+        crypcodile backfill --exchange binance --channel trade \\
+                           --symbols BTCUSDT \\
+                           --from 1700000000000000000 --to 1700000100000000000 \\
+                           --data-dir data
+    """
+    from crypcodile.client.backfill import SUPPORTED_EXCHANGES
+
+    if not is_interactive_stdin():
+        if not exchange or not channel or not symbols:
+            typer.echo(
+                "Error: --exchange, --channel, and --symbols are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        if frm is None or to is None:
+            typer.echo(
+                "Error: --from/--start and --to/--end are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if not exchange:
+            exchange = typer.prompt(
+                "Exchange (binance, bybit, okx, deribit)"
+            )
+        if not channel:
+            channel = typer.prompt("Channel (e.g. trade)")
+        if not symbols:
+            sym_input = typer.prompt("Symbol(s), comma-separated (e.g. BTCUSDT)")
+            symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if frm is None:
+            frm = int(typer.prompt("Start ns (--from)", default="0"))
+        if to is None:
+            to = int(typer.prompt("End ns (--to)", default="9999999999999999999"))
+
+    if not exchange or not channel or not symbols:
+        typer.echo("Error: --exchange, --channel, and --symbols are required.", err=True)
+        raise typer.Exit(code=1)
+    if frm is None or to is None:
+        typer.echo("Error: --from/--start and --to/--end are required.", err=True)
+        raise typer.Exit(code=1)
+    if frm > to:
+        typer.echo("Error: --from must be <= --to.", err=True)
+        raise typer.Exit(code=1)
+
+    exchange = exchange.lower().strip()
+    channel = channel.lower().strip()
+
+    if exchange not in SUPPORTED_EXCHANGES:
+        typer.echo(
+            f"Error: Unsupported exchange {exchange!r} for backfill. "
+            f"Supported: {sorted(SUPPORTED_EXCHANGES)}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    symbols = [normalize_user_symbol(exchange, s) for s in symbols if s.strip()]
+    if not symbols:
+        typer.echo("Error: At least one symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    sink = ParquetSink(
+        data_dir=data_dir,
+        max_buffer_rows=10_000,
+        flush_interval_seconds=5.0,
+    )
+
+    typer.echo(
+        f"Starting backfill: exchange={exchange!r} channel={channel!r} "
+        f"symbols={symbols} from={frm} to={to} data_dir={data_dir}"
+    )
+
+    try:
+        count = asyncio.run(
+            run_historical_backfill(
+                exchange=exchange,
+                channel=channel,
+                symbols=list(symbols),
+                start_ns=int(frm),
+                end_ns=int(to),
+                sink=sink,
+                market=market,
+                category=category,
+                inst_type=inst_type,
+                interval=interval,
+                period=period,
+            )
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        typer.echo("Backfill interrupted.", err=True)
+        raise typer.Exit(code=0) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Backfill complete: {count} records written to {data_dir}")
 
 
 # ---------------------------------------------------------------------------
