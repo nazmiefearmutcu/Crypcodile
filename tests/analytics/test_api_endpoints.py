@@ -3990,6 +3990,161 @@ def test_json_safe_float_maps_non_finite_to_none() -> None:
     assert _json_safe_float(float("nan")) is None
 
 
+def test_json_safe_records_sanitizes_float_fields() -> None:
+    """Lake DF rows: NaN/±Inf floats → None; ints/str/None unchanged."""
+    from crypcodile.api_server import _json_safe_records
+
+    rows = [
+        {
+            "local_ts": 100,
+            "symbol": "deribit:BTC-PERPETUAL",
+            "ofi": float("inf"),
+            "apr": float("nan"),
+            "basis_pct": float("-inf"),
+            "total_oi": 1500.0,
+            "note": None,
+        },
+        {
+            "local_ts": 200,
+            "symbol": "x",
+            "ofi": 1.25,
+            "apr": 0.0,
+            "basis_pct": -0.5,
+            "total_oi": 0.0,
+            "note": "ok",
+        },
+    ]
+    out = _json_safe_records(rows)
+    assert out[0]["local_ts"] == 100
+    assert out[0]["symbol"] == "deribit:BTC-PERPETUAL"
+    assert out[0]["ofi"] is None
+    assert out[0]["apr"] is None
+    assert out[0]["basis_pct"] is None
+    assert out[0]["total_oi"] == 1500.0
+    assert out[0]["note"] is None
+    assert out[1]["ofi"] == 1.25
+    assert out[1]["apr"] == 0.0
+    assert out[1]["basis_pct"] == -0.5
+    assert out[1]["total_oi"] == 0.0
+    assert out[1]["note"] == "ok"
+    # Empty input stays empty.
+    assert _json_safe_records([]) == []
+
+
+def test_open_interest_non_finite_floats_json_safe_null() -> None:
+    """OI aggregation may yield inf/nan; REST maps them to JSON null."""
+    mock_client = MagicMock()
+    mock_client.aggregate_open_interest.return_value = pl.DataFrame(
+        {
+            "local_ts": [100],
+            "binance": [float("inf")],
+            "bybit": [float("nan")],
+            "total_oi": [float("-inf")],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import open_interest
+
+        result = asyncio.run(
+            open_interest(symbols="BTC", start=0, end=1000, limit=100)
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 100
+    assert result[0]["binance"] is None
+    assert result[0]["bybit"] is None
+    assert result[0]["total_oi"] is None
+
+
+def test_funding_apr_non_finite_floats_json_safe_null() -> None:
+    """Funding APR head rows may contain nan/inf from edge rates."""
+    mock_client = MagicMock()
+    mock_client.funding_apr.return_value = pl.DataFrame(
+        {
+            "funding_ts": [100],
+            "funding_rate": [0.0001],
+            "interval_hours": [8.0],
+            "apr": [float("inf")],
+            "cumulative_funding": [float("nan")],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import funding_apr
+
+        result = asyncio.run(
+            funding_apr(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["funding_ts"] == 100
+    assert result[0]["funding_rate"] == 0.0001
+    assert result[0]["apr"] is None
+    assert result[0]["cumulative_funding"] is None
+
+
+def test_basis_non_finite_floats_json_safe_null() -> None:
+    """Spot-perp basis rows may contain nan/inf from zero-price joins."""
+    mock_client = MagicMock()
+    mock_client.spot_perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [100],
+            "spot_price": [0.0],
+            "perp_price": [100.0],
+            "basis": [100.0],
+            "basis_pct": [float("inf")],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import basis
+
+        result = asyncio.run(
+            basis(
+                spot="deribit:BTC-SPOT",
+                perp="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 100
+    assert result[0]["basis"] == 100.0
+    assert result[0]["basis_pct"] is None
+
+
+def test_ofi_non_finite_floats_json_safe_null() -> None:
+    """OFI bins may contain nan/inf from empty-book edge cases."""
+    mock_client = MagicMock()
+    mock_client.calculate_ofi.return_value = pl.DataFrame(
+        {
+            "local_ts": [100],
+            "ofi": [float("nan")],
+            "bid_size": [float("inf")],
+            "ask_size": [1.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import ofi
+
+        result = asyncio.run(
+            ofi(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                interval="1m",
+                limit=100,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 100
+    assert result[0]["ofi"] is None
+    assert result[0]["bid_size"] is None
+    assert result[0]["ask_size"] == 1.0
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/funding-predict — pure offline next-period funding (no lake)
 # ---------------------------------------------------------------------------

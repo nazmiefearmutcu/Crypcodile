@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–39 COMPLETE. Continuous loop still active → Wave 40+.
+**Status:** Waves 1–40 COMPLETE. Continuous loop still active → Wave 41+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -299,7 +299,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | Mirror sanitization on MCP `get_chaos_score` / `get_peg_deviation` / `get_funding_prediction` (+ shared `_json_safe_float`) | DONE | `040c457575a40d6ecd88c16fb1b327350165aaf9` |
 | 3 | Capabilities: add missing MCP hints `get_onchain_price`, `get_base_market_data` (REST free list already complete) | DONE | `040c457575a40d6ecd88c16fb1b327350165aaf9` |
 
-## Next rotation ideas (Wave 40+)
+## Wave 40 — Hardening (lake DF REST JSON-safe records) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Add `_json_safe_records(rows)` helper (walk dict values; NaN/±Inf floats → `None`) | DONE | (this commit) |
+| 2 | Apply to major DF-returning free lake endpoints: `open-interest`, `funding-apr`, `basis`, `perp-basis`, `spot-future-basis`, `ofi` | DONE | (this commit) |
+| 3 | Tests for helper + non-finite head rows on ofi / funding-apr / OI / basis | DONE | (this commit) |
+
+## Next rotation ideas (Wave 41+)
 
 Priority candidates for the next cycles:
 
@@ -307,6 +315,7 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **JSON-safe records** on remaining DF free endpoints (indicators, whale-alerts, vol suite, catalog scan) when analytics can emit nan/inf
 
 ## Subagent policy
 
@@ -356,3 +365,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 37: portal detectBackend `/api/v1/ready` probe; REST `GET /api/v1/capabilities` agent discovery
 - Wave 38: expand capabilities free rest/mcp lists; lending-stress JSON-safe null HF
 - Wave 39: pure REST/MCP JSON-safe floats (chaos/peg/funding-predict/gas-vol); MCP onchain capability hints
+- Wave 40: lake DF REST `_json_safe_records` on ofi / funding-apr / open-interest / basis suite

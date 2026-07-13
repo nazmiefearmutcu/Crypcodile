@@ -1805,7 +1805,7 @@ async def open_interest(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/funding-apr")
@@ -1845,7 +1845,7 @@ async def funding_apr(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/basis")
@@ -1889,7 +1889,7 @@ async def basis(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/perp-basis")
@@ -1930,7 +1930,7 @@ async def perp_basis(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/spot-future-basis")
@@ -1974,7 +1974,7 @@ async def spot_future_basis(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/indicators")
@@ -2084,7 +2084,7 @@ async def ofi(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/whale-alerts")
@@ -2446,6 +2446,26 @@ def _json_safe_float(value: float) -> float | None:
     if math.isnan(f) or math.isinf(f):
         return None
     return f
+
+
+def _json_safe_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitize non-finite floats in DataFrame row dicts for JSON encoding.
+
+    Walks each row's values; NaN/±Inf floats become ``None`` (JSON null).
+    Non-float values (ints, strs, None, bools) pass through unchanged.
+    Lake analytics head rows can contain ``inf``/``nan`` from ratios and
+    edge-case joins; Starlette rejects those on encode.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        cleaned: dict[str, Any] = {}
+        for key, value in row.items():
+            if isinstance(value, float):
+                cleaned[key] = _json_safe_float(value)
+            else:
+                cleaned[key] = value
+        out.append(cleaned)
+    return out
 
 
 @app.get("/api/v1/chaos-score")
