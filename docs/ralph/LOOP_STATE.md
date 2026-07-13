@@ -379,9 +379,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | # | Task | Status | Commit |
 |---|------|--------|--------|
 | 1 | Skip `GET /api/v1/catalog/buckets` (too granular) | SKIP | — |
-| 2 | `_is_safe_hive_suffix` + filter in `list_channels` / `list_exchanges_on_disk` / `_refresh_views` / `list_dates`; channel dir resolve check | DONE | `88cfa4b38db7f999dccc04d7157a46c40df90e72` |
-| 3 | CLI `catalog-summary` via client `list_channels` + `list_exchanges_on_disk` counts | DONE | `88cfa4b38db7f999dccc04d7157a46c40df90e72` |
-| 4 | Tests: special-char/symlink skips; CLI empty/data/delegate | DONE | `88cfa4b38db7f999dccc04d7157a46c40df90e72` |
+| 2 | `_is_safe_hive_suffix` + filter in `list_channels` / `list_exchanges_on_disk` / `_refresh_views` / `list_dates`; channel dir resolve check | DONE | `52ed26389b9bb4ff8fbd41b4c7569d78804ae010` |
+| 3 | CLI `catalog-summary` via client `list_channels` + `list_exchanges_on_disk` counts | DONE | `52ed26389b9bb4ff8fbd41b4c7569d78804ae010` |
+| 4 | Tests: special-char/symlink skips; CLI empty/data/delegate | DONE | `52ed26389b9bb4ff8fbd41b4c7569d78804ae010` |
 
 ## Next rotation ideas (Wave 50+)
 
