@@ -475,18 +475,9 @@ def test_catalog_scan_empty_dataframe_from_client() -> None:
 
 
 def test_is_mutating_sql_detects_keywords() -> None:
-    from crypcodile.api_server import _is_mutating_sql
+    from crypcodile.api_server import _MUTATING_SQL_KEYWORDS, _is_mutating_sql
 
-    for kw in (
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-        "DROP",
-        "CREATE",
-        "ALTER",
-        "ATTACH",
-        "COPY",
-    ):
+    for kw in _MUTATING_SQL_KEYWORDS:
         assert _is_mutating_sql(f"{kw} INTO trade VALUES (1)") is True
         assert _is_mutating_sql(f"  {kw.lower()} table trade;") is True
         assert _is_mutating_sql(f"select 1; {kw} x") is True
@@ -495,6 +486,24 @@ def test_is_mutating_sql_detects_keywords() -> None:
     assert _is_mutating_sql("SELECT count(*) AS n FROM book_snapshot") is False
     # Word-boundary: substring alone is not enough
     assert _is_mutating_sql("SELECT deleted_at FROM trade") is False
+    assert _is_mutating_sql("SELECT installed_at FROM trade") is False
+
+
+def test_is_single_select_and_wrap() -> None:
+    from crypcodile.api_server import _is_single_select, _wrap_select_limit
+
+    assert _is_single_select("SELECT * FROM trade") is True
+    assert _is_single_select("  select 1 as x;  ") is True
+    assert _is_single_select("WITH cte AS (SELECT 1 AS x) SELECT * FROM cte") is True
+    assert _is_single_select("SELECT 1; SELECT 2") is False
+    assert _is_single_select("EXPLAIN SELECT 1") is False
+    assert _is_single_select("DESCRIBE trade") is False
+    assert _is_single_select("") is False
+
+    wrapped = _wrap_select_limit("SELECT * FROM trade", 5)
+    assert wrapped == "SELECT * FROM (SELECT * FROM trade) AS _q LIMIT 5"
+    assert _wrap_select_limit("SELECT 1; SELECT 2", 5) is None
+    assert _wrap_select_limit("EXPLAIN SELECT 1", 5) is None
 
 
 def test_query_lake_returns_rows() -> None:
@@ -506,7 +515,7 @@ def test_query_lake_returns_rows() -> None:
         }
     )
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+        from crypcodile.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
 
         result = asyncio.run(
             query_lake(QueryPayload(sql="SELECT symbol, count(*) AS n FROM trade"))
@@ -515,7 +524,8 @@ def test_query_lake_returns_rows() -> None:
     assert result[0]["symbol"] == "deribit:BTC-PERPETUAL"
     assert result[0]["n"] == 42
     mock_client.query.assert_called_once_with(
-        "SELECT symbol, count(*) AS n FROM trade"
+        "SELECT * FROM (SELECT symbol, count(*) AS n FROM trade) AS _q "
+        f"LIMIT {_QUERY_MAX_LIMIT}"
     )
 
 
@@ -538,7 +548,8 @@ def test_query_lake_empty_lake(tmp_path, monkeypatch) -> None:
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(query_lake(QueryPayload(sql="SELECT * FROM trade")))
     assert exc_info.value.status_code == 400
-    assert "SQL execution failed" in str(exc_info.value.detail)
+    # Do not leak engine exception text to the client.
+    assert exc_info.value.detail == "SQL execution failed."
 
 
 def test_query_lake_rejects_mutating_sql() -> None:
@@ -553,6 +564,17 @@ def test_query_lake_rejects_mutating_sql() -> None:
         "ALTER TABLE trade ADD COLUMN x INT",
         "ATTACH 'other.db' AS other",
         "COPY trade TO 'out.parquet'",
+        "TRUNCATE trade",
+        "DETACH other",
+        "PRAGMA show_tables",
+        "INSTALL httpfs",
+        "LOAD httpfs",
+        "EXPORT DATABASE 'out'",
+        "CALL my_macro()",
+        "SET threads=1",
+        "REPLACE INTO trade VALUES (1)",
+        "MERGE INTO trade USING s ON trade.id = s.id WHEN MATCHED THEN UPDATE SET price = s.price",
+        "VACUUM",
     ):
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(query_lake(QueryPayload(sql=sql)))
@@ -571,10 +593,11 @@ def test_query_lake_rejects_empty_sql() -> None:
 
 def test_query_lake_applies_limit() -> None:
     mock_client = MagicMock()
+    # Simulate SQL LIMIT already applied by the wrapped query.
     mock_client.query.return_value = pl.DataFrame(
         {
-            "local_ts": [1, 2, 3, 4, 5],
-            "price": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "local_ts": [1, 2],
+            "price": [10.0, 20.0],
         }
     )
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
@@ -586,6 +609,52 @@ def test_query_lake_applies_limit() -> None:
     assert len(result) == 2
     assert result[0]["local_ts"] == 1
     assert result[1]["local_ts"] == 2
+    mock_client.query.assert_called_once_with(
+        "SELECT * FROM (SELECT * FROM trade) AS _q LIMIT 2"
+    )
+
+
+def test_query_lake_wrap_fallback_uses_head() -> None:
+    """If wrapped SELECT fails, re-run original SQL and bound with head()."""
+    mock_client = MagicMock()
+    mock_client.query.side_effect = [
+        RuntimeError("cannot wrap subquery"),
+        pl.DataFrame(
+            {
+                "local_ts": [1, 2, 3, 4, 5],
+                "price": [10.0, 20.0, 30.0, 40.0, 50.0],
+            }
+        ),
+    ]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import QueryPayload, query_lake
+
+        result = asyncio.run(
+            query_lake(QueryPayload(sql="SELECT * FROM trade", limit=2))
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 1
+    assert result[1]["local_ts"] == 2
+    assert mock_client.query.call_count == 2
+    assert mock_client.query.call_args_list[0].args[0] == (
+        "SELECT * FROM (SELECT * FROM trade) AS _q LIMIT 2"
+    )
+    assert mock_client.query.call_args_list[1].args[0] == "SELECT * FROM trade"
+
+
+def test_query_lake_non_select_uses_head_not_wrap() -> None:
+    mock_client = MagicMock()
+    mock_client.query.return_value = pl.DataFrame(
+        {"local_ts": [1, 2, 3], "price": [1.0, 2.0, 3.0]}
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import QueryPayload, query_lake
+
+        result = asyncio.run(
+            query_lake(QueryPayload(sql="EXPLAIN SELECT * FROM trade", limit=2))
+        )
+    assert len(result) == 2
+    mock_client.query.assert_called_once_with("EXPLAIN SELECT * FROM trade")
 
 
 def test_query_lake_clamps_limit_max() -> None:
@@ -608,13 +677,15 @@ def test_query_lake_clamps_limit_max() -> None:
         )
     # Mock only has 20 rows; clamp must not raise.
     assert len(result) == 20
-    mock_client.query.assert_called_once()
+    mock_client.query.assert_called_once_with(
+        f"SELECT * FROM (SELECT * FROM trade) AS _q LIMIT {_QUERY_MAX_LIMIT}"
+    )
 
 
 def test_query_lake_clamps_limit_minimum() -> None:
     mock_client = MagicMock()
     mock_client.query.return_value = pl.DataFrame(
-        {"local_ts": [1, 2, 3], "price": [1.0, 2.0, 3.0]}
+        {"local_ts": [1], "price": [1.0]}
     )
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
         from crypcodile.api_server import QueryPayload, query_lake
@@ -624,6 +695,9 @@ def test_query_lake_clamps_limit_minimum() -> None:
         )
     assert len(result) == 1
     assert result[0]["local_ts"] == 1
+    mock_client.query.assert_called_once_with(
+        "SELECT * FROM (SELECT * FROM trade) AS _q LIMIT 1"
+    )
 
 
 def test_query_lake_default_limit_is_max() -> None:
@@ -632,10 +706,13 @@ def test_query_lake_default_limit_is_max() -> None:
         {"local_ts": list(range(5)), "price": [1.0] * 5}
     )
     with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+        from crypcodile.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
 
         result = asyncio.run(query_lake(QueryPayload(sql="SELECT * FROM trade")))
     assert len(result) == 5
+    mock_client.query.assert_called_once_with(
+        f"SELECT * FROM (SELECT * FROM trade) AS _q LIMIT {_QUERY_MAX_LIMIT}"
+    )
 
 
 def test_query_lake_sql_error() -> None:
@@ -647,7 +724,10 @@ def test_query_lake_sql_error() -> None:
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(query_lake(QueryPayload(sql="SELEC bogus")))
     assert exc_info.value.status_code == 400
-    assert "SQL execution failed" in str(exc_info.value.detail)
+    assert exc_info.value.detail == "SQL execution failed."
+    # Sanitize: never return full exception detail to the client.
+    assert "syntax error" not in str(exc_info.value.detail)
+    assert "near X" not in str(exc_info.value.detail)
 
 
 def test_query_lake_route_via_mock_client() -> None:
@@ -657,6 +737,9 @@ def test_query_lake_route_via_mock_client() -> None:
         resp = client.post("/api/v1/query", json={"sql": "SELECT 1 AS x", "limit": 10})
     assert resp.status_code == 200
     assert resp.json() == [{"x": 1}]
+    mock_client.query.assert_called_once_with(
+        "SELECT * FROM (SELECT 1 AS x) AS _q LIMIT 10"
+    )
 
 
 def test_query_lake_route_rejects_mutating() -> None:
@@ -666,3 +749,18 @@ def test_query_lake_route_rejects_mutating() -> None:
     )
     assert resp.status_code == 400
     assert "Mutating SQL" in resp.json()["detail"]
+
+
+def test_query_lake_route_sanitizes_sql_error() -> None:
+    mock_client = MagicMock()
+    mock_client.query.side_effect = RuntimeError("internal path /secret/data leaked")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        resp = client.post(
+            "/api/v1/query",
+            json={"sql": "SELECT * FROM missing_table"},
+        )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["detail"] == "SQL execution failed."
+    assert "secret" not in body["detail"]
+    assert "/secret" not in str(body)

@@ -1412,16 +1412,70 @@ async def catalog_inventory(
 _CATALOG_SCAN_MAX_LIMIT = 10_000
 _QUERY_MAX_LIMIT = 10_000
 
-# Mutating SQL keywords rejected by the read-only query endpoint (word-boundary).
+# Mutating / side-effect SQL keywords rejected by the read-only query endpoint
+# (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
+# EXPORT, CALL, ATTACH/DETACH, etc.).
+_MUTATING_SQL_KEYWORDS = (
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "CREATE",
+    "ALTER",
+    "ATTACH",
+    "COPY",
+    "TRUNCATE",
+    "DETACH",
+    "PRAGMA",
+    "INSTALL",
+    "LOAD",
+    "EXPORT",
+    "CALL",
+    "SET",
+    "REPLACE",
+    "MERGE",
+    "VACUUM",
+)
 _MUTATING_SQL_RE = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|ATTACH|COPY)\b",
+    r"\b(" + "|".join(_MUTATING_SQL_KEYWORDS) + r")\b",
     re.IGNORECASE,
+)
+_MUTATING_SQL_DENY_MSG = (
+    "Mutating SQL is not allowed ("
+    + "/".join(_MUTATING_SQL_KEYWORDS)
+    + ")."
 )
 
 
 def _is_mutating_sql(sql: str) -> bool:
     """Return True if ``sql`` contains a forbidden mutating statement keyword."""
     return _MUTATING_SQL_RE.search(sql or "") is not None
+
+
+def _is_single_select(sql: str) -> bool:
+    """Return True if ``sql`` looks like a single SELECT (or WITH…SELECT).
+
+    Multi-statement SQL (semicolons mid-body) and non-SELECT statements are
+    rejected so we only wrap pure read queries as
+    ``SELECT * FROM (<user_sql>) LIMIT n``.
+    """
+    s = (sql or "").strip().rstrip(";").strip()
+    if not s or ";" in s:
+        return False
+    return re.match(r"^(WITH|SELECT)\b", s, re.IGNORECASE) is not None
+
+
+def _wrap_select_limit(sql: str, limit: int) -> str | None:
+    """Wrap a single SELECT as ``SELECT * FROM (...) AS _q LIMIT n``.
+
+    Returns ``None`` when wrapping is not safe (not a single SELECT). Callers
+    should fall back to post-query ``head(limit)`` when this returns ``None``
+    or when executing the wrapped SQL fails.
+    """
+    if not _is_single_select(sql):
+        return None
+    s = sql.strip().rstrip(";").strip()
+    return f"SELECT * FROM ({s}) AS _q LIMIT {int(limit)}"
 
 
 @app.get("/api/v1/catalog/scan")
@@ -1466,9 +1520,18 @@ class QueryPayload(BaseModel):
 async def query_lake(payload: QueryPayload) -> list[dict[str, Any]]:
     """Execute read-only DuckDB SQL against the local lake (no payment).
 
-    Rejects mutating statements (INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/
-    ATTACH/COPY) case-insensitively. Returns at most ``limit`` rows (default
-    and hard max: 10000). Empty result set yields ``[]``.
+    Rejects mutating / side-effect statements (INSERT, UPDATE, DELETE, DROP,
+    CREATE, ALTER, ATTACH, COPY, TRUNCATE, DETACH, PRAGMA, INSTALL, LOAD,
+    EXPORT, CALL, SET, REPLACE, MERGE, VACUUM) case-insensitively.
+
+    Row bound: for a single SELECT (or WITH…SELECT), the query is wrapped as
+    ``SELECT * FROM (<user_sql>) AS _q LIMIT n`` so DuckDB enforces the cap.
+    If wrapping is not applicable or the wrapped query fails, the original SQL
+    is executed and rows are truncated with ``head(limit)`` instead.
+
+    Returns at most ``limit`` rows (default and hard max: 10000). Empty result
+    set yields ``[]``. SQL errors are logged server-side; clients only receive
+    a generic failure message (no exception detail).
     """
     sql = (payload.sql or "").strip()
     if not sql:
@@ -1476,10 +1539,7 @@ async def query_lake(payload: QueryPayload) -> list[dict[str, Any]]:
     if _is_mutating_sql(sql):
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Mutating SQL is not allowed "
-                "(INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/ATTACH/COPY)."
-            ),
+            detail=_MUTATING_SQL_DENY_MSG,
         )
 
     limit = _QUERY_MAX_LIMIT if payload.limit is None else int(payload.limit)
@@ -1489,17 +1549,34 @@ async def query_lake(payload: QueryPayload) -> list[dict[str, Any]]:
         limit = _QUERY_MAX_LIMIT
 
     client = _get_lake_client()
+    wrapped = _wrap_select_limit(sql, limit)
     try:
-        df = client.query(sql)
+        if wrapped is not None:
+            try:
+                df = client.query(wrapped)
+            except Exception as wrap_err:
+                # Wrapping can fail for edge-case SELECTs (e.g. some DuckDB
+                # statements that parse as SELECT but are not subquery-safe).
+                # Fall back to original SQL + head() bound.
+                log.warning(
+                    "Wrapped SELECT LIMIT failed; falling back to head(%s): %s",
+                    limit,
+                    wrap_err,
+                )
+                df = client.query(sql)
+        else:
+            df = client.query(sql)
     except Exception as e:
-        log.error(f"Lake SQL query failed: {e}")
+        log.error("Lake SQL query failed: %s", e, exc_info=True)
         raise HTTPException(
             status_code=400,
-            detail=f"SQL execution failed: {e}",
+            detail="SQL execution failed.",
         ) from e
 
     if len(df) == 0:
         return []
+    # Always apply head() as a defense-in-depth bound (covers wrap miss /
+    # non-SELECT paths and any driver that ignores LIMIT).
     if len(df) > limit:
         df = df.head(limit)
     return df.to_dicts()
