@@ -4145,6 +4145,93 @@ def test_ofi_non_finite_floats_json_safe_null() -> None:
     assert result[0]["ask_size"] == 1.0
 
 
+def test_iv_surface_non_finite_floats_json_safe_null() -> None:
+    """IV surface rows may contain nan/inf from deep OTM / zero-price edges."""
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame(
+        {
+            "expiry": [1_700_000_000_000_000_000],
+            "strike": [50000.0],
+            "iv": [float("inf")],
+            "delta": [float("nan")],
+            "mark_price": [0.01],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        result = asyncio.run(
+            iv_surface(underlying="BTC", at=1_700_000_000_000_000_000, limit=100)
+        )
+    assert len(result) == 1
+    assert result[0]["strike"] == 50000.0
+    assert result[0]["iv"] is None
+    assert result[0]["delta"] is None
+    assert result[0]["mark_price"] == 0.01
+
+
+def test_whale_alerts_non_finite_floats_json_safe_null() -> None:
+    """Whale alert notionals may contain nan/inf from zero-price trades."""
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame(
+        {
+            "local_ts": [100],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "price": [0.0],
+            "amount": [10.0],
+            "notional_usd": [float("nan")],
+            "side": ["buy"],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        result = asyncio.run(
+            whale_alerts(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                min_usd=0.0,
+                limit=100,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 100
+    assert result[0]["amount"] == 10.0
+    assert result[0]["notional_usd"] is None
+    assert result[0]["side"] == "buy"
+
+
+def test_indicators_non_finite_floats_json_safe_null() -> None:
+    """Indicator series may contain nan/inf during warmup / zero-volume bars."""
+    mock_client = MagicMock()
+    mock_client.get_indicators.return_value = pl.DataFrame(
+        {
+            "local_ts": [100],
+            "rsi": [float("nan")],
+            "sma": [float("inf")],
+            "close": [42000.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import indicators
+
+        result = asyncio.run(
+            indicators(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                indicator="rsi",
+                limit=100,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 100
+    assert result[0]["rsi"] is None
+    assert result[0]["sma"] is None
+    assert result[0]["close"] == 42000.0
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/funding-predict — pure offline next-period funding (no lake)
 # ---------------------------------------------------------------------------

@@ -1566,7 +1566,7 @@ async def catalog_search_symbols(q: str = "", limit: int = 20) -> list[dict[str,
     df = client.search_symbols(q, limit=limit)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/catalog/inventory")
@@ -1585,7 +1585,7 @@ async def catalog_inventory(
     df = client.inventory(channel=ch, exchange=ex)
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/data-coverage")
@@ -1608,7 +1608,7 @@ async def data_coverage(
     if len(df) == 0:
         return []
     matched = [row for row in df.to_dicts() if row.get("symbol") == symbol]
-    return matched
+    return _json_safe_records(matched)
 
 
 @app.get("/api/v1/resolve-symbols")
@@ -1766,7 +1766,7 @@ async def catalog_scan(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/open-interest")
@@ -2036,7 +2036,7 @@ async def indicators(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/ofi")
@@ -2129,7 +2129,7 @@ async def whale_alerts(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/slippage")
@@ -2168,7 +2168,7 @@ async def slippage(
 
     if len(df) == 0:
         return []
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/iv-surface")
@@ -2209,7 +2209,7 @@ async def iv_surface(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/term-structure")
@@ -2250,7 +2250,7 @@ async def term_structure(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/vol-skew")
@@ -2293,7 +2293,7 @@ async def vol_skew(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/risk-reversal")
@@ -2392,7 +2392,7 @@ async def liquidity_depth(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.get("/api/v1/sequencer-latency")
@@ -2430,7 +2430,7 @@ async def sequencer_latency(
         return []
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 def _json_safe_float(value: float) -> float | None:
@@ -2815,7 +2815,7 @@ async def mev_sandwich(payload: MevSandwichPayload) -> list[dict[str, Any]]:
 
     if len(out) == 0:
         return []
-    return out.to_dicts()
+    return _json_safe_records(out.to_dicts())
 
 
 class SmartMoneyPayload(BaseModel):
@@ -3047,7 +3047,7 @@ async def query_lake(payload: QueryPayload) -> list[dict[str, Any]]:
     # non-SELECT paths and any driver that ignores LIMIT).
     if len(df) > limit:
         df = df.head(limit)
-    return df.to_dicts()
+    return _json_safe_records(df.to_dicts())
 
 
 @app.post("/api/v1/simulate-price-impact")
