@@ -152,6 +152,23 @@ Visualize live swap volumes, liquidity depth, and price feeds streaming directly
 Inspect our micropayment architecture for on-chain services.
 - **Vercel**: The `api_portal` contains a pre-configured [vercel.json](src/crypcodile/api_portal/vercel.json) file. Link the repo, select the `src/crypcodile/api_portal/` folder as the root directory, and deploy in one click.
 
+### REST API endpoint matrix (`/api/v1/*`)
+
+Python FastAPI surface in `src/crypcodile/api_server.py` (local lake + free probes; some routes are payment-gated demos):
+
+| Group | Methods / paths | Notes |
+|-------|-----------------|-------|
+| **Ops / meta** | `GET /health`, `/status`, `/version`, `/exchanges` | Free; no payment. `/version` → `{version}` only |
+| **Catalog / discovery** | `GET /catalog/channels`, `/catalog/search`, `/catalog/inventory`, `/catalog/scan`, `/data-coverage`, `/resolve-symbols` | Lake inventory & symbol resolve |
+| **Market data (gated)** | `GET /market-data`; `POST /simulate-payment` | x402 demo gating |
+| **Query** | `POST /query` | Bounded read-only SQL against the lake |
+| **Derivatives / OI** | `GET /open-interest`, `/funding-apr`, `/basis`, `/perp-basis`, `/spot-future-basis` | Funding & basis surfaces |
+| **Microstructure** | `GET /indicators`, `/ofi`, `/whale-alerts`, `/slippage`; `POST /simulate-price-impact` | Indicators & flow |
+| **Options** | `GET /iv-surface`, `/term-structure`, `/vol-skew`, `/risk-reversal` | IV / skew analytics |
+| **Base / risk** | `GET /liquidity-depth`, `/sequencer-latency`, `/chaos-score`, `/peg-deviation`, `/lending-stress` | L2 & DeFi risk |
+
+Paths above are relative to `/api/v1`. OpenAPI-style detail is available via the running API server.
+
 ---
 
 ## 7. Testing & Reliability Guarantee
