@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–36 COMPLETE. Continuous loop still active → Wave 37+.
+**Status:** Waves 1–37 COMPLETE. Continuous loop still active → Wave 38+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -281,8 +281,8 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Portal `detectBackend`: also probe `/api/v1/ready` (200 → Python) before `/api/v1/health` | DONE | (this wave) |
-| 2 | Prefer `GET /api/v1/capabilities` `{rest, mcp_tools_hint}` hardcoded short free discovery lists (skip openapi-paths) | DONE | (this wave) |
+| 1 | Portal `detectBackend`: also probe `/api/v1/ready` (200 → Python) before `/api/v1/health` | DONE | dbe54574440bce876a12f5da0dbd66f1d9be467e |
+| 2 | Prefer `GET /api/v1/capabilities` `{rest, mcp_tools_hint}` hardcoded short free discovery lists (skip openapi-paths) | DONE | dbe54574440bce876a12f5da0dbd66f1d9be467e |
 
 ## Next rotation ideas (Wave 38+)
 
