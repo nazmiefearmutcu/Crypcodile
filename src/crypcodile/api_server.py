@@ -1416,6 +1416,7 @@ _FUNDING_APR_MAX_LIMIT = 10_000
 _BASIS_MAX_LIMIT = 10_000
 _INDICATORS_MAX_LIMIT = 10_000
 _OFI_MAX_LIMIT = 10_000
+_WHALE_ALERTS_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1744,6 +1745,90 @@ async def ofi(
         return []
     if len(df) > limit:
         df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/whale-alerts")
+async def whale_alerts(
+    symbol: str = "",
+    start: int = 0,
+    end: int = 0,
+    min_usd: float = 0.0,
+    limit: int = _WHALE_ALERTS_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Whale-sized trades and liquidations above a USD threshold (read-only, no payment).
+
+    Query params: ``symbol`` (canonical, e.g. ``deribit:BTC-PERPETUAL``),
+    ``start`` / ``end`` as nanoseconds UTC (inclusive bounds on ``local_ts``),
+    ``min_usd`` minimum notional (price × amount; default ``0``).
+
+    Wraps :meth:`CrypcodileClient.track_whale_alerts`. Returns at most ``limit``
+    rows (default and hard max: 10000). Empty/missing ``symbol``, empty lake,
+    or no matching events yields ``[]``. Negative ``min_usd`` yields 400.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _WHALE_ALERTS_MAX_LIMIT:
+        limit = _WHALE_ALERTS_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.track_whale_alerts(sym, start, end, float(min_usd))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Whale alerts query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Whale alerts query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/slippage")
+async def slippage(
+    symbol: str = "",
+    side: str = "",
+    size: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Estimate execution slippage for a market order size (read-only, no payment).
+
+    Query params: ``symbol`` (canonical, e.g. ``deribit:BTC-PERPETUAL``),
+    ``side`` (``buy`` or ``sell``), ``size`` (base-asset quantity, must be > 0).
+
+    Wraps :meth:`CrypcodileClient.estimate_slippage`. Returns a single-row list
+    of dicts (``symbol``, ``side``, ``size``, ``best_price``, ``expected_price``,
+    ``slippage_usd``, ``slippage_pct``). Empty/missing ``symbol`` yields ``[]``.
+    Invalid ``side``/``size``, missing book, or insufficient depth yield 400.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    side_s = (side or "").strip()
+    size_f = float(size)
+
+    client = _get_lake_client()
+    try:
+        df = client.estimate_slippage(sym, side_s, size_f)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Slippage estimation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Slippage estimation failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
     return df.to_dicts()
 
 

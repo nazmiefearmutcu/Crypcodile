@@ -9,6 +9,9 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **API open-interest endpoint**: `GET /api/v1/open-interest` with optional symbols, time range, and row limit (read-only lake HTTP surface for OI aggregation).
 - **API funding-apr endpoint**: `GET /api/v1/funding-apr` REST endpoint for funding APR analytics.
 - **API indicators endpoint**: `GET /api/v1/indicators` wrapping `get_indicators` (symbol/start/end/interval/indicator/period; hard row limit 10000; unknown indicator → 400).
+- **API OFI endpoint**: `GET /api/v1/ofi` wrapping `calculate_ofi` (symbol/start/end/interval; hard row limit 10000; invalid interval → 400).
+- **API whale-alerts endpoint**: `GET /api/v1/whale-alerts` wrapping `track_whale_alerts` (symbol/start/end/min_usd; hard row limit 10000; negative min_usd → 400).
+- **API slippage endpoint**: `GET /api/v1/slippage` wrapping `estimate_slippage` (query: symbol, side, size; validation errors → 400).
 - **API spot-perp basis endpoint**: `GET /api/v1/basis` with `spot` + `perp` query params wrapping `spot_perp_basis` (bounded rows, no payment).
 - **MCP MEV sandwich detection tool**: Expose MEV sandwich detection over MCP.
 - **MCP chaos-score tool**: Base risk / chaos scoring available as an MCP tool.

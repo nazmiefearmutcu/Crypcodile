@@ -1769,3 +1769,399 @@ def test_ofi_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/ofi", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/whale-alerts — whale trades/liquidations (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_whale_alerts_empty_symbol_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        result = asyncio.run(whale_alerts(symbol="", start=0, end=100, min_usd=1000.0))
+        result_ws = asyncio.run(
+            whale_alerts(symbol="  ", start=0, end=100, min_usd=1000.0)
+        )
+    assert result == []
+    assert result_ws == []
+    mock_client.track_whale_alerts.assert_not_called()
+
+
+def test_whale_alerts_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import whale_alerts
+
+    result = asyncio.run(
+        whale_alerts(
+            symbol="deribit:BTC-PERPETUAL",
+            start=0,
+            end=10**18,
+            min_usd=1000.0,
+        )
+    )
+    assert result == []
+
+
+def test_whale_alerts_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        result = asyncio.run(
+            whale_alerts(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=100,
+                min_usd=500.0,
+            )
+        )
+    assert result == []
+    mock_client.track_whale_alerts.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 0, 100, 500.0
+    )
+
+
+def test_whale_alerts_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame(
+        {
+            "timestamp": [100, 200],
+            "event_type": ["Trade", "Liquidation"],
+            "price": [50000.0, 49000.0],
+            "amount": [2.0, 3.0],
+            "usd_value": [100000.0, 147000.0],
+            "side": ["buy", "sell"],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        result = asyncio.run(
+            whale_alerts(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                min_usd=1000.0,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["timestamp"] == 100
+    assert result[0]["event_type"] == "Trade"
+    assert result[0]["usd_value"] == 100000.0
+    assert result[1]["event_type"] == "Liquidation"
+    mock_client.track_whale_alerts.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 0, 1000, 1000.0
+    )
+
+
+def test_whale_alerts_strips_whitespace_symbol() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        asyncio.run(
+            whale_alerts(
+                symbol="  binance:BTCUSDT  ",
+                start=1,
+                end=2,
+                min_usd=0.0,
+            )
+        )
+    mock_client.track_whale_alerts.assert_called_once_with(
+        "binance:BTCUSDT", 1, 2, 0.0
+    )
+
+
+def test_whale_alerts_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame(
+        {
+            "timestamp": [1, 2, 3, 4, 5],
+            "event_type": ["Trade"] * 5,
+            "price": [100.0] * 5,
+            "amount": [1.0] * 5,
+            "usd_value": [100.0] * 5,
+            "side": ["buy"] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        result = asyncio.run(
+            whale_alerts(symbol="x", start=0, end=99, min_usd=0.0, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["timestamp"] == 1
+    assert result[1]["timestamp"] == 2
+
+
+def test_whale_alerts_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame(
+        {
+            "timestamp": list(range(20)),
+            "event_type": ["Trade"] * 20,
+            "price": [100.0] * 20,
+            "amount": [1.0] * 20,
+            "usd_value": [100.0] * 20,
+            "side": ["buy"] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _WHALE_ALERTS_MAX_LIMIT, whale_alerts
+
+        result = asyncio.run(
+            whale_alerts(
+                symbol="x",
+                start=0,
+                end=1,
+                min_usd=0.0,
+                limit=_WHALE_ALERTS_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.track_whale_alerts.assert_called_once()
+
+
+def test_whale_alerts_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.return_value = pl.DataFrame(
+        {
+            "timestamp": [1, 2, 3],
+            "event_type": ["Trade", "Trade", "Liquidation"],
+            "price": [100.0, 101.0, 102.0],
+            "amount": [1.0, 1.0, 1.0],
+            "usd_value": [100.0, 101.0, 102.0],
+            "side": ["buy", "sell", "buy"],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        result = asyncio.run(
+            whale_alerts(symbol="x", start=0, end=1, min_usd=0.0, limit=0)
+        )
+    assert len(result) == 1
+    assert result[0]["timestamp"] == 1
+
+
+def test_whale_alerts_negative_min_usd_400() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.side_effect = ValueError(
+        "min_usd must be non-negative."
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                whale_alerts(
+                    symbol="deribit:BTC-PERPETUAL",
+                    start=0,
+                    end=1,
+                    min_usd=-1.0,
+                )
+            )
+    assert exc_info.value.status_code == 400
+    assert "min_usd" in str(exc_info.value.detail)
+
+
+def test_whale_alerts_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.track_whale_alerts.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import whale_alerts
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                whale_alerts(
+                    symbol="deribit:BTC-PERPETUAL",
+                    start=0,
+                    end=1,
+                    min_usd=1000.0,
+                )
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Whale alerts query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_whale_alerts_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/whale-alerts."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/whale-alerts", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/slippage — execution slippage estimate (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_slippage_empty_symbol_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        result = asyncio.run(slippage(symbol="", side="buy", size=1.0))
+        result_ws = asyncio.run(slippage(symbol="  ", side="buy", size=1.0))
+    assert result == []
+    assert result_ws == []
+    mock_client.estimate_slippage.assert_not_called()
+
+
+def test_slippage_empty_lake_no_book(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import slippage
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            slippage(symbol="deribit:BTC-PERPETUAL", side="buy", size=1.0)
+        )
+    assert exc_info.value.status_code == 400
+    assert "No book snapshots" in str(exc_info.value.detail)
+
+
+def test_slippage_returns_row() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.return_value = pl.DataFrame(
+        {
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "side": ["buy"],
+            "size": [1.5],
+            "best_price": [50000.0],
+            "expected_price": [50010.0],
+            "slippage_usd": [10.0],
+            "slippage_pct": [0.02],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        result = asyncio.run(
+            slippage(symbol="deribit:BTC-PERPETUAL", side="buy", size=1.5)
+        )
+    assert len(result) == 1
+    assert result[0]["symbol"] == "deribit:BTC-PERPETUAL"
+    assert result[0]["side"] == "buy"
+    assert result[0]["size"] == 1.5
+    assert result[0]["best_price"] == 50000.0
+    assert result[0]["expected_price"] == 50010.0
+    assert result[0]["slippage_usd"] == 10.0
+    assert result[0]["slippage_pct"] == 0.02
+    mock_client.estimate_slippage.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", "buy", 1.5
+    )
+
+
+def test_slippage_strips_whitespace_symbol_and_side() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.return_value = pl.DataFrame(
+        {
+            "symbol": ["binance:BTCUSDT"],
+            "side": ["sell"],
+            "size": [2.0],
+            "best_price": [100.0],
+            "expected_price": [99.5],
+            "slippage_usd": [0.5],
+            "slippage_pct": [0.5],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        asyncio.run(
+            slippage(symbol="  binance:BTCUSDT  ", side="  sell  ", size=2.0)
+        )
+    mock_client.estimate_slippage.assert_called_once_with(
+        "binance:BTCUSDT", "sell", 2.0
+    )
+
+
+def test_slippage_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        result = asyncio.run(slippage(symbol="x", side="buy", size=1.0))
+    assert result == []
+
+
+def test_slippage_invalid_side_400() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.side_effect = ValueError(
+        "Invalid side 'hold'. Must be 'buy' or 'sell'."
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(slippage(symbol="x", side="hold", size=1.0))
+    assert exc_info.value.status_code == 400
+    assert "side" in str(exc_info.value.detail).lower()
+
+
+def test_slippage_invalid_size_400() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.side_effect = ValueError(
+        "Size must be greater than zero."
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(slippage(symbol="x", side="buy", size=0.0))
+    assert exc_info.value.status_code == 400
+    assert "Size" in str(exc_info.value.detail) or "size" in str(
+        exc_info.value.detail
+    ).lower()
+
+
+def test_slippage_exceeds_depth_400() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.side_effect = ValueError(
+        "Requested size 100 exceeds total order book depth (5.000000) "
+        "for symbol 'x' on the buy side."
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(slippage(symbol="x", side="buy", size=100.0))
+    assert exc_info.value.status_code == 400
+    assert "depth" in str(exc_info.value.detail).lower()
+
+
+def test_slippage_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.estimate_slippage.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import slippage
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(slippage(symbol="x", side="buy", size=1.0))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Slippage estimation failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_slippage_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/slippage."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/slippage", ("GET",)) in paths
