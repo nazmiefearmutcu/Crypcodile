@@ -1437,6 +1437,7 @@ _QUERY_MAX_LIMIT = 10_000
 _OPEN_INTEREST_MAX_LIMIT = 10_000
 _FUNDING_APR_MAX_LIMIT = 10_000
 _BASIS_MAX_LIMIT = 10_000
+_PERP_BASIS_MAX_LIMIT = 10_000
 _INDICATORS_MAX_LIMIT = 10_000
 _OFI_MAX_LIMIT = 10_000
 _WHALE_ALERTS_MAX_LIMIT = 10_000
@@ -1657,6 +1658,47 @@ async def basis(
         raise HTTPException(
             status_code=500,
             detail="Spot-perp basis query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/perp-basis")
+async def perp_basis(
+    symbol: str = "",
+    start: int = 0,
+    end: int = 0,
+    limit: int = _PERP_BASIS_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Perpetual mark–index basis (read-only, no payment).
+
+    Query params: ``symbol`` (canonical perpetual, e.g. ``deribit:BTC-PERPETUAL``),
+    ``start`` / ``end`` as nanoseconds UTC (inclusive bounds on ``local_ts``).
+
+    Wraps :meth:`CrypcodileClient.perp_basis`. Returns at most ``limit`` rows
+    (default and hard max: 10000). Empty/missing ``symbol``, empty lake, or no
+    matching rows yields ``[]``.
+    """
+    sym = (symbol or "").strip()
+    if not sym:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _PERP_BASIS_MAX_LIMIT:
+        limit = _PERP_BASIS_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.perp_basis(sym, start, end)
+    except Exception as e:
+        log.error("Perp basis query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Perp basis query failed.",
         ) from e
 
     if len(df) == 0:

@@ -1301,6 +1301,190 @@ def test_basis_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/perp-basis — mark-index perp basis (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_perp_basis_empty_symbol_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        assert asyncio.run(perp_basis(symbol="")) == []
+        assert asyncio.run(perp_basis(symbol="  ")) == []
+    mock_client.perp_basis.assert_not_called()
+
+
+def test_perp_basis_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import perp_basis
+
+    result = asyncio.run(
+        perp_basis(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18)
+    )
+    assert result == []
+
+
+def test_perp_basis_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        result = asyncio.run(
+            perp_basis(symbol="deribit:BTC-PERPETUAL", start=0, end=100)
+        )
+    assert result == []
+    mock_client.perp_basis.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 0, 100
+    )
+
+
+def test_perp_basis_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [100, 200],
+            "mark_price": [50100.0, 50200.0],
+            "index_price": [50000.0, 50100.0],
+            "basis": [100.0, 100.0],
+            "basis_pct": [0.002, 0.001996],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        result = asyncio.run(
+            perp_basis(
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 100
+    assert result[0]["mark_price"] == 50100.0
+    assert result[0]["index_price"] == 50000.0
+    assert result[0]["basis"] == 100.0
+    assert result[1]["local_ts"] == 200
+    mock_client.perp_basis.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 0, 1000
+    )
+
+
+def test_perp_basis_strips_whitespace_symbol() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        asyncio.run(
+            perp_basis(symbol="  deribit:BTC-PERPETUAL  ", start=1, end=2)
+        )
+    mock_client.perp_basis.assert_called_once_with(
+        "deribit:BTC-PERPETUAL", 1, 2
+    )
+
+
+def test_perp_basis_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3, 4, 5],
+            "mark_price": [101.0] * 5,
+            "index_price": [100.0] * 5,
+            "basis": [1.0] * 5,
+            "basis_pct": [0.01] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        result = asyncio.run(
+            perp_basis(symbol="p", start=0, end=99, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 1
+    assert result[1]["local_ts"] == 2
+
+
+def test_perp_basis_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": list(range(20)),
+            "mark_price": [101.0] * 20,
+            "index_price": [100.0] * 20,
+            "basis": [1.0] * 20,
+            "basis_pct": [0.01] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _PERP_BASIS_MAX_LIMIT, perp_basis
+
+        result = asyncio.run(
+            perp_basis(
+                symbol="p",
+                start=0,
+                end=1,
+                limit=_PERP_BASIS_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.perp_basis.assert_called_once()
+
+
+def test_perp_basis_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3],
+            "mark_price": [101.0, 102.0, 103.0],
+            "index_price": [100.0, 101.0, 102.0],
+            "basis": [1.0, 1.0, 1.0],
+            "basis_pct": [0.01, 0.01, 0.01],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        result = asyncio.run(perp_basis(symbol="p", start=0, end=1, limit=0))
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 1
+
+
+def test_perp_basis_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.perp_basis.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import perp_basis
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                perp_basis(
+                    symbol="deribit:BTC-PERPETUAL",
+                    start=0,
+                    end=1,
+                )
+            )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Perp basis query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_perp_basis_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/perp-basis."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/perp-basis", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/indicators — technical indicators on OHLCV (read-only, no payment)
 # ---------------------------------------------------------------------------
 
