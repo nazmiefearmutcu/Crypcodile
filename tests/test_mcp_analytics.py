@@ -16,6 +16,7 @@ from crypcodile.mcp_server import (
     TOOLS,
     handle_calculate_ofi,
     handle_estimate_slippage,
+    handle_get_chaos_score,
     handle_get_funding_prediction,
     handle_get_indicators,
     handle_get_iv_surface,
@@ -45,6 +46,7 @@ _ANALYTICS_TOOLS = {
     "get_sequencer_latency",
     "get_open_interest",
     "get_funding_prediction",
+    "get_chaos_score",
 }
 
 
@@ -420,6 +422,36 @@ def test_handle_get_funding_prediction_invalid_window_raises() -> None:
         handle_get_funding_prediction([0.01], window_size=0)
 
 
+def test_handle_get_chaos_score_zeros() -> None:
+    result = handle_get_chaos_score(0.0, 0.0, 0.0, 0.0)
+    assert isinstance(result, dict)
+    assert result["volatility"] == 0.0
+    assert result["stablecoin_deviation"] == 0.0
+    assert result["orderbook_imbalance"] == 0.0
+    assert result["sequencer_delay"] == 0.0
+    assert result["chaos_score"] == 0.0
+
+
+def test_handle_get_chaos_score_matches_analytics() -> None:
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    vol, dev, imb, delay = 0.02, 0.001, -0.2, 2.0
+    result = handle_get_chaos_score(vol, dev, imb, delay)
+    expected = calculate_chaos_score(vol, dev, imb, delay)
+    assert result["chaos_score"] == expected
+    assert result["volatility"] == vol
+    assert result["stablecoin_deviation"] == dev
+    assert result["orderbook_imbalance"] == imb
+    assert result["sequencer_delay"] == delay
+    assert 0.0 <= result["chaos_score"] <= 100.0
+
+
+def test_handle_get_chaos_score_high_risk_bounded() -> None:
+    result = handle_get_chaos_score(1000.0, 1000.0, 1.0, 1000.0)
+    assert 0.0 <= result["chaos_score"] <= 100.0
+    assert result["chaos_score"] > 50.0
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -494,3 +526,17 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
     assert "window_size" in by_name["get_funding_prediction"]["inputSchema"][
         "properties"
     ]
+    assert set(by_name["get_chaos_score"]["inputSchema"]["required"]) == {
+        "volatility",
+        "stablecoin_deviation",
+        "orderbook_imbalance",
+        "sequencer_delay",
+    }
+    chaos_props = by_name["get_chaos_score"]["inputSchema"]["properties"]
+    for key in (
+        "volatility",
+        "stablecoin_deviation",
+        "orderbook_imbalance",
+        "sequencer_delay",
+    ):
+        assert chaos_props[key]["type"] == "number"

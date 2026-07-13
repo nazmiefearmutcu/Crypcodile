@@ -563,6 +563,34 @@ def handle_get_funding_prediction(
     return predict_next_funding(rates, window_size=window_size)
 
 
+def handle_get_chaos_score(
+    volatility: float,
+    stablecoin_deviation: float,
+    orderbook_imbalance: float,
+    sequencer_delay: float,
+) -> dict[str, Any]:
+    """Compute a normalized [0, 100] chaos score from pure numeric risk metrics.
+
+    Wraps :func:`crypcodile.analytics.risk.calculate_chaos_score`.
+    No data lake required; all inputs are floats.
+    """
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    score = calculate_chaos_score(
+        volatility=volatility,
+        stablecoin_deviation=stablecoin_deviation,
+        orderbook_imbalance=orderbook_imbalance,
+        sequencer_delay=sequencer_delay,
+    )
+    return {
+        "volatility": float(volatility),
+        "stablecoin_deviation": float(stablecoin_deviation),
+        "orderbook_imbalance": float(orderbook_imbalance),
+        "sequencer_delay": float(sequencer_delay),
+        "chaos_score": float(score),
+    }
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -1125,6 +1153,51 @@ TOOLS = [
             "required": ["rates"],
         },
     },
+    {
+        "name": "get_chaos_score",
+        "description": (
+            "Compute a normalized [0, 100] Chaos Score from pure numeric risk "
+            "metrics (no data lake). Combines volatility, stablecoin peg "
+            "deviation, orderbook imbalance, and sequencer delay via soft "
+            "thresholding. Returns inputs plus chaos_score."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "volatility": {
+                    "type": "number",
+                    "description": (
+                        "Realized or implied volatility (soft-thresholded; "
+                        "higher -> more chaos)."
+                    ),
+                },
+                "stablecoin_deviation": {
+                    "type": "number",
+                    "description": (
+                        "Absolute peg deviation from $1.00 "
+                        "(e.g. 0.02 = 2 cents)."
+                    ),
+                },
+                "orderbook_imbalance": {
+                    "type": "number",
+                    "description": (
+                        "Order book imbalance in [-1, 1] "
+                        "(abs used; higher -> more chaos)."
+                    ),
+                },
+                "sequencer_delay": {
+                    "type": "number",
+                    "description": "Sequencer / exchange latency in seconds.",
+                },
+            },
+            "required": [
+                "volatility",
+                "stablecoin_deviation",
+                "orderbook_imbalance",
+                "sequencer_delay",
+            ],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1427,6 +1500,18 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_funding_prediction failed: {e}"
+                            }
+                    elif tool_name == "get_chaos_score":
+                        try:
+                            tool_result = handle_get_chaos_score(
+                                float(arguments.get("volatility", 0.0)),
+                                float(arguments.get("stablecoin_deviation", 0.0)),
+                                float(arguments.get("orderbook_imbalance", 0.0)),
+                                float(arguments.get("sequencer_delay", 0.0)),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_chaos_score failed: {e}"
                             }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
