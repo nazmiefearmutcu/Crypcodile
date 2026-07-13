@@ -4264,6 +4264,34 @@ def test_health_and_status_routes_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/version — package version only (no payment, no lake)
+# ---------------------------------------------------------------------------
+
+
+def test_version_returns_package_version_only() -> None:
+    """Endpoint returns exactly {\"version\": __version__}; no lake touch."""
+    from crypcodile import __version__
+    from crypcodile.api_server import version
+
+    with patch("crypcodile.api_server._get_lake_client") as mock_lake:
+        result = asyncio.run(version())
+        mock_lake.assert_not_called()
+
+    assert result == {"version": __version__}
+    assert set(result.keys()) == {"version"}
+    assert isinstance(result["version"], str)
+    assert result["version"]
+
+
+def test_version_route_registered() -> None:
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/version", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/exchanges — factory registry (no payment, no lake)
 # ---------------------------------------------------------------------------
 

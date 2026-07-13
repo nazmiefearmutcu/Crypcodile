@@ -1413,6 +1413,15 @@ async def status() -> dict[str, Any]:
     return await _health_payload()
 
 
+@app.get("/api/v1/version")
+async def version() -> dict[str, str]:
+    """Package version only (read-only, no payment, no lake).
+
+    Response: ``{"version": "<crypcodile.__version__>"}``.
+    """
+    return {"version": __version__}
+
+
 @app.get("/api/v1/exchanges")
 async def exchanges() -> list[str]:
     """List registered exchange connector names (read-only, no payment, no lake).
