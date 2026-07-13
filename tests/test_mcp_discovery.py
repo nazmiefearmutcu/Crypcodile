@@ -66,6 +66,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert "list_data_channels" in names
     assert "list_dates" in names
     assert "list_exchanges_on_disk" in names
+    assert "catalog_summary" in names
     assert "search_symbols" in names
     assert "data_coverage" in names
     assert "inventory_snapshot" in names
@@ -110,6 +111,57 @@ def test_list_exchanges_on_disk_delegates_to_client() -> None:
     client = MagicMock()
     client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
     assert handle_list_exchanges_on_disk(client) == ["binance", "deribit"]
+    client.list_exchanges_on_disk.assert_called_once_with()
+
+
+def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_catalog_summary, TOOLS
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_catalog_summary(client) == {
+        "channels": [],
+        "exchanges_on_disk": [],
+        "exchange_count": 0,
+        "channel_count": 0,
+    }
+    names = {t["name"] for t in TOOLS}
+    assert "catalog_summary" in names
+    tool = next(t for t in TOOLS if t["name"] == "catalog_summary")
+    assert tool["inputSchema"]["required"] == []
+
+
+async def test_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_catalog_summary
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    result = handle_catalog_summary(client)
+    assert result == {
+        "channels": ["book_snapshot", "trade"],
+        "exchanges_on_disk": ["deribit"],
+        "exchange_count": 1,
+        "channel_count": 2,
+    }
+
+
+def test_catalog_summary_delegates_to_client() -> None:
+    """Handler wraps list_channels + list_exchanges_on_disk with counts."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_catalog_summary
+
+    client = MagicMock()
+    client.list_channels.return_value = ["book_snapshot", "trade"]
+    client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
+    assert handle_catalog_summary(client) == {
+        "channels": ["book_snapshot", "trade"],
+        "exchanges_on_disk": ["binance", "deribit"],
+        "exchange_count": 2,
+        "channel_count": 2,
+    }
+    client.list_channels.assert_called_once_with()
     client.list_exchanges_on_disk.assert_called_once_with()
 
 

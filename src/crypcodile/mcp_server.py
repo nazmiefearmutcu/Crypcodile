@@ -364,6 +364,33 @@ def handle_list_exchanges_on_disk(client: CrypcodileClient) -> list[str]:
     return client.list_exchanges_on_disk()
 
 
+def handle_catalog_summary(client: CrypcodileClient) -> dict[str, object]:
+    """One-shot lake catalog summary for agent discovery.
+
+    Mirrors REST ``GET /api/v1/catalog/summary``::
+
+        {
+            "channels": [...],           # sorted channel ids
+            "exchanges_on_disk": [...],  # sorted hive exchange= suffixes
+            "exchange_count": int,
+            "channel_count": int,
+        }
+
+    Combines :meth:`CrypcodileClient.list_channels` and
+    :meth:`CrypcodileClient.list_exchanges_on_disk` with counts. Empty lake
+    yields empty lists and zero counts. Distinct from factory connector
+    registry — ``exchanges_on_disk`` reflects hive partitions only.
+    """
+    channels = client.list_channels()
+    exchanges_on_disk = client.list_exchanges_on_disk()
+    return {
+        "channels": channels,
+        "exchanges_on_disk": exchanges_on_disk,
+        "exchange_count": len(exchanges_on_disk),
+        "channel_count": len(channels),
+    }
+
+
 def handle_search_symbols(
     client: CrypcodileClient,
     q: str,
@@ -961,6 +988,20 @@ TOOLS = [
             "List distinct hive exchange partitions present in the Crypcodile "
             "parquet data lake (e.g. deribit, binance). Sorted ascending. "
             "Empty lake returns []. Distinct from registered connector names."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "catalog_summary",
+        "description": (
+            "One-shot lake catalog summary: channels, exchanges_on_disk, and "
+            "their counts (channel_count, exchange_count). Empty lake returns "
+            "empty lists and zero counts. Combines list_data_channels + "
+            "list_exchanges_on_disk for agent discovery without HTTP."
         ),
         "inputSchema": {
             "type": "object",
@@ -1923,6 +1964,13 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"list_exchanges_on_disk failed: {e}"
+                            }
+                    elif tool_name == "catalog_summary":
+                        try:
+                            tool_result = handle_catalog_summary(client)
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"catalog_summary failed: {e}"
                             }
                     elif tool_name == "search_symbols":
                         try:

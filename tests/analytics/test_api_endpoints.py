@@ -5756,6 +5756,7 @@ def test_capabilities_shape_and_contents() -> None:
         "list_data_channels",
         "list_dates",
         "list_exchanges_on_disk",
+        "catalog_summary",
         "search_symbols",
         "get_indicators",
         "get_spot_future_basis",

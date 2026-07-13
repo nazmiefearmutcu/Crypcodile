@@ -1488,6 +1488,7 @@ _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
     "list_data_channels",
     "list_dates",
     "list_exchanges_on_disk",
+    "catalog_summary",
     "search_symbols",
     "data_coverage",
     "inventory_snapshot",
