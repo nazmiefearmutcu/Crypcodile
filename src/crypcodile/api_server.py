@@ -1484,6 +1484,8 @@ _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
     "data_coverage",
     "inventory_snapshot",
     "query_market_data",
+    "get_onchain_price",
+    "get_base_market_data",
     "get_funding_apr",
     "get_indicators",
     "get_iv_surface",
@@ -2431,6 +2433,21 @@ async def sequencer_latency(
     return df.to_dicts()
 
 
+def _json_safe_float(value: float) -> float | None:
+    """Return a finite float, or ``None`` when *value* is NaN/±Inf.
+
+    Starlette/FastAPI ``JSONResponse`` rejects non-finite floats
+    (``ValueError: Out of range float values are not JSON compliant``).
+    Pure analytics may yield ``inf``/``nan`` (e.g. zero-debt health factors,
+    undefined correlations, ±Inf inputs). HTTP/MCP boundaries map those to
+    JSON ``null`` so responses encode.
+    """
+    f = float(value)
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
 @app.get("/api/v1/chaos-score")
 async def chaos_score(
     volatility: float = 0.0,
@@ -2444,7 +2461,8 @@ async def chaos_score(
     ``orderbook_imbalance``, ``sequencer_delay`` (all floats; default ``0``).
 
     Wraps :func:`crypcodile.analytics.risk.calculate_chaos_score`. Returns the
-    inputs plus ``chaos_score``.
+    inputs plus ``chaos_score``. Non-finite floats (e.g. ±Inf inputs → NaN
+    score via soft-thresholding) are returned as JSON ``null``.
     """
     from crypcodile.analytics.risk import calculate_chaos_score
 
@@ -2465,11 +2483,11 @@ async def chaos_score(
         ) from e
 
     return {
-        "volatility": float(volatility),
-        "stablecoin_deviation": float(stablecoin_deviation),
-        "orderbook_imbalance": float(orderbook_imbalance),
-        "sequencer_delay": float(sequencer_delay),
-        "chaos_score": float(score),
+        "volatility": _json_safe_float(volatility),
+        "stablecoin_deviation": _json_safe_float(stablecoin_deviation),
+        "orderbook_imbalance": _json_safe_float(orderbook_imbalance),
+        "sequencer_delay": _json_safe_float(sequencer_delay),
+        "chaos_score": _json_safe_float(score),
     }
 
 
@@ -2486,11 +2504,12 @@ async def peg_deviation(
 
     Wraps :func:`crypcodile.analytics.peg_deviation.peg_deviation_from_price`.
     Returns ``price``, ``deviation_pct``, ``is_alert_triggered``, ``threshold``.
+    Non-finite floats (NaN/±Inf price or deviation) are JSON ``null``.
     """
     from crypcodile.analytics.peg_deviation import peg_deviation_from_price
 
     try:
-        return peg_deviation_from_price(
+        result = peg_deviation_from_price(
             float(price),
             threshold=float(threshold),
             target=float(target),
@@ -2504,19 +2523,12 @@ async def peg_deviation(
             detail="Peg deviation calculation failed.",
         ) from e
 
-
-def _json_safe_float(value: float) -> float | None:
-    """Return a finite float, or ``None`` when *value* is NaN/±Inf.
-
-    Starlette/FastAPI ``JSONResponse`` rejects non-finite floats
-    (``ValueError: Out of range float values are not JSON compliant``).
-    Callers use this at HTTP/MCP boundaries so zero-debt health factors
-    (``float('inf')`` from pure analytics) serialize as JSON ``null``.
-    """
-    f = float(value)
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return f
+    return {
+        "price": _json_safe_float(result["price"]),
+        "deviation_pct": _json_safe_float(result["deviation_pct"]),
+        "is_alert_triggered": bool(result["is_alert_triggered"]),
+        "threshold": _json_safe_float(result["threshold"]),
+    }
 
 
 @app.get("/api/v1/lending-stress")
@@ -2583,6 +2595,7 @@ async def funding_predict(
     Wraps :func:`crypcodile.analytics.funding_prediction.predict_next_funding`.
     Returns ``predicted_funding_rate``, ``method`` (``xgboost`` or
     ``rolling_mean``), ``window_size``, ``n_history``, ``xgboost_available``.
+    Non-finite predictions (e.g. Inf/NaN history) are JSON ``null``.
 
     Empty / whitespace-only ``rates``, non-numeric tokens, empty after split,
     or ``window_size < 1`` yield HTTP 400.
@@ -2610,7 +2623,7 @@ async def funding_predict(
         ) from e
 
     try:
-        return predict_next_funding(rate_list, window_size=int(window_size))
+        result = predict_next_funding(rate_list, window_size=int(window_size))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -2619,6 +2632,15 @@ async def funding_predict(
             status_code=500,
             detail="Funding prediction failed.",
         ) from e
+
+    # Non-finite predicted rates (e.g. Inf/NaN history) → JSON null.
+    return {
+        "predicted_funding_rate": _json_safe_float(result["predicted_funding_rate"]),
+        "method": result["method"],
+        "window_size": int(result["window_size"]),
+        "n_history": int(result["n_history"]),
+        "xgboost_available": bool(result["xgboost_available"]),
+    }
 
 
 class GasVolPayload(BaseModel):
@@ -2632,17 +2654,6 @@ class GasVolPayload(BaseModel):
 
     gas: list[dict[str, Any]]
     vol: list[dict[str, Any]]
-
-
-def _json_safe_corr(value: float) -> float | None:
-    """Map NaN correlations to JSON null; keep finite floats as-is."""
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(f):
-        return None
-    return f
 
 
 def _series_rows_to_df(rows: list[dict[str, Any]], series_name: str):
@@ -2716,8 +2727,8 @@ async def gas_vol(payload: GasVolPayload) -> dict[str, Any]:
         ) from e
 
     return {
-        "pearson": _json_safe_corr(result.get("pearson", float("nan"))),
-        "spearman": _json_safe_corr(result.get("spearman", float("nan"))),
+        "pearson": _json_safe_float(result.get("pearson", float("nan"))),
+        "spearman": _json_safe_float(result.get("spearman", float("nan"))),
         "n_gas": len(payload.gas),
         "n_vol": len(payload.vol),
     }

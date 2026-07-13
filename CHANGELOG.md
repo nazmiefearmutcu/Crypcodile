@@ -6,10 +6,11 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Fixed
+- **API/MCP pure float JSON safety**: non-finite floats from pure offline analytics are mapped to JSON `null` via `_json_safe_float` at REST/MCP boundaries — covers `chaos-score` (±Inf inputs → NaN score), `peg-deviation` (Inf/NaN price), `funding-predict` (Inf/NaN history), `gas-vol` (undefined correlations), and the prior `lending-stress` zero-debt health-factor case. Prevents Starlette `ValueError: Out of range float values are not JSON compliant`.
 - **API/MCP lending-stress JSON safety**: zero-debt health factors (`float('inf')` in pure analytics) are returned as JSON `null` at the REST and MCP boundaries so Starlette/JSON-RPC encoding no longer raises `ValueError: Out of range float values are not JSON compliant`.
 
 ### Changed
-- **API capabilities discovery lists expanded**: `GET /api/v1/capabilities` `rest` now covers free routes previously missing from the short list (`status`, `capabilities`, `catalog/scan`, `perp-basis`, `spot-future-basis`, whale/slippage/vol suite, base-risk pure endpoints, `funding-predict`, `simulate-price-impact`, etc.); `mcp_tools_hint` aligned with major MCP tools. Paid/admin routes still omitted.
+- **API capabilities discovery lists expanded**: `GET /api/v1/capabilities` `rest` now covers free routes previously missing from the short list (`status`, `capabilities`, `catalog/scan`, `perp-basis`, `spot-future-basis`, whale/slippage/vol suite, base-risk pure endpoints, `funding-predict`, `simulate-price-impact`, etc.); `mcp_tools_hint` aligned with major MCP tools including `get_onchain_price` / `get_base_market_data`. Paid/admin routes still omitted.
 
 ### Added
 - **API capabilities endpoint**: `GET /api/v1/capabilities` — free agent discovery returning `{rest, mcp_tools_hint}` hardcoded lists of free REST routes (METHOD + path) and MCP tool names (no payment, no lake; defensive list copies).

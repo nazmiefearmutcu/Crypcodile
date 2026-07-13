@@ -3705,6 +3705,34 @@ def test_chaos_score_route_registered() -> None:
     assert ("/api/v1/chaos-score", ("GET",)) in paths
 
 
+def test_chaos_score_inf_input_json_safe_null() -> None:
+    """±Inf volatility yields NaN in pure analytics; REST returns null (JSON-safe)."""
+    import math
+
+    from starlette.responses import JSONResponse
+
+    from crypcodile.analytics.risk import calculate_chaos_score
+    from crypcodile.api_server import chaos_score
+
+    pure = calculate_chaos_score(float("inf"), 0.0, 0.0, 0.0)
+    assert math.isnan(pure)
+
+    result = asyncio.run(
+        chaos_score(
+            volatility=float("inf"),
+            stablecoin_deviation=0.0,
+            orderbook_imbalance=0.0,
+            sequencer_delay=0.0,
+        )
+    )
+    assert result["volatility"] is None
+    assert result["chaos_score"] is None
+    body = JSONResponse(result).body
+    assert b"null" in body
+    assert b"Infinity" not in body
+    assert b"NaN" not in body
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/peg-deviation — pure peg check (no lake, no payment)
 # ---------------------------------------------------------------------------
@@ -3764,6 +3792,41 @@ def test_peg_deviation_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/peg-deviation", ("GET",)) in paths
+
+
+def test_peg_deviation_inf_price_json_safe_null() -> None:
+    """Inf price yields Inf deviation in pure analytics; REST returns null."""
+    from starlette.responses import JSONResponse
+
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+    from crypcodile.api_server import peg_deviation
+
+    pure = peg_deviation_from_price(float("inf"))
+    assert pure["price"] == float("inf")
+    assert pure["deviation_pct"] == float("inf")
+
+    result = asyncio.run(peg_deviation(price=float("inf")))
+    assert result["price"] is None
+    assert result["deviation_pct"] is None
+    assert result["is_alert_triggered"] is True
+    body = JSONResponse(result).body
+    assert b"null" in body
+    assert b"Infinity" not in body
+
+
+def test_peg_deviation_nan_price_json_safe_null() -> None:
+    """NaN price yields NaN deviation; REST returns null."""
+    import math
+
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+    from crypcodile.api_server import peg_deviation
+
+    pure = peg_deviation_from_price(float("nan"))
+    assert math.isnan(pure["price"])
+
+    result = asyncio.run(peg_deviation(price=float("nan")))
+    assert result["price"] is None
+    assert result["deviation_pct"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -3916,7 +3979,7 @@ def test_lending_stress_route_registered() -> None:
 
 
 def test_json_safe_float_maps_non_finite_to_none() -> None:
-    """Helper used by REST lending-stress (and peers) for JSON encoding."""
+    """Helper used by pure REST float fields for JSON encoding."""
     from crypcodile.api_server import _json_safe_float
 
     assert _json_safe_float(1.5) == 1.5
@@ -4031,6 +4094,29 @@ def test_funding_predict_route_registered() -> None:
     assert ("/api/v1/funding-predict", ("GET",)) in paths
 
 
+def test_funding_predict_inf_rates_json_safe_null() -> None:
+    """Inf rates can yield Inf prediction; REST returns null (JSON-safe)."""
+    from starlette.responses import JSONResponse
+
+    from crypcodile.analytics.funding_prediction import predict_next_funding
+    from crypcodile.api_server import funding_predict
+
+    pure = predict_next_funding([float("inf"), 0.1, 0.2], window_size=3)
+    assert pure["predicted_funding_rate"] == float("inf") or pure[
+        "predicted_funding_rate"
+    ] != pure["predicted_funding_rate"]  # Inf or NaN
+
+    result = asyncio.run(
+        funding_predict(rates="inf,0.1,0.2", window_size=3)
+    )
+    assert result["predicted_funding_rate"] is None
+    assert result["n_history"] == 3
+    body = JSONResponse(result).body
+    assert b"null" in body
+    assert b"Infinity" not in body
+    assert b"NaN" not in body
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/gas-vol — pure offline gas/vol correlation (no lake, no payment)
 # ---------------------------------------------------------------------------
@@ -4083,6 +4169,32 @@ def test_gas_vol_empty_series_null_corr() -> None:
     assert result["spearman"] is None
     assert result["n_gas"] == 0
     assert result["n_vol"] == 0
+
+
+def test_gas_vol_constant_series_null_corr_json_safe() -> None:
+    """Constant gas vs varying vol → NaN correlations; REST returns null."""
+    import math
+
+    from starlette.responses import JSONResponse
+
+    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    gas_rows = [{"local_ts": i, "gas": 1.0} for i in range(1, 4)]
+    vol_rows = [{"local_ts": i, "vol": float(i) * 0.1} for i in range(1, 4)]
+    pure = gas_to_volatility_correlation(
+        pl.DataFrame(gas_rows), pl.DataFrame(vol_rows)
+    )
+    assert math.isnan(pure["pearson"])
+    assert math.isnan(pure["spearman"])
+
+    result = asyncio.run(gas_vol(GasVolPayload(gas=gas_rows, vol=vol_rows)))
+    assert result["pearson"] is None
+    assert result["spearman"] is None
+    body = JSONResponse(result).body
+    assert b"null" in body
+    assert b"NaN" not in body
+    assert b"Infinity" not in body
 
 
 def test_gas_vol_insufficient_data_null_corr() -> None:
@@ -5193,6 +5305,10 @@ def test_capabilities_shape_and_contents() -> None:
         "get_spot_future_basis",
         "get_lending_stress",
         "label_transfers",
+        "get_onchain_price",
+        "get_base_market_data",
+        "get_chaos_score",
+        "get_funding_prediction",
     ):
         assert tool in result["mcp_tools_hint"]
 

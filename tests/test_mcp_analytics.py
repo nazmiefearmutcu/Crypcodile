@@ -541,6 +541,21 @@ def test_handle_get_funding_prediction_invalid_window_raises() -> None:
         handle_get_funding_prediction([0.01], window_size=0)
 
 
+def test_handle_get_funding_prediction_inf_rates_json_safe_null() -> None:
+    """Inf rates → non-finite prediction; MCP returns None for JSON-RPC safety."""
+    import json
+
+    result = handle_get_funding_prediction(
+        [float("inf"), 0.1, 0.2], window_size=3
+    )
+    assert result["predicted_funding_rate"] is None
+    assert result["n_history"] == 3
+    encoded = json.dumps(result)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
+
+
 def test_handle_get_chaos_score_zeros() -> None:
     result = handle_get_chaos_score(0.0, 0.0, 0.0, 0.0)
     assert isinstance(result, dict)
@@ -569,6 +584,25 @@ def test_handle_get_chaos_score_high_risk_bounded() -> None:
     result = handle_get_chaos_score(1000.0, 1000.0, 1.0, 1000.0)
     assert 0.0 <= result["chaos_score"] <= 100.0
     assert result["chaos_score"] > 50.0
+
+
+def test_handle_get_chaos_score_inf_input_json_safe_null() -> None:
+    """±Inf volatility → NaN score in pure analytics; MCP returns None."""
+    import json
+    import math
+
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    pure = calculate_chaos_score(float("inf"), 0.0, 0.0, 0.0)
+    assert math.isnan(pure)
+
+    result = handle_get_chaos_score(float("inf"), 0.0, 0.0, 0.0)
+    assert result["volatility"] is None
+    assert result["chaos_score"] is None
+    encoded = json.dumps(result)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
+    assert "NaN" not in encoded
 
 
 def test_handle_get_peg_deviation_alert() -> None:
@@ -603,6 +637,19 @@ def test_handle_get_peg_deviation_matches_analytics() -> None:
     expected = peg_deviation_from_price(0.975, threshold=0.01, target=1.0)
     result = handle_get_peg_deviation(0.975, threshold=0.01, target=1.0)
     assert result == expected
+
+
+def test_handle_get_peg_deviation_inf_price_json_safe_null() -> None:
+    """Inf price → Inf deviation; MCP returns None for JSON-RPC safety."""
+    import json
+
+    result = handle_get_peg_deviation(float("inf"))
+    assert result["price"] is None
+    assert result["deviation_pct"] is None
+    assert result["is_alert_triggered"] is True
+    encoded = json.dumps(result)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
 
 
 def test_handle_get_lending_stress_healthy() -> None:

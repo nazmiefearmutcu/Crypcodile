@@ -586,6 +586,20 @@ def handle_get_open_interest(
     return df.to_dicts()
 
 
+def _json_safe_float(value: float) -> float | None:
+    """Return a finite float, or ``None`` when *value* is NaN/±Inf.
+
+    JSON-RPC tool results must be JSON-compliant; pure analytics may yield
+    non-finite floats (Inf health factors, undefined correlations, Inf inputs).
+    """
+    import math
+
+    f = float(value)
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
 def handle_get_funding_prediction(
     rates: list[float],
     window_size: int = 5,
@@ -594,10 +608,18 @@ def handle_get_funding_prediction(
 
     Wraps :func:`crypcodile.analytics.funding_prediction.predict_next_funding`.
     Accepts a sequence of funding-rate floats; optional rolling ``window_size``.
+    Non-finite predictions are returned as ``None`` (JSON null).
     """
     from crypcodile.analytics.funding_prediction import predict_next_funding
 
-    return predict_next_funding(rates, window_size=window_size)
+    result = predict_next_funding(rates, window_size=window_size)
+    return {
+        "predicted_funding_rate": _json_safe_float(result["predicted_funding_rate"]),
+        "method": result["method"],
+        "window_size": int(result["window_size"]),
+        "n_history": int(result["n_history"]),
+        "xgboost_available": bool(result["xgboost_available"]),
+    }
 
 
 def handle_get_chaos_score(
@@ -609,7 +631,8 @@ def handle_get_chaos_score(
     """Compute a normalized [0, 100] chaos score from pure numeric risk metrics.
 
     Wraps :func:`crypcodile.analytics.risk.calculate_chaos_score`.
-    No data lake required; all inputs are floats.
+    No data lake required; all inputs are floats. Non-finite floats (e.g.
+    ±Inf inputs → NaN score) are returned as ``None`` (JSON null).
     """
     from crypcodile.analytics.risk import calculate_chaos_score
 
@@ -620,11 +643,11 @@ def handle_get_chaos_score(
         sequencer_delay=sequencer_delay,
     )
     return {
-        "volatility": float(volatility),
-        "stablecoin_deviation": float(stablecoin_deviation),
-        "orderbook_imbalance": float(orderbook_imbalance),
-        "sequencer_delay": float(sequencer_delay),
-        "chaos_score": float(score),
+        "volatility": _json_safe_float(volatility),
+        "stablecoin_deviation": _json_safe_float(stablecoin_deviation),
+        "orderbook_imbalance": _json_safe_float(orderbook_imbalance),
+        "sequencer_delay": _json_safe_float(sequencer_delay),
+        "chaos_score": _json_safe_float(score),
     }
 
 
@@ -705,15 +728,7 @@ def handle_get_lending_stress(
     Non-finite health factors (zero debt → ``float('inf')`` in pure analytics)
     are returned as ``None`` so JSON-RPC tool results stay JSON-compliant.
     """
-    import math
-
     from crypcodile.analytics.lending_stress import lending_stress_test
-
-    def _json_safe_float(value: float) -> float | None:
-        f = float(value)
-        if math.isnan(f) or math.isinf(f):
-            return None
-        return f
 
     result = lending_stress_test(
         collateral_usd=float(collateral_usd),
@@ -790,14 +805,21 @@ def handle_get_peg_deviation(
 
     Wraps :func:`crypcodile.analytics.peg_deviation.peg_deviation_from_price`.
     Returns ``price``, ``deviation_pct``, ``is_alert_triggered``, ``threshold``.
+    Non-finite floats are returned as ``None`` (JSON null).
     """
     from crypcodile.analytics.peg_deviation import peg_deviation_from_price
 
-    return peg_deviation_from_price(
+    result = peg_deviation_from_price(
         float(price),
         threshold=float(threshold),
         target=float(target),
     )
+    return {
+        "price": _json_safe_float(result["price"]),
+        "deviation_pct": _json_safe_float(result["deviation_pct"]),
+        "is_alert_triggered": bool(result["is_alert_triggered"]),
+        "threshold": _json_safe_float(result["threshold"]),
+    }
 
 
 # List of tools exposed by the MCP server
