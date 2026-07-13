@@ -207,7 +207,14 @@
 | 1 | REST `GET /api/v1/spot-future-basis` (future/spot/start/end/limit → client.spot_future_basis) | DONE | `defd71e` |
 | 2 | Fix `Catalog.search_symbols` non-positive limit (Polars `head(-n)` trap) | DONE | `9a961d8` |
 
-## Next rotation ideas (Wave 27+)
+## Wave 27 — Feature (resolve-symbols REST) + bugfix — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/resolve-symbols` (symbols/channel/ambiguous → client.resolve_symbols) | DONE | `08808cf` |
+| 2 | Fix `resolve_symbols` empty/whitespace channel treated as no filter | DONE | `3cf669d` |
+
+## Next rotation ideas (Wave 28+)
 
 Priority candidates for the next cycles:
 
