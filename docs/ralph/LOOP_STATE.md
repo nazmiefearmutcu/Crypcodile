@@ -312,10 +312,10 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Apply `_json_safe_records` to `POST /api/v1/simulate-price-impact` (slippage DF floats) | DONE | `3f21e5f1b72eeda3a1cd6541b1eb706a75cfd7f4` |
-| 2 | Apply `_json_safe_records` to `POST /api/v1/smart-money` | DONE | `3f21e5f1b72eeda3a1cd6541b1eb706a75cfd7f4` |
-| 3 | Apply `_json_safe_records` to `POST /api/v1/label-transfers` | DONE | `3f21e5f1b72eeda3a1cd6541b1eb706a75cfd7f4` |
-| 4 | Tests for non-finite sanitization on those three POST endpoints; full API + MCP suites green | DONE | `3f21e5f1b72eeda3a1cd6541b1eb706a75cfd7f4` |
+| 1 | Apply `_json_safe_records` to `POST /api/v1/simulate-price-impact` (slippage DF floats) | DONE | `eb7e88e376b605524f231de961e374651ff6e316` |
+| 2 | Apply `_json_safe_records` to `POST /api/v1/smart-money` | DONE | `eb7e88e376b605524f231de961e374651ff6e316` |
+| 3 | Apply `_json_safe_records` to `POST /api/v1/label-transfers` | DONE | `eb7e88e376b605524f231de961e374651ff6e316` |
+| 4 | Tests for non-finite sanitization on those three POST endpoints; full API + MCP suites green | DONE | `eb7e88e376b605524f231de961e374651ff6e316` |
 
 ## Next rotation ideas (Wave 42+)
 
