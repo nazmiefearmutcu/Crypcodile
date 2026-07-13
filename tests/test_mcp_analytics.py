@@ -21,6 +21,7 @@ from crypcodile.mcp_server import (
     handle_get_funding_prediction,
     handle_get_indicators,
     handle_get_iv_surface,
+    handle_get_lending_stress,
     handle_get_liquidity_depth,
     handle_get_open_interest,
     handle_get_perp_basis,
@@ -48,6 +49,7 @@ _ANALYTICS_TOOLS = {
     "get_open_interest",
     "get_funding_prediction",
     "get_chaos_score",
+    "get_lending_stress",
     "detect_mev_sandwiches",
 }
 
@@ -485,6 +487,75 @@ def test_handle_get_chaos_score_high_risk_bounded() -> None:
     assert result["chaos_score"] > 50.0
 
 
+def test_handle_get_lending_stress_healthy() -> None:
+    result = handle_get_lending_stress(
+        collateral_usd=10_000.0,
+        debt_usd=4_000.0,
+        liquidation_threshold=0.8,
+        haircut_pct=0.10,
+    )
+    assert isinstance(result, dict)
+    assert result["collateral_usd"] == 10_000.0
+    assert result["debt_usd"] == 4_000.0
+    assert result["liquidation_threshold"] == 0.8
+    assert result["haircut_pct"] == 0.10
+    assert result["current_health_factor"] == pytest.approx(2.0)
+    assert result["simulated_health_factor"] == pytest.approx(1.8)
+    assert result["is_liquidatable"] is False
+    assert result["simulated_is_liquidatable"] is False
+
+
+def test_handle_get_lending_stress_liquidation() -> None:
+    # Current HF = (10000 * 0.8) / 9000 ≈ 0.889 → liquidatable now
+    result = handle_get_lending_stress(
+        collateral_usd=10_000.0,
+        debt_usd=9_000.0,
+        liquidation_threshold=0.8,
+        haircut_pct=10.0,
+    )
+    assert result["current_health_factor"] < 1.0
+    assert result["is_liquidatable"] is True
+    assert result["simulated_is_liquidatable"] is True
+
+
+def test_handle_get_lending_stress_zero_debt_inf() -> None:
+    result = handle_get_lending_stress(
+        collateral_usd=5_000.0,
+        debt_usd=0.0,
+        liquidation_threshold=0.8,
+        haircut_pct=0.20,
+    )
+    assert result["current_health_factor"] == float("inf")
+    assert result["simulated_health_factor"] == float("inf")
+    assert result["is_liquidatable"] is False
+    assert result["simulated_is_liquidatable"] is False
+
+
+def test_handle_get_lending_stress_matches_analytics() -> None:
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    kwargs = {
+        "collateral_usd": 12_500.0,
+        "debt_usd": 3_000.0,
+        "liquidation_threshold": 0.75,
+        "haircut_pct": 20.0,
+    }
+    result = handle_get_lending_stress(**kwargs)
+    expected = lending_stress_test(**kwargs)
+    assert result["current_health_factor"] == expected["current_health_factor"]
+    assert result["simulated_health_factor"] == expected["simulated_health_factor"]
+    assert result["is_liquidatable"] == expected["is_liquidatable"]
+    assert result["simulated_is_liquidatable"] == expected["simulated_is_liquidatable"]
+
+
+def test_handle_get_lending_stress_percent_vs_fraction_haircut() -> None:
+    """Haircut 20 and 0.20 must yield the same stress metrics."""
+    a = handle_get_lending_stress(10_000.0, 5_000.0, 0.8, 20.0)
+    b = handle_get_lending_stress(10_000.0, 5_000.0, 0.8, 0.20)
+    assert a["simulated_health_factor"] == b["simulated_health_factor"]
+    assert a["current_health_factor"] == b["current_health_factor"]
+
+
 def test_handle_detect_mev_sandwiches_positive() -> None:
     rows = handle_detect_mev_sandwiches(_MEV_SANDWICH_TRADES)
     assert isinstance(rows, list)
@@ -635,6 +706,20 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "sequencer_delay",
     ):
         assert chaos_props[key]["type"] == "number"
+    assert set(by_name["get_lending_stress"]["inputSchema"]["required"]) == {
+        "collateral_usd",
+        "debt_usd",
+        "liquidation_threshold",
+        "haircut_pct",
+    }
+    lend_props = by_name["get_lending_stress"]["inputSchema"]["properties"]
+    for key in (
+        "collateral_usd",
+        "debt_usd",
+        "liquidation_threshold",
+        "haircut_pct",
+    ):
+        assert lend_props[key]["type"] == "number"
     assert set(by_name["detect_mev_sandwiches"]["inputSchema"]["required"]) == {
         "trades",
     }

@@ -618,6 +618,40 @@ def handle_detect_mev_sandwiches(
     return out.to_dicts()
 
 
+def handle_get_lending_stress(
+    collateral_usd: float,
+    debt_usd: float,
+    liquidation_threshold: float,
+    haircut_pct: float,
+) -> dict[str, Any]:
+    """Stress-test a lending position health factor under a collateral haircut.
+
+    Wraps :func:`crypcodile.analytics.lending_stress.lending_stress_test`.
+    No data lake or RPC required; all inputs are pure numbers.
+
+    Returns the pure-function metrics plus the input parameters for context.
+    Health factors may be ``float('inf')`` when debt is zero.
+    """
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    result = lending_stress_test(
+        collateral_usd=float(collateral_usd),
+        debt_usd=float(debt_usd),
+        liquidation_threshold=float(liquidation_threshold),
+        haircut_pct=float(haircut_pct),
+    )
+    return {
+        "collateral_usd": float(collateral_usd),
+        "debt_usd": float(debt_usd),
+        "liquidation_threshold": float(liquidation_threshold),
+        "haircut_pct": float(haircut_pct),
+        "current_health_factor": result["current_health_factor"],
+        "simulated_health_factor": result["simulated_health_factor"],
+        "is_liquidatable": bool(result["is_liquidatable"]),
+        "simulated_is_liquidatable": bool(result["simulated_is_liquidatable"]),
+    }
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -1226,6 +1260,49 @@ TOOLS = [
         },
     },
     {
+        "name": "get_lending_stress",
+        "description": (
+            "Stress-test a lending position's health factor under a collateral "
+            "haircut (no data lake / RPC). Pure numeric inputs: collateral "
+            "USD, debt USD, liquidation threshold fraction, and haircut as "
+            "fraction or percent (0.20 or 20 for 20%). Returns current and "
+            "simulated health factors plus liquidatable flags."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "collateral_usd": {
+                    "type": "number",
+                    "description": "Current collateral value in USD.",
+                },
+                "debt_usd": {
+                    "type": "number",
+                    "description": "Current debt value in USD.",
+                },
+                "liquidation_threshold": {
+                    "type": "number",
+                    "description": (
+                        "Liquidation threshold as a fraction "
+                        "(e.g. 0.8 for 80%)."
+                    ),
+                },
+                "haircut_pct": {
+                    "type": "number",
+                    "description": (
+                        "Expected collateral drop as fraction or percent "
+                        "(e.g. 0.20 or 20 for a 20% drop)."
+                    ),
+                },
+            },
+            "required": [
+                "collateral_usd",
+                "debt_usd",
+                "liquidation_threshold",
+                "haircut_pct",
+            ],
+        },
+    },
+    {
         "name": "detect_mev_sandwiches",
         "description": (
             "Detect MEV sandwich attack patterns in an offline trade sequence "
@@ -1597,6 +1674,18 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_chaos_score failed: {e}"
+                            }
+                    elif tool_name == "get_lending_stress":
+                        try:
+                            tool_result = handle_get_lending_stress(
+                                float(arguments["collateral_usd"]),
+                                float(arguments["debt_usd"]),
+                                float(arguments["liquidation_threshold"]),
+                                float(arguments["haircut_pct"]),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_lending_stress failed: {e}"
                             }
                     elif tool_name == "detect_mev_sandwiches":
                         try:

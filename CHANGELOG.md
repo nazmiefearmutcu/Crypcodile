@@ -6,6 +6,8 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-13
 ### Added
+- **API spot-perp basis endpoint**: `GET /api/v1/basis` with `spot` + `perp` query params wrapping `spot_perp_basis` (bounded rows, no payment).
+- **MCP get_lending_stress tool**: Pure numeric lending health-factor stress test over MCP (wraps `lending_stress_test`).
 - **Catalog inventory and ranked symbol search**: Store-layer inventory listing and ranked symbol search over the data catalog.
 - **Search system (client, CLI, MCP)**: Client `resolve_symbols`, CLI search, and MCP discovery tools for symbol resolution.
 - **MCP analytics tools**: Exposed slippage, OFI, whale alerts, IV surface, and term-structure tools over MCP.
