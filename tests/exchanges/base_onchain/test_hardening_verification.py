@@ -134,6 +134,61 @@ async def test_api_server_payments_db_file_persistence() -> None:
     assert payment_id in db
     assert db[payment_id]["status"] == "pending"
     assert db[payment_id]["symbol"] == "cbBTC-USDC"
+    # Atomic write should not leave a temp sibling behind
+    assert not os.path.exists(payments_file + ".tmp")
+
+
+@pytest.mark.asyncio
+async def test_save_db_file_atomic_replace_and_fail_loud() -> None:
+    """_save_db_file uses temp+os.replace and re-raises on failure."""
+    from crypcodile.api_server import _save_db_file, PAYMENTS_DB, db_lock
+
+    payments_file = get_payments_file()
+    payload = {"pid-atomic": {"status": "pending", "symbol": "cbBTC-USDC"}}
+
+    # Happy path: durable write lands at final path
+    _save_db_file(payload)
+    assert os.path.exists(payments_file)
+    assert not os.path.exists(payments_file + ".tmp")
+    with open(payments_file) as f:
+        assert json.load(f) == payload
+
+    # Failure path: OSError from open is logged and re-raised (not swallowed)
+    with patch("builtins.open", side_effect=OSError("disk full")):
+        with pytest.raises(OSError, match="disk full"):
+            _save_db_file({"pid-fail": {"status": "paid"}})
+
+    # set_async depends on save — must propagate so CAS/serve cannot succeed silently
+    async with db_lock:
+        with patch(
+            "crypcodile.api_server._save_db_file",
+            side_effect=OSError("disk full"),
+        ):
+            with pytest.raises(OSError, match="disk full"):
+                await PAYMENTS_DB.set_async(
+                    "pid-set-async-fail",
+                    {"status": "spent", "symbol": "cbBTC-USDC"},
+                )
+
+
+@pytest.mark.asyncio
+async def test_sync_logs_load_errors(caplog: pytest.LogCaptureFixture) -> None:
+    """_sync must log load failures instead of silently passing."""
+    import logging
+    from crypcodile.api_server import PersistentDict
+
+    payments_file = get_payments_file()
+    with open(payments_file, "w") as f:
+        f.write("{not-valid-json")
+
+    pdb = PersistentDict()
+    with caplog.at_level(logging.ERROR, logger="crypcodile.api_server"):
+        pdb._sync()
+
+    assert any(
+        "Error loading PAYMENTS_DB during sync" in rec.message for rec in caplog.records
+    )
+
 
 @pytest.mark.asyncio
 async def test_non_blocking_ipc() -> None:

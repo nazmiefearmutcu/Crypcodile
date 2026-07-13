@@ -531,21 +531,39 @@ def _load_db_file() -> dict[str, dict[str, Any]]:
         return {}
 
 def _save_db_file(data: dict[str, dict[str, Any]]) -> None:
+    """Atomically persist payments DB (temp file + os.replace). Re-raises on failure."""
     payments_file = get_payments_file()
+    tmp_file = payments_file + ".tmp"
     try:
-        os.makedirs(os.path.dirname(payments_file), exist_ok=True)
+        parent = os.path.dirname(payments_file)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         lock_file = payments_file + ".lock"
         with open(lock_file, "a") as lf:
             try:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
             except (OSError, AttributeError):
                 pass
-            with open(payments_file, "w") as f:
-                json.dump(data, f)
-                f.flush()
-                os.fsync(f.fileno())
+            try:
+                with open(tmp_file, "w") as f:
+                    json.dump(data, f)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except OSError:
+                        # fsync not always available (e.g. some special FS); still rename
+                        pass
+                os.replace(tmp_file, payments_file)
+            finally:
+                # Best-effort cleanup if write/replace left a temp behind
+                if os.path.exists(tmp_file):
+                    try:
+                        os.unlink(tmp_file)
+                    except OSError:
+                        pass
     except Exception as e:
         log.error(f"Error saving PAYMENTS_DB file: {e}")
+        raise
 
 class PersistentDict(dict[str, Any]):
     def __init__(self, default_data: dict[str, Any] | None = None) -> None:
@@ -568,6 +586,7 @@ class PersistentDict(dict[str, Any]):
         return dict.get(self, key, default)
 
     async def set_async(self, key: str, value: Any) -> None:
+        """Update in-memory entry and persist. Save failures propagate (CAS/serve must fail)."""
         await self.sync_async()
         dict.__setitem__(self, key, value)
         await self.save_async()
@@ -608,8 +627,8 @@ class PersistentDict(dict[str, Any]):
                                     content = f.read().strip()
                                     if content:
                                         dict.update(self, json.loads(content))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.error(f"Error loading PAYMENTS_DB during sync: {e}")
                 self._last_payments_file = current_file
                 self._last_mtime = mtime
         finally:
