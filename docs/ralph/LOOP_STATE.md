@@ -501,9 +501,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | `CrypcodileClient.catalog_stats()` — list_channels + COUNT(*) per channel (`"` → `""` escape; fail → `-1`); REST/MCP/CLI all wire to it | DONE | (feature SHA) |
-| 2 | Tests: client empty/data/count/fail/escape; REST/MCP/CLI delegate + surface contract; catalog_stats suite **21 passed** | DONE | (feature SHA) |
-| 3 | Broad discovery regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **854 passed** | DONE | (feature SHA) |
+| 1 | `CrypcodileClient.catalog_stats()` — list_channels + COUNT(*) per channel (`"` → `""` escape; fail → `-1`); REST/MCP/CLI all wire to it | DONE | `031b0c0` |
+| 2 | Tests: client empty/data/count/fail/escape; REST/MCP/CLI delegate + surface contract; catalog_stats suite **21 passed** | DONE | `031b0c0` |
+| 3 | Broad discovery regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **854 passed** | DONE | `031b0c0` |
 
 ## Next rotation ideas (Wave 65+)
 
