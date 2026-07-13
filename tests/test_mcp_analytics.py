@@ -17,6 +17,7 @@ from crypcodile.mcp_server import (
     handle_get_indicators,
     handle_get_iv_surface,
     handle_get_liquidity_depth,
+    handle_get_open_interest,
     handle_get_perp_basis,
     handle_get_risk_reversal,
     handle_get_sequencer_latency,
@@ -39,6 +40,7 @@ _ANALYTICS_TOOLS = {
     "get_indicators",
     "get_liquidity_depth",
     "get_sequencer_latency",
+    "get_open_interest",
 }
 
 
@@ -349,6 +351,40 @@ def test_handle_get_sequencer_latency_empty() -> None:
     assert handle_get_sequencer_latency(client, "base_onchain") == []
 
 
+def test_handle_get_open_interest_returns_dicts() -> None:
+    client = MagicMock()
+    client.aggregate_open_interest.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2],
+            "binance": [100.0, 110.0],
+            "bybit": [50.0, 55.0],
+            "total_oi": [150.0, 165.0],
+        }
+    )
+    rows = handle_get_open_interest(client, "BTC", 0, 100)
+    assert isinstance(rows, list)
+    assert len(rows) == 2
+    assert rows[0]["total_oi"] == 150.0
+    assert rows[1]["binance"] == 110.0
+    client.aggregate_open_interest.assert_called_once_with("BTC", 0, 100)
+
+
+def test_handle_get_open_interest_all_symbols() -> None:
+    client = MagicMock()
+    client.aggregate_open_interest.return_value = pl.DataFrame(
+        {"local_ts": [1], "total_oi": [200.0]}
+    )
+    rows = handle_get_open_interest(client, None, 0, 100)
+    assert len(rows) == 1
+    client.aggregate_open_interest.assert_called_once_with(None, 0, 100)
+
+
+def test_handle_get_open_interest_empty() -> None:
+    client = MagicMock()
+    client.aggregate_open_interest.return_value = pl.DataFrame()
+    assert handle_get_open_interest(client, "BTC", 0, 1) == []
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -407,3 +443,8 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
     }
     assert by_name["get_sequencer_latency"]["inputSchema"]["required"] == []
     assert "exchange" in by_name["get_sequencer_latency"]["inputSchema"]["properties"]
+    assert set(by_name["get_open_interest"]["inputSchema"]["required"]) == {
+        "start",
+        "end",
+    }
+    assert "symbols" in by_name["get_open_interest"]["inputSchema"]["properties"]

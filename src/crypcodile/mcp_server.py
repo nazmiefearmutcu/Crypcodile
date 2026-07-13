@@ -536,6 +536,19 @@ def handle_get_sequencer_latency(
     return df.to_dicts()
 
 
+def handle_get_open_interest(
+    client: CrypcodileClient,
+    symbols: str | list[str] | None = None,
+    start: int = 0,
+    end: int = 0,
+) -> list[dict[str, Any]]:
+    """Aggregate open interest across exchanges; returns list of row dicts (empty → [])."""
+    df = client.aggregate_open_interest(symbols, start, end)
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -1038,6 +1051,35 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_open_interest",
+        "description": (
+            "Aggregate open interest across exchanges for a symbol filter (or all), "
+            "with forward-fill alignment. Columns: local_ts, per-exchange OI, "
+            "total_oi. Empty lake / no data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbols": {
+                    "type": "string",
+                    "description": (
+                        "Optional symbol substring filter (e.g. 'BTC'). "
+                        "Omit or empty for all symbols."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+            },
+            "required": ["start", "end"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1308,6 +1350,21 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_sequencer_latency failed: {e}"
+                            }
+                    elif tool_name == "get_open_interest":
+                        try:
+                            syms = arguments.get("symbols")
+                            if isinstance(syms, str) and not syms.strip():
+                                syms = None
+                            tool_result = handle_get_open_interest(
+                                client,
+                                syms,
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_open_interest failed: {e}"
                             }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
