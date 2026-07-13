@@ -2,17 +2,10 @@
 
 - Last visited: 2026-07-13
 - Branch: `ralph/continuous-dev`
-- Status: Continuous loop Waves 1–7 COMPLETE (since `66b44af`). Version `0.1.044`. HEAD `605ac34`.
+- Status: Continuous loop Waves 1–19+ COMPLETE (since `66b44af`). Version `0.1.044`. HEAD `f564bf8` (~90 commits on branch).
 
-## Ralph continuous-dev (brief)
+## Ralph continuous-dev (0.1.044)
 
-- [x] Wave 1 — Bug hunt (compactor, payments CAS, MCP EOF)
-- [x] Wave 2 — Search system (catalog → client → CLI → MCP)
-- [x] Wave 3 — Hardening + surfaces (sink, path sanitize, MCP analytics, vol-skew CLI)
-- [x] Wave 4 — Analytics/catalog (base risk CLI, get_vol_skew, catalog limits)
-- [x] Wave 5 — Ingest reliability (DLQ drain, aiohttp session close)
-- [x] Wave 6 — Book resync bridge (Binance sequence gap)
-- [x] Wave 7 — Docs + smart-money / whale-transfer CLI
-- [ ] Wave 8+ — next ideas: bybit book resync, chaos-score CLI, basis spot-perp mode, REST lake endpoints, multi-partition sink atomic flush
+On `ralph/continuous-dev` at **0.1.044**, 80+ commits since `66b44af` shipped a full continuous-dev rotation: store/payment hardening (atomic parquet compact and part writes, sink re-buffer, path sanitize, CAS payments, MCP EOF); catalog search and inventory through client/CLI/MCP; multi-exchange collect plus duration/max-reconnects, backfill, DLQ drain, and Binance book resync; Superchain/Derive factory registration; CLI surfaces for chaos-score, spot-perp basis, lending-stress, liquidity-depth, sequencer-latency, smart-money/whale-transfer, vol-skew, and indicators; lake REST (catalog list/search/scan/inventory, bounded SQL query, open-interest, funding-apr, basis, indicators, OFI); and a broad MCP analytics pack (slippage, OFI, whale, IV/basis/vol-skew, funding prediction, lending-stress, peg deviation, MEV sandwich, chaos-score, open interest). Remaining candidates include Bybit book resync wiring and further portal/payment polish.
 
 See `docs/ralph/LOOP_STATE.md` for full wave tables and commits.
