@@ -202,4 +202,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 18: REST open-interest endpoint (`GET /api/v1/open-interest`)
 - Wave 19: REST funding-apr / basis / indicators endpoints; MCP lending-stress / peg_deviation / MEV sandwich
 - Wave 20: REST OFI / whale-alerts / slippage endpoints
-- **HEAD:** (pending) — wave 20 whale-alerts + slippage REST
+- **HEAD:** `1c354b2` — wave 20 whale-alerts + slippage REST; ready for Wave 21
