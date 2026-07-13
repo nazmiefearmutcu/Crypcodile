@@ -88,42 +88,55 @@ def load_watchlist(path: str | Path) -> dict[str, str]:
 
 
 def normalize_watchlist(payload: Any) -> dict[str, str]:
-    """Normalize various watchlist JSON shapes to ``{addr_lower: label}``."""
+    """Normalize various watchlist JSON shapes to ``{addr_lower: label}``.
+
+    Blank / whitespace-only address keys are dropped (same contract as list
+    entries) so empty ``from``/``to`` fields never match a phantom label.
+    """
     if payload is None:
         return {}
 
+    def _addr_key(raw: Any) -> str | None:
+        if raw is None:
+            return None
+        key = str(raw).strip().lower()
+        return key if key else None
+
     if isinstance(payload, Mapping):
         if "watchlist" in payload and isinstance(payload["watchlist"], Mapping):
-            return {
-                str(k).lower(): str(v)
-                for k, v in payload["watchlist"].items()
-                if k is not None
-            }
+            out: dict[str, str] = {}
+            for k, v in payload["watchlist"].items():
+                key = _addr_key(k)
+                if key is not None:
+                    out[key] = str(v)
+            return out
         if "labels" in payload and isinstance(payload["labels"], Mapping):
-            return {
-                str(k).lower(): str(v)
-                for k, v in payload["labels"].items()
-                if k is not None
-            }
+            out = {}
+            for k, v in payload["labels"].items():
+                key = _addr_key(k)
+                if key is not None:
+                    out[key] = str(v)
+            return out
         if "addresses" in payload and isinstance(payload["addresses"], Sequence):
             return {
-                str(a).lower(): str(a)
+                str(a).strip().lower(): str(a).strip()
                 for a in payload["addresses"]
                 if a is not None and str(a).strip()
             }
         # Flat address -> label map (skip non-address-looking nested containers)
-        out: dict[str, str] = {}
+        out = {}
         for k, v in payload.items():
             if isinstance(v, (dict, list)):
                 continue
-            if k is None:
+            key = _addr_key(k)
+            if key is None:
                 continue
-            out[str(k).lower()] = str(v)
+            out[key] = str(v)
         return out
 
     if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
         return {
-            str(a).lower(): str(a)
+            str(a).strip().lower(): str(a).strip()
             for a in payload
             if a is not None and str(a).strip()
         }

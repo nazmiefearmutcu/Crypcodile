@@ -84,6 +84,21 @@ def test_normalize_watchlist_shapes() -> None:
     assert labeled["0xff"] == "bot"
 
 
+def test_normalize_watchlist_drops_blank_keys() -> None:
+    """Blank / whitespace address keys must not become phantom labels."""
+    assert normalize_watchlist({"": "ghost", "  ": "space", "0xAa": "ok"}) == {
+        "0xaa": "ok"
+    }
+    assert normalize_watchlist({"watchlist": {"": "ghost", "0xBb": "bot"}}) == {
+        "0xbb": "bot"
+    }
+    assert normalize_watchlist({"labels": {"   ": "x", "0xCc": "c"}}) == {
+        "0xcc": "c"
+    }
+    assert normalize_watchlist(["", "  ", "0xDd"]) == {"0xdd": "0xDd"}
+    assert normalize_watchlist({"addresses": ["", "0xEe"]}) == {"0xee": "0xEe"}
+
+
 def test_load_watchlist_file(tmp_path: Path) -> None:
     path = tmp_path / "wl.json"
     path.write_text(json.dumps({"0xABC": "smart"}), encoding="utf-8")

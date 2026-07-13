@@ -53,6 +53,28 @@ def test_label_transfer_addresses() -> None:
     assert labeled[1]["is_known"] is False
 
 
+def test_label_transfer_addresses_ignores_blank_addr_and_keys() -> None:
+    """Missing/blank sides and blank watchlist keys never yield is_known."""
+    other = "0x1111111111111111111111111111111111111111"
+    labeled = label_transfer_addresses(
+        [
+            {"from": "", "to": other, "usd_value": 1},
+            {"from": None, "to": "  ", "usd_value": 2},
+            {"from": f"  {other}  ", "to": other, "usd_value": 3},
+        ],
+        {"": "ghost", "  ": "space", other.lower(): "known"},
+    )
+    assert labeled[0]["from_label"] == ""
+    assert labeled[0]["to_label"] == "known"
+    assert labeled[0]["is_known"] is True
+    assert labeled[1]["from_label"] == ""
+    assert labeled[1]["to_label"] == ""
+    assert labeled[1]["is_known"] is False
+    # Surrounding whitespace on transfer addresses is stripped for lookup.
+    assert labeled[2]["from_label"] == "known"
+    assert labeled[2]["is_known"] is True
+
+
 def test_label_known_addresses() -> None:
     rows = label_known_addresses(
         ["0xAa", "0xBb"],

@@ -4422,6 +4422,225 @@ def test_smart_money_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/label-transfers — pure offline label + filter (no lake)
+# ---------------------------------------------------------------------------
+
+
+def test_label_transfers_basic() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=_SMART_TRANSFERS,
+                watchlist={_SMART_ADDR: "vitalik"},
+            )
+        )
+    )
+    assert len(rows) == 2
+    assert rows[0]["from_label"] == "vitalik"
+    assert rows[0]["to_label"] == ""
+    assert rows[0]["is_known"] is True
+    assert rows[1]["from_label"] == ""
+    assert rows[1]["to_label"] == "vitalik"
+    assert rows[1]["is_known"] is True
+
+
+def test_label_transfers_known_only() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=[
+                    {"from": _SMART_ADDR, "to": _SMART_OTHER, "usd_value": 1},
+                    {"from": _SMART_OTHER, "to": _SMART_OTHER, "usd_value": 2},
+                ],
+                watchlist={_SMART_ADDR: "vitalik"},
+                known_only=True,
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["from_label"] == "vitalik"
+    assert rows[0]["is_known"] is True
+
+
+def test_label_transfers_min_usd() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=_SMART_TRANSFERS,
+                watchlist={_SMART_ADDR: "vitalik"},
+                min_usd=50.0,
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["usd_value"] == 100.0
+    assert rows[0]["from_label"] == "vitalik"
+
+
+def test_label_transfers_list_watchlist() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=_SMART_TRANSFERS,
+                watchlist=[_SMART_ADDR],
+            )
+        )
+    )
+    # List watchlist uses the address string itself as the label.
+    assert rows[0]["from_label"] == _SMART_ADDR
+    assert rows[0]["is_known"] is True
+
+
+def test_label_transfers_nested_watchlist() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=_SMART_TRANSFERS,
+                watchlist={"watchlist": {_SMART_ADDR: "mev-bot"}},
+            )
+        )
+    )
+    assert rows[0]["from_label"] == "mev-bot"
+
+
+def test_label_transfers_empty_transfers() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    assert (
+        asyncio.run(
+            label_transfers(
+                LabelTransfersPayload(
+                    transfers=[],
+                    watchlist={_SMART_ADDR: "x"},
+                )
+            )
+        )
+        == []
+    )
+
+
+def test_label_transfers_empty_watchlist_still_labels() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(transfers=_SMART_TRANSFERS, watchlist={})
+        )
+    )
+    assert len(rows) == 2
+    assert all(r["from_label"] == "" for r in rows)
+    assert all(r["to_label"] == "" for r in rows)
+    assert all(r["is_known"] is False for r in rows)
+
+
+def test_label_transfers_aliases() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    transfers = [
+        {
+            "from_address": _SMART_ADDR,
+            "to_address": _SMART_OTHER,
+            "amount": 10,
+        }
+    ]
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(
+                transfers=transfers,
+                watchlist={_SMART_ADDR: "smart"},
+            )
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0]["from_label"] == "smart"
+    assert rows[0]["is_known"] is True
+
+
+def test_label_transfers_matches_analytics() -> None:
+    from crypcodile.analytics.smart_money import normalize_watchlist
+    from crypcodile.analytics.whale_transfers import label_transfer_addresses
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    watch = {_SMART_ADDR: "vitalik"}
+    expected = label_transfer_addresses(
+        _SMART_TRANSFERS, normalize_watchlist(watch)
+    )
+    rows = asyncio.run(
+        label_transfers(
+            LabelTransfersPayload(transfers=_SMART_TRANSFERS, watchlist=watch)
+        )
+    )
+    assert rows == expected
+
+
+def test_label_transfers_negative_min_usd_400() -> None:
+    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(
+            label_transfers(
+                LabelTransfersPayload(
+                    transfers=_SMART_TRANSFERS,
+                    watchlist={_SMART_ADDR: "x"},
+                    min_usd=-1.0,
+                )
+            )
+        )
+    assert ei.value.status_code == 400
+    assert "non-negative" in str(ei.value.detail)
+
+
+def test_label_transfers_route_via_mock_client() -> None:
+    resp = client.post(
+        "/api/v1/label-transfers",
+        json={
+            "transfers": _SMART_TRANSFERS,
+            "watchlist": {_SMART_ADDR: "vitalik"},
+            "known_only": True,
+            "min_usd": 50.0,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["from_label"] == "vitalik"
+    assert data[0]["usd_value"] == 100.0
+    assert data[0]["is_known"] is True
+
+
+def test_label_transfers_route_missing_body_422() -> None:
+    resp = client.post("/api/v1/label-transfers", json={})
+    assert resp.status_code == 422
+
+
+def test_label_transfers_route_missing_watchlist_422() -> None:
+    resp = client.post(
+        "/api/v1/label-transfers",
+        json={"transfers": _SMART_TRANSFERS},
+    )
+    assert resp.status_code == 422
+
+
+def test_label_transfers_route_registered() -> None:
+    """Ensure FastAPI route table includes POST /api/v1/label-transfers."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/label-transfers", ("POST",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/data-coverage — inventory filter for one symbol (read-only)
 # ---------------------------------------------------------------------------
 

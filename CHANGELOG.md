@@ -6,6 +6,8 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **API label-transfers endpoint**: `POST /api/v1/label-transfers` body `{transfers, watchlist, known_only?, min_usd?}` wrapping pure offline `label_transfer_addresses` (+ optional `filter_transfers_by_usd`); empty transfers → `[]`; empty watchlist still returns unlabeled rows; negative `min_usd` → 400.
+- **API gas-vol / mev-sandwich / smart-money endpoints**: `POST /api/v1/gas-vol`, `/mev-sandwich`, `/smart-money` pure JSON offline analytics (no lake, no payment).
 - **API funding-predict endpoint**: `GET /api/v1/funding-predict` with comma-separated `rates` and optional `window_size` wrapping pure offline `predict_next_funding` (no payment, no lake; empty/invalid rates or window → 400).
 - **API health/status endpoints**: `GET /api/v1/health` and alias `GET /api/v1/status` — free lightweight probe returning `ok`, `crypcodile.__version__`, and `lake_channels` count (no payment). Empty lake is still `ok`; `list_channels` failure reports `ok: false` with `lake_unavailable`.
 - **API version endpoint**: `GET /api/v1/version` — free meta probe returning `{version}` only (no payment, no lake).
@@ -65,6 +67,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **CLI spot-perp basis mode**: True spot–perp basis via `--spot X --perp Y` (ASOF join of spot vs perp mark); keep `--perp` alone as mark/index and `--future`/`--spot` as spot–future.
 
 ### Fixed
+- **Blank watchlist address keys**: `normalize_watchlist` and `label_transfer_addresses` drop blank/whitespace address keys and never treat missing/empty transfer sides as labeled (prevents phantom `is_known` from `""` keys).
 - **OI symbol filter literal match**: `aggregate_open_interest` uses Polars `str.contains(..., literal=True)` so dots/parens in filter tokens are not regex metacharacters (e.g. `BTC.USDT` no longer matches `BTCXUSDT`); empty/whitespace filter tokens are ignored instead of matching every symbol via `contains("")`.
 - **resolve_symbols empty channel**: Empty / whitespace `channel` is treated as no filter (was falsely resolving nothing via inventory filter on unregistered `""`).
 - **Catalog inventory empty channel/exchange**: Empty or whitespace `channel`/`exchange` inventory filters are treated as no filter (same contract as `resolve_symbols`), so `channel=""` no longer falsely empties inventory/search.

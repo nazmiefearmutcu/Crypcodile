@@ -44,16 +44,21 @@ def label_transfer_addresses(
     Watchlist keys are matched case-insensitively. Unknown addresses keep an
     empty label string so downstream tables stay columnar.
     """
-    labels = {str(k).lower(): str(v) for k, v in watchlist.items()}
+    labels = {
+        str(k).strip().lower(): str(v)
+        for k, v in watchlist.items()
+        if k is not None and str(k).strip()
+    }
     out: list[dict[str, Any]] = []
     for row in transfers:
         item = dict(row)
         from_addr = item.get(from_key) or item.get("from_address") or item.get("sender")
         to_addr = item.get(to_key) or item.get("to_address") or item.get("recipient")
-        from_s = str(from_addr).lower() if from_addr is not None else ""
-        to_s = str(to_addr).lower() if to_addr is not None else ""
-        item["from_label"] = labels.get(from_s, "")
-        item["to_label"] = labels.get(to_s, "")
+        # Blank / missing addresses never match a watchlist entry.
+        from_s = str(from_addr).strip().lower() if from_addr is not None else ""
+        to_s = str(to_addr).strip().lower() if to_addr is not None else ""
+        item["from_label"] = labels.get(from_s, "") if from_s else ""
+        item["to_label"] = labels.get(to_s, "") if to_s else ""
         item["is_known"] = bool(item["from_label"] or item["to_label"])
         out.append(item)
     return out
@@ -64,15 +69,20 @@ def label_known_addresses(
     watchlist: Mapping[str, str],
 ) -> list[dict[str, str]]:
     """Map a list of addresses to watchlist labels (empty string if unknown)."""
-    labels = {str(k).lower(): str(v) for k, v in watchlist.items()}
+    labels = {
+        str(k).strip().lower(): str(v)
+        for k, v in watchlist.items()
+        if k is not None and str(k).strip()
+    }
     rows: list[dict[str, str]] = []
     for addr in addresses:
-        key = str(addr).lower()
+        key = str(addr).strip().lower() if addr is not None else ""
+        label = labels.get(key, "") if key else ""
         rows.append(
             {
                 "address": str(addr),
-                "label": labels.get(key, ""),
-                "is_known": "true" if key in labels else "false",
+                "label": label,
+                "is_known": "true" if key and key in labels else "false",
             }
         )
     return rows

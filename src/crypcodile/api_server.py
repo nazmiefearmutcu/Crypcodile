@@ -2733,6 +2733,92 @@ async def smart_money(payload: SmartMoneyPayload) -> list[dict[str, Any]]:
         ) from e
 
 
+class LabelTransfersPayload(BaseModel):
+    """Body for ``POST /api/v1/label-transfers`` — pure offline label + filter.
+
+    ``transfers`` rows accept ``from``/``to`` with common aliases
+    (``from_address``, ``sender``, ``to_address``, ``recipient``) and optional
+    ``usd_value`` / ``amount`` / ``value`` for ``min_usd`` filtering.
+    ``watchlist`` may be an addr→label map, a list of addresses, or nested
+    shapes accepted by
+    :func:`crypcodile.analytics.smart_money.normalize_watchlist`.
+    """
+
+    transfers: list[dict[str, Any]]
+    watchlist: dict[str, Any] | list[Any]
+    known_only: bool = False
+    min_usd: float | None = None
+
+
+@app.post("/api/v1/label-transfers")
+async def label_transfers(payload: LabelTransfersPayload) -> list[dict[str, Any]]:
+    """Annotate transfer rows with watchlist labels (no lake, no payment).
+
+    Body::
+
+        {
+          "transfers": [
+            {"from": "0xsmart", "to": "0xother", "usd_value": 100.0},
+            ...
+          ],
+          "watchlist": {"0xsmart": "vitalik"},
+          "known_only": false,
+          "min_usd": null
+        }
+
+    Wraps :func:`crypcodile.analytics.whale_transfers.label_transfer_addresses`
+    after optional
+    :func:`~crypcodile.analytics.whale_transfers.filter_transfers_by_usd` and
+    :func:`~crypcodile.analytics.smart_money.normalize_watchlist`. Returns the
+    same rows with ``from_label``, ``to_label``, and ``is_known``. Empty
+    ``transfers`` → ``[]`` (HTTP 200). Empty watchlist still returns rows with
+    empty labels. When ``known_only`` is true, only rows with a labeled side
+    are kept. Negative ``min_usd`` → HTTP 400.
+    """
+    from crypcodile.analytics.smart_money import normalize_watchlist
+    from crypcodile.analytics.whale_transfers import (
+        filter_transfers_by_usd,
+        label_transfer_addresses,
+    )
+
+    transfers = payload.transfers
+    watchlist = payload.watchlist
+
+    if not isinstance(transfers, list):
+        raise HTTPException(
+            status_code=400,
+            detail="transfers must be a JSON array of row objects.",
+        )
+    if not all(isinstance(r, dict) for r in transfers):
+        raise HTTPException(
+            status_code=400,
+            detail="transfers rows must be objects.",
+        )
+    if not isinstance(watchlist, (dict, list)):
+        raise HTTPException(
+            status_code=400,
+            detail="watchlist must be a JSON object or array of addresses.",
+        )
+
+    try:
+        rows: list[dict[str, Any]] = list(transfers)
+        if payload.min_usd is not None:
+            rows = filter_transfers_by_usd(rows, float(payload.min_usd))
+        labels = normalize_watchlist(watchlist)
+        labeled = label_transfer_addresses(rows, labels)
+        if payload.known_only:
+            labeled = [r for r in labeled if r.get("is_known")]
+        return labeled
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Label-transfers failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Label-transfers failed.",
+        ) from e
+
+
 class QueryPayload(BaseModel):
     """Body for ``POST /api/v1/query`` — bounded read-only SQL against the lake."""
 
