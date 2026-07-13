@@ -430,8 +430,8 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | # | Task | Status | Commit |
 |---|------|--------|--------|
 | 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink/rows), binance/okx book resync + gap_bridge, cli, client search, json_safe, factory — **667 passed** (no pre-existing failures) | DONE | baseline `5bb3290` |
-| 2 | MCP `resolve_symbols` wrapping `client.resolve_symbols` (list or comma-separated symbols; optional channel + ambiguous; empty → `[]`; ValueError → `{error}`; TOOLS + tools/call + capabilities hint) | DONE | TBD |
-| 3 | Tests: empty/data/comma/strip/error/delegate + capabilities includes `resolve_symbols`; post-feature critical suites **675 passed** | DONE | TBD |
+| 2 | MCP `resolve_symbols` wrapping `client.resolve_symbols` (list or comma-separated symbols; optional channel + ambiguous; empty → `[]`; ValueError → `{error}`; TOOLS + tools/call + capabilities hint) | DONE | `982de65` |
+| 3 | Tests: empty/data/comma/strip/error/delegate + capabilities includes `resolve_symbols`; post-feature critical suites **675 passed** | DONE | `982de65` |
 
 ## Next rotation ideas (Wave 56+)
 
