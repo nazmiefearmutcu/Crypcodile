@@ -35,6 +35,59 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
+# Stable schemas for inventory / search (empty-result contract).
+_INVENTORY_SCHEMA: dict[str, pl.DataType] = {
+    "exchange": pl.Utf8,
+    "channel": pl.Utf8,
+    "symbol": pl.Utf8,
+    "min_ts": pl.Int64,
+    "max_ts": pl.Int64,
+    "row_count": pl.Int64,
+}
+
+_SEARCH_SCHEMA: dict[str, pl.DataType] = {
+    "symbol": pl.Utf8,
+    "exchange": pl.Utf8,
+    "channels": pl.Utf8,
+    "score": pl.Int64,
+    "min_ts": pl.Int64,
+    "max_ts": pl.Int64,
+    "row_count": pl.Int64,
+}
+
+
+def _symbol_raw(symbol: str) -> str:
+    """Return the raw portion of a canonical symbol (after the last ``:``)."""
+    return symbol.rsplit(":", 1)[-1]
+
+
+def _score_symbol(q: str, symbol: str) -> int:
+    """Rank how well *symbol* matches query *q*.
+
+    Scores (highest first):
+      100 exact full symbol match
+       90 exact raw (after last ':') match
+       80 case-insensitive equality (full or raw)
+       60 prefix match on raw or full
+       40 substring match
+        0 no match
+    """
+    if symbol == q:
+        return 100
+    raw = _symbol_raw(symbol)
+    if raw == q:
+        return 90
+    q_lower = q.lower()
+    symbol_lower = symbol.lower()
+    raw_lower = raw.lower()
+    if symbol_lower == q_lower or raw_lower == q_lower:
+        return 80
+    if symbol_lower.startswith(q_lower) or raw_lower.startswith(q_lower):
+        return 60
+    if q_lower in symbol_lower or q_lower in raw_lower:
+        return 40
+    return 0
+
 
 class Catalog:
     """Query interface over a hive-partitioned Parquet data lake.
@@ -174,9 +227,212 @@ class Catalog:
         """
         self._refresh_views()
 
+    def list_channels(self) -> list[str]:
+        """Return sorted channel names present in the lake.
+
+        Empty lake → ``[]``.
+        """
+        self._refresh_views()
+        return sorted(self._registered_channels)
+
+    def inventory(
+        self,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> pl.DataFrame:
+        """Summarise symbols present in the lake.
+
+        Columns (stable schema even when empty)::
+
+            exchange: str
+            channel: str
+            symbol: str
+            min_ts: int
+            max_ts: int
+            row_count: int
+
+        Optionally filter by *channel* and/or *exchange*.
+        """
+        self._refresh_views()
+        empty = pl.DataFrame(schema=_INVENTORY_SCHEMA)
+
+        channels = sorted(self._registered_channels)
+        if channel is not None:
+            if channel not in self._registered_channels:
+                return empty
+            channels = [channel]
+        if not channels:
+            return empty
+
+        frames: list[pl.DataFrame] = []
+        for ch in channels:
+            frame = self._inventory_for_channel(ch, exchange=exchange)
+            if frame is not None and len(frame) > 0:
+                frames.append(frame)
+
+        if not frames:
+            return empty
+
+        out = pl.concat(frames, how="diagonal_relaxed")
+        # Enforce stable column order and dtypes.
+        return out.select(
+            pl.col("exchange").cast(pl.Utf8),
+            pl.col("channel").cast(pl.Utf8),
+            pl.col("symbol").cast(pl.Utf8),
+            pl.col("min_ts").cast(pl.Int64),
+            pl.col("max_ts").cast(pl.Int64),
+            pl.col("row_count").cast(pl.Int64),
+        ).sort(["exchange", "channel", "symbol"])
+
+    def search_symbols(
+        self,
+        q: str,
+        *,
+        channel: str | None = None,
+        exchange: str | None = None,
+        limit: int = 20,
+    ) -> pl.DataFrame:
+        """Ranked symbol search over the catalog inventory.
+
+        Columns::
+
+            symbol, exchange, channels, score, min_ts, max_ts, row_count
+
+        Ranking (see :func:`_score_symbol`).  Empty *q* returns an empty
+        DataFrame with the documented schema.  Multi-channel rows for the
+        same ``(symbol, exchange)`` are aggregated: channels joined with
+        commas, ``row_count`` summed, timestamps min/max'd, score max'd.
+        """
+        empty = pl.DataFrame(schema=_SEARCH_SCHEMA)
+        if not q:
+            return empty
+
+        inv = self.inventory(channel=channel, exchange=exchange)
+        if len(inv) == 0:
+            return empty
+
+        rows: list[dict[str, object]] = []
+        for rec in inv.iter_rows(named=True):
+            score = _score_symbol(q, rec["symbol"])
+            if score <= 0:
+                continue
+            rows.append(
+                {
+                    "symbol": rec["symbol"],
+                    "exchange": rec["exchange"],
+                    "channel": rec["channel"],
+                    "score": score,
+                    "min_ts": rec["min_ts"],
+                    "max_ts": rec["max_ts"],
+                    "row_count": rec["row_count"],
+                }
+            )
+
+        if not rows:
+            return empty
+
+        scored = pl.DataFrame(rows)
+        agg = (
+            scored.group_by(["symbol", "exchange"])
+            .agg(
+                pl.col("channel").unique().sort().str.join(",").alias("channels"),
+                pl.col("score").max().alias("score"),
+                pl.col("min_ts").min().alias("min_ts"),
+                pl.col("max_ts").max().alias("max_ts"),
+                pl.col("row_count").sum().alias("row_count"),
+            )
+            .with_columns(
+                pl.col("score").cast(pl.Int64),
+                pl.col("min_ts").cast(pl.Int64),
+                pl.col("max_ts").cast(pl.Int64),
+                pl.col("row_count").cast(pl.Int64),
+            )
+            .sort(["score", "symbol"], descending=[True, False])
+            .head(limit)
+            .select(
+                "symbol",
+                "exchange",
+                "channels",
+                "score",
+                "min_ts",
+                "max_ts",
+                "row_count",
+            )
+        )
+        return agg
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _inventory_for_channel(
+        self,
+        channel: str,
+        *,
+        exchange: str | None = None,
+    ) -> pl.DataFrame | None:
+        """Run the inventory aggregate SQL for a single registered channel.
+
+        Returns ``None`` if the view is unusable (missing required columns)
+        or the query fails; returns an empty DataFrame if the channel has
+        no rows after filtering.
+        """
+        escaped = channel.replace('"', '""')
+        try:
+            cols_df = self._conn.execute(f'DESCRIBE "{escaped}"').pl()
+            col_names = set(cols_df["column_name"].to_list())
+        except Exception:
+            return None
+
+        required = {"symbol", "local_ts"}
+        if not required.issubset(col_names):
+            return None
+
+        # Prefer hive-partition columns when present; otherwise synthesise
+        # from the registered channel name / optional exchange filter.
+        has_exchange = "exchange" in col_names
+        has_channel = "channel" in col_names
+
+        if has_exchange:
+            exchange_expr = "exchange"
+        elif exchange is not None:
+            exchange_expr = f"'{exchange.replace(chr(39), chr(39) * 2)}'"
+        else:
+            exchange_expr = "''"
+
+        channel_expr = (
+            "channel" if has_channel else f"'{channel.replace(chr(39), chr(39) * 2)}'"
+        )
+
+        where_parts: list[str] = []
+        params: list[object] = []
+        if exchange is not None and has_exchange:
+            where_parts.append("exchange = ?")
+            params.append(exchange)
+
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        sql = f"""
+            SELECT
+                {exchange_expr} AS exchange,
+                {channel_expr} AS channel,
+                symbol,
+                CAST(min(local_ts) AS BIGINT) AS min_ts,
+                CAST(max(local_ts) AS BIGINT) AS max_ts,
+                CAST(count(*) AS BIGINT) AS row_count
+            FROM "{escaped}"
+            {where_sql}
+            GROUP BY 1, 2, 3
+        """
+        try:
+            if params:
+                result = self._conn.execute(sql, params)
+            else:
+                result = self._conn.execute(sql)
+            return result.pl()
+        except Exception:
+            return None
+
 
     def _refresh_views(self) -> None:
         """Scan data_dir for channel directories and create/replace views."""
