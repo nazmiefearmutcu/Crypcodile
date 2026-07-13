@@ -169,7 +169,7 @@
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST /market/books) | DONE | `a24d32f` |
+| 1 | Wire BookResyncBridge for OKX books (seqId/prevSeqId + REST /market/books) | DONE | `71fec44` |
 
 ## Next rotation ideas (Wave 22+)
 
