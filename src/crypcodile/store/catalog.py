@@ -180,7 +180,14 @@ class Catalog:
             symbol_filter = f"symbol IN ({placeholders})"
             params = symbols_list + [start_ns, end_ns]
 
-        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        # Cast/validate before interpolating into SQL — never trust a raw limit.
+        if limit is not None:
+            limit = int(limit)
+            if limit < 0:
+                raise ValueError("limit must be >= 0")
+            limit_clause = f" LIMIT {limit}"  # safe after int cast
+        else:
+            limit_clause = ""
 
         # Use parameterized query to avoid SQL injection on the symbol value.
         # start_ns and end_ns are ints (no injection risk) but kept as parameters
@@ -469,8 +476,9 @@ class Catalog:
         # is valid even when data_dir or channel contains a single quote.
         # DuckDB does not support ? parameters for structural/path arguments
         # like read_parquet() paths, so quote-escaping is the correct fix.
+        # View name uses double-quoted identifiers: escape " as "".
         escaped_glob = glob_pattern.replace("'", "''")
-        escaped_channel = channel.replace("'", "''")
+        escaped_channel = channel.replace('"', '""')
         sql = f"""
             CREATE OR REPLACE VIEW "{escaped_channel}" AS
             SELECT * FROM read_parquet(

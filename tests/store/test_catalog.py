@@ -254,6 +254,80 @@ async def test_catalog_single_quote_in_data_dir(tmp_path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Security: scan limit validation + channel identifier escaping
+# ---------------------------------------------------------------------------
+
+
+async def test_catalog_scan_limit_enforced(tmp_path: pathlib.Path) -> None:
+    """scan(..., limit=N) returns at most N rows."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+    df = cat.scan(
+        "trade",
+        "deribit:BTC-PERPETUAL",
+        _BASE_TS,
+        _BASE_TS + 9_999_999_999,
+        limit=2,
+    )
+    assert len(df) == 2
+
+
+async def test_catalog_scan_limit_rejects_negative(tmp_path: pathlib.Path) -> None:
+    """scan rejects a negative limit before interpolating into SQL."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+    try:
+        cat.scan(
+            "trade",
+            "deribit:BTC-PERPETUAL",
+            _BASE_TS,
+            _BASE_TS + 9_999_999_999,
+            limit=-1,
+        )
+        raise AssertionError("expected ValueError for negative limit")
+    except ValueError as exc:
+        assert "limit" in str(exc).lower()
+
+
+async def test_catalog_scan_limit_casts_to_int(tmp_path: pathlib.Path) -> None:
+    """scan coerces limit via int() so non-int numerics are safe for SQL."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+    df = cat.scan(
+        "trade",
+        "deribit:BTC-PERPETUAL",
+        _BASE_TS,
+        _BASE_TS + 9_999_999_999,
+        limit="1",  # type: ignore[arg-type]
+    )
+    assert len(df) == 1
+
+
+def test_create_view_escapes_double_quote_in_channel(tmp_path: pathlib.Path) -> None:
+    """Channel names with embedded \" must not break double-quoted VIEW ids."""
+    channel = 'weird"name'
+    # Minimal hive path + parquet so read_parquet succeeds after view create.
+    part_dir = (
+        tmp_path
+        / "exchange=deribit"
+        / f"channel={channel}"
+        / "date=2023-11-14"
+        / "bucket=0"
+    )
+    part_dir.mkdir(parents=True)
+    pl.DataFrame({"local_ts": [1], "symbol": ["x"]}).write_parquet(
+        part_dir / "part-0.parquet"
+    )
+
+    cat = Catalog(tmp_path)
+    # Discovery may already register the channel; re-create is fine either way.
+    cat._create_view(channel)
+    assert channel in cat._registered_channels
+    views = cat._conn.execute("SELECT view_name FROM duckdb_views()").pl()
+    assert channel in views["view_name"].to_list()
+
+
+# ---------------------------------------------------------------------------
 # T8-docs: Catalog.connection property
 # ---------------------------------------------------------------------------
 
