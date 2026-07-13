@@ -1081,7 +1081,15 @@ def select_collect_params_interactively(
     """Select exchange, channels, and symbols interactively for live data collection."""
     import sys
     
-    valid_exchanges = ["binance", "bybit", "coinbase", "deribit", "okx", "base_onchain"]
+    valid_exchanges = [
+        "binance",
+        "bybit",
+        "coinbase",
+        "deribit",
+        "okx",
+        "base_onchain",
+        "gmx_synthetix",
+    ]
     valid_channels = ["trade", "book_ticker", "book_snapshot", "book_delta"]
     
     suggested_symbols = {
@@ -1090,7 +1098,8 @@ def select_collect_params_interactively(
         "coinbase": ["BTC-USD", "ETH-USD"],
         "deribit": ["BTC-PERPETUAL", "ETH-PERPETUAL", "SOL-PERPETUAL"],
         "okx": ["BTC-USDT", "ETH-USDT"],
-        "base_onchain": ["cbBTC-USDC", "AERO-USDC", "WETH-USDC", "DEGEN-WETH", "WELL-WETH"]
+        "base_onchain": ["cbBTC-USDC", "AERO-USDC", "WETH-USDC", "DEGEN-WETH", "WELL-WETH"],
+        "gmx_synthetix": ["GMX:BTC-USD", "GMX:ETH-USD", "SYNTHETIX:ETH-USD"],
     }
 
     # 1. Select Exchange
@@ -1498,7 +1507,8 @@ def collect(
     Unparseable frames land in a dead-letter queue; on stop a JSON report is
     written when the queue is non-empty (see --dlq-report).
 
-    Valid exchange names: binance, bybit, coinbase, deribit, okx.
+    Valid exchange names: binance, bybit, coinbase, deribit, okx,
+    base_onchain, gmx_synthetix.
 
     Example::
 

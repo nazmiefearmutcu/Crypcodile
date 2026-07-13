@@ -13,7 +13,8 @@ Usage::
         market="usdm",          # forwarded as **kw to BinanceConnector
     )
 
-Valid exchange names: ``binance``, ``bybit``, ``okx``, ``coinbase``, ``deribit``.
+Valid exchange names: ``binance``, ``bybit``, ``coinbase``, ``deribit``,
+``okx``, ``base_onchain``, ``gmx_synthetix``.
 Extra keyword arguments (e.g. ``market`` for Binance, ``category`` for Bybit,
 ``region`` for OKX) are forwarded to the connector constructor unchanged.
 """
@@ -61,7 +62,8 @@ def make_connector(
     ----------
     exchange:
         Lowercase exchange name.  Valid values: ``binance``, ``bybit``,
-        ``coinbase``, ``deribit``, ``okx``.
+        ``coinbase``, ``deribit``, ``okx``, ``base_onchain``,
+        ``gmx_synthetix``.
     symbols:
         List of symbol strings to subscribe to (exchange-native format).
     channels:
