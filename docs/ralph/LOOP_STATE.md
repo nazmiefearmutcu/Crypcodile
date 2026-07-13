@@ -190,7 +190,7 @@
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | REST `GET /api/v1/data-coverage` (symbol/channel → inventory filter) | DONE | `dd319ed` |
+| 1 | REST `GET /api/v1/data-coverage` (symbol/channel → inventory filter) | DONE | `3438684` |
 | 2 | Skip `/api/v1/search` alias — already `GET /api/v1/catalog/search` | SKIP | — |
 
 ## Next rotation ideas (Wave 25+)
