@@ -4000,6 +4000,154 @@ def test_funding_predict_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/gas-vol — pure offline gas/vol correlation (no lake, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_gas_vol_perfect_correlation() -> None:
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    payload = GasVolPayload(
+        gas=[
+            {"local_ts": 1, "gas": 10.0},
+            {"local_ts": 2, "gas": 20.0},
+            {"local_ts": 3, "gas": 30.0},
+            {"local_ts": 4, "gas": 40.0},
+            {"local_ts": 5, "gas": 50.0},
+        ],
+        vol=[
+            {"local_ts": 1, "vol": 0.1},
+            {"local_ts": 2, "vol": 0.2},
+            {"local_ts": 3, "vol": 0.3},
+            {"local_ts": 4, "vol": 0.4},
+            {"local_ts": 5, "vol": 0.5},
+        ],
+    )
+    result = asyncio.run(gas_vol(payload))
+    assert result["n_gas"] == 5
+    assert result["n_vol"] == 5
+    assert result["pearson"] == pytest.approx(1.0, abs=1e-7)
+    assert result["spearman"] == pytest.approx(1.0, abs=1e-7)
+
+
+def test_gas_vol_column_aliases() -> None:
+    """gas_price / volatility column names are accepted (analytics parity)."""
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    payload = GasVolPayload(
+        gas=[{"local_ts": i, "gas_price": float(i * 10)} for i in range(1, 6)],
+        vol=[{"local_ts": i, "volatility": float(i) * 0.1} for i in range(1, 6)],
+    )
+    result = asyncio.run(gas_vol(payload))
+    assert result["pearson"] == pytest.approx(1.0, abs=1e-7)
+    assert result["spearman"] == pytest.approx(1.0, abs=1e-7)
+
+
+def test_gas_vol_empty_series_null_corr() -> None:
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    result = asyncio.run(gas_vol(GasVolPayload(gas=[], vol=[])))
+    assert result["pearson"] is None
+    assert result["spearman"] is None
+    assert result["n_gas"] == 0
+    assert result["n_vol"] == 0
+
+
+def test_gas_vol_insufficient_data_null_corr() -> None:
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    payload = GasVolPayload(
+        gas=[{"local_ts": 1, "gas": 10.0}],
+        vol=[{"local_ts": 2, "vol": 0.2}, {"local_ts": 3, "vol": 0.3}],
+    )
+    result = asyncio.run(gas_vol(payload))
+    assert result["pearson"] is None
+    assert result["spearman"] is None
+    assert result["n_gas"] == 1
+    assert result["n_vol"] == 2
+
+
+def test_gas_vol_matches_analytics() -> None:
+    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    gas_rows = [
+        {"local_ts": 100, "gas": 10.0},
+        {"local_ts": 200, "gas": 20.0},
+        {"local_ts": 300, "gas": 30.0},
+        {"local_ts": 400, "gas": 40.0},
+        {"local_ts": 500, "gas": 50.0},
+    ]
+    vol_rows = [
+        {"local_ts": 101, "vol": 0.1},
+        {"local_ts": 199, "vol": 0.2},
+        {"local_ts": 302, "vol": 0.3},
+        {"local_ts": 398, "vol": 0.4},
+        {"local_ts": 505, "vol": 0.5},
+    ]
+    expected = gas_to_volatility_correlation(
+        pl.DataFrame(gas_rows),
+        pl.DataFrame(vol_rows),
+    )
+    result = asyncio.run(gas_vol(GasVolPayload(gas=gas_rows, vol=vol_rows)))
+    assert result["pearson"] == pytest.approx(expected["pearson"], abs=1e-12)
+    assert result["spearman"] == pytest.approx(expected["spearman"], abs=1e-12)
+    assert result["n_gas"] == 5
+    assert result["n_vol"] == 5
+
+
+def test_gas_vol_missing_local_ts_400() -> None:
+    from crypcodile.api_server import GasVolPayload, gas_vol
+
+    payload = GasVolPayload(
+        gas=[{"gas": 10.0}, {"local_ts": 2, "gas": 20.0}],
+        vol=[{"local_ts": 1, "vol": 0.1}],
+    )
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(gas_vol(payload))
+    assert ei.value.status_code == 400
+    assert "local_ts" in str(ei.value.detail)
+
+
+def test_gas_vol_route_via_mock_client() -> None:
+    resp = client.post(
+        "/api/v1/gas-vol",
+        json={
+            "gas": [
+                {"local_ts": 1, "gas": 1.0},
+                {"local_ts": 2, "gas": 2.0},
+                {"local_ts": 3, "gas": 3.0},
+            ],
+            "vol": [
+                {"local_ts": 1, "vol": 2.0},
+                {"local_ts": 2, "vol": 4.0},
+                {"local_ts": 3, "vol": 6.0},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["n_gas"] == 3
+    assert data["n_vol"] == 3
+    assert data["pearson"] == pytest.approx(1.0, abs=1e-7)
+    assert data["spearman"] == pytest.approx(1.0, abs=1e-7)
+
+
+def test_gas_vol_route_missing_body_fields_422() -> None:
+    resp = client.post("/api/v1/gas-vol", json={})
+    assert resp.status_code == 422
+
+
+def test_gas_vol_route_registered() -> None:
+    """Ensure FastAPI route table includes POST /api/v1/gas-vol."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/gas-vol", ("POST",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/data-coverage — inventory filter for one symbol (read-only)
 # ---------------------------------------------------------------------------
 

@@ -5,6 +5,7 @@ import fcntl
 import hmac
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -2491,6 +2492,108 @@ async def funding_predict(
             status_code=500,
             detail="Funding prediction failed.",
         ) from e
+
+
+class GasVolPayload(BaseModel):
+    """Body for ``POST /api/v1/gas-vol`` — pure offline gas/vol series.
+
+    Each series is a list of row objects. Rows must include ``local_ts`` and at
+    least one numeric gas / volatility column (e.g. ``gas`` / ``gas_price`` /
+    ``gas_cost`` and ``vol`` / ``volatility``). Extra columns are ignored by
+    :func:`crypcodile.analytics.gas_vol_correlation.gas_to_volatility_correlation`.
+    """
+
+    gas: list[dict[str, Any]]
+    vol: list[dict[str, Any]]
+
+
+def _json_safe_corr(value: float) -> float | None:
+    """Map NaN correlations to JSON null; keep finite floats as-is."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f):
+        return None
+    return f
+
+
+def _series_rows_to_df(rows: list[dict[str, Any]], series_name: str):
+    """Build a Polars DataFrame from JSON series rows; validate ``local_ts``."""
+    import polars as pl
+
+    if not rows:
+        # Empty series → empty DF with the minimal schema the correlator expects.
+        return pl.DataFrame(schema={"local_ts": pl.Int64, series_name: pl.Float64})
+
+    if not all(isinstance(r, dict) for r in rows):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{series_name} rows must be objects.",
+        )
+    for i, row in enumerate(rows):
+        if "local_ts" not in row:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{series_name}[{i}] missing required field 'local_ts'.",
+            )
+    try:
+        return pl.DataFrame(rows)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid {series_name} series: {e}",
+        ) from e
+
+
+@app.post("/api/v1/gas-vol")
+async def gas_vol(payload: GasVolPayload) -> dict[str, Any]:
+    """Correlate gas costs vs volatility from pure JSON series (no lake, no payment).
+
+    Body::
+
+        {
+          "gas": [{"local_ts": 1, "gas": 10.0}, ...],
+          "vol": [{"local_ts": 1, "vol": 0.1}, ...]
+        }
+
+    Wraps :func:`crypcodile.analytics.gas_vol_correlation.gas_to_volatility_correlation`
+    after building Polars DataFrames from the series. Returns ``pearson`` and
+    ``spearman`` (JSON ``null`` when undefined / insufficient data), plus
+    ``n_gas`` and ``n_vol`` input lengths for context.
+
+    Empty series or fewer than two aligned pairs yield null correlations
+    (HTTP 200) rather than an error — matching the pure function.
+    """
+    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
+
+    if not isinstance(payload.gas, list) or not isinstance(payload.vol, list):
+        raise HTTPException(
+            status_code=400,
+            detail="gas and vol must be JSON arrays of row objects.",
+        )
+
+    gas_df = _series_rows_to_df(payload.gas, "gas")
+    vol_df = _series_rows_to_df(payload.vol, "vol")
+
+    try:
+        result = gas_to_volatility_correlation(gas_df, vol_df)
+    except (IndexError, KeyError, ValueError) as e:
+        # Column detection fails when non-empty frames lack a usable value col.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Gas–vol correlation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Gas–vol correlation failed.",
+        ) from e
+
+    return {
+        "pearson": _json_safe_corr(result.get("pearson", float("nan"))),
+        "spearman": _json_safe_corr(result.get("spearman", float("nan"))),
+        "n_gas": len(payload.gas),
+        "n_vol": len(payload.vol),
+    }
 
 
 class QueryPayload(BaseModel):

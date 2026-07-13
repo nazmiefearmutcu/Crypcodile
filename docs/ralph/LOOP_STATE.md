@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–31 COMPLETE. Continuous loop still active → Wave 32+.
+**Status:** Waves 1–33 COMPLETE. Continuous loop still active → Wave 34+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -249,15 +249,24 @@
 | 1 | REST `GET /api/v1/funding-predict` (comma-separated `rates`, `window_size` → `predict_next_funding`) | DONE | `fc2bd22` |
 | 2 | Fix OI symbol filter: `str.contains` literal match + skip empty tokens | DONE | `0af065a` |
 
-## Next rotation ideas (Wave 33+)
+## Wave 33 — Feature (gas-vol pure REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `POST /api/v1/gas-vol` pure JSON body `{gas, vol}` → `gas_to_volatility_correlation` (no files/lake) | DONE | `6e2d6b8` |
+
+Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exists); mev-sandwich / smart-money deferred.
+
+## Next rotation ideas (Wave 34+)
 
 Priority candidates for the next cycles:
 
 1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
-2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
-3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
-4. **MEV sandwich surface** — further CLI/MCP wiring if pure detect helpers remain unexposed  
-5. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+2. **POST /api/v1/smart-money** — pure transfers+watchlist JSON (CLI/MCP already exist)  
+3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
+4. **Payment / portal polish** — remaining API portal UX beyond backend detection  
+5. **MEV sandwich surface** — further REST/CLI/MCP wiring if pure detect helpers remain unexposed  
+6. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 
 ## Subagent policy
 
@@ -298,3 +307,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 30: derive options ns timestamps; Aave HF zero≠∞; OKX/Bybit option expiry parse from symbol
 - Wave 31: MCP `get_spot_future_basis` (completes basis trio with perp + spot-perp)
 - Wave 32: REST `/api/v1/funding-predict`; OI symbol filter literal `str.contains`
+- Wave 33: REST `POST /api/v1/gas-vol` pure JSON gas/vol correlation
