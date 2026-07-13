@@ -9,8 +9,16 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Catalog inventory and ranked symbol search**: Store-layer inventory listing and ranked symbol search over the data catalog.
 - **Search system (client, CLI, MCP)**: Client `resolve_symbols`, CLI search, and MCP discovery tools for symbol resolution.
 - **MCP analytics tools**: Exposed slippage, OFI, whale alerts, IV surface, and term-structure tools over MCP.
+- **MCP vol-skew tool**: Added `get_vol_skew` analytics tool on the MCP server.
 - **CLI vol-skew and risk-reversal**: New `vol-skew` and risk-reversal commands for options skew analytics.
 - **CLI base risk analytics**: Exposed base risk analytics commands on the CLI.
+- **Dead-letter queue drain on collect stop**: Drain the ingest dead-letter queue when collect stops and emit a stop report.
+- **Book resync bridge (Binance)**: On depth sequence gaps, buffer live deltas, REST re-fetch `/depth`, and emit snapshot plus post-snapshot deltas via `OrderBookSync` + `BookResyncBridge`.
+- **Shared book-sync helpers**: Extracted `SyncResult`, `BookSyncMachine` protocol, and buffer filter for multi-venue resync.
+- **Smart-money / whale-transfer CLI**: CLI surface for smart-money and whale-transfer analytics.
+- **CLI backfill command**: Historical REST backfill command with client-side backfill orchestration.
+- **CLI chaos-score command**: New `chaos-score` command for base risk / chaos scoring.
+- **CLI spot-perp basis mode**: True spot–perp basis via `--spot X --perp Y` (ASOF join of spot vs perp mark); keep `--perp` alone as mark/index and `--future`/`--spot` as spot–future.
 
 ### Fixed
 - **Atomic parquet compact**: Compact uses rename-before-delete; in-flight work is awaited on stop; compact executor is awaited across start/stop cancel paths.
@@ -20,9 +28,15 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Pending-only paid transitions**: Enforce pending-only transitions to paid for verify and simulate payment flows.
 - **MCP stdin EOF**: Exit cleanly on stdin EOF without hanging the executor.
 - **Polars min_samples**: Update analytics from deprecated `min_periods` to `min_samples`.
+- **WebSocket connect session leak**: Close the aiohttp session when WebSocket connect fails.
+- **Binance book bridge bootstrap**: Register the book resync bridge only after a successful bootstrap.
+- **Whitespace-only catalog search**: Treat whitespace-only search queries as empty.
 
 ### Changed
 - **CLI symbol resolution**: Resolve symbols via `client.resolve_symbols` for consistent catalog-backed lookup.
+- **Bybit book resync deferred**: Shared book-sync helpers land for multi-venue use; Bybit `BookResyncBridge` wiring deferred (REST `u` aligns with `orderbook.1000` while the connector uses `orderbook.50`; recovery remains re-snapshot/re-subscribe).
+- **Exchange list alignment**: Align CLI exchange lists with the factory registry.
+- **Search docs**: Document search and discovery commands in the README.
 
 ## [0.1.043] - 2026-07-09
 ### Added
