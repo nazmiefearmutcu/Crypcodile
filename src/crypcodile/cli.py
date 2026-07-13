@@ -17,6 +17,8 @@ risk-reversal  -- Print risk-reversal and butterfly from vol skew.
 open-interest  -- Aggregate open interest across exchanges from the lake.
 peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
 gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
+smart-money    -- Summarize smart-money net flow from transfers CSV + watchlist.
+label-transfers -- Label/filter transfer CSV rows via watchlist JSON (no RPC).
 
 Usage examples::
 
@@ -47,6 +49,9 @@ Usage examples::
     crypcodile peg-deviation --price 0.98 --threshold 0.01
     crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
     crypcodile gas-vol --gas-file gas.csv --vol-file vol.csv
+    crypcodile smart-money --transfers transfers.csv --watchlist watchlist.json
+    crypcodile label-transfers --transfers transfers.csv --watchlist watchlist.json \\
+                              --min-usd 100000
 """
 
 from __future__ import annotations
@@ -2942,6 +2947,158 @@ def gas_vol_cmd(
         raise typer.Exit(code=1)
 
     typer.echo(json.dumps(result, indent=2, allow_nan=True))
+
+
+# ---------------------------------------------------------------------------
+# smart-money / label-transfers (pure CSV + watchlist; no RPC)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="smart-money")
+def smart_money_cmd(
+    transfers: Annotated[
+        Path | None,
+        typer.Option(
+            "--transfers",
+            help="CSV/JSON/JSONL of transfers (from, to, usd_value[, timestamp]).",
+        ),
+    ] = None,
+    watchlist: Annotated[
+        Path | None,
+        typer.Option(
+            "--watchlist",
+            help="JSON watchlist: addr->label map, list of addresses, or "
+            '{"addresses": [...]} / {"watchlist": {...}}.',
+        ),
+    ] = None,
+) -> None:
+    """Summarize smart-money capital flows from a transfers file + address watchlist."""
+    import polars as pl
+
+    from crypcodile.analytics.smart_money import load_watchlist, summarize_smart_money
+
+    if not is_interactive_stdin():
+        if transfers is None or watchlist is None:
+            typer.echo(
+                "Error: --transfers and --watchlist are required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if transfers is None:
+            transfers = Path(typer.prompt("Path to transfers CSV/JSON"))
+        if watchlist is None:
+            watchlist = Path(typer.prompt("Path to watchlist JSON"))
+
+    if transfers is None or watchlist is None:
+        typer.echo("Error: --transfers and --watchlist are required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        xfer_df = _load_series_dataframe(transfers)
+        labels = load_watchlist(watchlist)
+    except Exception as e:
+        typer.echo(f"Error loading inputs: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if not labels:
+        typer.echo("Error: watchlist is empty.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        rows = summarize_smart_money(xfer_df.to_dicts(), labels)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if not rows:
+        typer.echo("No smart-money activity found for watchlist addresses.")
+        raise typer.Exit(code=0)
+
+    typer.echo(pl.DataFrame(rows))
+
+
+@app.command(name="label-transfers")
+def label_transfers_cmd(
+    transfers: Annotated[
+        Path | None,
+        typer.Option(
+            "--transfers",
+            help="CSV/JSON/JSONL of transfers (from, to[, usd_value, ...]).",
+        ),
+    ] = None,
+    watchlist: Annotated[
+        Path | None,
+        typer.Option(
+            "--watchlist",
+            help="JSON watchlist: addr->label map or list of addresses.",
+        ),
+    ] = None,
+    min_usd: Annotated[
+        float | None,
+        typer.Option(
+            "--min-usd",
+            help="Optional USD threshold filter before labeling (whale filter).",
+        ),
+    ] = None,
+    known_only: Annotated[
+        bool,
+        typer.Option(
+            "--known-only",
+            help="Only emit rows where from or to is on the watchlist.",
+        ),
+    ] = False,
+) -> None:
+    """Label transfer rows with watchlist names; optionally filter by USD (no RPC)."""
+    import polars as pl
+
+    from crypcodile.analytics.smart_money import load_watchlist
+    from crypcodile.analytics.whale_transfers import (
+        filter_transfers_by_usd,
+        label_transfer_addresses,
+    )
+
+    if not is_interactive_stdin():
+        if transfers is None or watchlist is None:
+            typer.echo(
+                "Error: --transfers and --watchlist are required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if transfers is None:
+            transfers = Path(typer.prompt("Path to transfers CSV/JSON"))
+        if watchlist is None:
+            watchlist = Path(typer.prompt("Path to watchlist JSON"))
+
+    if transfers is None or watchlist is None:
+        typer.echo("Error: --transfers and --watchlist are required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        xfer_df = _load_series_dataframe(transfers)
+        labels = load_watchlist(watchlist)
+    except Exception as e:
+        typer.echo(f"Error loading inputs: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    rows: list[dict] = xfer_df.to_dicts()
+    try:
+        if min_usd is not None:
+            rows = filter_transfers_by_usd(rows, min_usd)
+        rows = label_transfer_addresses(rows, labels)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if known_only:
+        rows = [r for r in rows if r.get("is_known")]
+
+    if not rows:
+        typer.echo("No transfers matched filters.")
+        raise typer.Exit(code=0)
+
+    typer.echo(pl.DataFrame(rows))
 
 
 # ---------------------------------------------------------------------------
