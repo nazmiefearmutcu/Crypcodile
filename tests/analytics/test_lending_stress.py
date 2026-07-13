@@ -105,3 +105,54 @@ async def test_lending_stress_tester_class() -> None:
         pool_address="0xA238Dd80C259b7051470e3E0f9d921008C39F93b"
     )
     assert abs(standalone_res["stressed_health_factor"] - 1.28) < 1e-9
+
+
+def _mock_pool_w3(mock_user_data: list) -> MagicMock:
+    """Build a MagicMock AsyncWeb3 whose pool contract returns mock_user_data."""
+    mock_w3 = MagicMock()
+    mock_w3.to_checksum_address = lambda x: AsyncWeb3.to_checksum_address(x)
+    mock_w3.eth = MagicMock()
+    mock_call = AsyncMock(return_value=mock_user_data)
+    mock_contract = MagicMock()
+    mock_contract.functions.getUserAccountData.return_value.call = mock_call
+    mock_w3.eth.contract.return_value = mock_contract
+    return mock_w3
+
+
+@pytest.mark.asyncio
+async def test_get_user_positions_hf_zero_is_zero_not_inf() -> None:
+    """Aave HF raw 0 is a real zero health factor, not 'no debt'."""
+    mock_user_data = [
+        int(10000.0 * 1e8),
+        int(5000.0 * 1e8),
+        0,
+        8000,
+        7500,
+        0,  # healthFactor raw == 0
+    ]
+    tester = LendingStressTester(
+        _mock_pool_w3(mock_user_data),
+        "0xA238Dd80C259b7051470e3E0f9d921008C39F93b",
+    )
+    pos = await tester.get_user_positions("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+    assert pos["health_factor"] == 0.0
+    assert pos["health_factor"] != float("inf")
+
+
+@pytest.mark.asyncio
+async def test_get_user_positions_hf_max_uint256_is_inf() -> None:
+    """Only max uint256 (no debt) maps to infinity."""
+    mock_user_data = [
+        int(10000.0 * 1e8),
+        0,
+        0,
+        8000,
+        7500,
+        2**256 - 1,  # Aave sentinel for no debt
+    ]
+    tester = LendingStressTester(
+        _mock_pool_w3(mock_user_data),
+        "0xA238Dd80C259b7051470e3E0f9d921008C39F93b",
+    )
+    pos = await tester.get_user_positions("0x70997970C51812dc3A010C7d01b50e0d17dc79C8")
+    assert pos["health_factor"] == float("inf")
