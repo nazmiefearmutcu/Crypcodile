@@ -1,12 +1,17 @@
-"""Unit tests for AiohttpWsTransport.send() — binary vs text frame regression.
+"""Unit tests for AiohttpWsTransport — send frames + connect session cleanup.
 
-Root-cause bug: send() used send_bytes() which Deribit silently rejects with
-bad_request (code 11050).  Fix: decode to str and use send_str() instead.
+Root-cause bugs covered:
+- send() used send_bytes() which Deribit silently rejects with bad_request
+  (code 11050).  Fix: decode to str and use send_str() instead.
+- connect() created ClientSession then called ws_connect; if ws_connect
+  raised, the session was never closed (leak).
 """
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from crypcodile.ingest.transport import AiohttpWsTransport
 
@@ -64,3 +69,44 @@ class TestAiohttpWsTransportSend:
         )
         fake_ws.send_str.assert_awaited_once_with(expected)
         fake_ws.send_bytes.assert_not_called()
+
+
+class TestAiohttpWsTransportConnect:
+    def test_connect_closes_session_when_ws_connect_fails(self) -> None:
+        """If ws_connect raises, the ClientSession must still be closed.
+
+        Regression: connect() assigned ClientSession to self then awaited
+        ws_connect; a failure left the session open when callers never
+        reached close() (or when self._session was never published).
+        """
+        transport = AiohttpWsTransport("wss://fake.example.com/ws")
+        fake_session = MagicMock()
+        fake_session.close = AsyncMock()
+        fake_session.ws_connect = AsyncMock(side_effect=ConnectionError("boom"))
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            with pytest.raises(ConnectionError, match="boom"):
+                asyncio.run(transport.connect())
+
+        fake_session.close.assert_awaited_once()
+        # Failure must not leave a live session/ws on the transport.
+        assert transport._session is None
+        assert transport._ws is None
+
+    def test_connect_success_keeps_session_and_ws(self) -> None:
+        """On success, session and ws are stored for later close()/send()."""
+        transport = AiohttpWsTransport("wss://fake.example.com/ws")
+        fake_ws = MagicMock()
+        fake_session = MagicMock()
+        fake_session.close = AsyncMock()
+        fake_session.ws_connect = AsyncMock(return_value=fake_ws)
+
+        with patch("aiohttp.ClientSession", return_value=fake_session):
+            asyncio.run(transport.connect())
+
+        assert transport._session is fake_session
+        assert transport._ws is fake_ws
+        fake_session.ws_connect.assert_awaited_once_with(
+            "wss://fake.example.com/ws", heartbeat=20.0
+        )
+        fake_session.close.assert_not_awaited()

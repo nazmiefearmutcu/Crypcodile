@@ -68,8 +68,20 @@ class AiohttpWsTransport:
     async def connect(self) -> None:
         import aiohttp  # lazy — keeps CLI import-time fast
 
-        self._session = aiohttp.ClientSession()
-        self._ws = await self._session.ws_connect(self._url, heartbeat=20.0)
+        # Create the session first; only publish it on self after ws_connect
+        # succeeds.  If ws_connect raises, close the session here so callers
+        # that never reach close() cannot leak the ClientSession.
+        session = aiohttp.ClientSession()
+        try:
+            ws = await session.ws_connect(self._url, heartbeat=20.0)
+        except Exception:
+            try:
+                await session.close()
+            except Exception:
+                pass
+            raise
+        self._session = session
+        self._ws = ws
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self._iter()
