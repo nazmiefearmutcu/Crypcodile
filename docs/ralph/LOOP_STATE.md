@@ -453,10 +453,10 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | CLI `list-exchanges` wrapping factory `list_exchanges` (no lake; ≠ `catalog-exchanges`) | DONE | pending |
-| 2 | MCP `list_registered_exchanges` handler + TOOLS + tools/call + capabilities hint | DONE | pending |
-| 3 | Tests: CLI factory/delegate/distinct-from-catalog; MCP factory/delegate/distinct-from-on-disk; capabilities includes tool | DONE | pending |
-| 4 | README/CHANGELOG/progress discovery surface docs | DONE | pending |
+| 1 | CLI `list-exchanges` wrapping factory `list_exchanges` (no lake; ≠ `catalog-exchanges`) | DONE | `6c69d28` |
+| 2 | MCP `list_registered_exchanges` handler + TOOLS + tools/call + capabilities hint | DONE | `6c69d28` |
+| 3 | Tests: CLI factory/delegate/distinct-from-catalog; MCP factory/delegate/distinct-from-on-disk; capabilities includes tool | DONE | `6c69d28` |
+| 4 | README/CHANGELOG/progress discovery surface docs | DONE | `6c69d28` |
 
 ## Next rotation ideas (Wave 59+)
 
