@@ -1448,6 +1448,7 @@ _CAPABILITIES_REST: list[str] = [
     "GET /api/v1/catalog/channels",
     "GET /api/v1/catalog/exchanges",
     "GET /api/v1/catalog/summary",
+    "GET /api/v1/catalog/stats",
     "GET /api/v1/catalog/search",
     "GET /api/v1/catalog/symbols",
     "GET /api/v1/catalog/inventory",
@@ -1608,6 +1609,45 @@ async def catalog_summary() -> dict[str, object]:
         "channels": channels,
         "exchanges_on_disk": exchanges_on_disk,
         "exchange_count": len(exchanges_on_disk),
+        "channel_count": len(channels),
+    }
+
+
+@app.get("/api/v1/catalog/stats")
+async def catalog_stats() -> dict[str, object]:
+    """Per-channel row counts for the local lake (read-only, no payment).
+
+    Discovers channels via filesystem :meth:`~CrypcodileClient.list_channels`,
+    then runs a lightweight ``COUNT(*)`` per channel through
+    :meth:`~CrypcodileClient.query` (registered DuckDB views). Avoids the
+    heavier per-symbol :meth:`~CrypcodileClient.inventory` aggregate.
+
+    On query failure for a channel (missing view, empty partition without
+    parquet, DuckDB error), that channel reports ``-1`` so callers can
+    distinguish "unknown/unavailable" from a true zero-row channel.
+
+    Response shape::
+
+        {
+            "row_counts": {"trade": 1234, "book_snapshot": 0, ...},
+            "channel_count": int,
+        }
+
+    Empty lake yields ``row_counts: {}`` and ``channel_count: 0``. Channel
+    keys follow ``list_channels`` order (sorted).
+    """
+    client = _get_lake_client()
+    channels = client.list_channels()
+    row_counts: dict[str, int] = {}
+    for ch in channels:
+        try:
+            escaped = str(ch).replace('"', '""')
+            row_df = client.query(f'SELECT count(*) AS n FROM "{escaped}"')
+            row_counts[ch] = int(row_df["n"][0])
+        except Exception:
+            row_counts[ch] = -1
+    return {
+        "row_counts": row_counts,
         "channel_count": len(channels),
     }
 

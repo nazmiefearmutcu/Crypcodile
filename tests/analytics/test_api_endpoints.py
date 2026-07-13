@@ -312,6 +312,82 @@ def test_catalog_summary_returns_lists_and_counts() -> None:
     mock_client.list_exchanges_on_disk.assert_called_once_with()
 
 
+def test_catalog_stats_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_stats
+
+    result = asyncio.run(catalog_stats())
+    assert result == {"row_counts": {}, "channel_count": 0}
+
+
+def test_catalog_stats_returns_row_counts() -> None:
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["book_snapshot", "trade"]
+
+    def _query(sql: str):
+        if "book_snapshot" in sql:
+            return pl.DataFrame({"n": [42]})
+        if "trade" in sql:
+            return pl.DataFrame({"n": [7]})
+        raise AssertionError(f"unexpected sql: {sql}")
+
+    mock_client.query.side_effect = _query
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_stats
+
+        result = asyncio.run(catalog_stats())
+    assert result == {
+        "row_counts": {"book_snapshot": 42, "trade": 7},
+        "channel_count": 2,
+    }
+    mock_client.list_channels.assert_called_once_with()
+    assert mock_client.query.call_count == 2
+    sqls = [c.args[0] for c in mock_client.query.call_args_list]
+    assert any('FROM "book_snapshot"' in s for s in sqls)
+    assert any('FROM "trade"' in s for s in sqls)
+
+
+def test_catalog_stats_query_failure_reports_minus_one() -> None:
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade", "funding"]
+
+    def _query(sql: str):
+        if "trade" in sql:
+            return pl.DataFrame({"n": [10]})
+        raise RuntimeError("view missing")
+
+    mock_client.query.side_effect = _query
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_stats
+
+        result = asyncio.run(catalog_stats())
+    assert result == {
+        "row_counts": {"trade": 10, "funding": -1},
+        "channel_count": 2,
+    }
+
+
+def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ['odd"chan']
+    mock_client.query.return_value = pl.DataFrame({"n": [1]})
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_stats
+
+        result = asyncio.run(catalog_stats())
+    assert result["row_counts"] == {'odd"chan': 1}
+    sql = mock_client.query.call_args.args[0]
+    assert 'FROM "odd""chan"' in sql
+
+
+def test_catalog_stats_route_registered() -> None:
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/catalog/stats", ("GET",)) in paths
+
+
 def test_catalog_search_symbols_empty() -> None:
     mock_client = MagicMock()
     mock_client.search_symbols.return_value = pl.DataFrame(
@@ -5961,6 +6037,7 @@ def test_capabilities_shape_and_contents() -> None:
         "GET /api/v1/catalog/dates",
         "GET /api/v1/catalog/exchanges",
         "GET /api/v1/catalog/summary",
+        "GET /api/v1/catalog/stats",
         "GET /api/v1/catalog/scan",
         "GET /api/v1/open-interest",
         "GET /api/v1/perp-basis",
