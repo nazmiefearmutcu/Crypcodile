@@ -295,9 +295,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Audit pure free REST float fields; apply `_json_safe_float` to `chaos-score`, `peg-deviation`, `funding-predict`, `gas-vol` (NaN/±Inf → JSON `null`) | DONE | pending |
-| 2 | Mirror sanitization on MCP `get_chaos_score` / `get_peg_deviation` / `get_funding_prediction` (+ shared `_json_safe_float`) | DONE | pending |
-| 3 | Capabilities: add missing MCP hints `get_onchain_price`, `get_base_market_data` (REST free list already complete) | DONE | pending |
+| 1 | Audit pure free REST float fields; apply `_json_safe_float` to `chaos-score`, `peg-deviation`, `funding-predict`, `gas-vol` (NaN/±Inf → JSON `null`) | DONE | `040c457575a40d6ecd88c16fb1b327350165aaf9` |
+| 2 | Mirror sanitization on MCP `get_chaos_score` / `get_peg_deviation` / `get_funding_prediction` (+ shared `_json_safe_float`) | DONE | `040c457575a40d6ecd88c16fb1b327350165aaf9` |
+| 3 | Capabilities: add missing MCP hints `get_onchain_price`, `get_base_market_data` (REST free list already complete) | DONE | `040c457575a40d6ecd88c16fb1b327350165aaf9` |
 
 ## Next rotation ideas (Wave 40+)
 
