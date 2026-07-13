@@ -652,6 +652,25 @@ def handle_get_lending_stress(
     }
 
 
+def handle_get_peg_deviation(
+    price: float,
+    threshold: float = 0.01,
+    target: float = 1.0,
+) -> dict[str, Any]:
+    """Pure peg-deviation check from a single mid price (no lake required).
+
+    Wraps :func:`crypcodile.analytics.peg_deviation.peg_deviation_from_price`.
+    Returns ``price``, ``deviation_pct``, ``is_alert_triggered``, ``threshold``.
+    """
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+
+    return peg_deviation_from_price(
+        float(price),
+        threshold=float(threshold),
+        target=float(target),
+    )
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -1303,6 +1322,39 @@ TOOLS = [
         },
     },
     {
+        "name": "get_peg_deviation",
+        "description": (
+            "Check stablecoin peg deviation from a single mid price (pure "
+            "offline; no data lake). Compares price against a peg target "
+            "(default 1.0) and threshold (default 0.01). Returns price, "
+            "deviation_pct, is_alert_triggered, and threshold."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "price": {
+                    "type": "number",
+                    "description": (
+                        "Observed mid price of the stablecoin pair "
+                        "(e.g. 0.98 for a depeg)."
+                    ),
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": (
+                        "Absolute deviation threshold that triggers an alert "
+                        "(default 0.01 = 1 cent from target)."
+                    ),
+                },
+                "target": {
+                    "type": "number",
+                    "description": "Peg target price (default 1.0).",
+                },
+            },
+            "required": ["price"],
+        },
+    },
+    {
         "name": "detect_mev_sandwiches",
         "description": (
             "Detect MEV sandwich attack patterns in an offline trade sequence "
@@ -1686,6 +1738,19 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_lending_stress failed: {e}"
+                            }
+                    elif tool_name == "get_peg_deviation":
+                        try:
+                            tool_result = handle_get_peg_deviation(
+                                float(arguments["price"]),
+                                threshold=float(
+                                    arguments.get("threshold", 0.01)
+                                ),
+                                target=float(arguments.get("target", 1.0)),
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_peg_deviation failed: {e}"
                             }
                     elif tool_name == "detect_mev_sandwiches":
                         try:

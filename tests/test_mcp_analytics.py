@@ -24,6 +24,7 @@ from crypcodile.mcp_server import (
     handle_get_lending_stress,
     handle_get_liquidity_depth,
     handle_get_open_interest,
+    handle_get_peg_deviation,
     handle_get_perp_basis,
     handle_get_risk_reversal,
     handle_get_sequencer_latency,
@@ -50,6 +51,7 @@ _ANALYTICS_TOOLS = {
     "get_funding_prediction",
     "get_chaos_score",
     "get_lending_stress",
+    "get_peg_deviation",
     "detect_mev_sandwiches",
 }
 
@@ -487,6 +489,40 @@ def test_handle_get_chaos_score_high_risk_bounded() -> None:
     assert result["chaos_score"] > 50.0
 
 
+def test_handle_get_peg_deviation_alert() -> None:
+    result = handle_get_peg_deviation(0.98, threshold=0.01)
+    assert isinstance(result, dict)
+    assert result["price"] == pytest.approx(0.98)
+    assert result["deviation_pct"] == pytest.approx(0.02)
+    assert result["is_alert_triggered"] is True
+    assert result["threshold"] == pytest.approx(0.01)
+
+
+def test_handle_get_peg_deviation_ok() -> None:
+    result = handle_get_peg_deviation(1.0)
+    assert result["price"] == pytest.approx(1.0)
+    assert result["deviation_pct"] == pytest.approx(0.0)
+    assert result["is_alert_triggered"] is False
+    assert result["threshold"] == pytest.approx(0.01)
+
+
+def test_handle_get_peg_deviation_custom_target() -> None:
+    result = handle_get_peg_deviation(1.05, threshold=0.02, target=1.0)
+    assert result["deviation_pct"] == pytest.approx(0.05)
+    assert result["is_alert_triggered"] is True
+    result_ok = handle_get_peg_deviation(2.0, threshold=0.05, target=2.0)
+    assert result_ok["deviation_pct"] == pytest.approx(0.0)
+    assert result_ok["is_alert_triggered"] is False
+
+
+def test_handle_get_peg_deviation_matches_analytics() -> None:
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+
+    expected = peg_deviation_from_price(0.975, threshold=0.01, target=1.0)
+    result = handle_get_peg_deviation(0.975, threshold=0.01, target=1.0)
+    assert result == expected
+
+
 def test_handle_get_lending_stress_healthy() -> None:
     result = handle_get_lending_stress(
         collateral_usd=10_000.0,
@@ -720,6 +756,13 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "haircut_pct",
     ):
         assert lend_props[key]["type"] == "number"
+    assert set(by_name["get_peg_deviation"]["inputSchema"]["required"]) == {
+        "price",
+    }
+    peg_props = by_name["get_peg_deviation"]["inputSchema"]["properties"]
+    assert peg_props["price"]["type"] == "number"
+    assert peg_props["threshold"]["type"] == "number"
+    assert peg_props["target"]["type"] == "number"
     assert set(by_name["detect_mev_sandwiches"]["inputSchema"]["required"]) == {
         "trades",
     }
