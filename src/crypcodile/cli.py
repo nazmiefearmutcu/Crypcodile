@@ -4,6 +4,7 @@ Commands
 --------
 query          -- Execute DuckDB SQL against the data lake; print result table.
 catalog        -- List all channels present in the data lake with row counts.
+catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
 search         -- Ranked symbol search over the data lake inventory.
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
@@ -32,6 +33,7 @@ Usage examples::
     crypcodile query "SELECT count(*) FROM trade" --data-dir /data
     crypcodile catalog --data-dir /data
     crypcodile catalog --symbols --data-dir /data
+    crypcodile catalog-summary --data-dir /data
     crypcodile search BTC --data-dir /data
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
                      --fmt csv --dest out/trades.csv --data-dir /data
@@ -874,6 +876,44 @@ def catalog(
         except Exception:
             n = -1
         typer.echo(f"{ch:<24}  {n:>10,}")
+
+
+# ---------------------------------------------------------------------------
+# catalog-summary
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-summary")
+def catalog_summary(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print one-shot lake catalog summary (channels + exchanges on disk).
+
+    Mirrors REST ``GET /api/v1/catalog/summary`` / MCP ``catalog_summary``:
+    channel list, on-disk hive exchange partitions, and counts. Uses the
+    client discovery façade (filesystem walks; empty partitions included).
+    Empty lake prints zero counts and empty lists; exit 0.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+
+    channels = client.list_channels()
+    exchanges_on_disk = client.list_exchanges_on_disk()
+    channel_count = len(channels)
+    exchange_count = len(exchanges_on_disk)
+
+    typer.echo(f"channel_count:  {channel_count}")
+    typer.echo(f"exchange_count: {exchange_count}")
+    typer.echo(
+        "channels: "
+        + (", ".join(channels) if channels else "(none)")
+    )
+    typer.echo(
+        "exchanges_on_disk: "
+        + (", ".join(exchanges_on_disk) if exchanges_on_disk else "(none)")
+    )
 
 
 # ---------------------------------------------------------------------------

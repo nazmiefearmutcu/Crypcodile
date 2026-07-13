@@ -114,6 +114,52 @@ async def test_list_channels_with_fixtures(tmp_path: pathlib.Path) -> None:
     assert cat.list_channels() == ["book_snapshot", "trade"]
 
 
+def test_list_channels_skips_special_char_suffixes(tmp_path: pathlib.Path) -> None:
+    """Glob / control / padded channel= suffixes must not be advertised.
+
+    Construct Catalog on empty lake first so ``_refresh_views`` is not asked
+    to register views over empty partitions, then plant adversarial dirs.
+    """
+    cat = Catalog(tmp_path)
+    base = tmp_path / "exchange=deribit"
+    (base / "channel=trade").mkdir(parents=True)
+    (base / "channel=funding").mkdir(parents=True)
+    # Glob metacharacters — unsafe for Path.glob / DuckDB patterns.
+    (base / "channel=trade*glob").mkdir(parents=True)
+    (base / "channel=trade?").mkdir(parents=True)
+    (base / "channel=trade[0]").mkdir(parents=True)
+    # Whitespace padding (list_dates strips user input → orphaned).
+    (base / "channel=  padded  ").mkdir(parents=True)
+    # Relative / empty suffixes.
+    (base / "channel=.").mkdir(parents=True)
+    (base / "channel=..").mkdir(parents=True)
+    (base / "channel=").mkdir(parents=True)
+    # Control character in name.
+    (base / "channel=trade\nline").mkdir(parents=True)
+
+    assert cat.list_channels() == ["funding", "trade"]
+
+
+def test_list_channels_resolve_checks_channel_symlink(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Channel dirs whose resolve() escapes data_dir are ignored."""
+    cat = Catalog(tmp_path)
+    outside = tmp_path.parent / f"outside_chan_{tmp_path.name}"
+    outside.mkdir(exist_ok=True)
+    try:
+        ex = tmp_path / "exchange=deribit"
+        ex.mkdir()
+        (ex / "channel=trade").mkdir()
+        (ex / "channel=escape").symlink_to(outside)
+        assert cat.list_channels() == ["trade"]
+    finally:
+        try:
+            outside.rmdir()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # list_dates
 # ---------------------------------------------------------------------------
@@ -206,6 +252,21 @@ def test_list_exchanges_on_disk_ignores_non_exchange_entries(
     (tmp_path / "exchange=deribit").mkdir()
     cat = Catalog(tmp_path)
     assert cat.list_exchanges_on_disk() == ["deribit"]
+
+
+def test_list_exchanges_on_disk_skips_special_char_suffixes(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Glob / control / padded exchange= suffixes must not be advertised."""
+    (tmp_path / "exchange=deribit").mkdir()
+    (tmp_path / "exchange=binance").mkdir()
+    (tmp_path / "exchange=weird*ex").mkdir()
+    (tmp_path / "exchange=weird?").mkdir()
+    (tmp_path / "exchange=  pad  ").mkdir()
+    (tmp_path / "exchange=.").mkdir()
+    (tmp_path / "exchange=..").mkdir()
+    cat = Catalog(tmp_path)
+    assert cat.list_exchanges_on_disk() == ["binance", "deribit"]
 
 
 async def test_list_exchanges_on_disk_with_fixtures(tmp_path: pathlib.Path) -> None:

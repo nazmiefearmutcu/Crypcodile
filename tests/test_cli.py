@@ -134,6 +134,92 @@ def test_cli_catalog_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# catalog-summary command
+# ---------------------------------------------------------------------------
+
+
+def test_cli_catalog_summary_empty_lake(tmp_path: pathlib.Path) -> None:
+    """``catalog-summary`` on empty lake prints zero counts; exit 0."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-summary", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "channel_count:  0" in result.output
+    assert "exchange_count: 0" in result.output
+    assert "channels: (none)" in result.output
+    assert "exchanges_on_disk: (none)" in result.output
+
+
+async def test_cli_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
+    """``catalog-summary`` lists channels + exchanges_on_disk with counts."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-summary", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "channel_count:  3" in result.output  # book_snapshot, funding, trade
+    assert "exchange_count: 1" in result.output
+    assert "trade" in result.output
+    assert "book_snapshot" in result.output
+    assert "funding" in result.output
+    assert "deribit" in result.output
+
+
+def test_cli_catalog_summary_uses_client_discovery(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """CLI delegates to client list_channels + list_exchanges_on_disk."""
+    from unittest.mock import MagicMock
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    mock_client = MagicMock()
+    mock_client.list_channels.return_value = ["trade"]
+    mock_client.list_exchanges_on_disk.return_value = ["deribit", "binance"]
+
+    class _FakeClient:
+        def __init__(self, data_dir=None) -> None:  # noqa: ANN001
+            pass
+
+        def list_channels(self):
+            return mock_client.list_channels()
+
+        def list_exchanges_on_disk(self):
+            return mock_client.list_exchanges_on_disk()
+
+    monkeypatch.setattr(
+        "crypcodile.client.client.CrypcodileClient", _FakeClient
+    )
+    # Also patch resolve so empty tmp does not trigger interactive prompts.
+    monkeypatch.setattr(
+        "crypcodile.cli.resolve_data_dir", lambda d: d
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["catalog-summary", "--data-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "channel_count:  1" in result.output
+    assert "exchange_count: 2" in result.output
+    assert "channels: trade" in result.output
+    assert "exchanges_on_disk: deribit, binance" in result.output
+    mock_client.list_channels.assert_called_once_with()
+    mock_client.list_exchanges_on_disk.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
 # search command
 # ---------------------------------------------------------------------------
 

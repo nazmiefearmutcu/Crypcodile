@@ -86,6 +86,7 @@ Find symbols, list catalog coverage, and expose the same discovery surface to ag
 ```bash
 crypcodile search "btc" --channel trade
 crypcodile catalog --symbols
+crypcodile catalog-summary   # channels + exchanges_on_disk counts (mirrors REST/MCP)
 crypcodile mcp  # tools: search_symbols, list_data_channels, list_exchanges_on_disk, catalog_summary, data_coverage
 ```
 

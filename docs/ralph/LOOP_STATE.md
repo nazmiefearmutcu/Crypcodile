@@ -374,7 +374,16 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | Small fix: README discovery section lists MCP catalog tools (`list_exchanges_on_disk`, `catalog_summary`) | DONE | `43a246af61467e0567d9909010a1646dec53e7b9` |
 | 3 | Tests: MCP empty/data/delegate; capabilities includes catalog_summary | DONE | `43a246af61467e0567d9909010a1646dec53e7b9` |
 
-## Next rotation ideas (Wave 49+)
+## Wave 49 — Feature (CLI catalog-summary) + list_channels special-char hardening — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Skip `GET /api/v1/catalog/buckets` (too granular) | SKIP | — |
+| 2 | `_is_safe_hive_suffix` + filter in `list_channels` / `list_exchanges_on_disk` / `_refresh_views` / `list_dates`; channel dir resolve check | DONE | `88cfa4b38db7f999dccc04d7157a46c40df90e72` |
+| 3 | CLI `catalog-summary` via client `list_channels` + `list_exchanges_on_disk` counts | DONE | `88cfa4b38db7f999dccc04d7157a46c40df90e72` |
+| 4 | Tests: special-char/symlink skips; CLI empty/data/delegate | DONE | `88cfa4b38db7f999dccc04d7157a46c40df90e72` |
+
+## Next rotation ideas (Wave 50+)
 
 Priority candidates for the next cycles:
 
@@ -442,3 +451,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 46: MCP `list_exchanges_on_disk` tool + filesystem `Catalog.list_channels` (empty partitions without DuckDB)
 - Wave 47: broad regression green (645→647 after +2 tests); REST `GET /api/v1/catalog/summary` agent discovery
 - Wave 48: MCP `catalog_summary` mirrors REST summary; README MCP discovery list updated
+- Wave 49: CLI `catalog-summary`; hive suffix special-char filtering on list_channels/exchanges walks

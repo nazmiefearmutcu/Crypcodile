@@ -6,6 +6,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-14
 ### Added
+- **CLI catalog-summary**: `crypcodile catalog-summary` prints one-shot lake discovery via client `list_channels` + `list_exchanges_on_disk` (channel/exchange counts and lists; empty lake → zero counts / `(none)`). Mirrors REST `GET /api/v1/catalog/summary` and MCP `catalog_summary`.
 - **MCP catalog_summary tool**: `catalog_summary` wraps `list_channels` + `list_exchanges_on_disk` with counts, returning `{channels, exchanges_on_disk, exchange_count, channel_count}` (empty lake → empty lists + zero counts; listed in capabilities `mcp_tools_hint`). Mirrors REST `GET /api/v1/catalog/summary` for agents without HTTP.
 - **API catalog summary discovery**: `GET /api/v1/catalog/summary` returns `{channels, exchanges_on_disk, exchange_count, channel_count}` in one call for agent discovery (empty lake → empty lists + zero counts; listed in capabilities). Combines `list_channels` + `list_exchanges_on_disk`.
 - **MCP list_exchanges_on_disk tool**: `list_exchanges_on_disk` wraps `CrypcodileClient.list_exchanges_on_disk` for hive `exchange=` partition discovery over MCP (empty lake → `[]`; listed in capabilities `mcp_tools_hint`). Distinct from factory connector registry.
@@ -15,6 +16,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ### Changed
 - **Catalog.list_channels filesystem discovery**: walks hive `exchange=*/channel=*` without requiring DuckDB view registration, so empty partition dirs (no parquet yet) still appear in channel listings; `_refresh_views` skips empty / relative `channel=` suffixes.
+- **Hive partition suffix safety**: shared `_is_safe_hive_suffix` rejects path separators, null/control bytes, glob metacharacters (`* ? [ ]`), relative (`.`, `..`), empty, and leading/trailing whitespace suffixes in `list_channels`, `list_exchanges_on_disk`, `list_dates`, and `_refresh_views`. Channel dirs are resolve-checked under the lake root (symlink escape defence).
 
 ### Fixed
 - **MCP list[dict] DF JSON safety**: `_json_safe_records` on MCP handlers that return DataFrame row dicts (OFI, slippage, whale alerts, vol suite, basis trio, indicators, depth, sequencer latency, open interest, discovery search/coverage/inventory, MEV sandwiches, smart-money, label-transfers) plus inline `query_market_data` / `get_funding_apr` tools/call paths — NaN/±Inf floats encode as JSON `null` (parity with REST).

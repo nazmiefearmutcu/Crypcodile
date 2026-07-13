@@ -56,6 +56,30 @@ _SEARCH_SCHEMA: dict[str, pl.DataType] = {
 }
 
 
+# Path / glob characters that must never appear in hive partition suffixes
+# used for discovery walks or interpolated into Path.glob / DuckDB patterns.
+_UNSAFE_HIVE_SUFFIX_CHARS = frozenset({"/", "\\", "\x00", "*", "?", "[", "]"})
+
+
+def _is_safe_hive_suffix(value: str) -> bool:
+    """Return True if *value* is a safe hive ``exchange=`` / ``channel=`` suffix.
+
+    Rejects empty / relative names (``.``, ``..``), leading or trailing
+    whitespace (callers such as :meth:`Catalog.list_dates` strip user input,
+    so padded on-disk names would be orphaned), path separators, null bytes,
+    glob metacharacters, and other ASCII control characters (e.g. newlines).
+    """
+    if not value or value in (".", ".."):
+        return False
+    if value != value.strip():
+        return False
+    if any(c in _UNSAFE_HIVE_SUFFIX_CHARS for c in value):
+        return False
+    if any(ord(c) < 32 for c in value):
+        return False
+    return True
+
+
 def _symbol_raw(symbol: str) -> str:
     """Return the raw portion of a canonical symbol (after the last ``:``)."""
     return symbol.rsplit(":", 1)[-1]
@@ -245,7 +269,9 @@ class Catalog:
         Empty lake or missing data directory yields ``[]``. Channel names
         are the raw partition suffixes (e.g. ``trade``, ``book_snapshot``),
         deduplicated across exchanges and sorted ascending. Non-directory
-        entries and names that are not ``channel=...`` are ignored.
+        entries, names that are not ``channel=...``, and suffixes that are
+        unsafe as path segments (separators, null/control bytes, ``.`` /
+        ``..``, glob metacharacters, leading/trailing whitespace) are ignored.
         """
         if not self._data_dir.exists() or not self._data_dir.is_dir():
             return []
@@ -280,8 +306,13 @@ class Catalog:
                     "channel="
                 ):
                     continue
+                # Resolve-check channel dirs too (symlink escape defence).
+                try:
+                    chan_dir.resolve().relative_to(data_root)
+                except (ValueError, OSError):
+                    continue
                 channel_str = chan_dir.name[len("channel=") :]
-                if channel_str and channel_str not in (".", ".."):
+                if _is_safe_hive_suffix(channel_str):
                     channels.add(channel_str)
 
         return sorted(channels)
@@ -301,13 +332,9 @@ class Catalog:
         deduplicated across exchanges and sorted ascending.
         """
         channel = (channel or "").strip()
-        if not channel:
-            return []
         # Reject path traversal and glob injection — never interpolate
         # untrusted channel into Path.glob patterns.
-        if any(c in channel for c in ("/", "\\", "\x00", "*", "?", "[", "]")):
-            return []
-        if channel in (".", ".."):
+        if not _is_safe_hive_suffix(channel):
             return []
 
         if not self._data_dir.exists() or not self._data_dir.is_dir():
@@ -361,8 +388,10 @@ class Catalog:
 
         Empty lake or missing data directory yields ``[]``. Exchange names
         are the raw partition suffixes (e.g. ``deribit``, ``binance``),
-        deduplicated and sorted ascending. Non-directory entries and names
-        that are not ``exchange=...`` are ignored.
+        deduplicated and sorted ascending. Non-directory entries, names
+        that are not ``exchange=...``, and suffixes that are unsafe as path
+        segments (separators, null/control bytes, ``.`` / ``..``, glob
+        metacharacters, leading/trailing whitespace) are ignored.
         """
         if not self._data_dir.exists() or not self._data_dir.is_dir():
             return []
@@ -387,7 +416,7 @@ class Catalog:
             except (ValueError, OSError):
                 continue
             exchange_str = exchange_dir.name[len("exchange=") :]
-            if exchange_str and exchange_str not in (".", ".."):
+            if _is_safe_hive_suffix(exchange_str):
                 exchanges.add(exchange_str)
 
         return sorted(exchanges)
@@ -621,8 +650,8 @@ class Catalog:
                 if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
                     continue
                 channel = chan_dir.name[len("channel="):]
-                # Skip empty / relative partition suffixes (invalid view names).
-                if not channel or channel in (".", ".."):
+                # Skip empty / relative / glob-unsafe suffixes (invalid views).
+                if not _is_safe_hive_suffix(channel):
                     continue
                 if channel not in self._registered_channels:
                     self._create_view(channel)
