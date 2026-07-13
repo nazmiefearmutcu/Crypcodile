@@ -275,7 +275,7 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Prefer readiness over metrics-summary: `GET /api/v1/ready` (200 when `health.ok`, else 503); leave Prometheus at `/metrics` | DONE | *(this commit)* |
+| 1 | Prefer readiness over metrics-summary: `GET /api/v1/ready` (200 when `health.ok`, else 503); leave Prometheus at `/metrics` | DONE | `8c4ca948e795762b68c53036148f4af4bdd91d22` |
 
 ## Next rotation ideas (Wave 37+)
 
