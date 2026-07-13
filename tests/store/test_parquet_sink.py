@@ -158,6 +158,44 @@ async def test_parquet_sink_never_appends_new_part_files(tmp_path: pathlib.Path)
     assert len(new_files) >= 1, "Second flush should write a new part file, not append"
 
 
+async def test_parquet_sink_atomic_write_leaves_no_temp_files(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Successful flush publishes part-*.parquet and removes temp-part-* files."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+    await sink.put(_trade(1.0))
+    await sink.flush()
+
+    part_files = list(tmp_path.rglob("part-*.parquet"))
+    temp_files = list(tmp_path.rglob("temp-part-*.parquet"))
+    assert len(part_files) == 1
+    assert temp_files == [], "temp-part files must not remain after successful rename"
+
+
+async def test_parquet_sink_failed_write_cleans_temp_and_no_part(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If write_parquet fails, no part-* is published and temp-part is cleaned up."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+    await sink.put(_trade(1.0))
+
+    def _partial_then_fail(_self, path, **_kwargs):
+        # Simulate a crash mid-write: temp file exists but is incomplete.
+        pathlib.Path(path).write_bytes(b"not-a-real-parquet")
+        raise OSError("simulated write crash")
+
+    monkeypatch.setattr(pl.DataFrame, "write_parquet", _partial_then_fail)
+
+    with pytest.raises(OSError, match="simulated write crash"):
+        await sink.flush()
+
+    assert list(tmp_path.rglob("part-*.parquet")) == []
+    assert list(tmp_path.rglob("temp-part-*.parquet")) == []
+    # Rows re-buffered for retry
+    assert len(sink._buffers["trade"]) == 1
+
+
 # ---------------------------------------------------------------------------
 # Regression: _last_flush updated after row-count-triggered flush (bug 3)
 # ---------------------------------------------------------------------------

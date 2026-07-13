@@ -10,6 +10,8 @@ Write policy:
     has elapsed, or explicitly via ``flush()`` / ``close()``.
   - A new ``part-{uuid}.parquet`` file is written on every flush; existing files are
     **never appended to** (Parquet footers are immutable).
+  - Each part is written via temp file + same-directory rename so readers never
+    observe a partial ``part-*.parquet`` if the process crashes mid-write.
 
 Compression: ZSTD level 5 (streaming sweet spot per Appendix §4).
 Row group size: 250 000 rows.
@@ -353,7 +355,10 @@ class ParquetSink(Sink):
                 f"Partition path escapes data_dir: {part_dir} not under {data_dir}"
             )
         part_dir.mkdir(parents=True, exist_ok=True)
-        out_path = part_dir / f"part-{uuid.uuid4().hex}.parquet"
+        part_id = uuid.uuid4().hex
+        # Temp name is not part-* so catalog / hive readers ignore in-progress writes.
+        temp_path = part_dir / f"temp-part-{part_id}.parquet"
+        out_path = part_dir / f"part-{part_id}.parquet"
 
         # Coerce book levels (list-of-tuples → list-of-dicts)
         if channel in ("book_snapshot", "book_delta"):
@@ -368,9 +373,20 @@ class ParquetSink(Sink):
         ]
         df = pl.DataFrame(filtered_rows, schema=schema)
 
-        df.write_parquet(
-            out_path,
-            compression="zstd",
-            compression_level=5,
-            row_group_size=250_000,
-        )
+        # Crash safety: write temp in the same directory, then rename to the
+        # final part-*.parquet. Same-directory rename is atomic on POSIX so
+        # readers never see a truncated part file if the process dies mid-write.
+        try:
+            df.write_parquet(
+                temp_path,
+                compression="zstd",
+                compression_level=5,
+                row_group_size=250_000,
+            )
+            temp_path.replace(out_path)
+        except Exception:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
