@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–44 COMPLETE. Continuous loop still active → Wave 45+.
+**Status:** Waves 1–47 COMPLETE. Continuous loop still active → Wave 48+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -358,7 +358,15 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | `Catalog.list_channels` filesystem-based (`exchange=*/channel=*`; empty partitions without DuckDB); `_refresh_views` skips empty channel suffixes | DONE | `3886d1dc9b66e52fe5d7207c2aba43f04b43c735` |
 | 3 | Tests: MCP empty/data/delegate; catalog empty-partition dirs; capabilities includes list_exchanges_on_disk | DONE | `3886d1dc9b66e52fe5d7207c2aba43f04b43c735` |
 
-## Next rotation ideas (Wave 47+)
+## Wave 47 — Bug hunt (broad regression) + Feature (catalog summary) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Broad regression: api_endpoints, mcp_analytics, mcp_discovery, catalog_search, client_search, compactor, parquet_sink, binance/okx book resync, factory, json_safe, util — all green (no fixes needed) | DONE | baseline `4a99b89` |
+| 2 | REST `GET /api/v1/catalog/summary` → `{channels, exchanges_on_disk, exchange_count, channel_count}` + capabilities entry | DONE | `ab6b353253210e6b08b1cd70ae792edfed90dab4` |
+| 3 | Tests: empty lake + mock lists/counts; capabilities includes catalog/summary | DONE | `ab6b353253210e6b08b1cd70ae792edfed90dab4` |
+
+## Next rotation ideas (Wave 48+)
 
 Priority candidates for the next cycles:
 
@@ -366,6 +374,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **MCP catalog_summary** — mirror REST summary over MCP if agents need it without HTTP  
+
 
 
 ## Subagent policy
@@ -423,3 +433,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 44: MCP `list_dates` tool + shared `crypcodile.util.json_safe` (dedupe REST/MCP JSON-safe helpers)
 - Wave 45: REST `GET /api/v1/catalog/exchanges` via Catalog/Client `list_exchanges_on_disk` (filesystem exchange partition discovery; ≠ factory `list_exchanges`)
 - Wave 46: MCP `list_exchanges_on_disk` tool + filesystem `Catalog.list_channels` (empty partitions without DuckDB)
+- Wave 47: broad regression green (645→647 after +2 tests); REST `GET /api/v1/catalog/summary` agent discovery
