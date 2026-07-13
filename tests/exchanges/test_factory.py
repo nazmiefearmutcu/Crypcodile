@@ -143,7 +143,7 @@ def test_make_connector_superchain() -> None:
         "crypcodile.exchanges.base_onchain.connector.BaseOnchainTransport",
         return_value=mock_transport,
     ) as mock_cls:
-        # Default SuperchainConnector.exchange is "optimism"; do not pass
+        # Default SuperchainConnector.exchange is "superchain"; do not pass
         # exchange= here — it collides with make_connector's exchange name.
         conn = _make(
             "superchain",
@@ -152,7 +152,7 @@ def test_make_connector_superchain() -> None:
         )
     assert isinstance(conn, SuperchainConnector)
     assert conn.chain_id == 10
-    assert conn.name == "optimism"
+    assert conn.name == "superchain"
     mock_cls.assert_called_once()
     # rpc_url is the first positional arg to BaseOnchainTransport
     assert mock_cls.call_args.args[0] == "http://localhost:8545"

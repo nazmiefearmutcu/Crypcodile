@@ -512,7 +512,9 @@ class BaseOnchainTransport:
         from crypcodile.ingest.rollback_manager import RollbackManager
         state_dir = os.path.expanduser("~/.crypcodile/sync_state")
         os.makedirs(state_dir, exist_ok=True)
-        self.sync_recovery = SyncRecovery(os.path.join(state_dir, "base_onchain.json"))
+        self.sync_recovery = SyncRecovery(
+            os.path.join(state_dir, f"{self.exchange}.json")
+        )
         self.rollback_manager = RollbackManager(max_depth=100)
         self._seen_logs = self.sync_recovery.get_seen_logs()
 

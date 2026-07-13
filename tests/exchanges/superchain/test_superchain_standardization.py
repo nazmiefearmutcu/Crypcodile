@@ -54,7 +54,28 @@ def test_superchain_connector_initialization(monkeypatch):
     )
 
     assert connector.chain_id == 10
+    assert connector.name == "superchain"
+    assert connector.transport.exchange == "superchain"
     assert connector.transport.rpc_urls == ["http://localhost:8545"]
+    # Per-exchange SyncRecovery state path (not hardcoded base_onchain.json).
+    assert connector.transport.sync_recovery.state_path.endswith("superchain.json")
     # Must not mutate process environment for RPC configuration.
     assert os.environ.get("BASE_RPC_URL") is None
     assert os.environ == before_env
+
+
+def test_superchain_connector_custom_exchange_name(monkeypatch):
+    """Custom exchange identity propagates to transport recovery state file."""
+    monkeypatch.delenv("BASE_RPC_URL", raising=False)
+    connector = SuperchainConnector(
+        symbols=["OP-USDC"],
+        channels=["trade"],
+        out=MagicMock(spec=Sink),
+        registry=InstrumentRegistry(),
+        rpc_url="http://localhost:8545",
+        chain_id=10,
+        exchange="optimism",
+    )
+    assert connector.name == "optimism"
+    assert connector.transport.exchange == "optimism"
+    assert connector.transport.sync_recovery.state_path.endswith("optimism.json")

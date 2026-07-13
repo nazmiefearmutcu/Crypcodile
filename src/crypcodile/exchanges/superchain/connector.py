@@ -24,7 +24,7 @@ class SuperchainConnector(BaseOnchainConnector):
         rpc_url: str | None = None,
         chain_id: int = 10,  # default to Optimism Mainnet
         custom_pools: dict[str, dict[str, Any]] | None = None,
-        exchange: str = "optimism",
+        exchange: str = "superchain",
         **kwargs: Any,
     ) -> None:
         # Set identity before parent init so transport uses the correct exchange name.
