@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–7 COMPLETE. Ready for Wave 8 (Feature).
+**Status:** Waves 1–11 COMPLETE. Ready for Wave 12 (Feature).
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -68,15 +68,48 @@
 | 2 | Align CLI exchange lists with factory registry | DONE | `04da164` |
 | 3 | CLI smart-money / whale-transfer surface | DONE | `605ac34` |
 
-## Next rotation ideas (Wave 8+)
+## Wave 8 — Feature (CLI backfill + chaos + basis) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Binance book bridge only after successful bootstrap | DONE | `2e51798` |
+| 2 | CLI backfill command (historical REST) | DONE | `600f574` |
+| 3 | CLI chaos-score command | DONE | `e172f7a` |
+| 4 | CLI spot-perp basis mode (`--spot X --perp Y`) | DONE | `2bad0dd` |
+
+## Wave 9 — Hardening + docs (search + ingest notes) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Bybit book resync deferred (shared helpers only) | DONE | `6a6ae7a` |
+| 2 | Whitespace-only catalog search treated as empty | DONE | `a871d14` |
+| 3 | Expand 0.1.044 changelog with wave 7–9 work | DONE | `9cc58d0` |
+
+## Wave 10 — Feature (API catalog + liquidity + sequencer + MCP basis) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST API lake catalog list and search endpoints | DONE | `cb00578` |
+| 2 | CLI liquidity-depth command | DONE | `3d490a1` |
+| 3 | CLI sequencer-latency command | DONE | `1c09a09` |
+| 4 | MCP basis analytics tools | DONE | `7d8a4ac` |
+
+## Wave 11 — Hardening + indicators surface — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Multi-partition sink: re-buffer only unwritten partitions after partial flush | DONE | `cc51a71` |
+| 2 | Client/MCP technical indicators surface | DONE | `8aaf679` |
+
+## Next rotation ideas (Wave 12+)
 
 Priority candidates for the next cycles:
 
-1. **Bybit book resync** — extend `OrderBookSync` + `BookResyncBridge` pattern from Binance to Bybit depth gaps  
-2. **chaos-score CLI** — surface chaos/stress score analytics on the CLI  
-3. **basis spot-perp CLI mode** — dedicated spot–perp basis command mode  
-4. **REST API lake endpoints** — HTTP read API over lake/catalog data  
-5. **multi-partition sink atomic flush** — atomic flush across multiple parquet partitions (no partial durable state)
+1. **Bybit book resync** — wire `BookResyncBridge` for Bybit (deferred: REST `u` vs `orderbook.50` alignment)  
+2. **REST API lake read endpoints** — broader HTTP read surface beyond catalog list/search  
+3. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
+4. **MCP liquidity / sequencer tools** — expose depth and sequencer latency over MCP  
+5. **Payment / portal polish** — remaining API portal UX and state edge cases  
 
 ## Subagent policy
 
@@ -92,4 +125,8 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 5: DLQ drain on stop, aiohttp connect-fail cleanup, 0.1.044 release notes
 - Wave 6: Binance book resync bridge on sequence gap
 - Wave 7: README/docs alignment, smart-money / whale-transfer CLI surface
-- **HEAD:** `605ac34` — ready for Wave 8
+- Wave 8: backfill CLI, chaos-score, spot-perp basis; Binance bridge bootstrap fix
+- Wave 9: Bybit resync deferred note, whitespace search fix, changelog 7–9
+- Wave 10: API lake catalog endpoints, liquidity-depth, sequencer-latency, MCP basis tools
+- Wave 11: multi-partition partial-flush re-buffer, client/MCP indicators surface
+- **HEAD:** `8aaf679` — ready for Wave 12
