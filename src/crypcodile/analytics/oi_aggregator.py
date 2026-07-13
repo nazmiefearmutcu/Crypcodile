@@ -67,11 +67,16 @@ def aggregate_open_interest(
     )
 
     # Map: ts -> (exchange, symbol) -> open_interest
+    # Skip null OI samples so they do not overwrite last-known values with 0.0
+    # and zero out forward-fill for that series.
     data_map: dict[int, dict[tuple[str, str], float]] = {}
     for row in raw_df.iter_rows(named=True):
+        oi_val = row["open_interest"]
+        if oi_val is None:
+            continue
         ts = row["local_ts"]
         key = (row["exchange"], row["symbol"])
-        oi = float(row["open_interest"]) if row["open_interest"] is not None else 0.0
+        oi = float(oi_val)
         if ts not in data_map:
             data_map[ts] = {}
         data_map[ts][key] = oi
