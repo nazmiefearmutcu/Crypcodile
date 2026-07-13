@@ -5,7 +5,6 @@ import fcntl
 import hmac
 import json
 import logging
-import math
 import os
 import random
 import re
@@ -23,6 +22,10 @@ from pydantic import BaseModel
 from web3 import Web3
 
 from crypcodile.mcp_server import AsyncHTTPProvider, AsyncWeb3, get_onchain_price
+from crypcodile.util.json_safe import (
+    json_safe_float as _json_safe_float,
+    json_safe_records as _json_safe_records,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1481,6 +1484,7 @@ _CAPABILITIES_REST: list[str] = [
 
 _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
     "list_data_channels",
+    "list_dates",
     "search_symbols",
     "data_coverage",
     "inventory_snapshot",
@@ -2447,41 +2451,6 @@ async def sequencer_latency(
     if len(df) > limit:
         df = df.head(limit)
     return _json_safe_records(df.to_dicts())
-
-
-def _json_safe_float(value: float) -> float | None:
-    """Return a finite float, or ``None`` when *value* is NaN/±Inf.
-
-    Starlette/FastAPI ``JSONResponse`` rejects non-finite floats
-    (``ValueError: Out of range float values are not JSON compliant``).
-    Pure analytics may yield ``inf``/``nan`` (e.g. zero-debt health factors,
-    undefined correlations, ±Inf inputs). HTTP/MCP boundaries map those to
-    JSON ``null`` so responses encode.
-    """
-    f = float(value)
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return f
-
-
-def _json_safe_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sanitize non-finite floats in DataFrame row dicts for JSON encoding.
-
-    Walks each row's values; NaN/±Inf floats become ``None`` (JSON null).
-    Non-float values (ints, strs, None, bools) pass through unchanged.
-    Lake analytics head rows can contain ``inf``/``nan`` from ratios and
-    edge-case joins; Starlette rejects those on encode.
-    """
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        cleaned: dict[str, Any] = {}
-        for key, value in row.items():
-            if isinstance(value, float):
-                cleaned[key] = _json_safe_float(value)
-            else:
-                cleaned[key] = value
-        out.append(cleaned)
-    return out
 
 
 @app.get("/api/v1/chaos-score")

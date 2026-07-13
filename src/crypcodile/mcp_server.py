@@ -31,6 +31,10 @@ class AsyncWeb3(web3.AsyncWeb3):
 from crypcodile import __version__
 from crypcodile.client.client import CrypcodileClient
 from crypcodile.exchanges.base_onchain.connector import FACTORIES, POOL_SPECS, TOKENS
+from crypcodile.util.json_safe import (
+    json_safe_float as _json_safe_float,
+    json_safe_records as _json_safe_records,
+)
 import os
 
 DEFAULT_RPC_URL = os.getenv("BASE_RPC_URL", "https://base-rpc.publicnode.com")
@@ -336,6 +340,18 @@ def handle_list_data_channels(client: CrypcodileClient) -> list[str]:
     return client.list_channels()
 
 
+def handle_list_dates(client: CrypcodileClient, channel: str) -> list[str]:
+    """Return sorted distinct date partitions for *channel*.
+
+    Mirrors REST ``GET /api/v1/catalog/dates``: strip *channel*; empty /
+    whitespace channel, unknown channel, or empty lake → ``[]``.
+    """
+    channel = (channel or "").strip()
+    if not channel:
+        return []
+    return client.list_dates(channel)
+
+
 def handle_search_symbols(
     client: CrypcodileClient,
     q: str,
@@ -584,40 +600,6 @@ def handle_get_open_interest(
     if len(df) == 0:
         return []
     return _json_safe_records(df.to_dicts())
-
-
-def _json_safe_float(value: float) -> float | None:
-    """Return a finite float, or ``None`` when *value* is NaN/±Inf.
-
-    JSON-RPC tool results must be JSON-compliant; pure analytics may yield
-    non-finite floats (Inf health factors, undefined correlations, Inf inputs).
-    """
-    import math
-
-    f = float(value)
-    if math.isnan(f) or math.isinf(f):
-        return None
-    return f
-
-
-def _json_safe_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sanitize non-finite floats in DataFrame row dicts for JSON-RPC encoding.
-
-    Walks each row's values; NaN/±Inf floats become ``None`` (JSON null).
-    Non-float values (ints, strs, None, bools) pass through unchanged.
-    Mirrors REST :func:`crypcodile.api_server._json_safe_records` so MCP tools
-    that return lake/analytics DF rows stay JSON-compliant over stdio.
-    """
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        cleaned: dict[str, Any] = {}
-        for key, value in row.items():
-            if isinstance(value, float):
-                cleaned[key] = _json_safe_float(value)
-            else:
-                cleaned[key] = value
-        out.append(cleaned)
-    return out
 
 
 def handle_get_funding_prediction(
@@ -939,6 +921,26 @@ TOOLS = [
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    },
+    {
+        "name": "list_dates",
+        "description": (
+            "List distinct hive date partitions (typically YYYY-MM-DD) for a "
+            "channel in the Crypcodile parquet data lake. Sorted ascending. "
+            "Empty / unknown channel or empty lake returns []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "description": (
+                        "Channel name (e.g. 'trade', 'book_snapshot', 'funding')."
+                    ),
+                },
+            },
+            "required": ["channel"],
         },
     },
     {
@@ -1883,6 +1885,13 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             tool_result = handle_list_data_channels(client)
                         except Exception as e:
                             tool_result = {"error": f"list_data_channels failed: {e}"}
+                    elif tool_name == "list_dates":
+                        try:
+                            tool_result = handle_list_dates(
+                                client, arguments.get("channel", "")
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"list_dates failed: {e}"}
                     elif tool_name == "search_symbols":
                         try:
                             q = arguments.get("q", "")

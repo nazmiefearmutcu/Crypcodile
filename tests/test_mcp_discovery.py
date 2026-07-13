@@ -64,6 +64,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert handle_list_data_channels(client) == []
     names = {t["name"] for t in TOOLS}
     assert "list_data_channels" in names
+    assert "list_dates" in names
     assert "search_symbols" in names
     assert "data_coverage" in names
     assert "inventory_snapshot" in names
@@ -76,6 +77,53 @@ async def test_list_data_channels_with_data(tmp_path: pathlib.Path) -> None:
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_list_data_channels(client) == ["book_snapshot", "trade"]
+
+
+def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_dates, TOOLS
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_dates(client, "trade") == []
+    assert handle_list_dates(client, "") == []
+    assert handle_list_dates(client, "   ") == []
+    names = {t["name"] for t in TOOLS}
+    assert "list_dates" in names
+    tool = next(t for t in TOOLS if t["name"] == "list_dates")
+    assert "channel" in tool["inputSchema"]["properties"]
+    assert "channel" in tool["inputSchema"]["required"]
+
+
+async def test_list_dates_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.mcp_server import handle_list_dates
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    dates = handle_list_dates(client, "trade")
+    assert isinstance(dates, list)
+    assert len(dates) >= 1
+    assert all(isinstance(d, str) for d in dates)
+    # Same channel with surrounding whitespace is stripped
+    assert handle_list_dates(client, "  trade  ") == dates
+    assert handle_list_dates(client, "no_such_channel") == []
+
+
+def test_list_dates_strips_channel_before_client() -> None:
+    """Handler strips channel; empty after strip never calls the client."""
+    from unittest.mock import MagicMock
+
+    from crypcodile.mcp_server import handle_list_dates
+
+    client = MagicMock()
+    client.list_dates.return_value = ["2024-01-01"]
+    assert handle_list_dates(client, "  book_snapshot  ") == ["2024-01-01"]
+    client.list_dates.assert_called_once_with("book_snapshot")
+
+    client.reset_mock()
+    assert handle_list_dates(client, "") == []
+    assert handle_list_dates(client, "   ") == []
+    client.list_dates.assert_not_called()
 
 
 def test_search_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
