@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -1384,8 +1385,20 @@ async def catalog_inventory(
     return df.to_dicts()
 
 
-# Hard max rows for lake scan HTTP responses (bounded discovery).
+# Hard max rows for lake scan / SQL query HTTP responses (bounded discovery).
 _CATALOG_SCAN_MAX_LIMIT = 10_000
+_QUERY_MAX_LIMIT = 10_000
+
+# Mutating SQL keywords rejected by the read-only query endpoint (word-boundary).
+_MUTATING_SQL_RE = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|ATTACH|COPY)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_mutating_sql(sql: str) -> bool:
+    """Return True if ``sql`` contains a forbidden mutating statement keyword."""
+    return _MUTATING_SQL_RE.search(sql or "") is not None
 
 
 @app.get("/api/v1/catalog/scan")
@@ -1412,6 +1425,56 @@ async def catalog_scan(
 
     client = _get_lake_client()
     df = client.scan(channel, [symbol], start, end)
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+class QueryPayload(BaseModel):
+    """Body for ``POST /api/v1/query`` — bounded read-only SQL against the lake."""
+
+    sql: str
+    limit: int | None = None
+
+
+@app.post("/api/v1/query")
+async def query_lake(payload: QueryPayload) -> list[dict[str, Any]]:
+    """Execute read-only DuckDB SQL against the local lake (no payment).
+
+    Rejects mutating statements (INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/
+    ATTACH/COPY) case-insensitively. Returns at most ``limit`` rows (default
+    and hard max: 10000). Empty result set yields ``[]``.
+    """
+    sql = (payload.sql or "").strip()
+    if not sql:
+        raise HTTPException(status_code=400, detail="SQL query is required.")
+    if _is_mutating_sql(sql):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Mutating SQL is not allowed "
+                "(INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/ATTACH/COPY)."
+            ),
+        )
+
+    limit = _QUERY_MAX_LIMIT if payload.limit is None else int(payload.limit)
+    if limit < 1:
+        limit = 1
+    if limit > _QUERY_MAX_LIMIT:
+        limit = _QUERY_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.query(sql)
+    except Exception as e:
+        log.error(f"Lake SQL query failed: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"SQL execution failed: {e}",
+        ) from e
+
     if len(df) == 0:
         return []
     if len(df) > limit:
