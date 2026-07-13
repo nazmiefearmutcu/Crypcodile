@@ -845,6 +845,93 @@ async def test_cas_concurrent_double_serve_prevention() -> None:
 
 
 @pytest.mark.asyncio
+async def test_serve_failure_restores_paid_status() -> None:
+    """If get_onchain_price fails after CAS paid→spent, restore paid so client can retry."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import db_lock
+
+    PAYMENTS_DB.clear()
+
+    private_key = "0x" + "4" * 64
+    account = Account.from_key(private_key)
+    pid = "serve-fail-restore-pid"
+    tx_hash = "0xserve_fail_restore_tx"
+
+    msg = encode_defunct(text=pid)
+    sig = account.sign_message(msg).signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+
+    async with db_lock:
+        await PAYMENTS_DB.set_async(pid, {
+            "status": "paid",
+            "symbol": "cbBTC-USDC",
+            "tx_hash": tx_hash,
+            "sender": account.address,
+            "signature": sig,
+            "price": "0.001",
+            "currency": "USDC",
+            "recipient": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        })
+
+    payment_sig_header = json.dumps({
+        "payment_id": pid,
+        "tx_hash": tx_hash,
+        "signature": sig,
+    })
+
+    # Case 1: get_onchain_price returns error dict — restore paid
+    with patch(
+        "crypcodile.api_server.get_onchain_price",
+        AsyncMock(return_value={"error": "RPC timeout"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        assert exc_info.value.status_code == 500
+        assert "Failed to fetch market data" in exc_info.value.detail
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "paid", "serve error-dict must restore paid entitlement"
+
+    # Case 2: get_onchain_price raises — restore paid again after re-CAS
+    with patch(
+        "crypcodile.api_server.get_onchain_price",
+        AsyncMock(side_effect=RuntimeError("upstream down")),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        assert exc_info.value.status_code == 500
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "paid", "serve exception must restore paid entitlement"
+
+    # Case 3: retry after restore succeeds and leaves status spent
+    with patch(
+        "crypcodile.api_server.get_onchain_price",
+        AsyncMock(return_value={"symbol": "cbBTC-USDC", "price": 41000.0, "block": 2}),
+    ):
+        resp = await get_market_data(
+            symbol="cbBTC-USDC",
+            response=Response(),
+            payment_signature=payment_sig_header,
+        )
+        assert resp["status"] == "success"
+        assert resp["data"]["price"] == 41000.0
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "spent"
+
+
+@pytest.mark.asyncio
 async def test_admin_payments_protection() -> None:
     """Admin payments endpoint: 404 if unset, 401 if wrong key, 200 if correct."""
     import os

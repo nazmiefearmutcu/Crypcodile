@@ -1124,10 +1124,33 @@ async def get_market_data(
         record["status"] = "spent"
         await PAYMENTS_DB.set_async(pid, record)
 
-    # 4. Retrieve and return live Base DEX pool data
-    active_rpc = get_w3().provider.endpoint_uri
-    data = await get_onchain_price(symbol, rpc_url=active_rpc)
+    # 4. Retrieve and return live Base DEX pool data.
+    # If serve fails after CAS, restore paid so the client can retry (refund entitlement).
+    async def _restore_paid_on_serve_failure(reason: str) -> None:
+        async with db_lock:
+            rec = await PAYMENTS_DB.get_async(pid)
+            if rec and rec.get("status") == "spent":
+                rec["status"] = "paid"
+                await PAYMENTS_DB.set_async(pid, rec)
+                log.warning(
+                    "Restored payment %s status spent→paid after market-data serve failure: %s",
+                    pid,
+                    reason,
+                )
+
+    try:
+        active_rpc = get_w3().provider.endpoint_uri
+        data = await get_onchain_price(symbol, rpc_url=active_rpc)
+    except Exception as e:
+        await _restore_paid_on_serve_failure(str(e))
+        log.error(f"On-chain price fetch raised for {symbol}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch market data from upstream RPC.",
+        ) from e
+
     if "error" in data:
+        await _restore_paid_on_serve_failure(str(data["error"]))
         log.error(f"On-chain price fetch failed for {symbol}: {data['error']}")
         raise HTTPException(
             status_code=500,
