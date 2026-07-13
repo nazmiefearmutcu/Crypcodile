@@ -431,6 +431,131 @@ def test_cli_term_structure_empty_exits_0(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CLI: vol-skew
+# ---------------------------------------------------------------------------
+
+
+def test_cli_vol_skew_exits_0(options_lake: Path) -> None:
+    """CLI vol-skew must exit 0 on a populated options lake."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    result = _RUNNER.invoke(
+        app,
+        [
+            "vol-skew",
+            "--underlying", _UNDERLYING,
+            "--expiry-ns", str(e1_ns),
+            "--at", str(_BASE_NS),
+            "--data-dir", str(options_lake),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+
+
+def test_cli_vol_skew_expiry_alias(options_lake: Path) -> None:
+    """CLI vol-skew accepts --expiry as an alias for --expiry-ns."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    result = _RUNNER.invoke(
+        app,
+        [
+            "vol-skew",
+            "--underlying", _UNDERLYING,
+            "--expiry", str(e1_ns),
+            "--at", str(_BASE_NS),
+            "--data-dir", str(options_lake),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+
+
+def test_cli_vol_skew_empty_exits_0(tmp_path: Path) -> None:
+    """CLI vol-skew on an empty lake must exit 0 gracefully."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    result = _RUNNER.invoke(
+        app,
+        [
+            "vol-skew",
+            "--underlying", _UNDERLYING,
+            "--expiry-ns", str(e1_ns),
+            "--at", str(_BASE_NS),
+            "--data-dir", str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert "No options data found" in result.output
+
+
+def test_cli_vol_skew_missing_args_exits_1() -> None:
+    """CLI vol-skew without required args in non-interactive mode must exit 1."""
+    result = _RUNNER.invoke(app, ["vol-skew", "--underlying", _UNDERLYING])
+    assert result.exit_code == 1, f"exit_code={result.exit_code}\n{result.output}"
+
+
+# ---------------------------------------------------------------------------
+# CLI: risk-reversal
+# ---------------------------------------------------------------------------
+
+
+def test_cli_risk_reversal_exits_0(options_lake: Path) -> None:
+    """CLI risk-reversal must exit 0 on a populated options lake."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    result = _RUNNER.invoke(
+        app,
+        [
+            "risk-reversal",
+            "--underlying", _UNDERLYING,
+            "--expiry-ns", str(e1_ns),
+            "--at", str(_BASE_NS),
+            "--data-dir", str(options_lake),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert "risk_reversal:" in result.output
+    assert "butterfly:" in result.output
+
+
+def test_cli_risk_reversal_target_delta(options_lake: Path) -> None:
+    """CLI risk-reversal accepts --target-delta."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    result = _RUNNER.invoke(
+        app,
+        [
+            "risk-reversal",
+            "--underlying", _UNDERLYING,
+            "--expiry", str(e1_ns),
+            "--at", str(_BASE_NS),
+            "--target-delta", "0.10",
+            "--data-dir", str(options_lake),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert "risk_reversal:" in result.output
+    assert "butterfly:" in result.output
+
+
+def test_cli_risk_reversal_empty_exits_0(tmp_path: Path) -> None:
+    """CLI risk-reversal on empty lake must exit 0 gracefully."""
+    e1_ns = _BASE_NS + _ONE_YEAR_NS
+    result = _RUNNER.invoke(
+        app,
+        [
+            "risk-reversal",
+            "--underlying", _UNDERLYING,
+            "--expiry-ns", str(e1_ns),
+            "--at", str(_BASE_NS),
+            "--data-dir", str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
+    assert "No options data found" in result.output
+
+
+def test_cli_risk_reversal_missing_args_exits_1() -> None:
+    """CLI risk-reversal without required args in non-interactive mode must exit 1."""
+    result = _RUNNER.invoke(app, ["risk-reversal", "--underlying", _UNDERLYING])
+    assert result.exit_code == 1, f"exit_code={result.exit_code}\n{result.output}"
+
+
+# ---------------------------------------------------------------------------
 # CrypcodileClient — vol_skew (T8-docs regression)
 # ---------------------------------------------------------------------------
 

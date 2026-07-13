@@ -12,6 +12,8 @@ funding-apr    -- Print per-event funding APR for a perpetual symbol.
 basis          -- Print spot-future or perpetual basis.
 iv-surface     -- Print the implied-vol surface snapshot.
 term-structure -- Print the ATM IV term structure.
+vol-skew       -- Print per-strike IV and delta for a single expiry.
+risk-reversal  -- Print risk-reversal and butterfly from vol skew.
 
 Usage examples::
 
@@ -33,6 +35,10 @@ Usage examples::
                     --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile iv-surface --underlying BTC --at 1704067200000000000 --data-dir /data
     crypcodile term-structure --underlying BTC --at 1704067200000000000 --data-dir /data
+    crypcodile vol-skew --underlying BTC --expiry-ns 1735689600000000000 \\
+                       --at 1704067200000000000 --data-dir /data
+    crypcodile risk-reversal --underlying BTC --expiry-ns 1735689600000000000 \\
+                            --at 1704067200000000000 --target-delta 0.25 --data-dir /data
 """
 
 from __future__ import annotations
@@ -2070,6 +2076,273 @@ def term_structure_cmd(
         typer.echo("No options data found.")
         raise typer.Exit(code=0)
     typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# vol-skew
+# ---------------------------------------------------------------------------
+
+
+def get_available_option_expiries(
+    data_dir: Path,
+    underlying: str | None = None,
+    at_ns: int | None = None,
+) -> list[int]:
+    """Return distinct option expiries (ns UTC), optionally filtered by underlying / snapshot."""
+    from crypcodile.store.catalog import Catalog
+
+    cat = Catalog(data_dir)
+    if "options_chain" not in cat._registered_channels:
+        return []
+
+    clauses: list[str] = []
+    if underlying:
+        clauses.append(f"UPPER(underlying) = '{underlying.upper()}'")
+    if at_ns is not None:
+        clauses.append(f"local_ts <= {int(at_ns)}")
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    try:
+        sql = (
+            f"SELECT DISTINCT expiry FROM options_chain{where} "
+            "ORDER BY expiry ASC LIMIT 50"
+        )
+        df = cat.query(sql)
+        return [int(x) for x in df["expiry"].to_list() if x is not None]
+    except Exception:
+        return []
+
+
+def _prompt_option_underlying_at_expiry(
+    data_dir: Path,
+    underlying: str | None,
+    at: int | None,
+    expiry_ns: int | None,
+) -> tuple[str | None, int | None, int | None]:
+    """Interactive prompts for underlying / snapshot / expiry used by vol-skew & risk-reversal."""
+    import datetime
+
+    if not underlying:
+        underlyings = get_available_option_underlyings(data_dir)
+        if underlyings:
+            typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+        underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
+
+    if at is None:
+        snapshots = get_available_option_snapshots(data_dir, underlying)
+        if not snapshots:
+            underlyings = get_available_option_underlyings(data_dir)
+            if underlyings:
+                typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+                snapshots = get_available_option_snapshots(data_dir, None)
+                if snapshots:
+                    typer.echo("Here are the latest available options snapshots across all assets:")
+            else:
+                typer.echo(
+                    "⚠️  No option data (options_chain channel) found in the database. "
+                    "Please collect options data first."
+                )
+
+        if snapshots:
+            typer.echo("\n--- Available Options Snapshots (latest first) ---")
+            for idx, ts in enumerate(snapshots, 1):
+                try:
+                    dt_str = datetime.datetime.fromtimestamp(
+                        ts // 1_000_000_000, tz=datetime.UTC
+                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                except Exception:
+                    dt_str = "Invalid timestamp"
+                typer.echo(f"  [{idx}] {ts} ({dt_str})")
+            choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
+                at = snapshots[int(choice) - 1]
+            else:
+                try:
+                    at = int(choice)
+                except ValueError:
+                    at = None
+        else:
+            at_str = typer.prompt(
+                "Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)"
+            ).strip()
+            try:
+                at = int(at_str)
+            except ValueError:
+                at = None
+
+    if expiry_ns is None:
+        expiries = get_available_option_expiries(data_dir, underlying, at)
+        if expiries:
+            typer.echo("\n--- Available Expiries ---")
+            for idx, exp in enumerate(expiries, 1):
+                try:
+                    dt_str = datetime.datetime.fromtimestamp(
+                        exp // 1_000_000_000, tz=datetime.UTC
+                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                except Exception:
+                    dt_str = "Invalid timestamp"
+                typer.echo(f"  [{idx}] {exp} ({dt_str})")
+            choice = typer.prompt("Select expiry by number or enter custom", default="1").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(expiries):
+                expiry_ns = expiries[int(choice) - 1]
+            else:
+                try:
+                    expiry_ns = int(choice)
+                except ValueError:
+                    expiry_ns = None
+        else:
+            exp_str = typer.prompt(
+                "Expiry (nanoseconds UTC, e.g. 1735689600000000000)"
+            ).strip()
+            try:
+                expiry_ns = int(exp_str)
+            except ValueError:
+                expiry_ns = None
+
+    return underlying, at, expiry_ns
+
+
+@app.command(name="vol-skew")
+def vol_skew_cmd(
+    underlying: Annotated[
+        str | None,
+        typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
+    ] = None,
+    expiry_ns: Annotated[
+        int | None,
+        typer.Option(
+            "--expiry-ns",
+            "--expiry",
+            help="Option expiry (nanoseconds UTC).",
+        ),
+    ] = None,
+    at: Annotated[
+        int | None,
+        typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
+    ] = None,
+    rate: Annotated[
+        float,
+        typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
+    ] = 0.0,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print per-strike IV and delta for a single expiry (vol skew)."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not underlying or at is None or expiry_ns is None:
+            typer.echo(
+                "Error: underlying, expiry-ns, and at snapshot instant are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        underlying, at, expiry_ns = _prompt_option_underlying_at_expiry(
+            data_dir, underlying, at, expiry_ns
+        )
+
+    if not underlying or at is None or expiry_ns is None:
+        typer.echo(
+            "Error: Underlying, expiry (expiry-ns), and snapshot instant (at) are required.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if len(df) == 0:
+        typer.echo("No options data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# risk-reversal
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="risk-reversal")
+def risk_reversal_cmd(
+    underlying: Annotated[
+        str | None,
+        typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
+    ] = None,
+    expiry_ns: Annotated[
+        int | None,
+        typer.Option(
+            "--expiry-ns",
+            "--expiry",
+            help="Option expiry (nanoseconds UTC).",
+        ),
+    ] = None,
+    at: Annotated[
+        int | None,
+        typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
+    ] = None,
+    rate: Annotated[
+        float,
+        typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
+    ] = 0.0,
+    target_delta: Annotated[
+        float,
+        typer.Option(
+            "--target-delta",
+            help="Target absolute delta for RR/BF (default 0.25).",
+        ),
+    ] = 0.25,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print risk-reversal and butterfly from the vol skew at a single expiry."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not underlying or at is None or expiry_ns is None:
+            typer.echo(
+                "Error: underlying, expiry-ns, and at snapshot instant are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        underlying, at, expiry_ns = _prompt_option_underlying_at_expiry(
+            data_dir, underlying, at, expiry_ns
+        )
+
+    if not underlying or at is None or expiry_ns is None:
+        typer.echo(
+            "Error: Underlying, expiry (expiry-ns), and snapshot instant (at) are required.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        skew_df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if len(skew_df) == 0:
+        typer.echo("No options data found.")
+        raise typer.Exit(code=0)
+
+    try:
+        rr, bf = client.risk_reversal_butterfly(skew_df, target_delta=target_delta)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"risk_reversal: {rr}")
+    typer.echo(f"butterfly: {bf}")
 
 
 # ---------------------------------------------------------------------------
