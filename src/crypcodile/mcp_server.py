@@ -702,9 +702,18 @@ def handle_get_lending_stress(
     No data lake or RPC required; all inputs are pure numbers.
 
     Returns the pure-function metrics plus the input parameters for context.
-    Health factors may be ``float('inf')`` when debt is zero.
+    Non-finite health factors (zero debt → ``float('inf')`` in pure analytics)
+    are returned as ``None`` so JSON-RPC tool results stay JSON-compliant.
     """
+    import math
+
     from crypcodile.analytics.lending_stress import lending_stress_test
+
+    def _json_safe_float(value: float) -> float | None:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
 
     result = lending_stress_test(
         collateral_usd=float(collateral_usd),
@@ -717,8 +726,8 @@ def handle_get_lending_stress(
         "debt_usd": float(debt_usd),
         "liquidation_threshold": float(liquidation_threshold),
         "haircut_pct": float(haircut_pct),
-        "current_health_factor": result["current_health_factor"],
-        "simulated_health_factor": result["simulated_health_factor"],
+        "current_health_factor": _json_safe_float(result["current_health_factor"]),
+        "simulated_health_factor": _json_safe_float(result["simulated_health_factor"]),
         "is_liquidatable": bool(result["is_liquidatable"]),
         "simulated_is_liquidatable": bool(result["simulated_is_liquidatable"]),
     }

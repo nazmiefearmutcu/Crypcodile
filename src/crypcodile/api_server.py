@@ -1430,29 +1430,52 @@ async def ready(response: Response) -> dict[str, Any]:
     return payload
 
 
-# Hardcoded short discovery lists for agents (free catalog / meta / analytics).
-# Not exhaustive — see OpenAPI or MCP ``tools/list`` for the full surface.
+# Hardcoded discovery lists for agents (free catalog / meta / analytics).
+# Paid/admin routes (market-data, simulate-payment, admin/payments) omitted.
+# See OpenAPI or MCP ``tools/list`` for query params and full schemas.
 _CAPABILITIES_REST: list[str] = [
+    # Meta / probes
     "GET /api/v1/health",
+    "GET /api/v1/status",
     "GET /api/v1/ready",
+    "GET /api/v1/capabilities",
     "GET /api/v1/version",
     "GET /api/v1/exchanges",
+    # Catalog / discovery
     "GET /api/v1/catalog/channels",
     "GET /api/v1/catalog/search",
     "GET /api/v1/catalog/inventory",
+    "GET /api/v1/catalog/scan",
     "GET /api/v1/data-coverage",
     "GET /api/v1/resolve-symbols",
+    # Lake analytics (read-only)
     "GET /api/v1/open-interest",
     "GET /api/v1/funding-apr",
     "GET /api/v1/basis",
+    "GET /api/v1/perp-basis",
+    "GET /api/v1/spot-future-basis",
     "GET /api/v1/indicators",
     "GET /api/v1/ofi",
+    "GET /api/v1/whale-alerts",
+    "GET /api/v1/slippage",
     "GET /api/v1/iv-surface",
+    "GET /api/v1/term-structure",
+    "GET /api/v1/vol-skew",
+    "GET /api/v1/risk-reversal",
+    "GET /api/v1/liquidity-depth",
+    "GET /api/v1/sequencer-latency",
+    # Pure risk / offline analytics (no lake)
+    "GET /api/v1/chaos-score",
+    "GET /api/v1/peg-deviation",
+    "GET /api/v1/lending-stress",
+    "GET /api/v1/funding-predict",
+    # Write-free POST analytics / SQL
     "POST /api/v1/query",
     "POST /api/v1/gas-vol",
     "POST /api/v1/mev-sandwich",
     "POST /api/v1/smart-money",
     "POST /api/v1/label-transfers",
+    "POST /api/v1/simulate-price-impact",
 ]
 
 _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
@@ -1464,11 +1487,22 @@ _CAPABILITIES_MCP_TOOLS_HINT: list[str] = [
     "get_funding_apr",
     "get_indicators",
     "get_iv_surface",
+    "get_term_structure",
+    "get_vol_skew",
+    "get_risk_reversal",
     "get_perp_basis",
     "get_spot_perp_basis",
+    "get_spot_future_basis",
     "get_open_interest",
     "calculate_ofi",
     "estimate_slippage",
+    "track_whale_alerts",
+    "get_liquidity_depth",
+    "get_sequencer_latency",
+    "get_funding_prediction",
+    "get_chaos_score",
+    "get_lending_stress",
+    "get_peg_deviation",
     "detect_mev_sandwiches",
     "smart_money_summary",
     "label_transfers",
@@ -2471,6 +2505,20 @@ async def peg_deviation(
         ) from e
 
 
+def _json_safe_float(value: float) -> float | None:
+    """Return a finite float, or ``None`` when *value* is NaN/±Inf.
+
+    Starlette/FastAPI ``JSONResponse`` rejects non-finite floats
+    (``ValueError: Out of range float values are not JSON compliant``).
+    Callers use this at HTTP/MCP boundaries so zero-debt health factors
+    (``float('inf')`` from pure analytics) serialize as JSON ``null``.
+    """
+    f = float(value)
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
 @app.get("/api/v1/lending-stress")
 async def lending_stress(
     collateral_usd: float = 0.0,
@@ -2486,7 +2534,8 @@ async def lending_stress(
 
     Wraps :func:`crypcodile.analytics.lending_stress.lending_stress_test`.
     Returns the pure-function metrics plus the input parameters for context.
-    Health factors may be ``float('inf')`` when debt is zero.
+    Health factors that are non-finite in pure analytics (zero debt →
+    ``float('inf')``) are returned as JSON ``null`` so responses encode.
     """
     from crypcodile.analytics.lending_stress import lending_stress_test
 
@@ -2511,8 +2560,8 @@ async def lending_stress(
         "debt_usd": float(debt_usd),
         "liquidation_threshold": float(liquidation_threshold),
         "haircut_pct": float(haircut_pct),
-        "current_health_factor": result["current_health_factor"],
-        "simulated_health_factor": result["simulated_health_factor"],
+        "current_health_factor": _json_safe_float(result["current_health_factor"]),
+        "simulated_health_factor": _json_safe_float(result["simulated_health_factor"]),
         "is_liquidatable": bool(result["is_liquidatable"]),
         "simulated_is_liquidatable": bool(result["simulated_is_liquidatable"]),
     }

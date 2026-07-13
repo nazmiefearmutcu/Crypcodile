@@ -3809,8 +3809,21 @@ def test_lending_stress_liquidation() -> None:
     assert result["simulated_is_liquidatable"] is True
 
 
-def test_lending_stress_zero_debt_inf() -> None:
+def test_lending_stress_zero_debt_json_safe_null() -> None:
+    """Zero debt yields inf in pure analytics; REST returns null (JSON-safe)."""
+    from starlette.responses import JSONResponse
+
+    from crypcodile.analytics.lending_stress import lending_stress_test
     from crypcodile.api_server import lending_stress
+
+    pure = lending_stress_test(
+        collateral_usd=5_000.0,
+        debt_usd=0.0,
+        liquidation_threshold=0.8,
+        haircut_pct=0.20,
+    )
+    assert pure["current_health_factor"] == float("inf")
+    assert pure["simulated_health_factor"] == float("inf")
 
     result = asyncio.run(
         lending_stress(
@@ -3820,10 +3833,16 @@ def test_lending_stress_zero_debt_inf() -> None:
             haircut_pct=0.20,
         )
     )
-    assert result["current_health_factor"] == float("inf")
-    assert result["simulated_health_factor"] == float("inf")
+    # HTTP boundary must not return non-finite floats (Starlette JSONResponse
+    # raises ValueError: Out of range float values are not JSON compliant).
+    assert result["current_health_factor"] is None
+    assert result["simulated_health_factor"] is None
     assert result["is_liquidatable"] is False
     assert result["simulated_is_liquidatable"] is False
+    # Prove the payload is actually JSON-encodable.
+    body = JSONResponse(result).body
+    assert b"null" in body
+    assert b"Infinity" not in body
 
 
 def test_lending_stress_matches_analytics() -> None:
@@ -3880,8 +3899,9 @@ def test_lending_stress_defaults() -> None:
     assert result["debt_usd"] == 0.0
     assert result["liquidation_threshold"] == 0.0
     assert result["haircut_pct"] == 0.0
-    assert result["current_health_factor"] == float("inf")
-    assert result["simulated_health_factor"] == float("inf")
+    # Defaults imply zero debt → JSON-safe null health factors
+    assert result["current_health_factor"] is None
+    assert result["simulated_health_factor"] is None
     assert result["is_liquidatable"] is False
     assert result["simulated_is_liquidatable"] is False
 
@@ -3893,6 +3913,18 @@ def test_lending_stress_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/lending-stress", ("GET",)) in paths
+
+
+def test_json_safe_float_maps_non_finite_to_none() -> None:
+    """Helper used by REST lending-stress (and peers) for JSON encoding."""
+    from crypcodile.api_server import _json_safe_float
+
+    assert _json_safe_float(1.5) == 1.5
+    assert _json_safe_float(0.0) == 0.0
+    assert _json_safe_float(-2.25) == -2.25
+    assert _json_safe_float(float("inf")) is None
+    assert _json_safe_float(float("-inf")) is None
+    assert _json_safe_float(float("nan")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -5129,27 +5161,47 @@ def test_capabilities_shape_and_contents() -> None:
     assert len(result["rest"]) >= 10
     assert len(result["mcp_tools_hint"]) >= 8
 
-    # Core free meta / catalog routes agents should discover first
+    # Core free meta / catalog / analytics routes agents should discover
     for route in (
         "GET /api/v1/health",
         "GET /api/v1/ready",
+        "GET /api/v1/status",
+        "GET /api/v1/capabilities",
         "GET /api/v1/catalog/channels",
+        "GET /api/v1/catalog/inventory",
+        "GET /api/v1/catalog/scan",
+        "GET /api/v1/open-interest",
+        "GET /api/v1/perp-basis",
+        "GET /api/v1/lending-stress",
         "POST /api/v1/query",
+        "POST /api/v1/simulate-price-impact",
     ):
         assert route in result["rest"]
+
+    # Paid/admin routes must not appear in free discovery
+    for route in (
+        "GET /api/v1/market-data",
+        "POST /api/v1/simulate-payment",
+        "GET /api/v1/admin/payments",
+    ):
+        assert route not in result["rest"]
 
     for tool in (
         "list_data_channels",
         "search_symbols",
         "get_indicators",
+        "get_spot_future_basis",
+        "get_lending_stress",
         "label_transfers",
     ):
         assert tool in result["mcp_tools_hint"]
 
-    # All REST entries are METHOD + path
+    # All REST entries are METHOD + path; no duplicates
     for entry in result["rest"]:
         assert entry.startswith("GET ") or entry.startswith("POST ")
         assert "/api/v1/" in entry
+    assert len(result["rest"]) == len(set(result["rest"]))
+    assert len(result["rest"]) >= 30
 
 
 def test_capabilities_returns_defensive_copies() -> None:

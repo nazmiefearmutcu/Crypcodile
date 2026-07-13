@@ -636,17 +636,29 @@ def test_handle_get_lending_stress_liquidation() -> None:
     assert result["simulated_is_liquidatable"] is True
 
 
-def test_handle_get_lending_stress_zero_debt_inf() -> None:
+def test_handle_get_lending_stress_zero_debt_json_safe_null() -> None:
+    """Zero debt → pure analytics inf; MCP tool returns null for JSON-RPC safety."""
+    import json
+
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    pure = lending_stress_test(5_000.0, 0.0, 0.8, 0.20)
+    assert pure["current_health_factor"] == float("inf")
+
     result = handle_get_lending_stress(
         collateral_usd=5_000.0,
         debt_usd=0.0,
         liquidation_threshold=0.8,
         haircut_pct=0.20,
     )
-    assert result["current_health_factor"] == float("inf")
-    assert result["simulated_health_factor"] == float("inf")
+    assert result["current_health_factor"] is None
+    assert result["simulated_health_factor"] is None
     assert result["is_liquidatable"] is False
     assert result["simulated_is_liquidatable"] is False
+    # MCP tools/list results are JSON-serialized over stdio
+    encoded = json.dumps(result)
+    assert "null" in encoded
+    assert "Infinity" not in encoded
 
 
 def test_handle_get_lending_stress_matches_analytics() -> None:
