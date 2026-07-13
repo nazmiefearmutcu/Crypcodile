@@ -33,6 +33,9 @@ list_channels()
 list_dates(channel)
     Sorted distinct date partition values for a channel.
 
+list_exchanges_on_disk()
+    Sorted distinct exchange partition values present on disk (lake hive).
+
 inventory(channel=None, exchange=None)
     Per-symbol coverage summary DataFrame.
 
@@ -163,6 +166,17 @@ class CrypcodileClient:
         channel or empty lake → ``[]``.
         """
         return self._catalog.list_dates(channel)
+
+    def list_exchanges_on_disk(self) -> list[str]:
+        """Return sorted distinct exchange partitions present in the lake.
+
+        Thin wrapper over :meth:`Catalog.list_exchanges_on_disk`.  Empty
+        lake → ``[]``.
+
+        Distinct from :func:`crypcodile.exchanges.factory.list_exchanges`
+        (registered connectors vs on-disk hive partitions).
+        """
+        return self._catalog.list_exchanges_on_disk()
 
     def inventory(
         self,

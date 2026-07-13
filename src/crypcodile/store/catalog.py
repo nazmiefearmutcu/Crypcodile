@@ -304,6 +304,50 @@ class Catalog:
 
         return sorted(dates)
 
+    def list_exchanges_on_disk(self) -> list[str]:
+        """Return sorted distinct ``exchange=`` partition values on disk.
+
+        Walks the hive layout ``exchange=*/`` at the data lake root on the
+        filesystem (no DuckDB scan).  Useful discovery before channel/date
+        scoping or ``inventory(exchange=...)`` filters.
+
+        Distinct from :func:`crypcodile.exchanges.factory.list_exchanges`,
+        which returns **registered connector** names (code registry), not
+        partitions present in the lake.
+
+        Empty lake or missing data directory yields ``[]``. Exchange names
+        are the raw partition suffixes (e.g. ``deribit``, ``binance``),
+        deduplicated and sorted ascending. Non-directory entries and names
+        that are not ``exchange=...`` are ignored.
+        """
+        if not self._data_dir.exists() or not self._data_dir.is_dir():
+            return []
+
+        try:
+            data_root = self._data_dir.resolve()
+        except OSError:
+            return []
+
+        exchanges: set[str] = set()
+        try:
+            children = list(self._data_dir.iterdir())
+        except OSError:
+            return []
+
+        for exchange_dir in children:
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                exchange_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            exchange_str = exchange_dir.name[len("exchange=") :]
+            if exchange_str and exchange_str not in (".", ".."):
+                exchanges.add(exchange_str)
+
+        return sorted(exchanges)
+
     def inventory(
         self,
         channel: str | None = None,

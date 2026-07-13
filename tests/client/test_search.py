@@ -108,6 +108,21 @@ async def test_list_channels_with_data(tmp_path: pathlib.Path) -> None:
     assert client.list_channels() == ["book_snapshot", "trade"]
 
 
+def test_list_exchanges_on_disk_empty(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.list_exchanges_on_disk() == []
+
+
+async def test_list_exchanges_on_disk_with_data(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert client.list_exchanges_on_disk() == ["deribit"]
+
+
 def test_inventory_empty_schema(tmp_path: pathlib.Path) -> None:
     from crypcodile.client.client import CrypcodileClient
 

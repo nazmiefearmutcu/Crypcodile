@@ -152,6 +152,68 @@ async def test_list_dates_multiday_and_multi_exchange(tmp_path: pathlib.Path) ->
 
 
 # ---------------------------------------------------------------------------
+# list_exchanges_on_disk
+# ---------------------------------------------------------------------------
+
+
+def test_list_exchanges_on_disk_empty_lake(tmp_path: pathlib.Path) -> None:
+    """Empty lake → []."""
+    cat = Catalog(tmp_path)
+    assert cat.list_exchanges_on_disk() == []
+
+
+def test_list_exchanges_on_disk_missing_data_dir(tmp_path: pathlib.Path) -> None:
+    """Non-existent data_dir → []."""
+    cat = Catalog(tmp_path / "does_not_exist")
+    assert cat.list_exchanges_on_disk() == []
+
+
+def test_list_exchanges_on_disk_ignores_non_exchange_entries(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only exchange=* directories count; files and other dirs are ignored."""
+    (tmp_path / "not_a_partition").mkdir()
+    (tmp_path / "exchange=").mkdir()  # empty suffix → ignored
+    (tmp_path / "readme.txt").write_text("hi", encoding="utf-8")
+    (tmp_path / "exchange=deribit").mkdir()
+    cat = Catalog(tmp_path)
+    assert cat.list_exchanges_on_disk() == ["deribit"]
+
+
+async def test_list_exchanges_on_disk_with_fixtures(tmp_path: pathlib.Path) -> None:
+    """Single-exchange fixtures → one partition name."""
+    await _write_fixtures(tmp_path)
+    cat = Catalog(tmp_path)
+    assert cat.list_exchanges_on_disk() == ["deribit"]
+
+
+async def test_list_exchanges_on_disk_multi_exchange(tmp_path: pathlib.Path) -> None:
+    """Distinct exchanges are sorted and deduped."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    await sink.put(_trade(1.0, exchange="deribit"))
+    await sink.put(
+        _trade(
+            2.0,
+            exchange="binance",
+            symbol="binance-spot:BTC-USDT",
+            symbol_raw="BTCUSDT",
+        )
+    )
+    await sink.put(
+        _trade(
+            3.0,
+            exchange="binance",
+            symbol="binance-spot:ETH-USDT",
+            symbol_raw="ETHUSDT",
+        )
+    )
+    await sink.flush()
+
+    cat = Catalog(tmp_path)
+    assert cat.list_exchanges_on_disk() == ["binance", "deribit"]
+
+
+# ---------------------------------------------------------------------------
 # inventory
 # ---------------------------------------------------------------------------
 

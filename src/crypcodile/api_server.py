@@ -1446,6 +1446,7 @@ _CAPABILITIES_REST: list[str] = [
     "GET /api/v1/exchanges",
     # Catalog / discovery
     "GET /api/v1/catalog/channels",
+    "GET /api/v1/catalog/exchanges",
     "GET /api/v1/catalog/search",
     "GET /api/v1/catalog/inventory",
     "GET /api/v1/catalog/dates",
@@ -1560,6 +1561,20 @@ async def catalog_list_channels() -> list[str]:
     """List data channels present in the local lake (read-only, no payment)."""
     client = _get_lake_client()
     return client.list_channels()
+
+
+@app.get("/api/v1/catalog/exchanges")
+async def catalog_list_exchanges() -> list[str]:
+    """List distinct exchange partitions present in the local lake (read-only).
+
+    Walks hive ``exchange=`` directories on disk via
+    :meth:`Catalog.list_exchanges_on_disk`. Empty lake yields ``[]``.
+
+    Distinct from ``GET /api/v1/exchanges``, which returns **registered
+    connector** names from the factory registry (no lake).
+    """
+    client = _get_lake_client()
+    return client.list_exchanges_on_disk()
 
 
 @app.get("/api/v1/catalog/dates")

@@ -262,6 +262,25 @@ def test_catalog_list_dates_strips_channel() -> None:
     mock_client.list_dates.assert_called_once_with("book_snapshot")
 
 
+def test_catalog_list_exchanges_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_list_exchanges
+
+    result = asyncio.run(catalog_list_exchanges())
+    assert result == []
+
+
+def test_catalog_list_exchanges_returns_exchanges() -> None:
+    mock_client = MagicMock()
+    mock_client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_list_exchanges
+
+        result = asyncio.run(catalog_list_exchanges())
+    assert result == ["binance", "deribit"]
+    mock_client.list_exchanges_on_disk.assert_called_once_with()
+
+
 def test_catalog_search_symbols_empty() -> None:
     mock_client = MagicMock()
     mock_client.search_symbols.return_value = pl.DataFrame(
@@ -5683,6 +5702,7 @@ def test_capabilities_shape_and_contents() -> None:
         "GET /api/v1/catalog/channels",
         "GET /api/v1/catalog/inventory",
         "GET /api/v1/catalog/dates",
+        "GET /api/v1/catalog/exchanges",
         "GET /api/v1/catalog/scan",
         "GET /api/v1/open-interest",
         "GET /api/v1/perp-basis",
