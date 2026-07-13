@@ -31,6 +31,7 @@ from crypcodile.mcp_server import (
     handle_get_spot_perp_basis,
     handle_get_term_structure,
     handle_get_vol_skew,
+    handle_label_transfers,
     handle_smart_money_summary,
     handle_track_whale_alerts,
 )
@@ -55,6 +56,7 @@ _ANALYTICS_TOOLS = {
     "get_peg_deviation",
     "detect_mev_sandwiches",
     "smart_money_summary",
+    "label_transfers",
 }
 
 _SMART_ADDR = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B"
@@ -746,6 +748,117 @@ def test_handle_smart_money_summary_not_list_raises() -> None:
         )
 
 
+def test_handle_label_transfers_basic() -> None:
+    rows = handle_label_transfers(
+        _SMART_TRANSFERS,
+        {_SMART_ADDR: "vitalik"},
+    )
+    assert isinstance(rows, list)
+    assert len(rows) == 2
+    assert rows[0]["from_label"] == "vitalik"
+    assert rows[0]["to_label"] == ""
+    assert rows[0]["is_known"] is True
+    assert rows[1]["from_label"] == ""
+    assert rows[1]["to_label"] == "vitalik"
+    assert rows[1]["is_known"] is True
+
+
+def test_handle_label_transfers_known_only() -> None:
+    rows = handle_label_transfers(
+        [
+            {"from": _SMART_ADDR, "to": _OTHER_ADDR, "usd_value": 1},
+            {"from": _OTHER_ADDR, "to": _OTHER_ADDR, "usd_value": 2},
+        ],
+        {_SMART_ADDR: "vitalik"},
+        known_only=True,
+    )
+    assert len(rows) == 1
+    assert rows[0]["from_label"] == "vitalik"
+    assert rows[0]["is_known"] is True
+
+
+def test_handle_label_transfers_min_usd() -> None:
+    rows = handle_label_transfers(
+        _SMART_TRANSFERS,
+        {_SMART_ADDR: "vitalik"},
+        min_usd=50.0,
+    )
+    assert len(rows) == 1
+    assert rows[0]["usd_value"] == 100.0
+    assert rows[0]["from_label"] == "vitalik"
+
+
+def test_handle_label_transfers_list_watchlist() -> None:
+    rows = handle_label_transfers(_SMART_TRANSFERS, [_SMART_ADDR])
+    # List watchlist uses the address string itself as the label.
+    assert rows[0]["from_label"] == _SMART_ADDR
+    assert rows[0]["is_known"] is True
+
+
+def test_handle_label_transfers_nested_watchlist() -> None:
+    rows = handle_label_transfers(
+        _SMART_TRANSFERS,
+        {"watchlist": {_SMART_ADDR: "mev-bot"}},
+    )
+    assert rows[0]["from_label"] == "mev-bot"
+
+
+def test_handle_label_transfers_empty_transfers() -> None:
+    assert handle_label_transfers([], {_SMART_ADDR: "x"}) == []
+
+
+def test_handle_label_transfers_empty_watchlist_still_labels() -> None:
+    rows = handle_label_transfers(_SMART_TRANSFERS, {})
+    assert len(rows) == 2
+    assert all(r["from_label"] == "" for r in rows)
+    assert all(r["to_label"] == "" for r in rows)
+    assert all(r["is_known"] is False for r in rows)
+
+
+def test_handle_label_transfers_aliases() -> None:
+    transfers = [
+        {
+            "from_address": _SMART_ADDR,
+            "to_address": _OTHER_ADDR,
+            "amount": 10,
+        }
+    ]
+    rows = handle_label_transfers(transfers, {_SMART_ADDR: "smart"})
+    assert len(rows) == 1
+    assert rows[0]["from_label"] == "smart"
+    assert rows[0]["is_known"] is True
+
+
+def test_handle_label_transfers_matches_analytics() -> None:
+    from crypcodile.analytics.whale_transfers import label_transfer_addresses
+
+    watch = {_SMART_ADDR.lower(): "vitalik"}
+    expected = label_transfer_addresses(_SMART_TRANSFERS, watch)
+    result = handle_label_transfers(_SMART_TRANSFERS, {_SMART_ADDR: "vitalik"})
+    assert result == expected
+
+
+def test_handle_label_transfers_not_list_raises() -> None:
+    with pytest.raises(TypeError, match="list of dicts"):
+        handle_label_transfers(
+            {"from": _SMART_ADDR},  # type: ignore[arg-type]
+            {_SMART_ADDR: "x"},
+        )
+
+
+def test_handle_label_transfers_bad_row_raises() -> None:
+    with pytest.raises(TypeError, match="transfers\\[0\\] must be a dict"):
+        handle_label_transfers(
+            ["not-a-dict"],  # type: ignore[list-item]
+            {_SMART_ADDR: "x"},
+        )
+
+
+def test_handle_label_transfers_bad_watchlist_raises() -> None:
+    with pytest.raises(TypeError, match="watchlist must be a dict or list"):
+        handle_label_transfers(_SMART_TRANSFERS, "0xabc")  # type: ignore[arg-type]
+
+
 def test_handle_smart_money_summary_bad_row_raises() -> None:
     with pytest.raises(TypeError, match="transfers\\[0\\]"):
         handle_smart_money_summary(
@@ -900,3 +1013,13 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
     assert sm_props["transfers"]["type"] == "array"
     assert sm_props["transfers"]["items"]["type"] == "object"
     assert "watchlist" in sm_props
+    assert set(by_name["label_transfers"]["inputSchema"]["required"]) == {
+        "transfers",
+        "watchlist",
+    }
+    lt_props = by_name["label_transfers"]["inputSchema"]["properties"]
+    assert lt_props["transfers"]["type"] == "array"
+    assert lt_props["transfers"]["items"]["type"] == "object"
+    assert "watchlist" in lt_props
+    assert lt_props["known_only"]["type"] == "boolean"
+    assert lt_props["min_usd"]["type"] == "number"

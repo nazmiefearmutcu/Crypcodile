@@ -687,6 +687,54 @@ def handle_get_lending_stress(
     }
 
 
+def handle_label_transfers(
+    transfers: list[dict[str, Any]],
+    watchlist: dict[str, Any] | list[Any],
+    *,
+    known_only: bool = False,
+    min_usd: float | None = None,
+) -> list[dict[str, Any]]:
+    """Annotate offline transfer rows with watchlist address labels.
+
+    Wraps :func:`crypcodile.analytics.whale_transfers.label_transfer_addresses`
+    (and optional :func:`~crypcodile.analytics.whale_transfers.filter_transfers_by_usd`).
+    Pure offline: no data lake or RPC.
+
+    ``transfers`` is a list of transfer dicts (``from``/``to`` with common
+    aliases). ``watchlist`` is an addr->label map, address list, or nested
+    shapes accepted by
+    :func:`crypcodile.analytics.smart_money.normalize_watchlist`.
+
+    Returns the same rows with ``from_label``, ``to_label``, and ``is_known``.
+    Empty ``transfers`` → ``[]``. Empty watchlist still returns rows (unknown
+    labels). When ``known_only`` is true, only rows with a labeled side are kept.
+    """
+    from crypcodile.analytics.smart_money import normalize_watchlist
+    from crypcodile.analytics.whale_transfers import (
+        filter_transfers_by_usd,
+        label_transfer_addresses,
+    )
+
+    if not isinstance(transfers, list):
+        raise TypeError("transfers must be a list of dicts")
+    for i, row in enumerate(transfers):
+        if not isinstance(row, dict):
+            raise TypeError(
+                f"transfers[{i}] must be a dict, got {type(row).__name__}"
+            )
+    if not isinstance(watchlist, (dict, list)):
+        raise TypeError("watchlist must be a dict or list of addresses")
+
+    rows: list[dict[str, Any]] = list(transfers)
+    if min_usd is not None:
+        rows = filter_transfers_by_usd(rows, float(min_usd))
+    labels = normalize_watchlist(watchlist)
+    labeled = label_transfer_addresses(rows, labels)
+    if known_only:
+        labeled = [r for r in labeled if r.get("is_known")]
+    return labeled
+
+
 def handle_get_peg_deviation(
     price: float,
     threshold: float = 0.01,
@@ -1501,6 +1549,68 @@ TOOLS = [
             "required": ["transfers", "watchlist"],
         },
     },
+    {
+        "name": "label_transfers",
+        "description": (
+            "Annotate offline transfer rows with watchlist address labels "
+            "(pure; no data lake / RPC). Accepts transfer dicts (from/to with "
+            "common aliases) and a watchlist (addr->label map, address list, "
+            "or nested watchlist/labels/addresses shapes). Returns the same "
+            "rows with from_label, to_label, and is_known. Optional min_usd "
+            "filters by USD notional; known_only keeps only labeled sides."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "transfers": {
+                    "type": "array",
+                    "description": (
+                        "List of transfer objects. Fields: from/to (or "
+                        "from_address/to_address/sender/recipient), optional "
+                        "usd_value (or amount/value) when using min_usd."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": {
+                                "type": "string",
+                                "description": "Sender address.",
+                            },
+                            "to": {
+                                "type": "string",
+                                "description": "Recipient address.",
+                            },
+                            "usd_value": {
+                                "type": "number",
+                                "description": "Transfer notional in USD.",
+                            },
+                        },
+                    },
+                },
+                "watchlist": {
+                    "description": (
+                        "Address labels. Object map of address->label, list of "
+                        "addresses, or nested shapes ({watchlist: {...}}, "
+                        "{labels: {...}}, {addresses: [...]})."
+                    ),
+                },
+                "known_only": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, only return rows where from or to is on the "
+                        "watchlist. Default false."
+                    ),
+                },
+                "min_usd": {
+                    "type": "number",
+                    "description": (
+                        "Optional USD threshold filter applied before labeling."
+                    ),
+                },
+            },
+            "required": ["transfers", "watchlist"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1870,6 +1980,31 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"smart_money_summary failed: {e}"
+                            }
+                    elif tool_name == "label_transfers":
+                        try:
+                            raw_transfers = arguments.get("transfers", [])
+                            if not isinstance(raw_transfers, (list, tuple)):
+                                raise TypeError(
+                                    "transfers must be an array of objects"
+                                )
+                            raw_watchlist = arguments.get("watchlist", {})
+                            known_only = bool(arguments.get("known_only", False))
+                            min_usd_raw = arguments.get("min_usd")
+                            min_usd = (
+                                None
+                                if min_usd_raw is None
+                                else float(min_usd_raw)
+                            )
+                            tool_result = handle_label_transfers(
+                                list(raw_transfers),
+                                raw_watchlist,
+                                known_only=known_only,
+                                min_usd=min_usd,
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"label_transfers failed: {e}"
                             }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
