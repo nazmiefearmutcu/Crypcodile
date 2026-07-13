@@ -10,10 +10,13 @@ from unittest.mock import MagicMock
 
 import polars as pl
 
+import pytest
+
 from crypcodile.mcp_server import (
     TOOLS,
     handle_calculate_ofi,
     handle_estimate_slippage,
+    handle_get_funding_prediction,
     handle_get_indicators,
     handle_get_iv_surface,
     handle_get_liquidity_depth,
@@ -41,6 +44,7 @@ _ANALYTICS_TOOLS = {
     "get_liquidity_depth",
     "get_sequencer_latency",
     "get_open_interest",
+    "get_funding_prediction",
 }
 
 
@@ -385,6 +389,37 @@ def test_handle_get_open_interest_empty() -> None:
     assert handle_get_open_interest(client, "BTC", 0, 1) == []
 
 
+def test_handle_get_funding_prediction_returns_dict() -> None:
+    result = handle_get_funding_prediction([0.01, 0.02, 0.03], window_size=3)
+    assert isinstance(result, dict)
+    assert "predicted_funding_rate" in result
+    assert isinstance(result["predicted_funding_rate"], float)
+    assert result["method"] in ("rolling_mean", "xgboost")
+    assert result["n_history"] == 3
+    assert result["window_size"] == 3
+    assert "xgboost_available" in result
+    if result["method"] == "rolling_mean":
+        assert abs(result["predicted_funding_rate"] - 0.02) < 1e-9
+
+
+def test_handle_get_funding_prediction_default_window() -> None:
+    result = handle_get_funding_prediction([0.01, 0.02, 0.03, 0.04, 0.05])
+    assert result["window_size"] == 5
+    assert result["n_history"] == 5
+    if result["method"] == "rolling_mean":
+        assert abs(result["predicted_funding_rate"] - 0.03) < 1e-9
+
+
+def test_handle_get_funding_prediction_empty_raises() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        handle_get_funding_prediction([])
+
+
+def test_handle_get_funding_prediction_invalid_window_raises() -> None:
+    with pytest.raises(ValueError, match="window_size"):
+        handle_get_funding_prediction([0.01], window_size=0)
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -448,3 +483,14 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
         "end",
     }
     assert "symbols" in by_name["get_open_interest"]["inputSchema"]["properties"]
+    assert set(by_name["get_funding_prediction"]["inputSchema"]["required"]) == {
+        "rates",
+    }
+    rates_schema = by_name["get_funding_prediction"]["inputSchema"]["properties"][
+        "rates"
+    ]
+    assert rates_schema["type"] == "array"
+    assert rates_schema["items"]["type"] == "number"
+    assert "window_size" in by_name["get_funding_prediction"]["inputSchema"][
+        "properties"
+    ]

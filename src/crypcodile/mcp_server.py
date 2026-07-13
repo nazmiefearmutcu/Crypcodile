@@ -549,6 +549,20 @@ def handle_get_open_interest(
     return df.to_dicts()
 
 
+def handle_get_funding_prediction(
+    rates: list[float],
+    window_size: int = 5,
+) -> dict[str, Any]:
+    """Predict next-period funding rate from historical rates (pure offline).
+
+    Wraps :func:`crypcodile.analytics.funding_prediction.predict_next_funding`.
+    Accepts a sequence of funding-rate floats; optional rolling ``window_size``.
+    """
+    from crypcodile.analytics.funding_prediction import predict_next_funding
+
+    return predict_next_funding(rates, window_size=window_size)
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -1080,6 +1094,37 @@ TOOLS = [
             "required": ["start", "end"],
         },
     },
+    {
+        "name": "get_funding_prediction",
+        "description": (
+            "Predict the next-period funding rate from a sequence of historical "
+            "funding rates (pure offline; no data lake). Uses XGBoost when "
+            "available and trainable, otherwise a rolling-mean heuristic. "
+            "Returns predicted_funding_rate, method, window_size, n_history, "
+            "xgboost_available."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "rates": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": (
+                        "Historical funding rates as an array of numbers "
+                        "(e.g. [0.0001, 0.0002, 0.00015])."
+                    ),
+                },
+                "window_size": {
+                    "type": "integer",
+                    "description": (
+                        "Rolling window size for the heuristic fallback "
+                        "(default 5; must be >= 1)."
+                    ),
+                },
+            },
+            "required": ["rates"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1365,6 +1410,23 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"get_open_interest failed: {e}"
+                            }
+                    elif tool_name == "get_funding_prediction":
+                        try:
+                            raw_rates = arguments.get("rates", [])
+                            if not isinstance(raw_rates, (list, tuple)):
+                                raise TypeError(
+                                    "rates must be an array of numbers"
+                                )
+                            rate_list = [float(r) for r in raw_rates]
+                            window = int(arguments.get("window_size", 5))
+                            tool_result = handle_get_funding_prediction(
+                                rate_list,
+                                window_size=window,
+                            )
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"get_funding_prediction failed: {e}"
                             }
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
