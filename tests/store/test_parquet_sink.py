@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 
 import polars as pl
+import pytest
 
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import BookSnapshot, Trade
@@ -202,3 +203,109 @@ async def test_parquet_sink_last_flush_updated_after_row_count_flush(
     assert sink._last_flush <= t_upper + 0.1, (
         "_last_flush is set to an implausibly future value"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: buffer safety — only drop rows after durable write (Wave 3)
+# ---------------------------------------------------------------------------
+
+
+async def test_parquet_sink_write_failure_does_not_lose_rows(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """If Parquet write fails, buffered rows must still be present for retry.
+
+    Before the fix, ``_flush_channel`` popped the buffer *before* writing;
+    a failed write permanently discarded the data.  After the fix, rows are
+    re-buffered and the exception is re-raised.
+    """
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    await sink.put(_trade(1.0))
+    await sink.put(_trade(2.0))
+    assert len(sink._buffers["trade"]) == 2
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("simulated durable write failure")
+
+    monkeypatch.setattr(sink, "_write_parquet_sync", _boom)
+
+    with pytest.raises(OSError, match="simulated durable write failure"):
+        await sink.flush()
+
+    # Rows must still be buffered — no silent data loss
+    assert "trade" in sink._buffers
+    assert len(sink._buffers["trade"]) == 2
+    prices = {row["price"] for row in sink._buffers["trade"]}
+    assert prices == {1.0, 2.0}
+
+    # No parquet files should have been produced
+    assert _find_parquets(tmp_path) == []
+
+    # After the write path is restored, a subsequent flush must succeed and
+    # persist the previously failed rows.
+    monkeypatch.undo()
+    await sink.flush()
+    assert sink._buffers.get("trade", []) == []
+    trade_files = [p for p in _find_parquets(tmp_path) if "channel=trade" in str(p)]
+    assert trade_files, "retry flush should write parquet after write path restored"
+    df = pl.read_parquet(trade_files)
+    assert len(df) == 2
+    assert set(df["price"].to_list()) == {1.0, 2.0}
+
+
+async def test_parquet_sink_successful_flush_clears_buffer(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Successful flush still drops rows from the buffer and writes files."""
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    await sink.put(_trade(10.0))
+    await sink.put(_trade(20.0))
+    assert len(sink._buffers["trade"]) == 2
+
+    await sink.flush()
+
+    assert sink._buffers.get("trade", []) == []
+    trade_files = [p for p in _find_parquets(tmp_path) if "channel=trade" in str(p)]
+    assert len(trade_files) >= 1
+    df = pl.read_parquet(trade_files)
+    assert len(df) == 2
+    assert set(df["price"].to_list()) == {10.0, 20.0}
+
+
+async def test_parquet_sink_write_failure_preserves_concurrent_puts(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """Rows added via put() during a failed flush must not be lost either.
+
+    Concurrent puts append while the flush snapshot is detached; on failure
+    the snapshot is prepended in front of any pending rows.
+    """
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    await sink.put(_trade(1.0))
+
+    original_write = sink._write_parquet_sync
+
+    def _fail_then_note(*args, **kwargs):
+        # Simulate a concurrent put that lands while write is in progress.
+        # Direct buffer append mirrors put()'s post-to_row path for this channel.
+        from crypcodile.store.rows import to_row
+
+        sink._buffers["trade"].append(to_row(_trade(99.0)))
+        raise OSError("write failed mid-flush")
+
+    monkeypatch.setattr(sink, "_write_parquet_sync", _fail_then_note)
+
+    with pytest.raises(OSError, match="write failed mid-flush"):
+        await sink.flush()
+
+    buf = sink._buffers["trade"]
+    prices = [row["price"] for row in buf]
+    # Original snapshot first, then concurrent put
+    assert prices == [1.0, 99.0]
+    # original_write kept only to document intent / silence unused lint
+    assert original_write is not None

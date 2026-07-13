@@ -180,10 +180,12 @@ def _coerce_levels(
     """Convert list-of-tuples book levels to list-of-dicts in-place.
 
     Polars ``pl.List(pl.Struct(...))`` requires dicts, not tuples.
+    Idempotent: already-coerced dict levels are left unchanged so a retry
+    after a failed write (which may have partially coerced rows) is safe.
     """
     for row in rows:
         levels = row.get(field)
-        if levels is not None:
+        if levels is not None and levels and not isinstance(levels[0], dict):
             row[field] = [{"price": px, "amount": amt} for px, amt in levels]
 
 
@@ -250,27 +252,45 @@ class ParquetSink(Sink):
     # ------------------------------------------------------------------
 
     async def _flush_channel(self, channel: str) -> None:
-        """Write a channel's buffer to one or more Parquet files and clear it."""
+        """Write a channel's buffer to one or more Parquet files.
+
+        Rows are detached for the write attempt but only dropped after every
+        partition write succeeds.  On failure the snapshot is re-buffered
+        (prepended ahead of any rows concurrent ``put()`` may have added
+        while the write was in flight) and the exception is re-raised so
+        callers see the failure without silent data loss.
+        """
+        # Detach current buffer so concurrent put() appends to a fresh list
+        # via defaultdict, while we own the snapshot for this flush.
         rows = self._buffers.pop(channel, [])
         if not rows:
             return
 
-        # Group rows by (exchange, date, bucket) — each group → one file
-        groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            key = (row["exchange"], row["date"], row["bucket"])
-            groups[key].append(row)
-
-        for (exchange, date, bucket), group_rows in groups.items():
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                self._write_parquet_sync,
-                channel,
-                exchange,
-                date,
-                bucket,
-                group_rows,
+        try:
+            # Group rows by (exchange, date, bucket) — each group → one file
+            groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = (
+                defaultdict(list)
             )
+            for row in rows:
+                key = (row["exchange"], row["date"], row["bucket"])
+                groups[key].append(row)
+
+            for (exchange, date, bucket), group_rows in groups.items():
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self._write_parquet_sync,
+                    channel,
+                    exchange,
+                    date,
+                    bucket,
+                    group_rows,
+                )
+        except Exception:
+            # Durable write failed: restore snapshot without losing any rows
+            # that arrived via put() while the flush was in progress.
+            pending = self._buffers.get(channel, [])
+            self._buffers[channel] = rows + pending
+            raise
 
     def _write_parquet_sync(
         self,
