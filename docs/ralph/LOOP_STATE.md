@@ -317,7 +317,16 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 3 | Apply `_json_safe_records` to `POST /api/v1/label-transfers` | DONE | `eb7e88e376b605524f231de961e374651ff6e316` |
 | 4 | Tests for non-finite sanitization on those three POST endpoints; full API + MCP suites green | DONE | `eb7e88e376b605524f231de961e374651ff6e316` |
 
-## Next rotation ideas (Wave 42+)
+## Wave 42 — Hardening (MCP list[dict] DF JSON-safe records) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | Add MCP `_json_safe_records` (mirror REST walk; NaN/±Inf floats → `None`) | DONE | `9845aeb4870b83cb47ec95d8bdf874a3d91dbbcb` |
+| 2 | Apply to lake/analytics handlers returning `list[dict]` from DataFrames: ofi, slippage, whale, vol suite, basis trio, indicators, depth, sequencer, OI, discovery (search/coverage/inventory), MEV; plus smart-money / label-transfers | DONE | `9845aeb4870b83cb47ec95d8bdf874a3d91dbbcb` |
+| 3 | Sanitize inline `query_market_data` / `get_funding_apr` tools/call paths | DONE | `9845aeb4870b83cb47ec95d8bdf874a3d91dbbcb` |
+| 4 | Tests for helper + non-finite ofi/slippage/OI/basis/indicators/whale; MCP analytics suite green | DONE | `9845aeb4870b83cb47ec95d8bdf874a3d91dbbcb` |
+
+## Next rotation ideas (Wave 43+)
 
 Priority candidates for the next cycles:
 
@@ -325,7 +334,7 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
-5. **JSON-safe** on MCP tool handlers that return list-of-dicts without sanitization (parity with REST)
+5. **Shared util** for `_json_safe_float` / `_json_safe_records` (dedupe api_server + mcp_server copies)
 
 ## Subagent policy
 
@@ -377,3 +386,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 39: pure REST/MCP JSON-safe floats (chaos/peg/funding-predict/gas-vol); MCP onchain capability hints
 - Wave 40: lake DF REST `_json_safe_records` on ofi / funding-apr / open-interest / basis suite (+ remaining free DF endpoints)
 - Wave 41: `_json_safe_records` on POST simulate-price-impact / smart-money / label-transfers
+- Wave 42: MCP `_json_safe_records` on list[dict] DF handlers (ofi/slippage/whale/vol/basis/indicators/OI/…) + query/funding_apr paths
