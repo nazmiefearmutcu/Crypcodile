@@ -219,13 +219,67 @@ def test_option_summary_with_registry() -> None:
 
 
 def test_option_summary_no_registry_fallback() -> None:
-    """Fallback: no registry → strike/opt_type parsed from instId string."""
+    """Fallback: no registry → strike/opt_type/expiry parsed from instId string."""
+    import calendar
+    import time as _time
+
     msg = json.loads((FIXTURES / "option_summary.json").read_text())
     out = list(normalize_message(msg, local_ts=13, venue="okx", registry=None))
     oc_list = [r for r in out if isinstance(r, OptionsChain)]
     assert len(oc_list) == 1
     oc = oc_list[0]
-    # OKX option instId: BTC-USD-25DEC22-40000-C → strike=40000.0, opt_type=CALL
+    # OKX option instId: BTC-USD-25DEC22-40000-C → strike=40000.0, opt_type=CALL,
+    # expiry = 2022-12-25 midnight UTC ns
+    assert oc.strike == 40000.0
+    assert oc.opt_type == OptType.CALL
+    expected_expiry = int(calendar.timegm(_time.strptime("25 12 2022", "%d %m %Y"))) * 1_000_000_000
+    assert oc.expiry == expected_expiry, (
+        f"expiry must be parsed from 25DEC22 segment, got {oc.expiry}"
+    )
+
+
+def test_option_summary_no_registry_expiry_is_nonzero() -> None:
+    """No-registry path: expiry must be parsed from DDMMMYY segment, not 0.
+
+    BTC-USD-25DEC22-40000-C → 2022-12-25 → nonzero expiry_ns.
+    """
+    import calendar
+    import time as _time
+
+    msg = json.loads((FIXTURES / "option_summary.json").read_text())
+    out = list(normalize_message(msg, local_ts=1, venue="okx", registry=None))
+    oc = next(r for r in out if isinstance(r, OptionsChain))
+    assert oc.expiry != 0, (
+        f"expiry must be nonzero (parsed from symbol DDMMMYY), got {oc.expiry}"
+    )
+    expected = int(calendar.timegm(_time.strptime("25 12 2022", "%d %m %Y"))) * 1_000_000_000
+    assert oc.expiry == expected
+
+
+def test_option_summary_registry_missing_expiry_falls_back_to_symbol() -> None:
+    """Registry hit with expiry=None must still parse expiry from instId."""
+    import calendar
+    import time as _time
+
+    reg = InstrumentRegistry()
+    reg.add(
+        Instrument(
+            canonical="okx:BTC-USD-25DEC22-40000-C",
+            exchange="okx",
+            symbol_raw="BTC-USD-25DEC22-40000-C",
+            kind=Kind.OPTION,
+            base="BTC",
+            quote="USD",
+            strike=40000.0,
+            expiry=None,  # missing in registry
+            opt_type="C",
+        )
+    )
+    msg = json.loads((FIXTURES / "option_summary.json").read_text())
+    out = list(normalize_message(msg, local_ts=13, venue="okx", registry=reg))
+    oc = next(r for r in out if isinstance(r, OptionsChain))
+    expected = int(calendar.timegm(_time.strptime("25 12 2022", "%d %m %Y"))) * 1_000_000_000
+    assert oc.expiry == expected
     assert oc.strike == 40000.0
     assert oc.opt_type == OptType.CALL
 
@@ -236,13 +290,13 @@ def test_option_summary_no_registry_fallback() -> None:
 
 
 def test_option_summary_malformed_instid_is_skipped() -> None:
-    """_parse_option_instid returns (None, None) for a short/malformed instId.
+    """_parse_option_instid returns (None, None, None) for a short/malformed instId.
 
     Previously the normalizer would emit a nonsensical OptionsChain with
     strike=0.0, expiry=0, opt_type=CALL (sentinel defaults).  After the fix
     such records are silently dropped (no yield).
     """
-    # Deliberately malformed instId: too few dash-segments → _parse_option_instid → (None, None)
+    # Deliberately malformed instId: too few dash-segments → (None, None, None)
     msg: dict = {
         "arg": {"channel": "option-summary", "instId": "MALFORMED"},
         "data": [

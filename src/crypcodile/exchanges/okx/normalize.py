@@ -20,13 +20,16 @@ Appendix §7 / §8 critical notes:
 - ``open-interest`` channel: ``oi`` (contracts) + ``oiCcy`` (base-ccy equiv).
 - ``liq-orders`` channel: ``details[*]{side, sz, bkPx, ts}``.
 - ``option-summary``: ``markVol``→mark_iv, ``bidVol``→bid_iv, ``askVol``→ask_iv,
-  ``delta/gamma/vega/theta``; ``uly`` is the underlying; strike/opt_type
-  parsed from ``instId`` when not in registry.
+  ``delta/gamma/vega/theta``; ``uly`` is the underlying; strike/opt_type/expiry
+  parsed from ``instId`` when not in registry (expiry from ``DDMMMYY`` segment).
 """
 
 from __future__ import annotations
 
+import calendar
 import logging
+import re
+import time as _time
 from collections.abc import Iterable
 from typing import Any
 
@@ -48,6 +51,25 @@ from crypcodile.util.time import ms_to_ns
 log = logging.getLogger(__name__)
 
 EXCHANGE = "okx"
+
+# Month abbreviation → numeric month string (OKX option expiry: DDMMMYY)
+_MONTH_MAP = {
+    "JAN": "01",
+    "FEB": "02",
+    "MAR": "03",
+    "APR": "04",
+    "MAY": "05",
+    "JUN": "06",
+    "JUL": "07",
+    "AUG": "08",
+    "SEP": "09",
+    "OCT": "10",
+    "NOV": "11",
+    "DEC": "12",
+}
+
+# OKX option date token: D{1,2}MMMYY (e.g. "25DEC22", "8JUN26")
+_OPT_DATE_RE = re.compile(r"^(\d{1,2})([A-Z]{3})(\d{2})$")
 
 
 # ---------------------------------------------------------------------------
@@ -86,22 +108,48 @@ def _canonical(venue: str, raw_symbol: str, registry: InstrumentRegistry | None)
     return f"{venue}:{raw_symbol}"
 
 
-def _parse_option_instid(inst_id: str) -> tuple[float | None, OptType | None]:
-    """Parse OKX option instId to extract strike and opt_type.
+def _parse_option_expiry_ns(date_str: str) -> int | None:
+    """Parse OKX option date token ``DDMMMYY`` (e.g. ``25DEC22``) to midnight UTC ns.
+
+    Returns ``None`` if the token cannot be parsed.
+    """
+    m = _OPT_DATE_RE.match(date_str.upper())
+    if not m:
+        return None
+    day_i = int(m.group(1))
+    month = _MONTH_MAP.get(m.group(2))
+    if month is None:
+        return None
+    year = 2000 + int(m.group(3))
+    try:
+        struct = _time.strptime(f"{day_i:02d} {month} {year}", "%d %m %Y")
+        return int(calendar.timegm(struct)) * 1_000_000_000
+    except (ValueError, OverflowError):
+        return None
+
+
+def _parse_option_instid(
+    inst_id: str,
+) -> tuple[float | None, OptType | None, int | None]:
+    """Parse OKX option instId to extract strike, opt_type, and expiry_ns.
 
     OKX option format: ``BTC-USD-25DEC22-40000-C``
     Parts: [underlying_base, underlying_quote, expiry_str, strike_str, opt_type]
+
+    Returns ``(strike, opt_type, expiry_ns)``.  Any field may be ``None`` if
+    that segment cannot be parsed; callers must handle gracefully.
     """
     parts = inst_id.split("-")
     if len(parts) < 5:
-        return None, None
+        return None, None, None
     try:
         strike = float(parts[-2])
     except (ValueError, IndexError):
-        return None, None
+        return None, None, None
     raw_type = parts[-1].upper()
     opt_type = OptType.CALL if raw_type == "C" else OptType.PUT if raw_type == "P" else None
-    return strike, opt_type
+    expiry_ns = _parse_option_expiry_ns(parts[-3])
+    return strike, opt_type, expiry_ns
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +427,7 @@ def _normalize_option_summary(
     - ``askVol``  → ask_iv
     - ``delta``, ``gamma``, ``vega``, ``theta`` → greeks
     - ``fwdPx``   → underlying_price (forward price)
-    - Strike / opt_type resolved from registry or parsed from ``instId``.
+    - Strike / opt_type / expiry resolved from registry or parsed from ``instId``.
     """
     for entry in data:
         sym: str = entry.get("instId", "")
@@ -401,8 +449,16 @@ def _normalize_option_summary(
                 elif inst.opt_type == "P":
                     opt_type_enum = OptType.PUT
 
-        if strike is None or opt_type_enum is None:
-            strike, opt_type_enum = _parse_option_instid(sym)
+        # Fall back to instId parse for any missing field (including expiry when
+        # the registry has no instrument or no expiry).
+        if strike is None or opt_type_enum is None or expiry is None:
+            parsed_strike, parsed_opt, parsed_expiry = _parse_option_instid(sym)
+            if strike is None:
+                strike = parsed_strike
+            if opt_type_enum is None:
+                opt_type_enum = parsed_opt
+            if expiry is None:
+                expiry = parsed_expiry
 
         if strike is None or opt_type_enum is None:
             log.warning(
@@ -432,7 +488,7 @@ def _normalize_option_summary(
             underlying=underlying,
             underlying_price=underlying_price,
             strike=strike,
-            expiry=expiry or 0,
+            expiry=expiry if expiry is not None else 0,
             opt_type=opt_type_enum,
             mark_iv=float(mark_vol_raw) if mark_vol_raw else None,
             bid_iv=float(bid_vol_raw) if bid_vol_raw else None,

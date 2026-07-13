@@ -14,7 +14,10 @@ Appendix §7 / §8 critical notes:
 
 from __future__ import annotations
 
+import calendar
 import logging
+import re
+import time as _time
 from collections.abc import Iterable
 from typing import Any
 
@@ -36,6 +39,25 @@ from crypcodile.util.time import ms_to_ns
 log = logging.getLogger(__name__)
 
 EXCHANGE = "bybit"
+
+# Month abbreviation → numeric month string (Bybit option expiry: DDMMMYY)
+_MONTH_MAP = {
+    "JAN": "01",
+    "FEB": "02",
+    "MAR": "03",
+    "APR": "04",
+    "MAY": "05",
+    "JUN": "06",
+    "JUL": "07",
+    "AUG": "08",
+    "SEP": "09",
+    "OCT": "10",
+    "NOV": "11",
+    "DEC": "12",
+}
+
+# Bybit option date token: D{1,2}MMMYY (e.g. "30JUN25", "8JUN26")
+_OPT_DATE_RE = re.compile(r"^(\d{1,2})([A-Z]{3})(\d{2})$")
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +98,52 @@ def _is_option_symbol(symbol: str) -> bool:
     """Heuristic: Bybit option symbols look like ``BTC-30JUN25-50000-C``."""
     parts = symbol.split("-")
     return len(parts) == 4 and parts[-1] in ("C", "P")
+
+
+def _parse_option_expiry_ns(date_str: str) -> int | None:
+    """Parse Bybit option date token ``DDMMMYY`` (e.g. ``30JUN25``) to midnight UTC ns.
+
+    Returns ``None`` if the token cannot be parsed.
+    """
+    m = _OPT_DATE_RE.match(date_str.upper())
+    if not m:
+        return None
+    day_i = int(m.group(1))
+    month = _MONTH_MAP.get(m.group(2))
+    if month is None:
+        return None
+    year = 2000 + int(m.group(3))
+    try:
+        struct = _time.strptime(f"{day_i:02d} {month} {year}", "%d %m %Y")
+        return int(calendar.timegm(struct)) * 1_000_000_000
+    except (ValueError, OverflowError):
+        return None
+
+
+def _parse_option_symbol(
+    sym: str,
+) -> tuple[float | None, OptType | None, int | None]:
+    """Parse Bybit option symbol to (strike, opt_type, expiry_ns).
+
+    Bybit option format: ``BTC-30JUN25-50000-C``
+    Parts: [underlying, expiry_str (DDMMMYY), strike_str, C|P]
+    """
+    parts = sym.split("-")
+    if len(parts) != 4:
+        return None, None, None
+    try:
+        strike = float(parts[2])
+    except ValueError:
+        return None, None, None
+    raw_type = parts[3].upper()
+    if raw_type == "C":
+        opt_type = OptType.CALL
+    elif raw_type == "P":
+        opt_type = OptType.PUT
+    else:
+        return None, None, None
+    expiry_ns = _parse_option_expiry_ns(parts[1])
+    return strike, opt_type, expiry_ns
 
 
 # ---------------------------------------------------------------------------
@@ -306,19 +374,16 @@ def _normalize_option_ticker(
             elif inst.opt_type == "P":
                 opt_type_enum = OptType.PUT
 
-    if strike is None or opt_type_enum is None:
-        # Fall back to parsing the symbol: BTC-30JUN25-50000-C
-        parts = sym.split("-")
-        if len(parts) == 4:
-            try:
-                strike = float(parts[2])
-            except ValueError:
-                pass
-            raw_type = parts[3].upper()
-            if raw_type == "C":
-                opt_type_enum = OptType.CALL
-            elif raw_type == "P":
-                opt_type_enum = OptType.PUT
+    # Fall back to symbol parse for any missing field (including expiry when
+    # unregistered): BTC-30JUN25-50000-C
+    if strike is None or opt_type_enum is None or expiry is None:
+        parsed_strike, parsed_opt, parsed_expiry = _parse_option_symbol(sym)
+        if strike is None:
+            strike = parsed_strike
+        if opt_type_enum is None:
+            opt_type_enum = parsed_opt
+        if expiry is None:
+            expiry = parsed_expiry
 
     # After registry + symbol-parse attempts, if either strike or opt_type is still
     # unresolved, skip the record (matches OKX/Binance skip-with-warning pattern).
@@ -345,7 +410,7 @@ def _normalize_option_ticker(
         underlying=sym.split("-")[0] if "-" in sym else sym,
         underlying_price=underlying_price,
         strike=strike,
-        expiry=expiry or 0,
+        expiry=expiry if expiry is not None else 0,
         opt_type=opt_type_enum,
         mark_price=mark_price,
         mark_iv=mark_iv,

@@ -166,23 +166,49 @@ def test_ticker_option_emits_options_chain() -> None:
 
 
 def test_ticker_option_no_registry_fallback_parses_symbol() -> None:
-    """Fallback path: no registry → strike/opt_type parsed from symbol string.
+    """Fallback path: no registry → strike/opt_type/expiry parsed from symbol string.
 
-    Symbol ``BTC-30JUN25-50000-C`` → strike=50000.0, opt_type=CALL.
+    Symbol ``BTC-30JUN25-50000-C`` → strike=50000.0, opt_type=CALL,
+    expiry = 2025-06-30 midnight UTC ns.
     """
+    import calendar
+    import time as _time
+
     msg = json.loads((FIXTURES / "ticker_option.json").read_text())
     # Pass registry=None to exercise the string-split fallback
     out = list(normalize_message(msg, local_ts=10, venue="bybit", registry=None))
     oc_list = [r for r in out if isinstance(r, OptionsChain)]
     assert len(oc_list) == 1
     oc = oc_list[0]
-    # Fallback must correctly extract strike and opt_type from symbol
+    # Fallback must correctly extract strike, opt_type, and expiry from symbol
     assert oc.strike == 50000.0, (
         f"Expected strike=50000.0 from fallback parse, got {oc.strike}"
     )
     assert oc.opt_type == OptType.CALL, (
         f"Expected OptType.CALL from fallback parse, got {oc.opt_type}"
     )
+    expected_expiry = int(calendar.timegm(_time.strptime("30 06 2025", "%d %m %Y"))) * 1_000_000_000
+    assert oc.expiry == expected_expiry, (
+        f"expiry must be parsed from 30JUN25 segment, got {oc.expiry}"
+    )
+
+
+def test_ticker_option_no_registry_expiry_is_nonzero() -> None:
+    """No-registry path: expiry must be parsed from DDMMMYY segment, not 0.
+
+    BTC-30JUN25-50000-C → 2025-06-30 → nonzero expiry_ns.
+    """
+    import calendar
+    import time as _time
+
+    msg = json.loads((FIXTURES / "ticker_option.json").read_text())
+    out = list(normalize_message(msg, local_ts=1, venue="bybit", registry=None))
+    oc = next(r for r in out if isinstance(r, OptionsChain))
+    assert oc.expiry != 0, (
+        f"expiry must be nonzero (parsed from symbol DDMMMYY), got {oc.expiry}"
+    )
+    expected = int(calendar.timegm(_time.strptime("30 06 2025", "%d %m %Y"))) * 1_000_000_000
+    assert oc.expiry == expected
 
 
 def test_ticker_option_no_registry_put_fallback() -> None:
