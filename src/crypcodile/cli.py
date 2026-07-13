@@ -4184,13 +4184,6 @@ def indicators(
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Calculate technical analysis indicators (SMA, EMA, RSI, MACD, BB) using Polars."""
-    from crypcodile.analytics import (
-        calculate_bollinger_bands,
-        calculate_ema,
-        calculate_macd,
-        calculate_rsi,
-        calculate_sma,
-    )
     from crypcodile.client.client import CrypcodileClient
 
     data_dir = resolve_data_dir(data_dir)
@@ -4222,55 +4215,21 @@ def indicators(
 
     client = CrypcodileClient(data_dir=data_dir)
     try:
-        df = client.resample(symbol, frm, to, interval, fill_empty=True)
-        if len(df) == 0:
+        res = client.get_indicators(
+            symbol,  # type: ignore[arg-type]
+            frm,  # type: ignore[arg-type]
+            to,  # type: ignore[arg-type]
+            interval=interval,
+            indicator=indicator,
+            period=period,
+        )
+        if len(res) == 0:
             typer.echo("No data found for the given symbol and time range.")
             return
-
-        # Sort by bar timestamp to ensure calculations are correct
-        df = df.sort("bar")
-        close_series = df["close"]
-
-        if indicator == "sma":
-            res = df.with_columns(calculate_sma(close_series, period).alias("sma"))
-        elif indicator == "ema":
-            res = df.with_columns(calculate_ema(close_series, period).alias("ema"))
-        elif indicator == "rsi":
-            res = df.with_columns(calculate_rsi(close_series, period).alias("rsi"))
-        elif indicator == "macd":
-            macd, signal, hist = calculate_macd(close_series)
-            res = df.with_columns(
-                macd.alias("macd"),
-                signal.alias("signal"),
-                hist.alias("hist")
-            )
-        elif indicator == "bb":
-            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
-            res = df.with_columns(
-                upper.alias("bb_upper"),
-                middle.alias("bb_middle"),
-                lower.alias("bb_lower")
-            )
-        elif not indicator or indicator == "all":
-            # calculate all indicators and append
-            macd, signal, hist = calculate_macd(close_series)
-            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
-            res = df.with_columns(
-                calculate_sma(close_series, period).alias("sma"),
-                calculate_ema(close_series, period).alias("ema"),
-                calculate_rsi(close_series, period).alias("rsi"),
-                macd.alias("macd"),
-                signal.alias("signal"),
-                hist.alias("hist"),
-                upper.alias("bb_upper"),
-                middle.alias("bb_middle"),
-                lower.alias("bb_lower")
-            )
-        else:
-            typer.echo(f"Error: Unknown indicator '{indicator}'", err=True)
-            raise typer.Exit(code=1)
-
         typer.echo(res)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

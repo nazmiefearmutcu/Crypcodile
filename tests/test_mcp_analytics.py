@@ -14,6 +14,7 @@ from crypcodile.mcp_server import (
     TOOLS,
     handle_calculate_ofi,
     handle_estimate_slippage,
+    handle_get_indicators,
     handle_get_iv_surface,
     handle_get_perp_basis,
     handle_get_risk_reversal,
@@ -33,6 +34,7 @@ _ANALYTICS_TOOLS = {
     "get_risk_reversal",
     "get_perp_basis",
     "get_spot_perp_basis",
+    "get_indicators",
 }
 
 
@@ -242,6 +244,39 @@ def test_handle_get_spot_perp_basis_empty() -> None:
     assert handle_get_spot_perp_basis(client, "s", "p", 0, 1) == []
 
 
+def test_handle_get_indicators_returns_dicts() -> None:
+    client = MagicMock()
+    client.get_indicators.return_value = pl.DataFrame(
+        {"bar": [1], "close": [100.0], "sma": [99.5]}
+    )
+    rows = handle_get_indicators(
+        client,
+        "deribit:BTC-PERPETUAL",
+        0,
+        100,
+        interval="1h",
+        indicator="sma",
+        period=14,
+    )
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert rows[0]["sma"] == 99.5
+    client.get_indicators.assert_called_once_with(
+        "deribit:BTC-PERPETUAL",
+        0,
+        100,
+        interval="1h",
+        indicator="sma",
+        period=14,
+    )
+
+
+def test_handle_get_indicators_empty() -> None:
+    client = MagicMock()
+    client.get_indicators.return_value = pl.DataFrame()
+    assert handle_get_indicators(client, "x", 0, 1) == []
+
+
 def test_analytics_tool_schemas_have_required_fields() -> None:
     by_name: dict[str, Any] = {t["name"]: t for t in TOOLS}
     assert set(by_name["estimate_slippage"]["inputSchema"]["required"]) == {
@@ -287,6 +322,11 @@ def test_analytics_tool_schemas_have_required_fields() -> None:
     assert set(by_name["get_spot_perp_basis"]["inputSchema"]["required"]) == {
         "spot_symbol",
         "perp_symbol",
+        "start",
+        "end",
+    }
+    assert set(by_name["get_indicators"]["inputSchema"]["required"]) == {
+        "symbol",
         "start",
         "end",
     }

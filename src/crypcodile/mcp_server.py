@@ -491,6 +491,29 @@ def handle_get_spot_perp_basis(
     return df.to_dicts()
 
 
+def handle_get_indicators(
+    client: CrypcodileClient,
+    symbol: str,
+    start: int,
+    end: int,
+    interval: str = "1d",
+    indicator: str | None = None,
+    period: int = 14,
+) -> list[dict[str, Any]]:
+    """Technical indicators on resampled OHLCV; returns list of row dicts (empty → [])."""
+    df = client.get_indicators(
+        symbol,
+        start,
+        end,
+        interval=interval,
+        indicator=indicator,
+        period=period,
+    )
+    if len(df) == 0:
+        return []
+    return df.to_dicts()
+
+
 # List of tools exposed by the MCP server
 TOOLS = [
     {
@@ -907,6 +930,51 @@ TOOLS = [
             "required": ["spot_symbol", "perp_symbol", "start", "end"],
         },
     },
+    {
+        "name": "get_indicators",
+        "description": (
+            "Calculate technical analysis indicators (SMA, EMA, RSI, MACD, BB) "
+            "on resampled OHLCV bars for a symbol. indicator: sma|ema|rsi|macd|bb|all "
+            "(default all). Empty lake / no data → []."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Canonical symbol (e.g. 'deribit:BTC-PERPETUAL')."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start timestamp in nanoseconds UTC.",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End timestamp in nanoseconds UTC.",
+                },
+                "interval": {
+                    "type": "string",
+                    "description": "Resampling interval (e.g. '1m', '1h', '1d'; default 1d).",
+                },
+                "indicator": {
+                    "type": "string",
+                    "description": (
+                        "Indicator to compute: sma, ema, rsi, macd, bb, or all "
+                        "(default all)."
+                    ),
+                },
+                "period": {
+                    "type": "integer",
+                    "description": (
+                        "Smoothing/lookback window for SMA, EMA, RSI, BB (default 14)."
+                    ),
+                },
+            },
+            "required": ["symbol", "start", "end"],
+        },
+    },
 ]
 
 async def serve_stdio(data_dir: Path = Path("data")) -> None:
@@ -1144,6 +1212,20 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                             tool_result = {
                                 "error": f"get_spot_perp_basis failed: {e}"
                             }
+                    elif tool_name == "get_indicators":
+                        try:
+                            ind = arguments.get("indicator")
+                            tool_result = handle_get_indicators(
+                                client,
+                                arguments.get("symbol", ""),
+                                int(arguments.get("start", 0)),
+                                int(arguments.get("end", 0)),
+                                interval=arguments.get("interval", "1d"),
+                                indicator=ind if ind else None,
+                                period=int(arguments.get("period", 14)),
+                            )
+                        except Exception as e:
+                            tool_result = {"error": f"get_indicators failed: {e}"}
                     else:
                         tool_result = {"error": f"Tool {tool_name} not found"}
                     

@@ -1,5 +1,9 @@
 """Tests for crypcodile technical analysis indicators."""
 
+from __future__ import annotations
+
+import pathlib
+
 import numpy as np
 import polars as pl
 import pytest
@@ -11,6 +15,11 @@ from crypcodile.analytics.indicators import (
     calculate_rsi,
     calculate_sma,
 )
+from crypcodile.schema.enums import Side
+from crypcodile.schema.records import Trade
+from crypcodile.store.parquet_sink import ParquetSink
+
+_BASE_TS = 1_700_000_000_000_000_000
 
 
 def test_sma() -> None:
@@ -145,3 +154,89 @@ def test_bollinger_bands() -> None:
     # Error case
     with pytest.raises(ValueError):
         calculate_bollinger_bands(prices, period=-5)
+
+
+# ---------------------------------------------------------------------------
+# CrypcodileClient.get_indicators (matches CLI indicators)
+# ---------------------------------------------------------------------------
+
+
+async def _write_trade_bars(data_dir: pathlib.Path) -> None:
+    """Write spaced trades so 1s OHLCV produces multiple bars."""
+    sink = ParquetSink(data_dir=data_dir, max_buffer_rows=10, flush_interval_seconds=9999)
+    for i, price in enumerate([100.0, 110.0, 120.0, 115.0, 130.0]):
+        ts = _BASE_TS + i * 1_000_000_000
+        await sink.put(
+            Trade(
+                exchange="deribit",
+                symbol="deribit:BTC-PERPETUAL",
+                symbol_raw="BTC-PERPETUAL",
+                exchange_ts=ts,
+                local_ts=ts,
+                id=str(i),
+                price=price,
+                amount=1.0,
+                side=Side.BUY,
+            )
+        )
+    await sink.flush()
+
+
+async def test_client_get_indicators_sma(tmp_path: pathlib.Path) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_trade_bars(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    df = client.get_indicators(
+        "deribit:BTC-PERPETUAL",
+        _BASE_TS - 1,
+        _BASE_TS + 10_000_000_000,
+        interval="1s",
+        indicator="sma",
+        period=2,
+    )
+    assert isinstance(df, pl.DataFrame)
+    assert len(df) > 0
+    assert "sma" in df.columns
+    assert "close" in df.columns
+
+
+async def test_client_get_indicators_all_and_empty(
+    tmp_path: pathlib.Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_trade_bars(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    df = client.get_indicators(
+        "deribit:BTC-PERPETUAL",
+        _BASE_TS - 1,
+        _BASE_TS + 10_000_000_000,
+        interval="1s",
+        indicator="all",
+        period=2,
+    )
+    for col in ("sma", "ema", "rsi", "macd", "signal", "hist", "bb_upper", "bb_middle", "bb_lower"):
+        assert col in df.columns
+
+    empty_dir = tmp_path_factory.mktemp("empty_lake")
+    empty_client = CrypcodileClient(data_dir=empty_dir)
+    empty = empty_client.get_indicators(
+        "deribit:BTC-PERPETUAL",
+        _BASE_TS - 1,
+        _BASE_TS + 10_000_000_000,
+        interval="1s",
+        indicator="sma",
+        period=2,
+    )
+    assert len(empty) == 0
+
+    with pytest.raises(ValueError, match="Unknown indicator"):
+        client.get_indicators(
+            "deribit:BTC-PERPETUAL",
+            _BASE_TS - 1,
+            _BASE_TS + 10_000_000_000,
+            interval="1s",
+            indicator="not_a_thing",
+            period=2,
+        )

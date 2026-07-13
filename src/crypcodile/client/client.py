@@ -64,6 +64,9 @@ vol_skew(underlying, expiry_ns, at_ns, rate=0.0)
 
 risk_reversal_butterfly(skew_df, target_delta=0.25)
     25-delta risk reversal and butterfly from a vol_skew DataFrame.
+
+get_indicators(symbol, start_ns, end_ns, interval="1d", indicator=None, period=14)
+    Technical indicators (SMA, EMA, RSI, MACD, BB) on resampled OHLCV bars.
 """
 
 from __future__ import annotations
@@ -743,3 +746,84 @@ class CrypcodileClient:
             interval,
             fill_empty=fill_empty,
         )
+
+    def get_indicators(
+        self,
+        symbol: str,
+        start_ns: int,
+        end_ns: int,
+        interval: str = "1d",
+        indicator: str | None = None,
+        period: int = 14,
+    ) -> pl.DataFrame:
+        """Calculate technical analysis indicators on resampled OHLCV bars.
+
+        Matches the CLI ``indicators`` command: resamples trades to OHLCV
+        (``fill_empty=True``), sorts by ``bar``, then appends indicator columns.
+
+        Args:
+            symbol:    Canonical symbol (e.g. ``"deribit:BTC-PERPETUAL"``).
+            start_ns:  Inclusive lower bound on trade time (nanoseconds UTC).
+            end_ns:    Inclusive upper bound on trade time (nanoseconds UTC).
+            interval:  Resampling interval (e.g. ``"1m"``, ``"1h"``, ``"1d"``).
+            indicator: One of ``sma``, ``ema``, ``rsi``, ``macd``, ``bb``,
+                       ``all``, or ``None`` (same as ``all``).
+            period:    Smoothing/lookback window for SMA, EMA, RSI, BB.
+
+        Returns:
+            OHLCV DataFrame with indicator columns. Empty when no bar data.
+
+        Raises:
+            ValueError: If ``indicator`` is not a recognised name.
+        """
+        from crypcodile.analytics import (
+            calculate_bollinger_bands,
+            calculate_ema,
+            calculate_macd,
+            calculate_rsi,
+            calculate_sma,
+        )
+
+        df = self.resample(symbol, start_ns, end_ns, interval, fill_empty=True)
+        if len(df) == 0:
+            return df
+
+        df = df.sort("bar")
+        close_series = df["close"]
+        name = (indicator or "all").lower()
+
+        if name == "sma":
+            return df.with_columns(calculate_sma(close_series, period).alias("sma"))
+        if name == "ema":
+            return df.with_columns(calculate_ema(close_series, period).alias("ema"))
+        if name == "rsi":
+            return df.with_columns(calculate_rsi(close_series, period).alias("rsi"))
+        if name == "macd":
+            macd, signal, hist = calculate_macd(close_series)
+            return df.with_columns(
+                macd.alias("macd"),
+                signal.alias("signal"),
+                hist.alias("hist"),
+            )
+        if name == "bb":
+            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
+            return df.with_columns(
+                upper.alias("bb_upper"),
+                middle.alias("bb_middle"),
+                lower.alias("bb_lower"),
+            )
+        if name == "all":
+            macd, signal, hist = calculate_macd(close_series)
+            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
+            return df.with_columns(
+                calculate_sma(close_series, period).alias("sma"),
+                calculate_ema(close_series, period).alias("ema"),
+                calculate_rsi(close_series, period).alias("rsi"),
+                macd.alias("macd"),
+                signal.alias("signal"),
+                hist.alias("hist"),
+                upper.alias("bb_upper"),
+                middle.alias("bb_middle"),
+                lower.alias("bb_lower"),
+            )
+        raise ValueError(f"Unknown indicator '{indicator}'")
