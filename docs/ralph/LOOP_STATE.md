@@ -303,9 +303,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | Add `_json_safe_records(rows)` helper (walk dict values; NaN/±Inf floats → `None`) | DONE | (this commit) |
-| 2 | Apply to major DF-returning free lake endpoints: `open-interest`, `funding-apr`, `basis`, `perp-basis`, `spot-future-basis`, `ofi` | DONE | (this commit) |
-| 3 | Tests for helper + non-finite head rows on ofi / funding-apr / OI / basis | DONE | (this commit) |
+| 1 | Add `_json_safe_records(rows)` helper (walk dict values; NaN/±Inf floats → `None`) | DONE | `0ee00cb0c7d92d399a137920d8c336951e9927a4` |
+| 2 | Apply to major DF-returning free lake endpoints: `open-interest`, `funding-apr`, `basis`, `perp-basis`, `spot-future-basis`, `ofi` | DONE | `0ee00cb0c7d92d399a137920d8c336951e9927a4` |
+| 3 | Tests for helper + non-finite head rows on ofi / funding-apr / OI / basis | DONE | `0ee00cb0c7d92d399a137920d8c336951e9927a4` |
 
 ## Next rotation ideas (Wave 41+)
 
