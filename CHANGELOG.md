@@ -4,8 +4,11 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
-## [0.1.044] - 2026-07-13
+## [0.1.044] - 2026-07-14
 ### Added
+- **API health/status endpoints**: `GET /api/v1/health` and alias `GET /api/v1/status` — free lightweight probe returning `ok`, `crypcodile.__version__`, and `lake_channels` count (no payment). Empty lake is still `ok`; `list_channels` failure reports `ok: false` with `lake_unavailable`.
+- **API version endpoint**: `GET /api/v1/version` — free meta probe returning `{version}` only (no payment, no lake).
+- **API exchanges endpoint**: `GET /api/v1/exchanges` — free listing of sorted registered exchange connector names via `list_exchanges()` (no payment, no lake).
 - **API resolve-symbols endpoint**: `GET /api/v1/resolve-symbols` with comma-separated `symbols`, optional `channel`, and `ambiguous=error|first|all` wrapping `CrypcodileClient.resolve_symbols` (list of canonical symbols on success; ambiguous/no-match → 400; no payment).
 - **API spot-future-basis endpoint**: `GET /api/v1/spot-future-basis` with `future`/`spot`/`start`/`end`/`limit` wrapping `CrypcodileClient.spot_future_basis` (trade ASOF join; hard row limit 10000; no payment).
 - **API perp-basis endpoint**: `GET /api/v1/perp-basis` with `symbol`/`start`/`end`/`limit` wrapping `CrypcodileClient.perp_basis` (mark–index basis; hard row limit 10000; no payment). Skipped bulk `/api/v1/export` lake dump in favor of this bounded analytics surface.
@@ -61,6 +64,10 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ### Fixed
 - **resolve_symbols empty channel**: Empty / whitespace `channel` is treated as no filter (was falsely resolving nothing via inventory filter on unregistered `""`).
+- **Catalog inventory empty channel/exchange**: Empty or whitespace `channel`/`exchange` inventory filters are treated as no filter (same contract as `resolve_symbols`), so `channel=""` no longer falsely empties inventory/search.
+- **Option expiry parse (OKX/Bybit)**: When the instrument registry has no entry (or no expiry), option normalizers parse the `DDMMMYY` date token from the symbol into midnight-UTC nanoseconds, matching Binance/Deribit behavior.
+- **Derive options timestamps in nanoseconds**: Store Derive options `local_ts` / `expiry` in nanoseconds UTC (schema convention); convert on-chain expiry seconds and compute `t_years` from ns.
+- **Aave health factor zero**: Treat Aave HF raw `0` as a real zero health factor (underwater), not infinity; only max `uint256` means “no debt” / infinite HF.
 - **Catalog search non-positive limit**: `Catalog.search_symbols` returns empty schema for `limit < 1` instead of Polars ``head(-n)`` (which drops the last *n* rows).
 - **Atomic parquet compact**: Compact uses rename-before-delete; in-flight work is awaited on stop; compact executor is awaited across start/stop cancel paths.
 - **Atomic parquet part writes**: Parquet part files written via temp path then atomic rename for crash-safe durability.
@@ -75,7 +82,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **WebSocket connect session leak**: Close the aiohttp session when WebSocket connect fails.
 - **Binance book bridge bootstrap**: Register the book resync bridge only after a successful bootstrap.
 - **Whitespace-only catalog search**: Treat whitespace-only search queries as empty.
-- **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back through admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
+- **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back to free `GET /api/v1/health` 200, then admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
 - **Payment refund on serve failure**: Restore paid status when market-data serve fails after payment CAS spend.
 - **Multi-symbol OI exchange overwrite**: Keep multi-symbol open interest without clobbering exchange identity across symbols.
 - **Read-only SQL query hardening**: Harden the bounded read-only SQL / lake query API endpoint.
@@ -91,6 +98,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **Exchange list alignment**: Align CLI exchange lists with the factory registry.
 - **CLI exchange lists via registry**: Collect help and interactive suggestions include `derive` and `superchain` via `list_exchanges()`.
 - **Search docs**: Document search and discovery commands in the README.
+- **REST API endpoint matrix**: README documents a brief `/api/v1/*` matrix covering ops/meta, catalog/discovery, market-data, query, derivatives, microstructure, options, and Base/risk routes.
 
 ## [0.1.043] - 2026-07-09
 ### Added
