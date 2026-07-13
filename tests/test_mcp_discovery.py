@@ -66,6 +66,7 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
     assert "list_data_channels" in names
     assert "list_dates" in names
     assert "list_exchanges_on_disk" in names
+    assert "list_registered_exchanges" in names
     assert "catalog_summary" in names
     assert "search_symbols" in names
     assert "list_symbols" in names
@@ -114,6 +115,62 @@ def test_list_exchanges_on_disk_delegates_to_client() -> None:
     client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
     assert handle_list_exchanges_on_disk(client) == ["binance", "deribit"]
     client.list_exchanges_on_disk.assert_called_once_with()
+
+
+def test_list_registered_exchanges_matches_factory() -> None:
+    """Handler mirrors factory.list_exchanges (no lake)."""
+    from crypcodile.exchanges.factory import list_exchanges
+    from crypcodile.mcp_server import handle_list_registered_exchanges, TOOLS
+
+    result = handle_list_registered_exchanges()
+    assert result == list_exchanges()
+    assert result == sorted(result)
+    assert "binance" in result
+    assert "base_onchain" in result
+    assert "superchain" in result
+    assert "deribit" in result
+
+    names = {t["name"] for t in TOOLS}
+    assert "list_registered_exchanges" in names
+    tool = next(t for t in TOOLS if t["name"] == "list_registered_exchanges")
+    assert tool["inputSchema"]["required"] == []
+    assert tool["inputSchema"]["properties"] == {}
+
+
+def test_list_registered_exchanges_uses_factory(monkeypatch) -> None:
+    """Handler delegates to factory.list_exchanges."""
+    from crypcodile import mcp_server
+
+    calls: list[int] = []
+
+    def _fake_list() -> list[str]:
+        calls.append(1)
+        return ["alpha", "zeta"]
+
+    # Handler imports factory inside the function; patch the module it uses.
+    import crypcodile.exchanges.factory as factory_mod
+
+    monkeypatch.setattr(factory_mod, "list_exchanges", _fake_list)
+    assert mcp_server.handle_list_registered_exchanges() == ["alpha", "zeta"]
+    assert calls == [1]
+
+
+def test_list_registered_exchanges_distinct_from_on_disk(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Factory registry is independent of lake hive partitions."""
+    from crypcodile.client.client import CrypcodileClient
+    from crypcodile.exchanges.factory import list_exchanges
+    from crypcodile.mcp_server import (
+        handle_list_exchanges_on_disk,
+        handle_list_registered_exchanges,
+    )
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    assert handle_list_exchanges_on_disk(client) == []
+    registered = handle_list_registered_exchanges()
+    assert registered == list_exchanges()
+    assert len(registered) >= 1
 
 
 def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:

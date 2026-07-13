@@ -779,6 +779,78 @@ def test_cli_catalog_exchanges_uses_client(
 
 
 # ---------------------------------------------------------------------------
+# list-exchanges command (factory registry; no lake)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_list_exchanges_matches_factory() -> None:
+    """``list-exchanges`` prints sorted factory registry names (no lake)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+    from crypcodile.exchanges.factory import list_exchanges
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["list-exchanges"])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == list_exchanges()
+    assert lines == sorted(lines)
+    assert "binance" in lines
+    assert "base_onchain" in lines
+    assert "superchain" in lines
+    assert "deribit" in lines
+
+
+def test_cli_list_exchanges_uses_factory(monkeypatch) -> None:
+    """CLI delegates to factory.list_exchanges (not lake client)."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    calls: list[int] = []
+
+    def _fake_list() -> list[str]:
+        calls.append(1)
+        return ["alpha", "zeta"]
+
+    monkeypatch.setattr("crypcodile.cli.list_exchanges", _fake_list)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["list-exchanges"])
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    lines = [ln.strip() for ln in result.output.splitlines() if ln.strip()]
+    assert lines == ["alpha", "zeta"]
+    # Typer may touch the bound name during help/callback setup; require ≥1.
+    assert len(calls) >= 1
+
+
+def test_cli_list_exchanges_distinct_from_catalog_exchanges(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Factory list is independent of on-disk hive partitions."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+    from crypcodile.exchanges.factory import list_exchanges
+
+    # Empty lake: catalog-exchanges → No exchanges.; list-exchanges still full.
+    runner = CliRunner()
+    catalog = runner.invoke(
+        app, ["catalog-exchanges", "--data-dir", str(tmp_path)]
+    )
+    assert catalog.exit_code == 0
+    assert "No exchanges." in catalog.output
+
+    registered = runner.invoke(app, ["list-exchanges"])
+    assert registered.exit_code == 0
+    lines = [ln.strip() for ln in registered.output.splitlines() if ln.strip()]
+    assert lines == list_exchanges()
+    assert len(lines) >= 1
+    assert "No exchanges." not in registered.output
+
+
+# ---------------------------------------------------------------------------
 # search command
 # ---------------------------------------------------------------------------
 

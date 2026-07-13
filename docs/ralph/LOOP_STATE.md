@@ -449,7 +449,16 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | CLI `search`: document `--exchange` (module docstring, command help docstring, README example); strip empty/whitespace `--channel`/`--exchange` to `None` (parity with `catalog-symbols`) | DONE | `b45add3` |
 | 3 | Tests: `test_cli_search_exchange_filter` (hit/miss) + `test_cli_search_strips_exchange_filter`; post-feature critical suites **792 passed** (+2) | DONE | `b45add3` |
 
-## Next rotation ideas (Wave 58+)
+## Wave 58 — Feature (CLI list-exchanges + MCP list_registered_exchanges) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | CLI `list-exchanges` wrapping factory `list_exchanges` (no lake; ≠ `catalog-exchanges`) | DONE | pending |
+| 2 | MCP `list_registered_exchanges` handler + TOOLS + tools/call + capabilities hint | DONE | pending |
+| 3 | Tests: CLI factory/delegate/distinct-from-catalog; MCP factory/delegate/distinct-from-on-disk; capabilities includes tool | DONE | pending |
+| 4 | README/CHANGELOG/progress discovery surface docs | DONE | pending |
+
+## Next rotation ideas (Wave 59+)
 
 Priority candidates for the next cycles:
 
@@ -526,3 +535,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 55: broad regression green (667→675 after +8 tests); MCP `resolve_symbols` (REST resolve-symbols parity for agents)
 - Wave 56: CLI `resolve-symbols` + `data-coverage` (REST/MCP discovery parity; 15 new tests)
 - Wave 57: broad regression green (790→792 after +2 tests); CLI search `--exchange` docs + strip + tests
+- Wave 58: CLI `list-exchanges` + MCP `list_registered_exchanges` (factory connector registry; ≠ lake on-disk)

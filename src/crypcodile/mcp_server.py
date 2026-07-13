@@ -359,9 +359,25 @@ def handle_list_exchanges_on_disk(client: CrypcodileClient) -> list[str]:
     :meth:`CrypcodileClient.list_exchanges_on_disk` (hive ``exchange=``
     partitions on disk). Empty lake → ``[]``.
 
-    Distinct from factory ``list_exchanges`` (registered connectors).
+    Distinct from factory ``list_exchanges`` / MCP
+    ``list_registered_exchanges`` (registered connectors).
     """
     return client.list_exchanges_on_disk()
+
+
+def handle_list_registered_exchanges() -> list[str]:
+    """Return sorted registered exchange connector names (factory registry).
+
+    Mirrors REST ``GET /api/v1/exchanges`` via
+    :func:`crypcodile.exchanges.factory.list_exchanges`. Does not touch the
+    data lake or any network connectors.
+
+    Distinct from MCP ``list_exchanges_on_disk`` (hive partitions present on
+    disk).
+    """
+    from crypcodile.exchanges.factory import list_exchanges
+
+    return list_exchanges()
 
 
 def handle_catalog_summary(client: CrypcodileClient) -> dict[str, object]:
@@ -1055,7 +1071,22 @@ TOOLS = [
         "description": (
             "List distinct hive exchange partitions present in the Crypcodile "
             "parquet data lake (e.g. deribit, binance). Sorted ascending. "
-            "Empty lake returns []. Distinct from registered connector names."
+            "Empty lake returns []. Distinct from registered connector names "
+            "(use list_registered_exchanges)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "list_registered_exchanges",
+        "description": (
+            "List registered exchange connector names from the factory "
+            "registry (e.g. binance, deribit, base_onchain). Sorted ascending. "
+            "Does not touch the data lake. Distinct from list_exchanges_on_disk "
+            "(hive partitions present on disk)."
         ),
         "inputSchema": {
             "type": "object",
@@ -2095,6 +2126,15 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         except Exception as e:
                             tool_result = {
                                 "error": f"list_exchanges_on_disk failed: {e}"
+                            }
+                    elif tool_name == "list_registered_exchanges":
+                        try:
+                            tool_result = handle_list_registered_exchanges()
+                        except Exception as e:
+                            tool_result = {
+                                "error": (
+                                    f"list_registered_exchanges failed: {e}"
+                                )
                             }
                     elif tool_name == "catalog_summary":
                         try:

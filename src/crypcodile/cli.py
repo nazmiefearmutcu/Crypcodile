@@ -8,6 +8,7 @@ catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
 catalog-dates  -- List hive date= partitions for a channel (list_dates).
 catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
 catalog-exchanges -- List on-disk hive exchange= partitions.
+list-exchanges -- List registered factory connector names (no lake).
 search         -- Ranked symbol search over the data lake inventory (--channel / --exchange).
 resolve-symbols -- Resolve free-form symbols to canonical catalog ids.
 data-coverage  -- Inventory coverage rows for one symbol (optional channel).
@@ -42,6 +43,7 @@ Usage examples::
     crypcodile catalog-dates --channel trade --data-dir /data
     crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
     crypcodile catalog-exchanges --data-dir /data
+    crypcodile list-exchanges  # registered connectors (factory; no lake)
     crypcodile search BTC --channel trade --exchange deribit --data-dir /data
     crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
     crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
@@ -1045,7 +1047,8 @@ def catalog_exchanges(
     ``list_exchanges_on_disk`` via
     :meth:`CrypcodileClient.list_exchanges_on_disk` (filesystem walk).
     Empty lake prints ``No exchanges.`` and exits 0. Distinct from factory
-    connector registry (``list_exchanges``). Sorted, one per line.
+    connector registry (``list-exchanges`` / ``list_exchanges``). Sorted, one
+    per line.
     """
     from crypcodile.client.client import CrypcodileClient
 
@@ -1056,6 +1059,24 @@ def catalog_exchanges(
         typer.echo("No exchanges.")
         raise typer.Exit(code=0)
     for ex in exchanges:
+        typer.echo(ex)
+
+
+# ---------------------------------------------------------------------------
+# list-exchanges (factory registry; no lake)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="list-exchanges")
+def list_exchanges_cmd() -> None:
+    """List registered exchange connector names from the factory registry.
+
+    Mirrors REST ``GET /api/v1/exchanges`` / MCP ``list_registered_exchanges``
+    via :func:`crypcodile.exchanges.factory.list_exchanges`. Does not touch
+    the data lake. Distinct from ``catalog-exchanges`` (hive partitions on
+    disk). Sorted, one per line.
+    """
+    for ex in list_exchanges():
         typer.echo(ex)
 
 
