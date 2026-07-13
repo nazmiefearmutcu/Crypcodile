@@ -200,4 +200,5 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 16: portal detect, multi-exchange collect, REST query, superchain factory, inventory, funding MCP, catalog scan
 - Wave 17: payment refund, multi-symbol OI, SQL harden, superchain identity, seen-logs co-persist, chaos MCP, CLI derive/superchain lists, derive poll connector
 - Wave 18: REST open-interest endpoint (`GET /api/v1/open-interest`)
-- **HEAD:** `8f80bd0` — wave 18 open-interest REST; ready for Wave 19
+- Wave 19: REST funding-apr / basis / indicators endpoints; MCP lending-stress / peg_deviation / MEV sandwich
+- **HEAD:** `66f59e1` — wave 19 indicators REST + peg_deviation MCP; ready for Wave 20
