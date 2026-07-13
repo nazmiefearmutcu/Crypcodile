@@ -412,9 +412,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | MCP `list_symbols` wrapping inventory distinct sorted symbols; optional channel/exchange (strip empty → no filter); TOOLS + tools/call + capabilities hint | DONE | (this wave) |
-| 2 | Tests: empty/data/channel/exchange/strip/delegate; TOOLS schema; capabilities includes `list_symbols` | DONE | (this wave) |
-| 3 | Broad regression: mcp_discovery, mcp_analytics, api_endpoints, catalog, catalog_search, client search, json_safe, factory — all green | DONE | (this wave) |
+| 1 | MCP `list_symbols` wrapping inventory distinct sorted symbols; optional channel/exchange (strip empty → no filter); TOOLS + tools/call + capabilities hint | DONE | `3a240d2` |
+| 2 | Tests: empty/data/channel/exchange/strip/delegate; TOOLS schema; capabilities includes `list_symbols` | DONE | `3a240d2` |
+| 3 | Broad regression: mcp_discovery, mcp_analytics, api_endpoints, catalog, catalog_search, client search, json_safe, factory — **537 passed** | DONE | baseline `3a240d2` |
 
 ## Next rotation ideas (Wave 54+)
 
