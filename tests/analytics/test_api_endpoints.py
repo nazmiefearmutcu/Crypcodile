@@ -259,3 +259,136 @@ def test_get_lake_client_uses_env(tmp_path, monkeypatch) -> None:
     client = _get_lake_client()
     assert client._catalog._data_dir == tmp_path
     assert client.list_channels() == []
+
+
+def test_catalog_scan_empty_params() -> None:
+    from crypcodile.api_server import catalog_scan
+
+    assert asyncio.run(catalog_scan()) == []
+    assert asyncio.run(catalog_scan(channel="", symbol="x")) == []
+    assert asyncio.run(catalog_scan(channel="trade", symbol="")) == []
+    assert asyncio.run(catalog_scan(channel="  ", symbol="  ")) == []
+
+
+def test_catalog_scan_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import catalog_scan
+
+    result = asyncio.run(
+        catalog_scan(
+            channel="trade",
+            symbol="deribit:BTC-PERPETUAL",
+            start=0,
+            end=10**18,
+        )
+    )
+    assert result == []
+
+
+def test_catalog_scan_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.scan.return_value = pl.DataFrame(
+        {
+            "local_ts": [100, 200],
+            "symbol": ["deribit:BTC-PERPETUAL", "deribit:BTC-PERPETUAL"],
+            "price": [1.0, 2.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_scan
+
+        result = asyncio.run(
+            catalog_scan(
+                channel="trade",
+                symbol="deribit:BTC-PERPETUAL",
+                start=0,
+                end=1000,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["price"] == 1.0
+    assert result[1]["local_ts"] == 200
+    mock_client.scan.assert_called_once_with(
+        "trade", ["deribit:BTC-PERPETUAL"], 0, 1000
+    )
+
+
+def test_catalog_scan_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.scan.return_value = pl.DataFrame(
+        {
+            "local_ts": [1, 2, 3, 4, 5],
+            "price": [10.0, 20.0, 30.0, 40.0, 50.0],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_scan
+
+        result = asyncio.run(
+            catalog_scan(
+                channel="trade",
+                symbol="binance-spot:BTC-USDT",
+                start=0,
+                end=99,
+                limit=2,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["local_ts"] == 1
+    assert result[1]["local_ts"] == 2
+
+
+def test_catalog_scan_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.scan.return_value = pl.DataFrame(
+        {"local_ts": list(range(20)), "price": [1.0] * 20}
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _CATALOG_SCAN_MAX_LIMIT, catalog_scan
+
+        result = asyncio.run(
+            catalog_scan(
+                channel="trade",
+                symbol="x:Y",
+                start=0,
+                end=1,
+                limit=_CATALOG_SCAN_MAX_LIMIT + 5000,
+            )
+        )
+    # Mock returns only 20 rows; clamp must not raise and scan is still called.
+    assert len(result) == 20
+    mock_client.scan.assert_called_once()
+
+
+def test_catalog_scan_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.scan.return_value = pl.DataFrame(
+        {"local_ts": [1, 2, 3], "price": [1.0, 2.0, 3.0]}
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_scan
+
+        result = asyncio.run(
+            catalog_scan(
+                channel="trade",
+                symbol="x:Y",
+                start=0,
+                end=1,
+                limit=0,
+            )
+        )
+    assert len(result) == 1
+    assert result[0]["local_ts"] == 1
+
+
+def test_catalog_scan_empty_dataframe_from_client() -> None:
+    mock_client = MagicMock()
+    mock_client.scan.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import catalog_scan
+
+        result = asyncio.run(
+            catalog_scan(channel="trade", symbol="x:Y", start=0, end=1)
+        )
+    assert result == []

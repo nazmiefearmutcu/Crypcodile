@@ -1365,6 +1365,41 @@ async def catalog_search_symbols(q: str = "", limit: int = 20) -> list[dict[str,
     return df.to_dicts()
 
 
+# Hard max rows for lake scan HTTP responses (bounded discovery).
+_CATALOG_SCAN_MAX_LIMIT = 10_000
+
+
+@app.get("/api/v1/catalog/scan")
+async def catalog_scan(
+    channel: str = "",
+    symbol: str = "",
+    start: int = 0,
+    end: int = 0,
+    limit: int = _CATALOG_SCAN_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Scan lake rows for one channel/symbol in a time range (read-only, no payment).
+
+    Returns at most ``limit`` rows (default and hard max: 10000). Empty channel
+    or symbol, or no matching rows, yields ``[]``.
+    """
+    channel = (channel or "").strip()
+    symbol = (symbol or "").strip()
+    if not channel or not symbol:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _CATALOG_SCAN_MAX_LIMIT:
+        limit = _CATALOG_SCAN_MAX_LIMIT
+
+    client = _get_lake_client()
+    df = client.scan(channel, [symbol], start, end)
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
 @app.post("/api/v1/simulate-price-impact")
 async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, Any]]:
     """Simulate execution slippage and price impact for a given order size."""
