@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–59 COMPLETE. Continuous loop still active → Wave 60+.
+**Status:** Waves 1–60 COMPLETE. Continuous loop still active → Wave 61+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -466,7 +466,14 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 2 | Ensure `list-exchanges` in CLI `--help` main Commands listing (already registered; module docstring Commands list present from wave 58; no CLI code change needed) | DONE | verified |
 | 3 | Test: `test_cli_list_exchanges_in_main_help` (top-level `--help` + module docstring); post-feature critical suites **799 passed** (+1) | DONE | `f0ca0e1` |
 
-## Next rotation ideas (Wave 60+)
+## Wave 60 — Feature (API catalog/stats) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/catalog/stats` → `{row_counts, channel_count}` via list_channels + per-channel COUNT(*) (try/except → -1); capabilities entry | DONE | `7ebac63` |
+| 2 | Tests: empty lake, mock counts, query fail → -1, quote escape, route registered, capabilities | DONE | `7ebac63` |
+
+## Next rotation ideas (Wave 61+)
 
 Priority candidates for the next cycles:
 
@@ -474,6 +481,8 @@ Priority candidates for the next cycles:
 2. **More indicator CLI modes** — mirror MCP indicators on the CLI where missing  
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
+5. **MCP / CLI catalog-stats surface** — mirror REST stats for agents/CLI  
+
 
 
 
@@ -545,3 +554,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 57: broad regression green (790→792 after +2 tests); CLI search `--exchange` docs + strip + tests
 - Wave 58: CLI `list-exchanges` + MCP `list_registered_exchanges` (factory connector registry; ≠ lake on-disk)
 - Wave 59: broad regression green (798→799 after +1 test); list-exchanges `--help` main listing + module docstring lock
+- Wave 60: REST `GET /api/v1/catalog/stats` per-channel row counts (list_channels + COUNT(*); -1 on fail; no inventory)
