@@ -3500,3 +3500,153 @@ def test_lending_stress_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/lending-stress", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/data-coverage — inventory filter for one symbol (read-only)
+# ---------------------------------------------------------------------------
+
+
+def test_data_coverage_empty_symbol() -> None:
+    """Missing / blank symbol yields [] without touching the lake client."""
+    from crypcodile.api_server import data_coverage
+
+    assert asyncio.run(data_coverage()) == []
+    assert asyncio.run(data_coverage(symbol="")) == []
+    assert asyncio.run(data_coverage(symbol="   ")) == []
+
+
+def test_data_coverage_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import data_coverage
+
+    result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
+    assert result == []
+
+
+def test_data_coverage_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import data_coverage
+
+        result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
+    assert result == []
+    mock_client.inventory.assert_called_once_with(channel=None)
+
+
+def test_data_coverage_filters_by_symbol() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit", "deribit", "binance"],
+            "channel": ["trade", "book_snapshot", "trade"],
+            "symbol": [
+                "deribit:BTC-PERPETUAL",
+                "deribit:BTC-PERPETUAL",
+                "binance:BTCUSDT",
+            ],
+            "min_ts": [1, 2, 3],
+            "max_ts": [10, 20, 30],
+            "row_count": [5, 8, 99],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import data_coverage
+
+        result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
+    assert len(result) == 2
+    assert {r["channel"] for r in result} == {"trade", "book_snapshot"}
+    for row in result:
+        assert row["symbol"] == "deribit:BTC-PERPETUAL"
+        assert row["exchange"] == "deribit"
+    mock_client.inventory.assert_called_once_with(channel=None)
+
+
+def test_data_coverage_channel_filter() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["deribit"],
+            "channel": ["trade"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [10],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import data_coverage
+
+        result = asyncio.run(
+            data_coverage(symbol="deribit:BTC-PERPETUAL", channel="trade")
+        )
+    assert len(result) == 1
+    assert result[0]["channel"] == "trade"
+    assert result[0]["row_count"] == 10
+    mock_client.inventory.assert_called_once_with(channel="trade")
+
+
+def test_data_coverage_strips_empty_channel() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        schema={
+            "exchange": pl.Utf8,
+            "channel": pl.Utf8,
+            "symbol": pl.Utf8,
+            "min_ts": pl.Int64,
+            "max_ts": pl.Int64,
+            "row_count": pl.Int64,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import data_coverage
+
+        asyncio.run(data_coverage(symbol="x:Y", channel="  "))
+    mock_client.inventory.assert_called_once_with(channel=None)
+
+
+def test_data_coverage_no_symbol_match() -> None:
+    mock_client = MagicMock()
+    mock_client.inventory.return_value = pl.DataFrame(
+        {
+            "exchange": ["binance"],
+            "channel": ["trade"],
+            "symbol": ["binance:BTCUSDT"],
+            "min_ts": [1],
+            "max_ts": [2],
+            "row_count": [3],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import data_coverage
+
+        result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
+    assert result == []
+
+
+def test_data_coverage_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/data-coverage."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/data-coverage", ("GET",)) in paths
+
+
+def test_catalog_search_route_registered() -> None:
+    """Search already lives at /api/v1/catalog/search — no /api/v1/search alias."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/catalog/search", ("GET",)) in paths

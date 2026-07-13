@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–23 COMPLETE. Ready for Wave 24.
+**Status:** Waves 1–24 COMPLETE. Ready for Wave 25.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -186,7 +186,14 @@
 |---|------|--------|--------|
 | 1 | REST `GET /api/v1/risk-reversal` (vol_skew → risk_reversal_butterfly; target_delta) | DONE | `eb23611` |
 
-## Next rotation ideas (Wave 24+)
+## Wave 24 — Feature (data-coverage REST) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/data-coverage` (symbol/channel → inventory filter) | DONE | `dd319ed` |
+| 2 | Skip `/api/v1/search` alias — already `GET /api/v1/catalog/search` | SKIP | — |
+
+## Next rotation ideas (Wave 25+)
 
 Priority candidates for the next cycles:
 
@@ -227,3 +234,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 21: OKX book resync bridge; base risk REST (depth/seq/chaos/peg); iv-surface / term-structure REST
 - Wave 22: REST vol-skew / lending-stress endpoints
 - Wave 23: REST risk-reversal (`vol_skew` → `risk_reversal_butterfly`)
+- Wave 24: REST data-coverage (`inventory` filter by symbol/channel); skip search alias

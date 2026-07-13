@@ -1408,6 +1408,29 @@ async def catalog_inventory(
     return df.to_dicts()
 
 
+@app.get("/api/v1/data-coverage")
+async def data_coverage(
+    symbol: str = "",
+    channel: str = "",
+) -> list[dict[str, Any]]:
+    """Return inventory coverage rows for one symbol (read-only, no payment).
+
+    Wraps lake inventory filtered to exact ``symbol`` match, with optional
+    ``channel``. Empty / whitespace-only symbol, empty lake, or no matching
+    rows yields ``[]``. Same contract as MCP ``data_coverage``.
+    """
+    symbol = (symbol or "").strip()
+    if not symbol:
+        return []
+    ch = (channel or "").strip() or None
+    client = _get_lake_client()
+    df = client.inventory(channel=ch)
+    if len(df) == 0:
+        return []
+    matched = [row for row in df.to_dicts() if row.get("symbol") == symbol]
+    return matched
+
+
 # Hard max rows for lake scan / SQL query / OI / funding-APR HTTP responses (bounded discovery).
 _CATALOG_SCAN_MAX_LIMIT = 10_000
 _QUERY_MAX_LIMIT = 10_000

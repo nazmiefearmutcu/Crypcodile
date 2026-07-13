@@ -6,6 +6,7 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-13
 ### Added
+- **API data-coverage endpoint**: `GET /api/v1/data-coverage` with `symbol` + optional `channel` wrapping inventory filter for per-symbol coverage (read-only, no payment; same contract as MCP `data_coverage`).
 - **API open-interest endpoint**: `GET /api/v1/open-interest` with optional symbols, time range, and row limit (read-only lake HTTP surface for OI aggregation).
 - **API funding-apr endpoint**: `GET /api/v1/funding-apr` REST endpoint for funding APR analytics.
 - **API indicators endpoint**: `GET /api/v1/indicators` wrapping `get_indicators` (symbol/start/end/interval/indicator/period; hard row limit 10000; unknown indicator → 400).
