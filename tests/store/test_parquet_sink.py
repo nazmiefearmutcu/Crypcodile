@@ -311,6 +311,47 @@ async def test_parquet_sink_write_failure_preserves_concurrent_puts(
     assert original_write is not None
 
 
+async def test_parquet_sink_cancelled_flush_re_buffers_rows(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    """CancelledError mid-await must restore rows (not only Exception).
+
+    ``except Exception`` does not catch ``asyncio.CancelledError`` (a
+    BaseException).  If flush is cancelled while awaiting the executor write,
+    the detached snapshot would be lost unless re-buffer runs in ``finally``.
+    """
+    import asyncio
+
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+
+    await sink.put(_trade(1.0))
+    await sink.put(_trade(2.0))
+    assert len(sink._buffers["trade"]) == 2
+
+    entered = asyncio.Event()
+
+    async def _hang_executor(*_args, **_kwargs):
+        entered.set()
+        # Park forever so the flush task can be cancelled mid-await.
+        await asyncio.Future()
+
+    monkeypatch.setattr(asyncio.get_event_loop(), "run_in_executor", _hang_executor)
+
+    task = asyncio.create_task(sink.flush())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Rows must be back in the buffer after cancel
+    assert "trade" in sink._buffers
+    assert len(sink._buffers["trade"]) == 2
+    prices = {row["price"] for row in sink._buffers["trade"]}
+    assert prices == {1.0, 2.0}
+    assert _find_parquets(tmp_path) == []
+
+
 # ---------------------------------------------------------------------------
 # Security: partition path components must not escape data_dir
 # ---------------------------------------------------------------------------

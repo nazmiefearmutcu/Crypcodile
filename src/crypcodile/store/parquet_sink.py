@@ -273,10 +273,11 @@ class ParquetSink(Sink):
         """Write a channel's buffer to one or more Parquet files.
 
         Rows are detached for the write attempt but only dropped after every
-        partition write succeeds.  On failure the snapshot is re-buffered
-        (prepended ahead of any rows concurrent ``put()`` may have added
-        while the write was in flight) and the exception is re-raised so
-        callers see the failure without silent data loss.
+        partition write succeeds.  On any non-success path (write failure,
+        ``CancelledError``, or other ``BaseException``) the snapshot is
+        re-buffered (prepended ahead of any rows concurrent ``put()`` may
+        have added while the write was in flight) so callers never see silent
+        data loss.
         """
         # Detach current buffer so concurrent put() appends to a fresh list
         # via defaultdict, while we own the snapshot for this flush.
@@ -284,6 +285,10 @@ class ParquetSink(Sink):
         if not rows:
             return
 
+        # Use try/finally + success flag so rows are re-buffered on ANY
+        # non-success path, including CancelledError / BaseException (which
+        # ``except Exception`` does not catch).
+        ok = False
         try:
             # Group rows by (exchange, date, bucket) — each group → one file
             groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = (
@@ -303,12 +308,14 @@ class ParquetSink(Sink):
                     bucket,
                     group_rows,
                 )
-        except Exception:
-            # Durable write failed: restore snapshot without losing any rows
-            # that arrived via put() while the flush was in progress.
-            pending = self._buffers.get(channel, [])
-            self._buffers[channel] = rows + pending
-            raise
+            ok = True
+        finally:
+            if not ok:
+                # Write failed or task cancelled: restore snapshot without
+                # losing any rows that arrived via put() while the flush was
+                # in progress.
+                pending = self._buffers.get(channel, [])
+                self._buffers[channel] = rows + pending
 
     def _write_parquet_sync(
         self,
