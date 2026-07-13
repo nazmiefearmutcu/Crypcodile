@@ -240,7 +240,7 @@
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | MCP `get_spot_future_basis` (handler + TOOLS schema + dispatch; optional `expiry_ns`) | DONE | (pending) |
+| 1 | MCP `get_spot_future_basis` (handler + TOOLS schema + dispatch; optional `expiry_ns`) | DONE | `096426f` |
 
 ## Next rotation ideas (Wave 32+)
 
