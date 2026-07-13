@@ -6,7 +6,7 @@
 **Base:** `66b44af`  
 **Version:** `0.1.044`  
 **Rotation:** Bug hunt → Feature → Hardening → Feature → …  
-**Status:** Waves 1–51 COMPLETE. Continuous loop still active → Wave 52+.
+**Status:** Waves 1–52 COMPLETE. Continuous loop still active → Wave 53+.
 
 ## Wave 1 — Bug hunt — COMPLETE
 
@@ -399,7 +399,16 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 | 1 | REST `GET /api/v1/catalog/search` optional `channel` + `exchange` query filters (strip empty → no filter; forward to client) | DONE | `9afda11` |
 | 2 | Tests: forwards filters; strips empty/padded filters; existing search tests updated for kwargs | DONE | `9afda11` |
 
-## Next rotation ideas (Wave 52+)
+## Wave 52 — Feature (MCP search exchange + REST catalog/symbols) — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | MCP `search_symbols` optional `exchange` filter (handler + schema + dispatch; parity with REST/CLI/Catalog) | DONE | `f152671` |
+| 2 | Verify MCP `inventory_snapshot` already has channel + exchange filters (no code change) | DONE | verified |
+| 3 | REST `GET /api/v1/catalog/symbols?channel=&exchange=` distinct sorted symbols from inventory + capabilities | DONE | `f152671` |
+| 4 | Tests: MCP exchange filter; catalog symbols empty/distinct/filters/strip/route; capabilities includes symbols | DONE | `f152671` |
+
+## Next rotation ideas (Wave 53+)
 
 Priority candidates for the next cycles:
 
@@ -408,7 +417,6 @@ Priority candidates for the next cycles:
 3. **Payment / portal polish** — remaining API portal UX beyond backend detection  
 4. **Coinbase book gap counter** — deferred: level2 has no sequence fields (`2150bba`)  
 5. **CLI catalog-dates** — surface `list_dates` on CLI (REST + MCP already exist)  
-6. **MCP search_symbols exchange filter** — REST/Catalog/CLI support exchange; MCP only has channel  
 
 
 
@@ -472,3 +480,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 49: CLI `catalog-summary`; hive suffix special-char filtering on list_channels/exchanges walks
 - Wave 50: broad regression green (714→719 after +5 tests); CLI catalog filesystem list_channels; `_create_view` empty-partition skip; `--symbols` still inventories with empty dirs present
 - Wave 51: REST `GET /api/v1/catalog/search` optional `channel`/`exchange` filters (parity with CLI search / Catalog.search_symbols)
+- Wave 52: MCP `search_symbols` exchange filter; REST `GET /api/v1/catalog/symbols` distinct inventory symbols; inventory_snapshot filters verified
