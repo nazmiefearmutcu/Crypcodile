@@ -17,7 +17,8 @@ Formulas
   (simple, non-compounded annualisation; appropriate for the short holding
   periods involved in perpetual funding).
 - ``cumulative_funding`` = running sum of ``funding_rate`` over rows ordered by
-  ``funding_ts`` ascending.
+  ``funding_ts`` ascending (after deduplicating by ``funding_ts`` so live-lake
+  re-emits of the same settlement do not inflate the sum).
 
 Missing ``interval_hours``
 --------------------------
@@ -100,6 +101,11 @@ def funding_apr(
     Queries the ``funding`` channel and returns one row per funding event
     within ``[start_ns, end_ns]``, ordered by ``funding_ts`` ascending.
 
+    Live lakes often re-emit the same settlement many times (WS reconnects,
+    overlapping collectors).  Rows that share a ``funding_timestamp`` (resolved
+    as ``funding_ts``) are collapsed to a single event **before** APR and the
+    cumulative sum are computed, so cumulative funding cannot explode.
+
     Args:
         catalog:  A :class:`~crypcodile.store.catalog.Catalog` instance.
         symbol:   Canonical symbol string (e.g. ``"deribit:BTC-PERPETUAL"``).
@@ -141,14 +147,20 @@ def funding_apr(
     else:
         ih_col = pl.Series("interval_hours", [_DEFAULT_INTERVAL_HOURS] * len(raw), dtype=pl.Int64)
 
-    # Build a working frame ordered by funding_ts.
-    work = pl.DataFrame(
-        {
-            "funding_ts": ts_col.cast(pl.Int64),
-            "funding_rate": rate_col.cast(pl.Float64),
-            "interval_hours": ih_col,
-        }
-    ).sort("funding_ts")
+    # Build a working frame ordered by funding_ts, then collapse duplicate
+    # settlement timestamps (keep last write).  Must happen before cumulative
+    # sum so re-emitted live-lake rows do not inflate total funding.
+    work = (
+        pl.DataFrame(
+            {
+                "funding_ts": ts_col.cast(pl.Int64),
+                "funding_rate": rate_col.cast(pl.Float64),
+                "interval_hours": ih_col,
+            }
+        )
+        .sort("funding_ts")
+        .unique(subset=["funding_ts"], keep="last", maintain_order=True)
+    )
 
     # Compute APR per row via the validated helper (pure math, no numpy/scipy).
     # Routing through apr_from_rate -> periods_per_year enforces the interval_hours>0
