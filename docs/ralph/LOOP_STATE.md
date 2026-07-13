@@ -437,9 +437,9 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 
 | # | Task | Status | Commit |
 |---|------|--------|--------|
-| 1 | CLI `resolve-symbols` wrapping `client.resolve_symbols` (`--channel`, `--ambiguous=error\|first\|all`; comma-separated arg; ValueError → exit 1) | DONE | `PLACEHOLDER_FEAT` |
-| 2 | CLI `data-coverage --symbol` optional `--channel` wrapping inventory exact-symbol filter (empty → `No coverage.`) | DONE | `PLACEHOLDER_FEAT` |
-| 3 | Tests: empty/data/comma/channel/strip/error/delegate for resolve-symbols; empty/data/channel/no-match/strip/delegate for data-coverage — **15 passed**; CLI+discovery regression green | DONE | `PLACEHOLDER_FEAT` |
+| 1 | CLI `resolve-symbols` wrapping `client.resolve_symbols` (`--channel`, `--ambiguous=error\|first\|all`; comma-separated arg; ValueError → exit 1) | DONE | `5f38b0f` |
+| 2 | CLI `data-coverage --symbol` optional `--channel` wrapping inventory exact-symbol filter (empty → `No coverage.`) | DONE | `5f38b0f` |
+| 3 | Tests: empty/data/comma/channel/strip/error/delegate for resolve-symbols; empty/data/channel/no-match/strip/delegate for data-coverage — **15 passed**; CLI+discovery regression green | DONE | `5f38b0f` |
 
 ## Next rotation ideas (Wave 57+)
 
