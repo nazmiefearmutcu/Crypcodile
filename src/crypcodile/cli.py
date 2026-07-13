@@ -16,6 +16,7 @@ term-structure -- Print the ATM IV term structure.
 vol-skew       -- Print per-strike IV and delta for a single expiry.
 risk-reversal  -- Print risk-reversal and butterfly from vol skew.
 open-interest  -- Aggregate open interest across exchanges from the lake.
+liquidity-depth -- Per-block bid/ask depth at ±1/2/5% from mid (book snapshots).
 peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
 chaos-score    -- Normalized [0, 100] chaos score from pure risk metrics.
 gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
@@ -52,6 +53,7 @@ Usage examples::
                             --at 1704067200000000000 --target-delta 0.25 --data-dir /data
     crypcodile open-interest --symbol BTC --start 0 --end 9999999999999999999 \\
                             --data-dir /data
+    crypcodile liquidity-depth --symbol base_onchain:DEGEN-WETH --data-dir /data
     crypcodile peg-deviation --price 0.98 --threshold 0.01
     crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
     crypcodile chaos-score --volatility 0.05 --stablecoin-deviation 0.002 \\
@@ -2855,6 +2857,69 @@ def ofi_cmd(
         })
     df_formatted = pl.DataFrame(formatted_rows)
     typer.echo(df_formatted)
+
+
+# ---------------------------------------------------------------------------
+# liquidity-depth (block-level book depth from lake snapshots)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="liquidity-depth")
+def liquidity_depth_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option(
+            "--symbol",
+            help="Canonical symbol, e.g. base_onchain:DEGEN-WETH or deribit:BTC-PERPETUAL.",
+        ),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Calculate per-block bid/ask liquidity depth at ±1%, ±2%, ±5% from mid-price."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(
+                data_dir, channel="book_snapshot"
+            )
+            if selected_symbols:
+                symbol = selected_symbols[0]
+
+        if not symbol:
+            symbol = prompt_symbol(
+                "Symbol (e.g. base_onchain:DEGEN-WETH)",
+                data_dir,
+                channel="book_snapshot",
+            )
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_block_liquidity_depth(symbol)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No book snapshots found for the given symbol.")
+        raise typer.Exit(code=0)
+
+    typer.echo(df)
 
 
 # ---------------------------------------------------------------------------

@@ -419,6 +419,18 @@ class CrypcodileClient:
 
         return _calculate_ofi(self._catalog, symbol, start_ns, end_ns, interval)
 
+    def calculate_block_liquidity_depth(self, symbol: str) -> pl.DataFrame:
+        """Calculate per-block bid/ask depth at ±1%, ±2%, ±5% from mid.
+
+        Thin wrapper over
+        :func:`crypcodile.analytics.liquidity_depth.calculate_block_liquidity_depth`.
+        """
+        from crypcodile.analytics.liquidity_depth import (
+            calculate_block_liquidity_depth as _calculate_block_liquidity_depth,
+        )
+
+        return _calculate_block_liquidity_depth(self._catalog, symbol)
+
     def track_whale_alerts(
         self,
         symbol: str,
