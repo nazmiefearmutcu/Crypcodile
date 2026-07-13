@@ -193,7 +193,14 @@
 | 1 | REST `GET /api/v1/data-coverage` (symbol/channel → inventory filter) | DONE | `3438684` |
 | 2 | Skip `/api/v1/search` alias — already `GET /api/v1/catalog/search` | SKIP | — |
 
-## Next rotation ideas (Wave 25+)
+## Wave 25 — Feature (perp-basis REST + label_transfers MCP) — IN PROGRESS
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/perp-basis` (symbol/start/end/limit → client.perp_basis); skip bulk `/export` | DONE | pending |
+| 2 | MCP `label_transfers` wrapping pure `label_transfer_addresses` | DONE | pending |
+
+## Next rotation ideas (Wave 26+)
 
 Priority candidates for the next cycles:
 
@@ -235,3 +242,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 22: REST vol-skew / lending-stress endpoints
 - Wave 23: REST risk-reversal (`vol_skew` → `risk_reversal_butterfly`)
 - Wave 24: REST data-coverage (`inventory` filter by symbol/channel); skip search alias
+- Wave 25: REST perp-basis (`client.perp_basis`); MCP `label_transfers`; skip bulk export HTTP

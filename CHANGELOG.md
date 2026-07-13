@@ -6,6 +6,8 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ## [0.1.044] - 2026-07-13
 ### Added
+- **API perp-basis endpoint**: `GET /api/v1/perp-basis` with `symbol`/`start`/`end`/`limit` wrapping `CrypcodileClient.perp_basis` (mark–index basis; hard row limit 10000; no payment). Skipped bulk `/api/v1/export` lake dump in favor of this bounded analytics surface.
+- **MCP label_transfers tool**: Pure offline transfer labeling via `label_transfer_addresses` (`transfers` + `watchlist`; optional `min_usd` / `known_only`).
 - **API data-coverage endpoint**: `GET /api/v1/data-coverage` with `symbol` + optional `channel` wrapping inventory filter for per-symbol coverage (read-only, no payment; same contract as MCP `data_coverage`).
 - **API open-interest endpoint**: `GET /api/v1/open-interest` with optional symbols, time range, and row limit (read-only lake HTTP surface for OI aggregation).
 - **API funding-apr endpoint**: `GET /api/v1/funding-apr` REST endpoint for funding APR analytics.
