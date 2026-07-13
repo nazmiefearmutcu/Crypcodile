@@ -464,7 +464,7 @@ Skipped: file-based GET gas-vol; GET list-channels alias (catalog/channels exist
 |---|------|--------|--------|
 | 1 | Broad regression: api_endpoints, mcp_analytics/discovery, catalog/catalog_search, store (compactor/parquet_sink), binance/okx, cli, client search, json_safe, factory, schema, sink, instruments, replay, gap_bridge — **798 passed** (no pre-existing failures) | DONE | baseline `6956c82` |
 | 2 | Ensure `list-exchanges` in CLI `--help` main Commands listing (already registered; module docstring Commands list present from wave 58; no CLI code change needed) | DONE | verified |
-| 3 | Test: `test_cli_list_exchanges_in_main_help` (top-level `--help` + module docstring); post-feature critical suites **799 passed** (+1) | DONE | PENDING_SHA |
+| 3 | Test: `test_cli_list_exchanges_in_main_help` (top-level `--help` + module docstring); post-feature critical suites **799 passed** (+1) | DONE | `f0ca0e1` |
 
 ## Next rotation ideas (Wave 60+)
 
