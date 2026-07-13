@@ -20,7 +20,8 @@ Usage example (inside a connector's message loop)::
 
     async for raw in transport:
         delta = normalize_depth(raw, ...)
-        result = sync.feed(U=delta.seq_start, u=delta.seq_id, pu=delta.prev_seq_id)
+        # U comes from the wire depthUpdate (not stored on BookDelta).
+        result = sync.feed(U=U, u=delta.seq_id, pu=delta.prev_seq_id)
         record = bridge.feed_sync_result(result, delta)
         if record is not None:
             await sink.put(record)
@@ -31,6 +32,10 @@ Usage example (inside a connector's message loop)::
             applied = await bridge.complete_resync()
             for r in applied:
                 await sink.put(r)
+
+Primary production wiring: ``BinanceConnector._handle_message`` (when
+``book_delta`` / ``book_snapshot`` channels are subscribed) — see
+``crypcodile.exchanges.binance.connector``.
 """
 
 from __future__ import annotations
@@ -241,6 +246,14 @@ class BookResyncBridge:
         # Clear state
         self._buffer = []
         self._resyncing = False
+
+        # Buffered deltas are emitted without re-running OrderBookSync.feed().
+        # Advance continuity so the next live event checks against the last
+        # applied u (not first-event rules against the snapshot alone).
+        if kept_deltas:
+            last_seq = kept_deltas[-1].seq_id
+            if last_seq is not None and hasattr(self._sync, "note_applied"):
+                self._sync.note_applied(last_seq)
 
         # Return snapshot first, then kept deltas (in buffered order).
         result: list[BookRecord] = [snapshot]

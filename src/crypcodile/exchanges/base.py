@@ -148,6 +148,23 @@ class Connector(ABC):
         pure pull source) should implement an explicit no-op.
         """
 
+    async def _handle_message(self, msg: object, local_ts: int) -> None:
+        """Process one decoded WS message and emit records to ``self.out``.
+
+        Default: ``normalize(msg)`` → ``out.put`` for each record.
+
+        **Integration point for book resync:** connectors that need async
+        side-effects during the message loop (e.g. Binance depth sequence-gap
+        recovery via :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`)
+        should override this method.  Keep the default path for non-book
+        channels so existing normalizers stay pure/sync.
+
+        Called from :meth:`run` inside the normalize-error try block; exceptions
+        here are DLQ'd and the loop continues.
+        """
+        for rec in self.normalize(msg, local_ts):
+            await self.out.put(rec)
+
     async def backfill(
         self,
         channel: str,
@@ -194,8 +211,7 @@ class Connector(ABC):
                         continue
 
                     try:
-                        for rec in self.normalize(msg, local_ts):
-                            await self.out.put(rec)
+                        await self._handle_message(msg, local_ts)
                     except Exception as exc:
                         tb = traceback.format_exc()
                         await self._dlq.put(local_ts, raw, type(exc).__name__, tb)
