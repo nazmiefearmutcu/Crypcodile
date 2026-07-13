@@ -4,6 +4,26 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.044] - 2026-07-13
+### Added
+- **Catalog inventory and ranked symbol search**: Store-layer inventory listing and ranked symbol search over the data catalog.
+- **Search system (client, CLI, MCP)**: Client `resolve_symbols`, CLI search, and MCP discovery tools for symbol resolution.
+- **MCP analytics tools**: Exposed slippage, OFI, whale alerts, IV surface, and term-structure tools over MCP.
+- **CLI vol-skew and risk-reversal**: New `vol-skew` and risk-reversal commands for options skew analytics.
+- **CLI base risk analytics**: Exposed base risk analytics commands on the CLI.
+
+### Fixed
+- **Atomic parquet compact**: Compact uses rename-before-delete; in-flight work is awaited on stop; compact executor is awaited across start/stop cancel paths.
+- **Parquet sink buffer durability**: Drop sink buffer only after durable write; re-buffer rows when a flush is cancelled.
+- **Partition path sanitization**: Sanitize parquet partition path components; validate catalog scan limits and escape channel IDs.
+- **API payment CAS and sim defaults**: Compare-and-swap payment spend before serve; disable simulation by default; lock admin behind admin key.
+- **Pending-only paid transitions**: Enforce pending-only transitions to paid for verify and simulate payment flows.
+- **MCP stdin EOF**: Exit cleanly on stdin EOF without hanging the executor.
+- **Polars min_samples**: Update analytics from deprecated `min_periods` to `min_samples`.
+
+### Changed
+- **CLI symbol resolution**: Resolve symbols via `client.resolve_symbols` for consistent catalog-backed lookup.
+
 ## [0.1.043] - 2026-07-09
 ### Added
 - **Technical Analysis Indicators Engine**: Implemented SMA, EMA, RSI, MACD, and Bollinger Bands calculated using high-performance Polars operations.
