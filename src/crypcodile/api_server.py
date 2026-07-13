@@ -1419,6 +1419,7 @@ _OFI_MAX_LIMIT = 10_000
 _WHALE_ALERTS_MAX_LIMIT = 10_000
 _IV_SURFACE_MAX_LIMIT = 10_000
 _TERM_STRUCTURE_MAX_LIMIT = 10_000
+_VOL_SKEW_MAX_LIMIT = 10_000
 _LIQUIDITY_DEPTH_MAX_LIMIT = 10_000
 _SEQUENCER_LATENCY_MAX_LIMIT = 10_000
 
@@ -1918,6 +1919,49 @@ async def term_structure(
     return df.to_dicts()
 
 
+@app.get("/api/v1/vol-skew")
+async def vol_skew(
+    underlying: str = "",
+    expiry_ns: int = 0,
+    at: int = 0,
+    rate: float = 0.0,
+    limit: int = _VOL_SKEW_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Per-strike IV and delta for a single expiry (read-only, no payment).
+
+    Query params: ``underlying`` (e.g. ``BTC``), ``expiry_ns`` option expiry
+    as nanoseconds UTC, ``at`` snapshot instant as nanoseconds UTC, ``rate``
+    continuous risk-free rate (default ``0.0``).
+
+    Wraps :meth:`CrypcodileClient.vol_skew`. Returns at most ``limit`` rows
+    (default and hard max: 10000). Empty/missing ``underlying``, empty lake,
+    or no matching options yields ``[]``.
+    """
+    und = (underlying or "").strip()
+    if not und:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _VOL_SKEW_MAX_LIMIT:
+        limit = _VOL_SKEW_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.vol_skew(und, int(expiry_ns), int(at), rate=float(rate))
+    except Exception as e:
+        log.error("Vol skew query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Vol skew query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
 @app.get("/api/v1/liquidity-depth")
 async def liquidity_depth(
     symbol: str = "",
@@ -2068,6 +2112,53 @@ async def peg_deviation(
             status_code=500,
             detail="Peg deviation calculation failed.",
         ) from e
+
+
+@app.get("/api/v1/lending-stress")
+async def lending_stress(
+    collateral_usd: float = 0.0,
+    debt_usd: float = 0.0,
+    liquidation_threshold: float = 0.0,
+    haircut_pct: float = 0.0,
+) -> dict[str, Any]:
+    """Pure LTV/health-factor stress under collateral haircut (no lake, no payment).
+
+    Query params match the CLI ``lending-stress`` command:
+    ``collateral_usd``, ``debt_usd``, ``liquidation_threshold`` (fraction,
+    e.g. ``0.8``), ``haircut_pct`` (fraction or percent, e.g. ``0.20`` or ``20``).
+
+    Wraps :func:`crypcodile.analytics.lending_stress.lending_stress_test`.
+    Returns the pure-function metrics plus the input parameters for context.
+    Health factors may be ``float('inf')`` when debt is zero.
+    """
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    try:
+        result = lending_stress_test(
+            collateral_usd=float(collateral_usd),
+            debt_usd=float(debt_usd),
+            liquidation_threshold=float(liquidation_threshold),
+            haircut_pct=float(haircut_pct),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        log.error("Lending stress calculation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Lending stress calculation failed.",
+        ) from e
+
+    return {
+        "collateral_usd": float(collateral_usd),
+        "debt_usd": float(debt_usd),
+        "liquidation_threshold": float(liquidation_threshold),
+        "haircut_pct": float(haircut_pct),
+        "current_health_factor": result["current_health_factor"],
+        "simulated_health_factor": result["simulated_health_factor"],
+        "is_liquidatable": bool(result["is_liquidatable"]),
+        "simulated_is_liquidatable": bool(result["simulated_is_liquidatable"]),
+    }
 
 
 class QueryPayload(BaseModel):

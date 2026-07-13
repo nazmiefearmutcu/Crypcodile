@@ -13,6 +13,8 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 - **API whale-alerts endpoint**: `GET /api/v1/whale-alerts` wrapping `track_whale_alerts` (symbol/start/end/min_usd; hard row limit 10000; negative min_usd → 400).
 - **API slippage endpoint**: `GET /api/v1/slippage` wrapping `estimate_slippage` (query: symbol, side, size; validation errors → 400).
 - **API spot-perp basis endpoint**: `GET /api/v1/basis` with `spot` + `perp` query params wrapping `spot_perp_basis` (bounded rows, no payment).
+- **API vol-skew endpoint**: `GET /api/v1/vol-skew` with `underlying`, `expiry_ns`, `at`, `rate`, `limit` wrapping `CrypcodileClient.vol_skew` (hard row limit 10000).
+- **API lending-stress endpoint**: `GET /api/v1/lending-stress` pure query params matching CLI (`collateral_usd`, `debt_usd`, `liquidation_threshold`, `haircut_pct`) wrapping `lending_stress_test`.
 - **MCP MEV sandwich detection tool**: Expose MEV sandwich detection over MCP.
 - **MCP chaos-score tool**: Base risk / chaos scoring available as an MCP tool.
 - **MCP get_peg_deviation tool**: Pure `peg_deviation_from_price` over MCP (`price` required; optional `threshold`/`target`; no data lake).

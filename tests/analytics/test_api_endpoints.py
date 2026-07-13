@@ -2516,6 +2516,191 @@ def test_term_structure_route_registered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/vol-skew — per-strike IV/delta for one expiry (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_vol_skew_empty_underlying_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        assert asyncio.run(vol_skew(underlying="", expiry_ns=1, at=1)) == []
+        assert asyncio.run(vol_skew(underlying="  ", expiry_ns=1, at=1)) == []
+    mock_client.vol_skew.assert_not_called()
+
+
+def test_vol_skew_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import vol_skew
+
+    result = asyncio.run(
+        vol_skew(
+            underlying="BTC",
+            expiry_ns=1_735_689_600_000_000_000,
+            at=1_700_000_000_000_000_000,
+            rate=0.0,
+        )
+    )
+    assert result == []
+
+
+def test_vol_skew_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        result = asyncio.run(
+            vol_skew(
+                underlying="BTC",
+                expiry_ns=100,
+                at=1_700_000_000_000_000_000,
+                rate=0.01,
+            )
+        )
+    assert result == []
+    mock_client.vol_skew.assert_called_once_with(
+        "BTC", 100, 1_700_000_000_000_000_000, rate=0.01
+    )
+
+
+def test_vol_skew_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame(
+        {
+            "strike": [50000.0, 55000.0],
+            "moneyness": [1.0, 1.1],
+            "opt_type": ["C", "P"],
+            "iv": [0.5, 0.55],
+            "delta": [0.5, -0.45],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        result = asyncio.run(
+            vol_skew(
+                underlying="BTC",
+                expiry_ns=100,
+                at=1_700_000_000_000_000_000,
+                rate=0.0,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["strike"] == 50000.0
+    assert result[0]["iv"] == 0.5
+    assert result[0]["delta"] == 0.5
+    assert result[1]["opt_type"] == "P"
+    mock_client.vol_skew.assert_called_once_with(
+        "BTC", 100, 1_700_000_000_000_000_000, rate=0.0
+    )
+
+
+def test_vol_skew_strips_whitespace_underlying() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        asyncio.run(vol_skew(underlying="  BTC  ", expiry_ns=42, at=99, rate=0.02))
+    mock_client.vol_skew.assert_called_once_with("BTC", 42, 99, rate=0.02)
+
+
+def test_vol_skew_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame(
+        {
+            "strike": [90.0, 100.0, 110.0, 120.0, 130.0],
+            "moneyness": [0.9, 1.0, 1.1, 1.2, 1.3],
+            "opt_type": ["C"] * 5,
+            "iv": [0.5] * 5,
+            "delta": [0.5] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        result = asyncio.run(
+            vol_skew(underlying="BTC", expiry_ns=1, at=1, rate=0.0, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["strike"] == 90.0
+    assert result[1]["strike"] == 100.0
+
+
+def test_vol_skew_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame(
+        {
+            "strike": [float(i) for i in range(20)],
+            "moneyness": [1.0] * 20,
+            "opt_type": ["C"] * 20,
+            "iv": [0.5] * 20,
+            "delta": [0.5] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _VOL_SKEW_MAX_LIMIT, vol_skew
+
+        result = asyncio.run(
+            vol_skew(
+                underlying="BTC",
+                expiry_ns=1,
+                at=1,
+                rate=0.0,
+                limit=_VOL_SKEW_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.vol_skew.assert_called_once()
+
+
+def test_vol_skew_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.return_value = pl.DataFrame(
+        {
+            "strike": [90.0, 100.0, 110.0],
+            "moneyness": [0.9, 1.0, 1.1],
+            "opt_type": ["C", "C", "C"],
+            "iv": [0.5, 0.5, 0.5],
+            "delta": [0.5, 0.5, 0.5],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        result = asyncio.run(
+            vol_skew(underlying="BTC", expiry_ns=1, at=1, rate=0.0, limit=0)
+        )
+    assert len(result) == 1
+    assert result[0]["strike"] == 90.0
+
+
+def test_vol_skew_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.vol_skew.side_effect = RuntimeError("internal path /secret/lake")
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import vol_skew
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(vol_skew(underlying="BTC", expiry_ns=1, at=1, rate=0.0))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Vol skew query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_vol_skew_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/vol-skew."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/vol-skew", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/liquidity-depth — per-block book depth (read-only, no payment)
 # ---------------------------------------------------------------------------
 
@@ -2977,3 +3162,132 @@ def test_peg_deviation_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/peg-deviation", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/lending-stress — pure LTV / health-factor stress (no lake, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_lending_stress_healthy() -> None:
+    from crypcodile.api_server import lending_stress
+
+    result = asyncio.run(
+        lending_stress(
+            collateral_usd=10_000.0,
+            debt_usd=4_000.0,
+            liquidation_threshold=0.8,
+            haircut_pct=0.10,
+        )
+    )
+    assert result["collateral_usd"] == 10_000.0
+    assert result["debt_usd"] == 4_000.0
+    assert result["liquidation_threshold"] == 0.8
+    assert result["haircut_pct"] == 0.10
+    assert result["current_health_factor"] == pytest.approx(2.0)
+    assert result["simulated_health_factor"] == pytest.approx(1.8)
+    assert result["is_liquidatable"] is False
+    assert result["simulated_is_liquidatable"] is False
+
+
+def test_lending_stress_liquidation() -> None:
+    from crypcodile.api_server import lending_stress
+
+    # Current HF = (10000 * 0.8) / 9000 ≈ 0.889 → liquidatable now
+    result = asyncio.run(
+        lending_stress(
+            collateral_usd=10_000.0,
+            debt_usd=9_000.0,
+            liquidation_threshold=0.8,
+            haircut_pct=10.0,
+        )
+    )
+    assert result["current_health_factor"] < 1.0
+    assert result["is_liquidatable"] is True
+    assert result["simulated_is_liquidatable"] is True
+
+
+def test_lending_stress_zero_debt_inf() -> None:
+    from crypcodile.api_server import lending_stress
+
+    result = asyncio.run(
+        lending_stress(
+            collateral_usd=5_000.0,
+            debt_usd=0.0,
+            liquidation_threshold=0.8,
+            haircut_pct=0.20,
+        )
+    )
+    assert result["current_health_factor"] == float("inf")
+    assert result["simulated_health_factor"] == float("inf")
+    assert result["is_liquidatable"] is False
+    assert result["simulated_is_liquidatable"] is False
+
+
+def test_lending_stress_matches_analytics() -> None:
+    from crypcodile.analytics.lending_stress import lending_stress_test
+    from crypcodile.api_server import lending_stress
+
+    kwargs = {
+        "collateral_usd": 12_500.0,
+        "debt_usd": 3_000.0,
+        "liquidation_threshold": 0.75,
+        "haircut_pct": 20.0,
+    }
+    result = asyncio.run(lending_stress(**kwargs))
+    expected = lending_stress_test(**kwargs)
+    assert result["current_health_factor"] == expected["current_health_factor"]
+    assert result["simulated_health_factor"] == expected["simulated_health_factor"]
+    assert result["is_liquidatable"] == expected["is_liquidatable"]
+    assert result["simulated_is_liquidatable"] == expected["simulated_is_liquidatable"]
+    assert result["collateral_usd"] == kwargs["collateral_usd"]
+    assert result["debt_usd"] == kwargs["debt_usd"]
+    assert result["liquidation_threshold"] == kwargs["liquidation_threshold"]
+    assert result["haircut_pct"] == kwargs["haircut_pct"]
+
+
+def test_lending_stress_percent_vs_fraction_haircut() -> None:
+    """Haircut 20 and 0.20 must yield the same stress metrics (CLI parity)."""
+    from crypcodile.api_server import lending_stress
+
+    a = asyncio.run(
+        lending_stress(
+            collateral_usd=10_000.0,
+            debt_usd=5_000.0,
+            liquidation_threshold=0.8,
+            haircut_pct=20.0,
+        )
+    )
+    b = asyncio.run(
+        lending_stress(
+            collateral_usd=10_000.0,
+            debt_usd=5_000.0,
+            liquidation_threshold=0.8,
+            haircut_pct=0.20,
+        )
+    )
+    assert a["simulated_health_factor"] == b["simulated_health_factor"]
+    assert a["current_health_factor"] == b["current_health_factor"]
+
+
+def test_lending_stress_defaults() -> None:
+    from crypcodile.api_server import lending_stress
+
+    result = asyncio.run(lending_stress())
+    assert result["collateral_usd"] == 0.0
+    assert result["debt_usd"] == 0.0
+    assert result["liquidation_threshold"] == 0.0
+    assert result["haircut_pct"] == 0.0
+    assert result["current_health_factor"] == float("inf")
+    assert result["simulated_health_factor"] == float("inf")
+    assert result["is_liquidatable"] is False
+    assert result["simulated_is_liquidatable"] is False
+
+
+def test_lending_stress_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/lending-stress."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/lending-stress", ("GET",)) in paths
