@@ -242,7 +242,14 @@
 |---|------|--------|--------|
 | 1 | MCP `get_spot_future_basis` (handler + TOOLS schema + dispatch; optional `expiry_ns`) | DONE | `096426f` |
 
-## Next rotation ideas (Wave 32+)
+## Wave 32 — Feature (funding-predict REST) + bugfix — COMPLETE
+
+| # | Task | Status | Commit |
+|---|------|--------|--------|
+| 1 | REST `GET /api/v1/funding-predict` (comma-separated `rates`, `window_size` → `predict_next_funding`) | DONE | `fc2bd22` |
+| 2 | Fix OI symbol filter: `str.contains` literal match + skip empty tokens | DONE | `0af065a` |
+
+## Next rotation ideas (Wave 33+)
 
 Priority candidates for the next cycles:
 
@@ -290,3 +297,4 @@ Every task: implementer → spec reviewer → quality reviewer → fix if needed
 - Wave 29: portal detectBackend health fallback; REST `/api/v1/exchanges`
 - Wave 30: derive options ns timestamps; Aave HF zero≠∞; OKX/Bybit option expiry parse from symbol
 - Wave 31: MCP `get_spot_future_basis` (completes basis trio with perp + spot-perp)
+- Wave 32: REST `/api/v1/funding-predict`; OI symbol filter literal `str.contains`
