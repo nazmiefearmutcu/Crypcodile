@@ -1417,6 +1417,8 @@ _BASIS_MAX_LIMIT = 10_000
 _INDICATORS_MAX_LIMIT = 10_000
 _OFI_MAX_LIMIT = 10_000
 _WHALE_ALERTS_MAX_LIMIT = 10_000
+_IV_SURFACE_MAX_LIMIT = 10_000
+_TERM_STRUCTURE_MAX_LIMIT = 10_000
 
 # Mutating / side-effect SQL keywords rejected by the read-only query endpoint
 # (word-boundary). Includes DuckDB-specific statements (PRAGMA, INSTALL, LOAD,
@@ -1829,6 +1831,88 @@ async def slippage(
 
     if len(df) == 0:
         return []
+    return df.to_dicts()
+
+
+@app.get("/api/v1/iv-surface")
+async def iv_surface(
+    underlying: str = "",
+    at: int = 0,
+    rate: float = 0.0,
+    limit: int = _IV_SURFACE_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """Implied-vol surface snapshot at ``at`` (read-only, no payment).
+
+    Query params: ``underlying`` (e.g. ``BTC``), ``at`` snapshot instant as
+    nanoseconds UTC, ``rate`` continuous risk-free rate (default ``0.0``).
+
+    Wraps :meth:`CrypcodileClient.iv_surface`. Returns at most ``limit`` rows
+    (default and hard max: 10000). Empty/missing ``underlying``, empty lake,
+    or no matching options yields ``[]``.
+    """
+    und = (underlying or "").strip()
+    if not und:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _IV_SURFACE_MAX_LIMIT:
+        limit = _IV_SURFACE_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.iv_surface(und, at, rate=float(rate))
+    except Exception as e:
+        log.error("IV surface query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="IV surface query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
+    return df.to_dicts()
+
+
+@app.get("/api/v1/term-structure")
+async def term_structure(
+    underlying: str = "",
+    at: int = 0,
+    rate: float = 0.0,
+    limit: int = _TERM_STRUCTURE_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """ATM IV term structure at ``at`` (read-only, no payment).
+
+    Query params: ``underlying`` (e.g. ``BTC``), ``at`` snapshot instant as
+    nanoseconds UTC, ``rate`` continuous risk-free rate (default ``0.0``).
+
+    Wraps :meth:`CrypcodileClient.term_structure`. Returns at most ``limit``
+    rows (default and hard max: 10000). Empty/missing ``underlying``, empty
+    lake, or no matching options yields ``[]``.
+    """
+    und = (underlying or "").strip()
+    if not und:
+        return []
+    if limit < 1:
+        limit = 1
+    if limit > _TERM_STRUCTURE_MAX_LIMIT:
+        limit = _TERM_STRUCTURE_MAX_LIMIT
+
+    client = _get_lake_client()
+    try:
+        df = client.term_structure(und, at, rate=float(rate))
+    except Exception as e:
+        log.error("Term structure query failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Term structure query failed.",
+        ) from e
+
+    if len(df) == 0:
+        return []
+    if len(df) > limit:
+        df = df.head(limit)
     return df.to_dicts()
 
 

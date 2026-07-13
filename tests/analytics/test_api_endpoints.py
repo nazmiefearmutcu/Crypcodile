@@ -2165,3 +2165,351 @@ def test_slippage_route_registered() -> None:
         for r in app.routes
     }
     assert ("/api/v1/slippage", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/iv-surface — implied-vol surface snapshot (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_iv_surface_empty_underlying_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        assert asyncio.run(iv_surface(underlying="", at=1)) == []
+        assert asyncio.run(iv_surface(underlying="  ", at=1)) == []
+    mock_client.iv_surface.assert_not_called()
+
+
+def test_iv_surface_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import iv_surface
+
+    result = asyncio.run(
+        iv_surface(underlying="BTC", at=1_700_000_000_000_000_000, rate=0.0)
+    )
+    assert result == []
+
+
+def test_iv_surface_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        result = asyncio.run(
+            iv_surface(underlying="BTC", at=1_700_000_000_000_000_000, rate=0.01)
+        )
+    assert result == []
+    mock_client.iv_surface.assert_called_once_with(
+        "BTC", 1_700_000_000_000_000_000, rate=0.01
+    )
+
+
+def test_iv_surface_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame(
+        {
+            "expiry": [100, 100],
+            "strike": [50000.0, 55000.0],
+            "moneyness": [1.0, 1.1],
+            "opt_type": ["C", "P"],
+            "iv": [0.5, 0.55],
+            "source": ["mark", "mark"],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        result = asyncio.run(
+            iv_surface(
+                underlying="BTC",
+                at=1_700_000_000_000_000_000,
+                rate=0.0,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["strike"] == 50000.0
+    assert result[0]["iv"] == 0.5
+    assert result[1]["opt_type"] == "P"
+    mock_client.iv_surface.assert_called_once_with(
+        "BTC", 1_700_000_000_000_000_000, rate=0.0
+    )
+
+
+def test_iv_surface_strips_whitespace_underlying() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        asyncio.run(iv_surface(underlying="  BTC  ", at=42, rate=0.02))
+    mock_client.iv_surface.assert_called_once_with("BTC", 42, rate=0.02)
+
+
+def test_iv_surface_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame(
+        {
+            "expiry": [1, 2, 3, 4, 5],
+            "strike": [100.0] * 5,
+            "moneyness": [1.0] * 5,
+            "opt_type": ["C"] * 5,
+            "iv": [0.5] * 5,
+            "source": ["mark"] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        result = asyncio.run(
+            iv_surface(underlying="BTC", at=1, rate=0.0, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["expiry"] == 1
+    assert result[1]["expiry"] == 2
+
+
+def test_iv_surface_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame(
+        {
+            "expiry": list(range(20)),
+            "strike": [100.0] * 20,
+            "moneyness": [1.0] * 20,
+            "opt_type": ["C"] * 20,
+            "iv": [0.5] * 20,
+            "source": ["mark"] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _IV_SURFACE_MAX_LIMIT, iv_surface
+
+        result = asyncio.run(
+            iv_surface(
+                underlying="BTC",
+                at=1,
+                rate=0.0,
+                limit=_IV_SURFACE_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.iv_surface.assert_called_once()
+
+
+def test_iv_surface_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.return_value = pl.DataFrame(
+        {
+            "expiry": [1, 2, 3],
+            "strike": [100.0, 101.0, 102.0],
+            "moneyness": [1.0, 1.0, 1.0],
+            "opt_type": ["C", "C", "C"],
+            "iv": [0.5, 0.5, 0.5],
+            "source": ["mark", "mark", "mark"],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        result = asyncio.run(
+            iv_surface(underlying="BTC", at=1, rate=0.0, limit=0)
+        )
+    assert len(result) == 1
+    assert result[0]["expiry"] == 1
+
+
+def test_iv_surface_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.iv_surface.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import iv_surface
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(iv_surface(underlying="BTC", at=1, rate=0.0))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "IV surface query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_iv_surface_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/iv-surface."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/iv-surface", ("GET",)) in paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/term-structure — ATM IV term structure (read-only, no payment)
+# ---------------------------------------------------------------------------
+
+
+def test_term_structure_empty_underlying_skips_client() -> None:
+    mock_client = MagicMock()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        assert asyncio.run(term_structure(underlying="", at=1)) == []
+        assert asyncio.run(term_structure(underlying="  ", at=1)) == []
+    mock_client.term_structure.assert_not_called()
+
+
+def test_term_structure_empty_lake(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
+    from crypcodile.api_server import term_structure
+
+    result = asyncio.run(
+        term_structure(underlying="ETH", at=1_700_000_000_000_000_000, rate=0.0)
+    )
+    assert result == []
+
+
+def test_term_structure_empty_dataframe() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        result = asyncio.run(
+            term_structure(underlying="ETH", at=1_700_000_000_000_000_000, rate=0.01)
+        )
+    assert result == []
+    mock_client.term_structure.assert_called_once_with(
+        "ETH", 1_700_000_000_000_000_000, rate=0.01
+    )
+
+
+def test_term_structure_returns_rows() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.return_value = pl.DataFrame(
+        {
+            "expiry": [100, 200],
+            "days_to_expiry": [7.0, 30.0],
+            "atm_strike": [50000.0, 51000.0],
+            "atm_iv": [0.45, 0.50],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        result = asyncio.run(
+            term_structure(
+                underlying="ETH",
+                at=1_700_000_000_000_000_000,
+                rate=0.0,
+                limit=100,
+            )
+        )
+    assert len(result) == 2
+    assert result[0]["days_to_expiry"] == 7.0
+    assert result[0]["atm_iv"] == 0.45
+    assert result[1]["atm_strike"] == 51000.0
+    mock_client.term_structure.assert_called_once_with(
+        "ETH", 1_700_000_000_000_000_000, rate=0.0
+    )
+
+
+def test_term_structure_strips_whitespace_underlying() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.return_value = pl.DataFrame()
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        asyncio.run(term_structure(underlying="  ETH  ", at=99, rate=0.03))
+    mock_client.term_structure.assert_called_once_with("ETH", 99, rate=0.03)
+
+
+def test_term_structure_applies_limit() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.return_value = pl.DataFrame(
+        {
+            "expiry": [1, 2, 3, 4, 5],
+            "days_to_expiry": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "atm_strike": [100.0] * 5,
+            "atm_iv": [0.4] * 5,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        result = asyncio.run(
+            term_structure(underlying="ETH", at=1, rate=0.0, limit=2)
+        )
+    assert len(result) == 2
+    assert result[0]["expiry"] == 1
+    assert result[1]["expiry"] == 2
+
+
+def test_term_structure_clamps_limit_max() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.return_value = pl.DataFrame(
+        {
+            "expiry": list(range(20)),
+            "days_to_expiry": [float(i) for i in range(20)],
+            "atm_strike": [100.0] * 20,
+            "atm_iv": [0.4] * 20,
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import _TERM_STRUCTURE_MAX_LIMIT, term_structure
+
+        result = asyncio.run(
+            term_structure(
+                underlying="ETH",
+                at=1,
+                rate=0.0,
+                limit=_TERM_STRUCTURE_MAX_LIMIT + 5000,
+            )
+        )
+    assert len(result) == 20
+    mock_client.term_structure.assert_called_once()
+
+
+def test_term_structure_clamps_limit_minimum() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.return_value = pl.DataFrame(
+        {
+            "expiry": [1, 2, 3],
+            "days_to_expiry": [1.0, 2.0, 3.0],
+            "atm_strike": [100.0, 101.0, 102.0],
+            "atm_iv": [0.4, 0.41, 0.42],
+        }
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        result = asyncio.run(
+            term_structure(underlying="ETH", at=1, rate=0.0, limit=0)
+        )
+    assert len(result) == 1
+    assert result[0]["expiry"] == 1
+
+
+def test_term_structure_query_error() -> None:
+    mock_client = MagicMock()
+    mock_client.term_structure.side_effect = RuntimeError(
+        "internal path /secret/lake"
+    )
+    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+        from crypcodile.api_server import term_structure
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(term_structure(underlying="ETH", at=1, rate=0.0))
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Term structure query failed."
+    assert "secret" not in str(exc_info.value.detail)
+
+
+def test_term_structure_route_registered() -> None:
+    """Ensure FastAPI route table includes GET /api/v1/term-structure."""
+    paths = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", set()) or [])))
+        for r in app.routes
+    }
+    assert ("/api/v1/term-structure", ("GET",)) in paths
