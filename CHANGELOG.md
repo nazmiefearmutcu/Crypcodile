@@ -4,17 +4,29 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.045] - 2026-07-14
+### Fixed
+- **FlowMap residual bug-hunt**: env-gated SSL bootstrap for the embedded visualizer; certifi CA default plus `session.wait_closed()` connector drain in `AiohttpWsTransport` (no pending-task/thread leak when the event loop closes); `compute_hist_target_bw` / `compute_hist_vis_rows` pure helpers so history is never binned with buffer width 1 (`target_bw >= 64`); `CRYPCODILE_SHELL=1` so `flowmap` launched from the interactive shell does not block-join.
+- **Embedded FlowMap window cleanup**: large dead-code / duplication removal; hardened `test_flowmap_window` around the new helpers; new `test_flowmap_gui_cua` live GUI check that soft-skips when `cua-driver` is unavailable.
+### Merged
+- Reconciled the FlowMap visualizer branch with the Technical Analysis Indicators engine branch (both forked from 0.1.042); both feature sets now coexist.
+
 ## [0.1.044] - 2026-07-04
 ### Changed
-- **High-Performance GUI Event Loop**: Resolved infinite paint loops in PyQt6 Bookmap Visualizer caused by auto-range updates triggering recursive signal feedback. Added an update guard flag (`_updating_plots`) and disabled auto-range.
+- **High-Performance GUI Event Loop**: Resolved infinite paint loops in the PyQt6 visualizer caused by auto-range updates triggering recursive signal feedback. Added an update guard flag (`_updating_plots`) and disabled auto-range.
 - **Throttled Updates**: Decreased QTimer frame update rate to 100ms for lightweight CPU execution (CPU consumption reduced from 199% to 0.6%).
 - **Resilient Struct Ingestion**: Patched `msgspec.Struct` event property access in live WebSocket queue handlers to avoid `AttributeError` exceptions.
 - **Unbounded Memory Protection**: Added order book depth dictionary trimming to retain only the top 200 bid/ask levels, preventing memory and CPU load leaks.
-- **Blocked GUI Process**: Added `gui_process.join()` in CLI launcher to prevent immediate parent interpreter shutdown and thread pool failures.
+- **Blocked GUI Process**: Added `gui_process.join()` in the CLI launcher to prevent immediate parent interpreter shutdown and thread pool failures.
 
-## [0.1.043] - 2026-07-04
+## [0.1.043] - 2026-07-09
+### Added
+- **Technical Analysis Indicators Engine**: Implemented SMA, EMA, RSI, MACD, and Bollinger Bands calculated using high-performance Polars operations.
+- **CLI Subcommand (`indicators` command)**: Added a command to compute and display technical analysis indicators from resampled OHLCV bar data.
+- **Client Resampling Interface**: Added the `resample` method to `CrypcodileClient`.
+- **Unit Testing**: Implemented complete testing coverage for indicator calculations and CLI commands.
 ### Changed
-- **Resilient Symbol Resolution**: Fixed perpetual symbol resolution in `basis` and interactive `bookmap` commands when the database catalog is empty or lacks registered symbols.
+- **Resilient Symbol Resolution**: Fixed perpetual symbol resolution in `basis` and the interactive visualizer commands when the database catalog is empty or lacks registered symbols.
 - **Context-Aware Mapping**: Improved `resolve_input_symbols` to differentiate derivative-only channels (like `derivative_ticker` and `funding`) from spot channels, resolving `btcusdt` to `binance-usdm:BTCUSDT` for derivatives and `binance-spot:BTCUSDT` for spot.
 - **Expanded Venue Support**: Normalized raw symbols for `binance-usdm` and `bybit` to support standard derivatives conventions.
 

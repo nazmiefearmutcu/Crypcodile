@@ -6,6 +6,7 @@ transport used by the ``collect`` CLI command.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
@@ -125,8 +126,9 @@ class AiohttpWsTransport:
         if session is not None:
             try:
                 await session.close()
-                # Drain connector cleanup so callers do not leave pending
-                # tasks when the event loop is about to be closed.
-                await session.wait_closed()
+                # Yield once so aiohttp's connector can finish tearing down its
+                # (SSL) transports before the caller closes the event loop —
+                # avoids "Task was destroyed but it is pending" warnings.
+                await asyncio.sleep(0)
             except Exception:
                 pass

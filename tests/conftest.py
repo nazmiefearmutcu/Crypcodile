@@ -1,5 +1,13 @@
 import os
 import sys
+
+# Prevent OpenMP and OpenBLAS multithreading deadlocks/slowness on macOS Apple Silicon
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -7,10 +15,22 @@ from unittest.mock import patch, MagicMock
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 # Safeguard against xgboost C-library loading failures on macOS
+sys.modules["xgboost"] = MagicMock()
+
+# NOTE: PyQt6 / pyqtgraph are intentionally NOT mocked here. The FlowMap GUI
+# tests exercise real (offscreen) Qt widgets — QT_QPA_PLATFORM=offscreen above
+# keeps that headless and hang-free, which is why a blanket sys.modules stub of
+# PyQt6 would break them (e.g. QMainWindow.move missing on a dummy widget).
+
+# Safeguard against matplotlib interactive GUI backend loading delays/hangs on macOS
 try:
-    import xgboost
-except Exception:
-    sys.modules["xgboost"] = MagicMock()
+    import matplotlib
+    matplotlib.use('Agg')
+except ImportError:
+    pass
+
+
+
 
 @pytest.fixture(autouse=True, scope="function")
 def configure_payments_env(tmp_path):

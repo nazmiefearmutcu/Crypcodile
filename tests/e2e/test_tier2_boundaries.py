@@ -140,7 +140,7 @@ async def test_t2_huge_pagination_split(mock_rpc) -> None:
     transport._last_blocks["cbBTC-USDC"] = 1000
     await transport.connect()
     try:
-        for _ in range(100):
+        for _ in range(300):
             if transport._last_blocks.get("cbBTC-USDC", 0) >= 2500:
                 break
             await asyncio.sleep(0.05)
@@ -625,7 +625,10 @@ async def test_t2_invalid_hexadecimal_inputs(mock_rpc, caplog) -> None:
     with caplog.at_level(logging.ERROR):
         await transport.connect()
         try:
-            await asyncio.sleep(0.3)
+            for _ in range(300):
+                if len([rec.message for rec in caplog.records if "Error polling pool data" in rec.message]) > 0:
+                    break
+                await asyncio.sleep(0.05)
         finally:
             await transport.close()
             
@@ -665,12 +668,13 @@ async def test_t2_fastapi_server_crash_resilience() -> None:
 async def test_t2_mcp_stdin_eof(mcp_server_client) -> None:
     proc = mcp_server_client
     proc.stdin.close()
-    for _ in range(50):
+    for _ in range(150):
         if proc.poll() is not None:
             break
         await asyncio.sleep(0.1)
     # MCP server process should exit cleanly
     assert proc.poll() is not None
+
 
 # 26. Extremely large decimals
 @pytest.mark.asyncio

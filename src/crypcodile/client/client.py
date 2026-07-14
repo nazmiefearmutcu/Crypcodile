@@ -482,3 +482,24 @@ class CrypcodileClient:
             )
         """
         _export(self._catalog, channel, symbols, frm, to, fmt, Path(dest), limit=limit)
+
+    def resample(
+        self,
+        symbol: str,
+        start_ns: int,
+        end_ns: int,
+        interval: str,
+        *,
+        fill_empty: bool = False,
+    ) -> pl.DataFrame:
+        """Resample trade data in the DuckDB Catalog into OHLCV bars."""
+        from crypcodile.resample.ohlcv import resample_ohlcv
+
+        return resample_ohlcv(
+            self._catalog,
+            symbol,
+            start_ns,
+            end_ns,
+            interval,
+            fill_empty=fill_empty,
+        )

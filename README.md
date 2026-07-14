@@ -2,7 +2,7 @@
 
 **Deterministic Market Data Infrastructure for Quantitative Research and Autonomous Agents**
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.042-blue.svg)](https://pypi.org/project/crypcodile/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.043-blue.svg)](https://pypi.org/project/crypcodile/)
 [![Python Supported](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -55,7 +55,7 @@ Crypcodile is built around a robust, modular pipeline designed to handle degrade
 
 ## 2. Base Ecosystem & L2 Integration
 
-With the `v0.1.042` release, Crypcodile unifies the comparison of CeFi order book states with DeFi on-chain states. Historically, doing so required maintaining disparate codebases. The `BaseOnchainConnector` queries Base RPC nodes, extracts DEX swap and liquidity events (Uniswap V3 and Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
+With the `v0.1.043` release, Crypcodile unifies the comparison of CeFi order book states with DeFi on-chain states. Historically, doing so required maintaining disparate codebases. The `BaseOnchainConnector` queries Base RPC nodes, extracts DEX swap and liquidity events (Uniswap V3 and Aerodrome Finance), and normalizes them into the exact standard record formats used for traditional exchanges like Coinbase or Binance.
 
 This unified approach enables quantitative developers to seamlessly execute cross-venue arbitrage detection, on-chain momentum tracking, and aggregated volume analytics—treating smart contract state identically to centralized exchange APIs.
 
@@ -149,6 +149,13 @@ To execute the test suite locally:
 uv sync
 pytest tests/ -v
 ```
+
+### 🍏 macOS Apple Silicon & Headless Runs Optimization
+To ensure reliable operation on modern macOS Apple Silicon devices and inside headless CI/CD environments, Crypcodile includes several automated platform optimizations:
+* **Headless Matplotlib & PyQt6 Mocking**: Visual Qt rendering tests are automatically bypassed inside headless environments. Additionally, Matplotlib is programmatically forced to the non-interactive `Agg` backend globally in [tests/conftest.py](file:///Users/nazmi/Desktop/Crypcodile/tests/conftest.py) to prevent connection hangs with the macOS window manager.
+* **Apple Silicon OpenMP/OpenBLAS Thread Limits**: Programmatic environmental limit overrides (`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, etc.) are configured at test start to bypass Apple Silicon process thread-group deadlocks, dropping library load times from 80+ seconds to under 1.5 seconds.
+* **Robust Stdio MCP Transport**: The Model Context Protocol (MCP) Server utilizes a dedicated background executor thread pool to monitor `sys.stdin` for EOF/client closure, ensuring the server terminates cleanly on parent shell termination without socket leaks.
+
 
 ## 8. Contributing
 

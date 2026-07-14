@@ -281,25 +281,22 @@ async def test_mcp_server_serve_stdio(tmp_path) -> None:
         }
     ]
     
-    input_bytes = b"".join(json.dumps(r).encode() + b"\n" for r in requests)
-    
-    # We mock stream reader and sys.stdout
-    mock_reader = asyncio.StreamReader()
-    mock_reader.feed_data(input_bytes)
-    mock_reader.feed_eof()
-    
+    # serve_stdio reads via sys.stdin.readline() in an executor, so feed the
+    # request lines one at a time followed by "" (EOF). A bare MagicMock stdin
+    # returns truthy MagicMocks forever, which spins the read loop until the
+    # pytest-timeout kills it — hence the previous hang.
+    stdin_lines = [json.dumps(r) + "\n" for r in requests] + [""]
+    mock_stdin = MagicMock()
+    mock_stdin.readline.side_effect = stdin_lines
+
     # Mock sys.stdout.write and flush
     stdout_writes = []
     def mock_write(s):
         stdout_writes.append(s)
-    
-    loop = asyncio.get_running_loop()
-    
-    with patch("asyncio.StreamReader", return_value=mock_reader), \
-         patch("sys.stdin", MagicMock()), \
+
+    with patch("sys.stdin", mock_stdin), \
          patch("sys.stdout.write", mock_write), \
          patch("sys.stdout.flush", MagicMock()), \
-         patch.object(loop, "connect_read_pipe", new_callable=AsyncMock) as mock_connect, \
          patch("crypcodile.mcp_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
          
          mock_get_price.return_value = {

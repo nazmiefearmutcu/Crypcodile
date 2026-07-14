@@ -101,6 +101,14 @@ async def test_parquet_compactor_async_loop(tmp_path: pathlib.Path) -> None:
     await compactor.stop()
     assert not compactor._running
 
+    # Wait for background executor thread to finish writing and deleting files if cancelled mid-run
+    for _ in range(50):
+        post_files = list(tmp_path.rglob("part-*.parquet"))
+        if len(post_files) == 1 and post_files[0].name.startswith("part-compacted-"):
+            break
+        await asyncio.sleep(0.1)
+
     post_files = list(tmp_path.rglob("part-*.parquet"))
     assert len(post_files) == 1
     assert post_files[0].name.startswith("part-compacted-")
+

@@ -59,3 +59,7 @@ tmp_test_run/
 window_shot_*.png
 tmp_verify_*.py
 tmp_verify_*.txt
+
+# AI agent workspace files
+docs/superpowers/
+.ralph/

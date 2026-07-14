@@ -292,12 +292,42 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
 
 def test_resolve_input_symbols_different_channels(tmp_path: pathlib.Path) -> None:
     from crypcodile.cli import resolve_input_symbols
-    
+
     # 1. Resolve in derivative context (e.g. perp mode channels: derivative_ticker)
     res_perp = resolve_input_symbols(tmp_path, ["btcusdt"], channels=["derivative_ticker", "ticker"])
     assert res_perp == ["binance-usdm:BTCUSDT"]
-    
+
     # 2. Resolve in spot context (e.g. spot channels: trade, ticker)
     res_spot = resolve_input_symbols(tmp_path, ["btcusdt"], channels=["trade", "ticker"])
     assert res_spot == ["binance-spot:BTCUSDT"]
 
+
+async def test_cli_indicators_exits_zero(tmp_path: pathlib.Path) -> None:
+    """``indicators`` calculates technical analysis indicators, exit code 0."""
+    from typer.testing import CliRunner
+    from crypcodile.cli import app
+
+    await _write_fixtures(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "indicators",
+            "--symbol",
+            "deribit:BTC-PERPETUAL",
+            "--indicator",
+            "sma",
+            "--period",
+            "2",
+            "--interval",
+            "1s",
+            "--from",
+            str(_BASE_TS - 1),
+            "--to",
+            str(_BASE_TS + 1_000_000_000),
+            "--data-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "sma" in result.output
