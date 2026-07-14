@@ -310,8 +310,9 @@ async def test_t4_showcase_script_offline_dry_run(mock_rpc) -> None:
     env["PYTHONPATH"] = os.path.abspath("src")
     
     # Run example script with --dry-run
+    import sys
     proc = await asyncio.create_subprocess_exec(
-        "uv", "run", "python", "examples/collect_base_onchain.py", "--dry-run",
+        sys.executable, "examples/collect_base_onchain.py", "--dry-run",
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE

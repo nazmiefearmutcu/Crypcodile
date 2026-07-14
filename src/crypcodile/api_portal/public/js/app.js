@@ -1714,27 +1714,54 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function detectBackend() {
-        try {
-            const response = await fetch('/api/v1/admin/payments');
-            if (response.status === 200 || response.status === 401 || response.status === 402) {
-                isPythonBackend = true;
-                apiRoutes.marketData = '/api/v1/market-data';
-                apiRoutes.payments = '/api/v1/admin/payments';
-                apiRoutes.simulate = '/api/v1/simulate-payment';
-                apiRoutes.events = '/api/events';
-            } else {
-                isPythonBackend = false;
-                apiRoutes.marketData = '/api/gated-data';
-                apiRoutes.payments = '/api/payments';
-                apiRoutes.simulate = '/api/payments';
-                apiRoutes.events = '/api/events';
-            }
-        } catch (e) {
+        const applyPythonRoutes = () => {
+            isPythonBackend = true;
+            apiRoutes.marketData = '/api/v1/market-data';
+            apiRoutes.payments = '/api/v1/admin/payments';
+            apiRoutes.simulate = '/api/v1/simulate-payment';
+            apiRoutes.events = '/api/events';
+        };
+        const applyNodeRoutes = () => {
             isPythonBackend = false;
             apiRoutes.marketData = '/api/gated-data';
             apiRoutes.payments = '/api/payments';
             apiRoutes.simulate = '/api/payments';
             apiRoutes.events = '/api/events';
+        };
+
+        try {
+            // Prefer public Python-only probes (stable when ADMIN_API_KEY is unset).
+            // /api/v1/ready is a Python-only k8s readiness signal (200 when lake ok).
+            // /api/v1/health is a lightweight fallback when catalog/metrics/ready are
+            // unavailable (e.g. lake mount issues) but the FastAPI process is up.
+            for (const path of ['/api/v1/catalog/channels', '/metrics', '/api/v1/ready', '/api/v1/health']) {
+                try {
+                    const probe = await fetch(path);
+                    if (probe.status === 200) {
+                        applyPythonRoutes();
+                        return;
+                    }
+                } catch (_) { /* try next probe */ }
+            }
+
+            // Fall back: admin payments — 200/401/402 with key; 404 when ADMIN_API_KEY unset
+            const response = await fetch('/api/v1/admin/payments');
+            if (response.status === 200 || response.status === 401 || response.status === 402) {
+                applyPythonRoutes();
+                return;
+            }
+            // FastAPI returns JSON {"detail":"Not Found"} when the route exists but key is unset;
+            // Express Node portal returns plain-text 404 for unknown paths.
+            if (response.status === 404) {
+                const ct = response.headers.get('content-type') || '';
+                if (ct.includes('application/json')) {
+                    applyPythonRoutes();
+                    return;
+                }
+            }
+            applyNodeRoutes();
+        } catch (e) {
+            applyNodeRoutes();
         }
     }
 

@@ -27,6 +27,36 @@ export(channel, symbols, frm, to, fmt, dest)
     specified format.  Supported formats: ``parquet``, ``csv``, ``arrow``,
     ``json``, ``jsonl``.  Parent directories are created automatically.
 
+list_channels()
+    Sorted channel names present in the lake.
+
+list_dates(channel)
+    Sorted distinct date partition values for a channel.
+
+list_exchanges_on_disk()
+    Sorted distinct exchange partition values present on disk (lake hive).
+
+catalog_summary()
+    One-shot lake summary dict: channels, exchanges_on_disk, counts.
+
+catalog_stats()
+    Per-channel row counts via list_channels + COUNT(*) (-1 on fail).
+
+inventory(channel=None, exchange=None)
+    Per-symbol coverage summary DataFrame.
+
+list_symbols(channel=None, exchange=None)
+    Sorted distinct inventory symbols (lighter than inventory rows).
+
+data_coverage(symbol, channel=None, exchange=None)
+    Inventory coverage rows for one exact symbol.
+
+search_symbols(q, channel=None, exchange=None, limit=20)
+    Ranked symbol search over the inventory.
+
+resolve_symbols(symbols, channel=None, ambiguous="error"|"first"|"all")
+    Map free-form inputs to canonical catalog symbols.
+
 Analytics methods (Task 6.5)
 ----------------------------
 funding_apr(symbol, start_ns, end_ns)
@@ -37,6 +67,9 @@ spot_future_basis(future_symbol, spot_symbol, start_ns, end_ns, expiry_ns=None)
 
 perp_basis(perp_symbol, start_ns, end_ns)
     Perpetual basis (mark price vs index price).
+
+spot_perp_basis(spot_symbol, perp_symbol, start_ns, end_ns)
+    Spot-perp basis via ASOF JOIN (spot trades vs perp mark).
 
 iv_surface(underlying, at_ns, rate=0.0)
     Implied-vol surface snapshot at ``at_ns``.
@@ -49,12 +82,17 @@ vol_skew(underlying, expiry_ns, at_ns, rate=0.0)
 
 risk_reversal_butterfly(skew_df, target_delta=0.25)
     25-delta risk reversal and butterfly from a vol_skew DataFrame.
+
+get_indicators(symbol, start_ns, end_ns, interval="1d", indicator=None, period=14)
+    Technical indicators (SMA, EMA, RSI, MACD, BB) on resampled OHLCV bars.
 """
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import polars as pl
 
@@ -64,6 +102,10 @@ from crypcodile.replay.merge import replay as _kway_merge
 from crypcodile.schema.records import Record
 from crypcodile.store.catalog import Catalog
 from crypcodile.store.rows import from_row
+
+# Minimum search score for resolve_symbols (substring match = 40).
+_RESOLVE_SCORE_THRESHOLD = 40
+_AmbiguousMode = Literal["error", "first", "all"]
 
 
 def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
@@ -117,6 +159,299 @@ class CrypcodileClient:
             A Polars DataFrame containing the query result.
         """
         return self._catalog.query(sql)
+
+    # ------------------------------------------------------------------
+    # Discovery / search façade (Wave 2 Task 3)
+    # ------------------------------------------------------------------
+
+    def list_channels(self) -> list[str]:
+        """Return sorted channel names present in the lake.
+
+        Thin wrapper over :meth:`Catalog.list_channels`.  Empty lake → ``[]``.
+        """
+        return self._catalog.list_channels()
+
+    def list_dates(self, channel: str) -> list[str]:
+        """Return sorted distinct date partitions for *channel*.
+
+        Thin wrapper over :meth:`Catalog.list_dates`.  Empty / unknown
+        channel or empty lake → ``[]``.
+        """
+        return self._catalog.list_dates(channel)
+
+    def list_exchanges_on_disk(self) -> list[str]:
+        """Return sorted distinct exchange partitions present in the lake.
+
+        Thin wrapper over :meth:`Catalog.list_exchanges_on_disk`.  Empty
+        lake → ``[]``.
+
+        Distinct from :func:`crypcodile.exchanges.factory.list_exchanges`
+        (registered connectors vs on-disk hive partitions).
+        """
+        return self._catalog.list_exchanges_on_disk()
+
+    def catalog_summary(self) -> dict[str, object]:
+        """One-shot lake catalog summary for agent / CLI / REST discovery.
+
+        Combines :meth:`list_channels` and :meth:`list_exchanges_on_disk`
+        with counts::
+
+            {
+                "channels": [...],           # sorted channel ids
+                "exchanges_on_disk": [...],  # sorted hive exchange= suffixes
+                "exchange_count": int,
+                "channel_count": int,
+            }
+
+        Empty lake yields empty lists and zero counts. Distinct from
+        factory connector registry — ``exchanges_on_disk`` reflects hive
+        partitions only.
+
+        Shared by REST ``GET /api/v1/catalog/summary``, MCP
+        ``catalog_summary``, and CLI ``catalog-summary``.
+        """
+        channels = self.list_channels()
+        exchanges_on_disk = self.list_exchanges_on_disk()
+        return {
+            "channels": channels,
+            "exchanges_on_disk": exchanges_on_disk,
+            "exchange_count": len(exchanges_on_disk),
+            "channel_count": len(channels),
+        }
+
+    def catalog_stats(self) -> dict[str, object]:
+        """Per-channel row counts for agent / CLI / REST discovery.
+
+        Discovers channels via filesystem :meth:`list_channels`, then runs a
+        lightweight ``COUNT(*)`` per channel through :meth:`query` (registered
+        DuckDB views). Avoids the heavier per-symbol :meth:`inventory`
+        aggregate.
+
+        On query failure for a channel (missing view, empty partition without
+        parquet, DuckDB error), that channel reports ``-1`` so callers can
+        distinguish "unknown/unavailable" from a true zero-row channel.
+        Channel names are SQL-escaped (``"`` → ``""``) for quoted identifiers.
+
+        Response shape::
+
+            {
+                "row_counts": {"trade": 1234, "book_snapshot": 0, ...},
+                "channel_count": int,
+            }
+
+        Empty lake yields ``row_counts: {}`` and ``channel_count: 0``. Channel
+        keys follow ``list_channels`` order (sorted).
+
+        Shared by REST ``GET /api/v1/catalog/stats``, MCP ``catalog_stats``,
+        and CLI ``catalog-stats``.
+        """
+        channels = self.list_channels()
+        row_counts: dict[str, int] = {}
+        for ch in channels:
+            try:
+                escaped = str(ch).replace('"', '""')
+                row_df = self.query(f'SELECT count(*) AS n FROM "{escaped}"')
+                row_counts[ch] = int(row_df["n"][0])
+            except Exception:
+                row_counts[ch] = -1
+        return {
+            "row_counts": row_counts,
+            "channel_count": len(channels),
+        }
+
+    def inventory(
+        self,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> pl.DataFrame:
+        """Summarise symbols present in the lake.
+
+        Thin wrapper over :meth:`Catalog.inventory`.
+
+        Columns (stable schema even when empty)::
+
+            exchange, channel, symbol, min_ts, max_ts, row_count
+        """
+        return self._catalog.inventory(channel=channel, exchange=exchange)
+
+    def list_symbols(
+        self,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> list[str]:
+        """Return sorted distinct symbols from lake inventory.
+
+        Lighter than :meth:`inventory`: symbol strings only (no per-channel
+        coverage rows). Optional *channel* and *exchange* filters narrow
+        inventory first; empty/whitespace values are treated as no filter.
+
+        Empty lake or no match → ``[]``.
+
+        Shared by REST ``GET /api/v1/catalog/symbols``, MCP ``list_symbols``,
+        and CLI ``catalog-symbols``.
+        """
+        ch = (channel or "").strip() or None
+        ex = (exchange or "").strip() or None
+        inv = self.inventory(channel=ch, exchange=ex)
+        if len(inv) == 0:
+            return []
+        return sorted(inv["symbol"].unique().to_list())
+
+    def data_coverage(
+        self,
+        symbol: str,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> pl.DataFrame:
+        """Return inventory coverage rows for one exact *symbol*.
+
+        Filters :meth:`inventory` to rows whose ``symbol`` equals the stripped
+        *symbol*. Optional *channel* and *exchange* narrow inventory first;
+        empty/whitespace values are treated as no filter.
+
+        Empty / whitespace-only *symbol*, empty lake, or no match yields an
+        empty DataFrame with the stable inventory schema::
+
+            exchange, channel, symbol, min_ts, max_ts, row_count
+
+        Shared by REST ``GET /api/v1/data-coverage``, MCP ``data_coverage``,
+        and CLI ``data-coverage``.
+        """
+        symbol = (symbol or "").strip()
+        ch = (channel or "").strip() or None
+        ex = (exchange or "").strip() or None
+        if not symbol:
+            return pl.DataFrame(
+                schema={
+                    "exchange": pl.Utf8,
+                    "channel": pl.Utf8,
+                    "symbol": pl.Utf8,
+                    "min_ts": pl.Int64,
+                    "max_ts": pl.Int64,
+                    "row_count": pl.Int64,
+                }
+            )
+        inv = self.inventory(channel=ch, exchange=ex)
+        if len(inv) == 0:
+            return inv
+        return inv.filter(pl.col("symbol") == symbol)
+
+    def search_symbols(
+        self,
+        q: str,
+        *,
+        channel: str | None = None,
+        exchange: str | None = None,
+        limit: int = 20,
+    ) -> pl.DataFrame:
+        """Ranked symbol search over the catalog inventory.
+
+        Thin wrapper over :meth:`Catalog.search_symbols`.
+
+        Columns::
+
+            symbol, exchange, channels, score, min_ts, max_ts, row_count
+        """
+        return self._catalog.search_symbols(
+            q, channel=channel, exchange=exchange, limit=limit
+        )
+
+    def resolve_symbols(
+        self,
+        symbols: list[str],
+        *,
+        channel: str | None = None,
+        ambiguous: _AmbiguousMode = "error",
+    ) -> list[str]:
+        """Resolve free-form symbol inputs to canonical catalog symbols.
+
+        Rules
+        -----
+        1. If an input already contains ``:`` and appears exactly in the
+           inventory (optionally filtered by *channel*), it is passed through.
+        2. Otherwise :meth:`search_symbols` is used with ``limit=20`` and a
+           minimum score of 40 (substring match or better).
+        3. *ambiguous* controls multi-match behaviour:
+           - ``"error"``: raise ``ValueError`` listing the matches
+           - ``"first"``: take the highest-score match
+           - ``"all"``: include every matched symbol
+
+        Args:
+            symbols: Free-form symbol strings to resolve.
+            channel: Optional channel filter for inventory / search.
+            ambiguous: Multi-match policy (default ``"error"``).
+
+        Returns:
+            Ordered list of canonical symbols (may be longer than *symbols*
+            when ``ambiguous="all"``).
+
+        Raises:
+            ValueError: On unknown *ambiguous* mode, no matches, or
+                multi-match when ``ambiguous="error"``.
+        """
+        if ambiguous not in ("error", "first", "all"):
+            raise ValueError(
+                f"ambiguous must be 'error', 'first', or 'all'; got {ambiguous!r}"
+            )
+
+        if not symbols:
+            return []
+
+        # Treat empty / whitespace channel as "no filter". Catalog.inventory
+        # treats a non-None channel that is not registered as an empty result,
+        # so "" would otherwise falsely resolve nothing.
+        if isinstance(channel, str):
+            channel = channel.strip() or None
+
+        inv = self.inventory(channel=channel)
+        known: set[str] = set()
+        if len(inv) > 0:
+            known = set(inv["symbol"].to_list())
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+
+        def _append(sym: str) -> None:
+            if sym not in seen:
+                seen.add(sym)
+                resolved.append(sym)
+
+        for raw in symbols:
+            s = raw.strip() if isinstance(raw, str) else str(raw).strip()
+            if not s:
+                continue
+
+            # Exact pass-through for already-canonical symbols present in lake.
+            if ":" in s and s in known:
+                _append(s)
+                continue
+
+            hits = self.search_symbols(s, channel=channel, limit=20)
+            if len(hits) > 0:
+                hits = hits.filter(pl.col("score") >= _RESOLVE_SCORE_THRESHOLD)
+
+            if len(hits) == 0:
+                raise ValueError(f"No symbols matched {s!r}")
+
+            match_syms = hits["symbol"].to_list()
+            if len(match_syms) == 1:
+                _append(match_syms[0])
+                continue
+
+            if ambiguous == "error":
+                listed = ", ".join(f"{row['symbol']} (score={row['score']})"
+                                   for row in hits.iter_rows(named=True))
+                raise ValueError(
+                    f"Ambiguous symbol {s!r}: {len(match_syms)} matches: {listed}"
+                )
+            if ambiguous == "first":
+                # search_symbols already ranks by score descending.
+                _append(match_syms[0])
+            else:  # "all"
+                for m in match_syms:
+                    _append(m)
+
+        return resolved
 
     def scan(
         self,
@@ -185,7 +520,11 @@ class CrypcodileClient:
                       An empty list yields nothing immediately.
             frm:      Inclusive start of the time range (nanoseconds UTC).
             to:       Inclusive end of the time range (nanoseconds UTC).
-            limit:    Optional maximum number of records to return.
+            limit:    Optional maximum number of records to yield from the
+                      globally merged stream (not per channel).  Per-channel
+                      scans still use the same bound as a read optimization:
+                      the first *N* merged records are always contained in the
+                      first *N* rows of each time-ordered input stream.
 
         Yields:
             Record objects in non-decreasing ``local_ts`` order.
@@ -194,6 +533,8 @@ class CrypcodileClient:
             return iter([])
 
         # Build one sorted iterator per channel, querying all symbols in a single scan.
+        # Pass limit into each scan so large lakes are not fully materialised when
+        # only the earliest N merged records are needed (safe upper bound per stream).
         streams: list[Iterator[Record]] = []
         for channel in channels:
             df = self._catalog.scan(channel, symbols, frm, to, limit=limit)
@@ -203,7 +544,12 @@ class CrypcodileClient:
         if not streams:
             return iter([])
 
-        return _kway_merge(streams)
+        merged: Iterator[Record] = _kway_merge(streams)
+        # Global bound: per-channel scan limits alone can yield up to
+        # limit * len(channels) after the k-way merge.
+        if limit is not None:
+            return itertools.islice(merged, limit)
+        return merged
 
     # ------------------------------------------------------------------
     # Analytics API (Task 6.5)
@@ -263,6 +609,18 @@ class CrypcodileClient:
 
         return _calculate_ofi(self._catalog, symbol, start_ns, end_ns, interval)
 
+    def calculate_block_liquidity_depth(self, symbol: str) -> pl.DataFrame:
+        """Calculate per-block bid/ask depth at ±1%, ±2%, ±5% from mid.
+
+        Thin wrapper over
+        :func:`crypcodile.analytics.liquidity_depth.calculate_block_liquidity_depth`.
+        """
+        from crypcodile.analytics.liquidity_depth import (
+            calculate_block_liquidity_depth as _calculate_block_liquidity_depth,
+        )
+
+        return _calculate_block_liquidity_depth(self._catalog, symbol)
+
     def track_whale_alerts(
         self,
         symbol: str,
@@ -277,6 +635,52 @@ class CrypcodileClient:
         from crypcodile.analytics.whale import track_whale_alerts as _track_whale_alerts
 
         return _track_whale_alerts(self._catalog, symbol, start_ns, end_ns, min_usd)
+
+    def aggregate_open_interest(
+        self,
+        symbols: str | list[str] | None = None,
+        start_ns: int = 0,
+        end_ns: int = 0,
+    ) -> pl.DataFrame:
+        """Aggregate open interest across exchanges with forward-fill alignment.
+
+        Thin wrapper over :func:`crypcodile.analytics.oi_aggregator.aggregate_open_interest`.
+        """
+        from crypcodile.analytics.oi_aggregator import (
+            aggregate_open_interest as _aggregate_open_interest,
+        )
+
+        return _aggregate_open_interest(self._catalog, symbols, start_ns, end_ns)
+
+    def calculate_peg_deviation(
+        self,
+        symbol: str,
+        threshold: float = 0.01,
+    ) -> pl.DataFrame:
+        """Detect stablecoin peg deviations from book ticker / snapshot data.
+
+        Thin wrapper over :func:`crypcodile.analytics.peg_deviation.calculate_peg_deviation`.
+        """
+        from crypcodile.analytics.peg_deviation import (
+            calculate_peg_deviation as _calculate_peg_deviation,
+        )
+
+        return _calculate_peg_deviation(self._catalog, symbol, threshold)
+
+    def calculate_sequencer_latency(
+        self,
+        exchange: str = "base_onchain",
+    ) -> pl.DataFrame:
+        """Measure sequencer production intervals and ingestion delay.
+
+        Thin wrapper over
+        :func:`crypcodile.analytics.sequencer_latency.calculate_sequencer_latency`.
+        """
+        from crypcodile.analytics.sequencer_latency import (
+            calculate_sequencer_latency as _calculate_sequencer_latency,
+        )
+
+        return _calculate_sequencer_latency(self._catalog, exchange)
 
     def spot_future_basis(
         self,
@@ -331,6 +735,32 @@ class CrypcodileClient:
         from crypcodile.analytics.basis import perp_basis as _perp_basis
 
         return _perp_basis(self._catalog, perp_symbol, start_ns, end_ns)
+
+    def spot_perp_basis(
+        self,
+        spot_symbol: str,
+        perp_symbol: str,
+        start_ns: int,
+        end_ns: int,
+    ) -> pl.DataFrame:
+        """Return spot-perp basis via ASOF JOIN on spot trades vs perp mark.
+
+        Thin wrapper over :func:`crypcodile.analytics.basis.spot_perp_basis`.
+
+        Args:
+            spot_symbol: Canonical symbol for the spot leg.
+            perp_symbol: Canonical perpetual contract symbol.
+            start_ns:    Inclusive lower bound on ``local_ts`` (nanoseconds UTC).
+            end_ns:      Inclusive upper bound on ``local_ts`` (nanoseconds UTC).
+
+        Returns:
+            A Polars DataFrame with columns:
+            ``local_ts, spot_price, perp_price, basis, basis_pct``.
+            Returns an empty DataFrame when either leg has no data.
+        """
+        from crypcodile.analytics.basis import spot_perp_basis as _spb
+
+        return _spb(self._catalog, spot_symbol, perp_symbol, start_ns, end_ns)
 
     def iv_surface(
         self,
@@ -503,3 +933,84 @@ class CrypcodileClient:
             interval,
             fill_empty=fill_empty,
         )
+
+    def get_indicators(
+        self,
+        symbol: str,
+        start_ns: int,
+        end_ns: int,
+        interval: str = "1d",
+        indicator: str | None = None,
+        period: int = 14,
+    ) -> pl.DataFrame:
+        """Calculate technical analysis indicators on resampled OHLCV bars.
+
+        Matches the CLI ``indicators`` command: resamples trades to OHLCV
+        (``fill_empty=True``), sorts by ``bar``, then appends indicator columns.
+
+        Args:
+            symbol:    Canonical symbol (e.g. ``"deribit:BTC-PERPETUAL"``).
+            start_ns:  Inclusive lower bound on trade time (nanoseconds UTC).
+            end_ns:    Inclusive upper bound on trade time (nanoseconds UTC).
+            interval:  Resampling interval (e.g. ``"1m"``, ``"1h"``, ``"1d"``).
+            indicator: One of ``sma``, ``ema``, ``rsi``, ``macd``, ``bb``,
+                       ``all``, or ``None`` (same as ``all``).
+            period:    Smoothing/lookback window for SMA, EMA, RSI, BB.
+
+        Returns:
+            OHLCV DataFrame with indicator columns. Empty when no bar data.
+
+        Raises:
+            ValueError: If ``indicator`` is not a recognised name.
+        """
+        from crypcodile.analytics import (
+            calculate_bollinger_bands,
+            calculate_ema,
+            calculate_macd,
+            calculate_rsi,
+            calculate_sma,
+        )
+
+        df = self.resample(symbol, start_ns, end_ns, interval, fill_empty=True)
+        if len(df) == 0:
+            return df
+
+        df = df.sort("bar")
+        close_series = df["close"]
+        name = (indicator or "all").lower()
+
+        if name == "sma":
+            return df.with_columns(calculate_sma(close_series, period).alias("sma"))
+        if name == "ema":
+            return df.with_columns(calculate_ema(close_series, period).alias("ema"))
+        if name == "rsi":
+            return df.with_columns(calculate_rsi(close_series, period).alias("rsi"))
+        if name == "macd":
+            macd, signal, hist = calculate_macd(close_series)
+            return df.with_columns(
+                macd.alias("macd"),
+                signal.alias("signal"),
+                hist.alias("hist"),
+            )
+        if name == "bb":
+            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
+            return df.with_columns(
+                upper.alias("bb_upper"),
+                middle.alias("bb_middle"),
+                lower.alias("bb_lower"),
+            )
+        if name == "all":
+            macd, signal, hist = calculate_macd(close_series)
+            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
+            return df.with_columns(
+                calculate_sma(close_series, period).alias("sma"),
+                calculate_ema(close_series, period).alias("ema"),
+                calculate_rsi(close_series, period).alias("rsi"),
+                macd.alias("macd"),
+                signal.alias("signal"),
+                hist.alias("hist"),
+                upper.alias("bb_upper"),
+                middle.alias("bb_middle"),
+                lower.alias("bb_lower"),
+            )
+        raise ValueError(f"Unknown indicator '{indicator}'")

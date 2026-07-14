@@ -1,8 +1,91 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable, Mapping, Sequence
 import eth_abi
 from web3 import AsyncWeb3
+
+
+def filter_transfers_by_usd(
+    transfers: Iterable[Mapping[str, Any]],
+    usd_threshold: float,
+) -> list[dict[str, Any]]:
+    """Return decoded transfer dicts whose ``usd_value`` meets ``usd_threshold``.
+
+    Pure helper for offline CSV/JSON pipelines (no RPC).
+    """
+    if usd_threshold < 0:
+        raise ValueError("usd_threshold must be non-negative")
+
+    out: list[dict[str, Any]] = []
+    for row in transfers:
+        raw = row.get("usd_value", row.get("amount", row.get("value")))
+        if raw is None:
+            continue
+        try:
+            usd_value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if usd_value >= usd_threshold:
+            item = dict(row)
+            item["usd_value"] = usd_value
+            out.append(item)
+    return out
+
+
+def label_transfer_addresses(
+    transfers: Iterable[Mapping[str, Any]],
+    watchlist: Mapping[str, str],
+    *,
+    from_key: str = "from",
+    to_key: str = "to",
+) -> list[dict[str, Any]]:
+    """Annotate transfer rows with ``from_label`` / ``to_label`` from a watchlist.
+
+    Watchlist keys are matched case-insensitively. Unknown addresses keep an
+    empty label string so downstream tables stay columnar.
+    """
+    labels = {
+        str(k).strip().lower(): str(v)
+        for k, v in watchlist.items()
+        if k is not None and str(k).strip()
+    }
+    out: list[dict[str, Any]] = []
+    for row in transfers:
+        item = dict(row)
+        from_addr = item.get(from_key) or item.get("from_address") or item.get("sender")
+        to_addr = item.get(to_key) or item.get("to_address") or item.get("recipient")
+        # Blank / missing addresses never match a watchlist entry.
+        from_s = str(from_addr).strip().lower() if from_addr is not None else ""
+        to_s = str(to_addr).strip().lower() if to_addr is not None else ""
+        item["from_label"] = labels.get(from_s, "") if from_s else ""
+        item["to_label"] = labels.get(to_s, "") if to_s else ""
+        item["is_known"] = bool(item["from_label"] or item["to_label"])
+        out.append(item)
+    return out
+
+
+def label_known_addresses(
+    addresses: Sequence[str],
+    watchlist: Mapping[str, str],
+) -> list[dict[str, str]]:
+    """Map a list of addresses to watchlist labels (empty string if unknown)."""
+    labels = {
+        str(k).strip().lower(): str(v)
+        for k, v in watchlist.items()
+        if k is not None and str(k).strip()
+    }
+    rows: list[dict[str, str]] = []
+    for addr in addresses:
+        key = str(addr).strip().lower() if addr is not None else ""
+        label = labels.get(key, "") if key else ""
+        rows.append(
+            {
+                "address": str(addr),
+                "label": label,
+                "is_known": "true" if key and key in labels else "false",
+            }
+        )
+    return rows
 
 
 class WhaleTransferTracker:

@@ -78,7 +78,8 @@ def test_sparkline_nan_inf_validation():
 
 def test_selection_wizard_digit_checks():
     with patch("typer.prompt") as mock_prompt:
-        mock_prompt.side_effect = ["1", "1, trade", "trade,book_ticker", "1"]
+        # list_exchanges() is sorted: 1=base_onchain, 2=binance, ...
+        mock_prompt.side_effect = ["2", "1, trade", "trade,book_ticker", "1"]
         exchange, symbols, channels = select_collect_params_interactively(None, None, None)
         assert exchange == "binance"
         assert channels == ["trade", "book_ticker"]
@@ -131,10 +132,10 @@ def test_adversarial_timestamp_overflow(tmp_path):
 def test_adversarial_selection_wizard_loops():
     # Test that select_collect_params_interactively rejects invalid/out-of-bound indexes and eventually accepts a valid one
     with patch("typer.prompt") as mock_prompt:
-        # exchange: 99 (invalid), 1 (valid -> binance)
+        # exchange: 99 (invalid), 2 (valid -> binance; list_exchanges is sorted)
         # channels: 99 (invalid), 1 (valid -> trade)
         # symbols: 99 (invalid), 1 (valid -> BTCUSDT)
-        mock_prompt.side_effect = ["99", "1", "99", "1", "99", "1"]
+        mock_prompt.side_effect = ["99", "2", "99", "1", "99", "1"]
         exchange, symbols, channels = select_collect_params_interactively(None, None, None)
         assert exchange == "binance"
         assert channels == ["trade"]
@@ -144,10 +145,10 @@ def test_adversarial_selection_wizard_loops():
 def test_adversarial_selection_wizard_non_digit():
     # Test that select_collect_params_interactively rejects non-digit / random strings and loops
     with patch("typer.prompt") as mock_prompt:
-        # exchange: "invalid", "1"
+        # exchange: "invalid", "2" (binance)
         # channels: "invalid", "1"
         # symbols: "invalid", "1"
-        mock_prompt.side_effect = ["invalid", "1", "invalid", "1", "invalid", "1"]
+        mock_prompt.side_effect = ["invalid", "2", "invalid", "1", "invalid", "1"]
         exchange, symbols, channels = select_collect_params_interactively(None, None, None)
         assert exchange == "binance"
         assert channels == ["trade"]

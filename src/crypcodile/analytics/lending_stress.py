@@ -81,9 +81,9 @@ class LendingStressTester:
         liquidation_threshold = float(data[3]) / 10000.0
         ltv = float(data[4]) / 10000.0
         
-        # If health factor is max uint256 or extremely large, treat as infinity
+        # Aave encodes "no debt" as max uint256; zero is a real HF of 0 (underwater).
         hf_raw = data[5]
-        if hf_raw == (2**256 - 1) or hf_raw == 0:
+        if hf_raw == (2**256 - 1):
             health_factor = float("inf")
         else:
             health_factor = float(hf_raw) / 1e18

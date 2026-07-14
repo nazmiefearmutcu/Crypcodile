@@ -35,6 +35,83 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
+# Stable schemas for inventory / search (empty-result contract).
+_INVENTORY_SCHEMA: dict[str, pl.DataType] = {
+    "exchange": pl.Utf8,
+    "channel": pl.Utf8,
+    "symbol": pl.Utf8,
+    "min_ts": pl.Int64,
+    "max_ts": pl.Int64,
+    "row_count": pl.Int64,
+}
+
+_SEARCH_SCHEMA: dict[str, pl.DataType] = {
+    "symbol": pl.Utf8,
+    "exchange": pl.Utf8,
+    "channels": pl.Utf8,
+    "score": pl.Int64,
+    "min_ts": pl.Int64,
+    "max_ts": pl.Int64,
+    "row_count": pl.Int64,
+}
+
+
+# Path / glob characters that must never appear in hive partition suffixes
+# used for discovery walks or interpolated into Path.glob / DuckDB patterns.
+_UNSAFE_HIVE_SUFFIX_CHARS = frozenset({"/", "\\", "\x00", "*", "?", "[", "]"})
+
+
+def _is_safe_hive_suffix(value: str) -> bool:
+    """Return True if *value* is a safe hive ``exchange=`` / ``channel=`` suffix.
+
+    Rejects empty / relative names (``.``, ``..``), leading or trailing
+    whitespace (callers such as :meth:`Catalog.list_dates` strip user input,
+    so padded on-disk names would be orphaned), path separators, null bytes,
+    glob metacharacters, and other ASCII control characters (e.g. newlines).
+    """
+    if not value or value in (".", ".."):
+        return False
+    if value != value.strip():
+        return False
+    if any(c in _UNSAFE_HIVE_SUFFIX_CHARS for c in value):
+        return False
+    if any(ord(c) < 32 for c in value):
+        return False
+    return True
+
+
+def _symbol_raw(symbol: str) -> str:
+    """Return the raw portion of a canonical symbol (after the last ``:``)."""
+    return symbol.rsplit(":", 1)[-1]
+
+
+def _score_symbol(q: str, symbol: str) -> int:
+    """Rank how well *symbol* matches query *q*.
+
+    Scores (highest first):
+      100 exact full symbol match
+       90 exact raw (after last ':') match
+       80 case-insensitive equality (full or raw)
+       60 prefix match on raw or full
+       40 substring match
+        0 no match
+    """
+    if symbol == q:
+        return 100
+    raw = _symbol_raw(symbol)
+    if raw == q:
+        return 90
+    q_lower = q.lower()
+    symbol_lower = symbol.lower()
+    raw_lower = raw.lower()
+    if symbol_lower == q_lower or raw_lower == q_lower:
+        return 80
+    if symbol_lower.startswith(q_lower) or raw_lower.startswith(q_lower):
+        return 60
+    if q_lower in symbol_lower or q_lower in raw_lower:
+        return 40
+    return 0
+
 
 class Catalog:
     """Query interface over a hive-partitioned Parquet data lake.
@@ -127,7 +204,14 @@ class Catalog:
             symbol_filter = f"symbol IN ({placeholders})"
             params = symbols_list + [start_ns, end_ns]
 
-        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        # Cast/validate before interpolating into SQL — never trust a raw limit.
+        if limit is not None:
+            limit = int(limit)
+            if limit < 0:
+                raise ValueError("limit must be >= 0")
+            limit_clause = f" LIMIT {limit}"  # safe after int cast
+        else:
+            limit_clause = ""
 
         # Use parameterized query to avoid SQL injection on the symbol value.
         # start_ns and end_ns are ints (no injection risk) but kept as parameters
@@ -174,9 +258,383 @@ class Catalog:
         """
         self._refresh_views()
 
+    def list_channels(self) -> list[str]:
+        """Return sorted channel names present in the lake.
+
+        Walks the hive layout ``exchange=*/channel=*`` on the filesystem
+        (no DuckDB scan).  Useful discovery even when channel directories
+        exist but views cannot be registered yet (empty partitions / no
+        parquet parts).
+
+        Empty lake or missing data directory yields ``[]``. Channel names
+        are the raw partition suffixes (e.g. ``trade``, ``book_snapshot``),
+        deduplicated across exchanges and sorted ascending. Non-directory
+        entries, names that are not ``channel=...``, and suffixes that are
+        unsafe as path segments (separators, null/control bytes, ``.`` /
+        ``..``, glob metacharacters, leading/trailing whitespace) are ignored.
+        """
+        if not self._data_dir.exists() or not self._data_dir.is_dir():
+            return []
+
+        try:
+            data_root = self._data_dir.resolve()
+        except OSError:
+            return []
+
+        channels: set[str] = set()
+        try:
+            exchange_dirs = list(self._data_dir.iterdir())
+        except OSError:
+            return []
+
+        for exchange_dir in exchange_dirs:
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith(
+                "exchange="
+            ):
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                exchange_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            try:
+                children = list(exchange_dir.iterdir())
+            except OSError:
+                continue
+            for chan_dir in children:
+                if not chan_dir.is_dir() or not chan_dir.name.startswith(
+                    "channel="
+                ):
+                    continue
+                # Resolve-check channel dirs too (symlink escape defence).
+                try:
+                    chan_dir.resolve().relative_to(data_root)
+                except (ValueError, OSError):
+                    continue
+                channel_str = chan_dir.name[len("channel=") :]
+                if _is_safe_hive_suffix(channel_str):
+                    channels.add(channel_str)
+
+        return sorted(channels)
+
+    def list_dates(self, channel: str) -> list[str]:
+        """Return sorted distinct ``date=`` partition values for *channel*.
+
+        Walks the hive layout ``exchange=*/channel={channel}/date=*`` on the
+        filesystem (no DuckDB scan).  Useful discovery before bounded
+        ``scan()`` / analytics calls.
+
+        Empty / whitespace *channel*, unknown channel, empty lake, or a
+        channel value that is unsafe as a path segment (separators, null
+        bytes, ``.`` / ``..``, glob metacharacters) yields ``[]``.
+
+        Dates are the raw partition suffixes (typically ``YYYY-MM-DD``),
+        deduplicated across exchanges and sorted ascending.
+        """
+        channel = (channel or "").strip()
+        # Reject path traversal and glob injection — never interpolate
+        # untrusted channel into Path.glob patterns.
+        if not _is_safe_hive_suffix(channel):
+            return []
+
+        if not self._data_dir.exists() or not self._data_dir.is_dir():
+            return []
+
+        try:
+            data_root = self._data_dir.resolve()
+        except OSError:
+            return []
+
+        dates: set[str] = set()
+        try:
+            exchange_dirs = list(self._data_dir.iterdir())
+        except OSError:
+            return []
+
+        for exchange_dir in exchange_dirs:
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
+                continue
+            chan_dir = exchange_dir / f"channel={channel}"
+            if not chan_dir.is_dir():
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                chan_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            try:
+                children = list(chan_dir.iterdir())
+            except OSError:
+                continue
+            for date_dir in children:
+                if not date_dir.is_dir() or not date_dir.name.startswith("date="):
+                    continue
+                date_str = date_dir.name[len("date=") :]
+                if date_str and date_str not in (".", ".."):
+                    dates.add(date_str)
+
+        return sorted(dates)
+
+    def list_exchanges_on_disk(self) -> list[str]:
+        """Return sorted distinct ``exchange=`` partition values on disk.
+
+        Walks the hive layout ``exchange=*/`` at the data lake root on the
+        filesystem (no DuckDB scan).  Useful discovery before channel/date
+        scoping or ``inventory(exchange=...)`` filters.
+
+        Distinct from :func:`crypcodile.exchanges.factory.list_exchanges`,
+        which returns **registered connector** names (code registry), not
+        partitions present in the lake.
+
+        Empty lake or missing data directory yields ``[]``. Exchange names
+        are the raw partition suffixes (e.g. ``deribit``, ``binance``),
+        deduplicated and sorted ascending. Non-directory entries, names
+        that are not ``exchange=...``, and suffixes that are unsafe as path
+        segments (separators, null/control bytes, ``.`` / ``..``, glob
+        metacharacters, leading/trailing whitespace) are ignored.
+        """
+        if not self._data_dir.exists() or not self._data_dir.is_dir():
+            return []
+
+        try:
+            data_root = self._data_dir.resolve()
+        except OSError:
+            return []
+
+        exchanges: set[str] = set()
+        try:
+            children = list(self._data_dir.iterdir())
+        except OSError:
+            return []
+
+        for exchange_dir in children:
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                exchange_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            exchange_str = exchange_dir.name[len("exchange=") :]
+            if _is_safe_hive_suffix(exchange_str):
+                exchanges.add(exchange_str)
+
+        return sorted(exchanges)
+
+    def inventory(
+        self,
+        channel: str | None = None,
+        exchange: str | None = None,
+    ) -> pl.DataFrame:
+        """Summarise symbols present in the lake.
+
+        Columns (stable schema even when empty)::
+
+            exchange: str
+            channel: str
+            symbol: str
+            min_ts: int
+            max_ts: int
+            row_count: int
+
+        Optionally filter by *channel* and/or *exchange*. Empty or
+        whitespace-only filter strings are treated as no filter (same contract
+        as client ``resolve_symbols``), so ``channel=""`` does not falsely
+        empty the inventory.
+        """
+        self._refresh_views()
+        empty = pl.DataFrame(schema=_INVENTORY_SCHEMA)
+
+        # Treat empty / whitespace filters as "no filter". A non-None channel
+        # that is not registered returns empty, so "" would otherwise yield [].
+        if isinstance(channel, str):
+            channel = channel.strip() or None
+        if isinstance(exchange, str):
+            exchange = exchange.strip() or None
+
+        channels = sorted(self._registered_channels)
+        if channel is not None:
+            if channel not in self._registered_channels:
+                return empty
+            channels = [channel]
+        if not channels:
+            return empty
+
+        frames: list[pl.DataFrame] = []
+        for ch in channels:
+            frame = self._inventory_for_channel(ch, exchange=exchange)
+            if frame is not None and len(frame) > 0:
+                frames.append(frame)
+
+        if not frames:
+            return empty
+
+        out = pl.concat(frames, how="diagonal_relaxed")
+        # Enforce stable column order and dtypes.
+        return out.select(
+            pl.col("exchange").cast(pl.Utf8),
+            pl.col("channel").cast(pl.Utf8),
+            pl.col("symbol").cast(pl.Utf8),
+            pl.col("min_ts").cast(pl.Int64),
+            pl.col("max_ts").cast(pl.Int64),
+            pl.col("row_count").cast(pl.Int64),
+        ).sort(["exchange", "channel", "symbol"])
+
+    def search_symbols(
+        self,
+        q: str,
+        *,
+        channel: str | None = None,
+        exchange: str | None = None,
+        limit: int = 20,
+    ) -> pl.DataFrame:
+        """Ranked symbol search over the catalog inventory.
+
+        Columns::
+
+            symbol, exchange, channels, score, min_ts, max_ts, row_count
+
+        Ranking (see :func:`_score_symbol`).  Empty or whitespace-only *q*
+        returns an empty DataFrame with the documented schema.  Multi-channel
+        rows for the same ``(symbol, exchange)`` are aggregated: channels
+        joined with commas, ``row_count`` summed, timestamps min/max'd,
+        score max'd.  ``limit < 1`` yields the empty schema (Polars
+        ``DataFrame.head(-n)`` would otherwise drop the last *n* rows).
+        """
+        empty = pl.DataFrame(schema=_SEARCH_SCHEMA)
+        q = q.strip()
+        if not q:
+            return empty
+        # Guard before .head(limit): Polars treats negative n as "all but last n".
+        if limit < 1:
+            return empty
+
+        inv = self.inventory(channel=channel, exchange=exchange)
+        if len(inv) == 0:
+            return empty
+
+        rows: list[dict[str, object]] = []
+        for rec in inv.iter_rows(named=True):
+            score = _score_symbol(q, rec["symbol"])
+            if score <= 0:
+                continue
+            rows.append(
+                {
+                    "symbol": rec["symbol"],
+                    "exchange": rec["exchange"],
+                    "channel": rec["channel"],
+                    "score": score,
+                    "min_ts": rec["min_ts"],
+                    "max_ts": rec["max_ts"],
+                    "row_count": rec["row_count"],
+                }
+            )
+
+        if not rows:
+            return empty
+
+        scored = pl.DataFrame(rows)
+        agg = (
+            scored.group_by(["symbol", "exchange"])
+            .agg(
+                pl.col("channel").unique().sort().str.join(",").alias("channels"),
+                pl.col("score").max().alias("score"),
+                pl.col("min_ts").min().alias("min_ts"),
+                pl.col("max_ts").max().alias("max_ts"),
+                pl.col("row_count").sum().alias("row_count"),
+            )
+            .with_columns(
+                pl.col("score").cast(pl.Int64),
+                pl.col("min_ts").cast(pl.Int64),
+                pl.col("max_ts").cast(pl.Int64),
+                pl.col("row_count").cast(pl.Int64),
+            )
+            .sort(["score", "symbol"], descending=[True, False])
+            .head(limit)
+            .select(
+                "symbol",
+                "exchange",
+                "channels",
+                "score",
+                "min_ts",
+                "max_ts",
+                "row_count",
+            )
+        )
+        return agg
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _inventory_for_channel(
+        self,
+        channel: str,
+        *,
+        exchange: str | None = None,
+    ) -> pl.DataFrame | None:
+        """Run the inventory aggregate SQL for a single registered channel.
+
+        Returns ``None`` if the view is unusable (missing required columns)
+        or the query fails; returns an empty DataFrame if the channel has
+        no rows after filtering.
+        """
+        escaped = channel.replace('"', '""')
+        try:
+            cols_df = self._conn.execute(f'DESCRIBE "{escaped}"').pl()
+            col_names = set(cols_df["column_name"].to_list())
+        except Exception:
+            return None
+
+        required = {"symbol", "local_ts"}
+        if not required.issubset(col_names):
+            return None
+
+        # Prefer hive-partition columns when present; otherwise synthesise
+        # from the registered channel name / optional exchange filter.
+        has_exchange = "exchange" in col_names
+        has_channel = "channel" in col_names
+
+        if has_exchange:
+            exchange_expr = "exchange"
+        elif exchange is not None:
+            exchange_expr = f"'{exchange.replace(chr(39), chr(39) * 2)}'"
+        else:
+            exchange_expr = "''"
+
+        channel_expr = (
+            "channel" if has_channel else f"'{channel.replace(chr(39), chr(39) * 2)}'"
+        )
+
+        where_parts: list[str] = []
+        params: list[object] = []
+        if exchange is not None and has_exchange:
+            where_parts.append("exchange = ?")
+            params.append(exchange)
+
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        sql = f"""
+            SELECT
+                {exchange_expr} AS exchange,
+                {channel_expr} AS channel,
+                symbol,
+                CAST(min(local_ts) AS BIGINT) AS min_ts,
+                CAST(max(local_ts) AS BIGINT) AS max_ts,
+                CAST(count(*) AS BIGINT) AS row_count
+            FROM "{escaped}"
+            {where_sql}
+            GROUP BY 1, 2, 3
+        """
+        try:
+            if params:
+                result = self._conn.execute(sql, params)
+            else:
+                result = self._conn.execute(sql)
+            return result.pl()
+        except Exception:
+            return None
+
 
     def _refresh_views(self) -> None:
         """Scan data_dir for channel directories and create/replace views."""
@@ -192,6 +650,9 @@ class Catalog:
                 if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
                     continue
                 channel = chan_dir.name[len("channel="):]
+                # Skip empty / relative / glob-unsafe suffixes (invalid views).
+                if not _is_safe_hive_suffix(channel):
+                    continue
                 if channel not in self._registered_channels:
                     self._create_view(channel)
 
@@ -200,6 +661,12 @@ class Catalog:
 
         The glob covers all exchanges and all dates for that channel so that
         ``query("SELECT … FROM trade")`` works without extra parameters.
+
+        Empty partition directories (no ``part-*.parquet`` yet) are skipped
+        without raising: DuckDB ``read_parquet`` fails hard when the glob
+        matches nothing, which would otherwise break ``Catalog`` construction
+        / ``refresh_views`` when filesystem ``list_channels`` still discovers
+        those channels. The channel is not added to ``_registered_channels``.
         """
         glob_pattern = str(
             self._data_dir
@@ -209,12 +676,17 @@ class Catalog:
             / "bucket=*"
             / "part-*.parquet"
         )
+        # Avoid DuckDB "No files found" when only empty hive dirs exist.
+        if not _glob.glob(glob_pattern):
+            return
+
         # Escape embedded single quotes in the path so the SQL string literal
         # is valid even when data_dir or channel contains a single quote.
         # DuckDB does not support ? parameters for structural/path arguments
         # like read_parquet() paths, so quote-escaping is the correct fix.
+        # View name uses double-quoted identifiers: escape " as "".
         escaped_glob = glob_pattern.replace("'", "''")
-        escaped_channel = channel.replace("'", "''")
+        escaped_channel = channel.replace('"', '""')
         sql = f"""
             CREATE OR REPLACE VIEW "{escaped_channel}" AS
             SELECT * FROM read_parquet(
@@ -223,7 +695,11 @@ class Catalog:
                 union_by_name => true
             )
         """
-        self._conn.execute(sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        try:
+            self._conn.execute(sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        except Exception:
+            # Race: files vanished between glob check and execute, or corrupt.
+            return
         self._registered_channels.add(channel)
 
     def _build_date_globs(

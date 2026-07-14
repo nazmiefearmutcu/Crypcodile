@@ -108,16 +108,20 @@ class TestCliAdversarial(unittest.TestCase):
             basis_cmd(perp=None, future=None, spot=None, data_dir=data_dir)
         self.assertEqual(cm.exception.exit_code, 1)
         out, err = self.get_output()
-        self.assertIn("Error: Either --perp, or both --future and --spot must be specified in non-interactive mode", out + err)
+        self.assertIn(
+            "Error: Specify one of: --perp; both --future and --spot; "
+            "or both --spot and --perp in non-interactive mode",
+            out + err,
+        )
         self.stdout_capture.seek(0); self.stdout_capture.truncate()
         self.stderr_capture.seek(0); self.stderr_capture.truncate()
 
-        # basis with perp and future/spot (mutually exclusive)
+        # basis with perp and future (mutually exclusive)
         with self.assertRaises(typer.Exit) as cm:
             basis_cmd(perp="BTC-PERPETUAL", future="BTC-FUTURE", spot="BTC-SPOT", data_dir=data_dir)
         self.assertEqual(cm.exception.exit_code, 1)
         out, err = self.get_output()
-        self.assertIn("Error: --perp and --future/--spot are mutually exclusive", out + err)
+        self.assertIn("Error: --perp and --future are mutually exclusive", out + err)
         self.stdout_capture.seek(0); self.stdout_capture.truncate()
         self.stderr_capture.seek(0); self.stderr_capture.truncate()
 
@@ -173,12 +177,12 @@ class TestCliAdversarial(unittest.TestCase):
 
     def test_collect_wizard_invalid_inputs(self):
         """4a. Test exchange/symbol/channel selection wizards with invalid inputs (digit and non-digit) for collect"""
-        # 1. Exchange selection:
-        # Input sequence: 
-        # - "99" (invalid exchange index) -> "abc" (invalid exchange name) -> "1" (valid index for binance)
+        # 1. Exchange selection (list_exchanges is sorted: 2=binance):
+        # Input sequence:
+        # - "99" (invalid exchange index) -> "abc" (invalid exchange name) -> "2" (valid index for binance)
         # - "99" (invalid channel index) -> "abc" (invalid channel name) -> "1" (valid index for trade)
         # - "c" (custom symbol choice) -> "BTC"
-        with patch("typer.prompt", side_effect=["99", "abc", "1", "99", "abc", "1", "c", "BTC"]):
+        with patch("typer.prompt", side_effect=["99", "abc", "2", "99", "abc", "1", "c", "BTC"]):
             exchange, symbols, channels = select_collect_params_interactively(None, None, None)
             self.assertEqual(exchange, "binance")
             self.assertEqual(channels, ["trade"])

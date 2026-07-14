@@ -280,44 +280,44 @@ async def test_mcp_server_serve_stdio(tmp_path) -> None:
             "params": {"name": "get_onchain_price", "arguments": {"symbol": "cbBTC-USDC"}}
         }
     ]
-    
-    # serve_stdio reads via sys.stdin.readline() in an executor, so feed the
-    # request lines one at a time followed by "" (EOF). A bare MagicMock stdin
-    # returns truthy MagicMocks forever, which spins the read loop until the
-    # pytest-timeout kills it — hence the previous hang.
-    stdin_lines = [json.dumps(r) + "\n" for r in requests] + [""]
-    mock_stdin = MagicMock()
-    mock_stdin.readline.side_effect = stdin_lines
 
-    # Mock sys.stdout.write and flush
-    stdout_writes = []
-    def mock_write(s):
+    lines = [json.dumps(r).encode() + b"\n" for r in requests]
+    # Final empty read = EOF so serve_stdio exits cleanly.
+    lines.append(b"")
+
+    mock_buffer = MagicMock()
+    mock_buffer.readline = MagicMock(side_effect=lines)
+    mock_stdin = MagicMock()
+    mock_stdin.buffer = mock_buffer
+
+    stdout_writes: list[str] = []
+
+    def mock_write(s: str) -> int:
         stdout_writes.append(s)
+        return len(s)
 
     with patch("sys.stdin", mock_stdin), \
          patch("sys.stdout.write", mock_write), \
          patch("sys.stdout.flush", MagicMock()), \
          patch("crypcodile.mcp_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
-         
+
          mock_get_price.return_value = {
              "symbol": "cbBTC-USDC",
              "price": 50000.0
          }
-         
-         # Run serve_stdio with a temporary folder
+
          await serve_stdio(data_dir=tmp_path)
-         
-         # Check the responses written to stdout
+
          assert len(stdout_writes) == 3
-         
+
          resp_1 = json.loads(stdout_writes[0])
          assert resp_1["id"] == 1
          assert "protocolVersion" in resp_1["result"]
-         
+
          resp_2 = json.loads(stdout_writes[1])
          assert resp_2["id"] == 2
          assert "tools" in resp_2["result"]
-         
+
          resp_3 = json.loads(stdout_writes[2])
          assert resp_3["id"] == 3
          tool_content = json.loads(resp_3["result"]["content"][0]["text"])
@@ -767,3 +767,419 @@ async def test_api_server_metrics_endpoint() -> None:
     
     from crypcodile.api_server import METRICS_METRICS_REQUESTS as new_count
     assert new_count == init_count + 1
+
+
+@pytest.mark.asyncio
+async def test_cas_concurrent_double_serve_prevention() -> None:
+    """CAS paid→spent under lock: only one concurrent serve may succeed per payment_id."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import db_lock
+
+    PAYMENTS_DB.clear()
+
+    private_key = "0x" + "3" * 64
+    account = Account.from_key(private_key)
+    pid = "cas-double-serve-pid"
+    tx_hash = "0xcas_double_serve_tx"
+
+    msg = encode_defunct(text=pid)
+    sig = account.sign_message(msg).signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+
+    async with db_lock:
+        await PAYMENTS_DB.set_async(pid, {
+            "status": "paid",
+            "symbol": "cbBTC-USDC",
+            "tx_hash": tx_hash,
+            "sender": account.address,
+            "signature": sig,
+            "price": "0.001",
+            "currency": "USDC",
+            "recipient": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        })
+
+    payment_sig_header = json.dumps({
+        "payment_id": pid,
+        "tx_hash": tx_hash,
+        "signature": sig,
+    })
+
+    serve_started = asyncio.Event()
+    release_serve = asyncio.Event()
+
+    async def slow_price(symbol, rpc_url=None):
+        serve_started.set()
+        await release_serve.wait()
+        return {"symbol": symbol, "price": 42000.0, "block": 1}
+
+    with patch("crypcodile.api_server.get_onchain_price", side_effect=slow_price):
+        t1 = asyncio.create_task(
+            get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        )
+        # Wait until first request has passed CAS and is serving
+        await asyncio.wait_for(serve_started.wait(), timeout=2.0)
+
+        # Second concurrent serve must fail — payment already spent by CAS
+        with pytest.raises(HTTPException) as exc_info:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Payment already spent."
+
+        release_serve.set()
+        resp1 = await t1
+        assert resp1["status"] == "success"
+        assert resp1["data"]["price"] == 42000.0
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_serve_failure_restores_paid_status() -> None:
+    """If get_onchain_price fails after CAS paid→spent, restore paid so client can retry."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import db_lock
+
+    PAYMENTS_DB.clear()
+
+    private_key = "0x" + "4" * 64
+    account = Account.from_key(private_key)
+    pid = "serve-fail-restore-pid"
+    tx_hash = "0xserve_fail_restore_tx"
+
+    msg = encode_defunct(text=pid)
+    sig = account.sign_message(msg).signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+
+    async with db_lock:
+        await PAYMENTS_DB.set_async(pid, {
+            "status": "paid",
+            "symbol": "cbBTC-USDC",
+            "tx_hash": tx_hash,
+            "sender": account.address,
+            "signature": sig,
+            "price": "0.001",
+            "currency": "USDC",
+            "recipient": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        })
+
+    payment_sig_header = json.dumps({
+        "payment_id": pid,
+        "tx_hash": tx_hash,
+        "signature": sig,
+    })
+
+    # Case 1: get_onchain_price returns error dict — restore paid
+    with patch(
+        "crypcodile.api_server.get_onchain_price",
+        AsyncMock(return_value={"error": "RPC timeout"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        assert exc_info.value.status_code == 500
+        assert "Failed to fetch market data" in exc_info.value.detail
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "paid", "serve error-dict must restore paid entitlement"
+
+    # Case 2: get_onchain_price raises — restore paid again after re-CAS
+    with patch(
+        "crypcodile.api_server.get_onchain_price",
+        AsyncMock(side_effect=RuntimeError("upstream down")),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header,
+            )
+        assert exc_info.value.status_code == 500
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "paid", "serve exception must restore paid entitlement"
+
+    # Case 3: retry after restore succeeds and leaves status spent
+    with patch(
+        "crypcodile.api_server.get_onchain_price",
+        AsyncMock(return_value={"symbol": "cbBTC-USDC", "price": 41000.0, "block": 2}),
+    ):
+        resp = await get_market_data(
+            symbol="cbBTC-USDC",
+            response=Response(),
+            payment_signature=payment_sig_header,
+        )
+        assert resp["status"] == "success"
+        assert resp["data"]["price"] == 41000.0
+
+    record = await PAYMENTS_DB.get_async(pid)
+    assert record["status"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_admin_payments_protection() -> None:
+    """Admin payments endpoint: 404 if unset, 401 if wrong key, 200 if correct."""
+    import os
+    from crypcodile.api_server import get_all_payments, db_lock
+
+    PAYMENTS_DB.clear()
+    async with db_lock:
+        await PAYMENTS_DB.set_async("admin-test-pid", {"status": "paid"})
+
+    prev_key = os.environ.get("ADMIN_API_KEY")
+    try:
+        # Unset ADMIN_API_KEY → 404
+        os.environ.pop("ADMIN_API_KEY", None)
+        with pytest.raises(HTTPException) as exc_404:
+            await get_all_payments()
+        assert exc_404.value.status_code == 404
+
+        # Set key, missing/wrong credentials → 401
+        os.environ["ADMIN_API_KEY"] = "super-secret-admin-key"
+
+        with pytest.raises(HTTPException) as exc_missing:
+            await get_all_payments()
+        assert exc_missing.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc_wrong:
+            await get_all_payments(x_admin_key="wrong-key")
+        assert exc_wrong.value.status_code == 401
+
+        with pytest.raises(HTTPException) as exc_wrong_bearer:
+            await get_all_payments(authorization="Bearer wrong-key")
+        assert exc_wrong_bearer.value.status_code == 401
+
+        # Correct X-Admin-Key → 200 / full DB
+        result = await get_all_payments(x_admin_key="super-secret-admin-key")
+        assert "admin-test-pid" in result
+        assert result["admin-test-pid"]["status"] == "paid"
+
+        # Correct Bearer token → 200
+        result_bearer = await get_all_payments(authorization="Bearer super-secret-admin-key")
+        assert "admin-test-pid" in result_bearer
+    finally:
+        if prev_key is None:
+            os.environ.pop("ADMIN_API_KEY", None)
+        else:
+            os.environ["ADMIN_API_KEY"] = prev_key
+
+
+@pytest.mark.asyncio
+async def test_simulate_payment_disabled_without_env() -> None:
+    """simulate_payment must reject when ALLOW_SIMULATION is not true."""
+    import os
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import PaymentSignature
+
+    prev_sim = os.environ.get("ALLOW_SIMULATION")
+    try:
+        os.environ["ALLOW_SIMULATION"] = "false"
+
+        private_key = "0x" + "4" * 64
+        account = Account.from_key(private_key)
+        pid = "sim-disabled-pid"
+        msg = encode_defunct(text=pid)
+        sig = account.sign_message(msg).signature.hex()
+        if not sig.startswith("0x"):
+            sig = "0x" + sig
+
+        payload = PaymentSignature(payment_id=pid, tx_hash="0xsim", signature=sig)
+        with pytest.raises(HTTPException) as exc_info:
+            await simulate_payment(payload)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Simulation mode is disabled."
+
+        # Also when unset (default false)
+        os.environ.pop("ALLOW_SIMULATION", None)
+        with pytest.raises(HTTPException) as exc_info2:
+            await simulate_payment(payload)
+        assert exc_info2.value.status_code == 400
+        assert exc_info2.value.detail == "Simulation mode is disabled."
+    finally:
+        if prev_sim is None:
+            os.environ.pop("ALLOW_SIMULATION", None)
+        else:
+            os.environ["ALLOW_SIMULATION"] = prev_sim
+
+
+@pytest.mark.asyncio
+async def test_simulate_payment_rejects_paid_and_spent() -> None:
+    """simulate_payment only allows pending → paid; paid/spent return 400."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from crypcodile.api_server import PaymentSignature, db_lock
+
+    PAYMENTS_DB.clear()
+
+    private_key = "0x" + "5" * 64
+    account = Account.from_key(private_key)
+
+    # --- paid record: second simulate must fail ---
+    response = Response()
+    await get_market_data(symbol="cbBTC-USDC", response=response, payment_signature=None)
+    payment_id = json.loads(response.headers["Payment-Required"])["payment_id"]
+
+    msg = encode_defunct(text=payment_id)
+    sig = account.sign_message(msg).signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+
+    payload = PaymentSignature(
+        payment_id=payment_id, tx_hash="0xsim_paid_once", signature=sig
+    )
+    sim_res = await simulate_payment(payload)
+    assert sim_res["status"] == "success"
+    assert PAYMENTS_DB[payment_id]["status"] == "paid"
+
+    with pytest.raises(HTTPException) as exc_paid:
+        await simulate_payment(payload)
+    assert exc_paid.value.status_code == 400
+    assert exc_paid.value.detail == "Payment already processed."
+    assert PAYMENTS_DB[payment_id]["status"] == "paid"
+
+    # --- spent record: simulate must fail ---
+    spent_pid = "sim-spent-pid"
+    spent_msg = encode_defunct(text=spent_pid)
+    spent_sig = account.sign_message(spent_msg).signature.hex()
+    if not spent_sig.startswith("0x"):
+        spent_sig = "0x" + spent_sig
+
+    async with db_lock:
+        await PAYMENTS_DB.set_async(spent_pid, {
+            "status": "spent",
+            "symbol": "cbBTC-USDC",
+            "tx_hash": "0xsim_spent_tx",
+            "sender": account.address,
+            "signature": spent_sig,
+            "price": "0.001",
+            "currency": "USDC",
+            "recipient": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+        })
+
+    spent_payload = PaymentSignature(
+        payment_id=spent_pid, tx_hash="0xsim_spent_new", signature=spent_sig
+    )
+    with pytest.raises(HTTPException) as exc_spent:
+        await simulate_payment(spent_payload)
+    assert exc_spent.value.status_code == 400
+    assert exc_spent.value.detail == "Payment already processed."
+    assert PAYMENTS_DB[spent_pid]["status"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_spent_cannot_be_repaid_via_verify_path() -> None:
+    """Spent records cannot be re-paid: early gate + pending-only write after verify."""
+    from crypcodile.api_server import db_lock, VERIFYING_TXS
+
+    PAYMENTS_DB.clear()
+    VERIFYING_TXS.clear()
+
+    # --- A: spent at entry → Payment already spent (never re-verify) ---
+    response = Response()
+    await get_market_data(symbol="cbBTC-USDC", response=response, payment_signature=None)
+    payment_id = json.loads(response.headers["Payment-Required"])["payment_id"]
+    sig, address = generate_signature(payment_id)
+    tx_hash = "0x" + "e" * 64
+
+    async with db_lock:
+        rec = await PAYMENTS_DB.get_async(payment_id)
+        rec["status"] = "spent"
+        rec["tx_hash"] = tx_hash
+        rec["sender"] = address
+        rec["signature"] = sig
+        await PAYMENTS_DB.set_async(payment_id, rec)
+
+    payment_sig_header = json.dumps({
+        "payment_id": payment_id,
+        "tx_hash": tx_hash,
+        "signature": sig,
+    })
+    with pytest.raises(HTTPException) as exc_spent:
+        await get_market_data(
+            symbol="cbBTC-USDC",
+            response=Response(),
+            payment_signature=payment_sig_header,
+        )
+    assert exc_spent.value.status_code == 400
+    assert exc_spent.value.detail == "Payment already spent."
+    assert PAYMENTS_DB[payment_id]["status"] == "spent"
+
+    # --- B: status flipped to spent during on-chain verify → pending-only write rejects ---
+    PAYMENTS_DB.clear()
+    VERIFYING_TXS.clear()
+
+    response2 = Response()
+    await get_market_data(symbol="cbBTC-USDC", response=response2, payment_signature=None)
+    payment_id2 = json.loads(response2.headers["Payment-Required"])["payment_id"]
+    sig2, address2 = generate_signature(payment_id2)
+    tx_hash2 = "0x" + "f" * 64
+
+    mock_receipt = {
+        "status": 1,
+        "blockNumber": 100,
+        "logs": [
+            {
+                "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
+                "topics": [
+                    bytes.fromhex("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"),
+                    bytes.fromhex("000000000000000000000000" + address2[2:]),
+                    bytes.fromhex(
+                        "00000000000000000000000070997970C51812dc3A010C7d01b50e0d17dc79C8"[2:]
+                    ),
+                ],
+                "data": bytes.fromhex(
+                    "00000000000000000000000000000000000000000000000000000000000003e8"
+                ),
+            }
+        ],
+    }
+
+    async def flip_to_spent_then_receipt(*args, **kwargs):
+        async with db_lock:
+            rec = await PAYMENTS_DB.get_async(payment_id2)
+            rec["status"] = "spent"
+            await PAYMENTS_DB.set_async(payment_id2, rec)
+        return mock_receipt
+
+    with patch("crypcodile.api_server.get_w3") as mock_get_w3:
+        mock_w3 = MagicMock()
+        mock_w3.eth.chain_id = AwaitableValue(8453)
+        mock_w3.eth.get_transaction = AsyncMock(
+            return_value={"from": address2, "chainId": 8453}
+        )
+        mock_w3.eth.get_block = AsyncMock(return_value={"timestamp": 1000})
+        mock_w3.eth.get_transaction_receipt = AsyncMock(
+            side_effect=flip_to_spent_then_receipt
+        )
+        mock_get_w3.return_value = mock_w3
+
+        payment_sig_header2 = json.dumps({
+            "payment_id": payment_id2,
+            "tx_hash": tx_hash2,
+            "signature": sig2,
+        })
+        with pytest.raises(HTTPException) as exc_repay:
+            await get_market_data(
+                symbol="cbBTC-USDC",
+                response=Response(),
+                payment_signature=payment_sig_header2,
+            )
+        assert exc_repay.value.status_code == 400
+        assert exc_repay.value.detail == "Payment already processed."
+        assert PAYMENTS_DB[payment_id2]["status"] == "spent"

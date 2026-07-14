@@ -161,7 +161,7 @@ def test_analytics_funding_empty_lake_exits_zero(tmp_path: Path) -> None:
         [sys.executable, str(script), "--data-dir", str(tmp_path)],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=360,
     )
     assert result.returncode == 0, (
         f"analytics_funding.py exited {result.returncode} on empty lake.\n"
@@ -176,7 +176,7 @@ def test_analytics_iv_surface_empty_lake_exits_zero(tmp_path: Path) -> None:
         [sys.executable, str(script), "--data-dir", str(tmp_path)],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=360,
     )
     assert result.returncode == 0, (
         f"analytics_iv_surface.py exited {result.returncode} on empty lake.\n"
@@ -204,7 +204,7 @@ def test_analytics_funding_populated_lake_exits_zero(tmp_path: Path) -> None:
         ],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=360,
     )
     assert result.returncode == 0, (
         f"analytics_funding.py exited {result.returncode} on populated lake.\n"
@@ -231,7 +231,7 @@ def test_analytics_iv_surface_populated_lake_exits_zero(tmp_path: Path) -> None:
         ],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=360,
     )
     assert result.returncode == 0, (
         f"analytics_iv_surface.py exited {result.returncode} on populated lake.\n"

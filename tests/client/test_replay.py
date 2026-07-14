@@ -278,3 +278,95 @@ async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
     types = {type(r).__name__ for r in records}
     assert "Trade" in types, "Expected Trade records in multi-channel replay"
     assert "BookDelta" in types, "Expected BookDelta records in multi-channel replay"
+
+
+async def test_replay_limit_bounds_global_merge_output(tmp_path: pathlib.Path) -> None:
+    """limit caps total merged records, not each channel independently.
+
+    With two channels that each have enough rows, a per-channel scan limit
+    alone would over-fetch (up to limit * num_channels).  The public API
+    documents a global maximum on the merged stream.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
+    symbol = "deribit:BTC-PERPETUAL"
+
+    # 3 trades + 3 book deltas, strictly interleaved by local_ts
+    for i in range(3):
+        trade_ts = _BASE_TS + i * 2_000_000_000
+        delta_ts = trade_ts + 1_000_000_000
+        await sink.put(
+            Trade(
+                exchange="deribit",
+                symbol=symbol,
+                symbol_raw="BTC-PERPETUAL",
+                exchange_ts=trade_ts,
+                local_ts=trade_ts,
+                id=str(trade_ts),
+                price=float(i + 1),
+                amount=1.0,
+                side=Side.BUY,
+            )
+        )
+        await sink.put(
+            BookDelta(
+                exchange="deribit",
+                symbol=symbol,
+                symbol_raw="BTC-PERPETUAL",
+                exchange_ts=delta_ts,
+                local_ts=delta_ts,
+                bids=[(100.0 + i, 1.0)],
+                asks=[],
+                seq_id=i + 1,
+                prev_seq_id=i if i > 0 else None,
+                is_snapshot=False,
+            )
+        )
+    await sink.flush()
+
+    client = CrypcodileClient(data_dir=tmp_path)
+    limit = 3
+    records = list(
+        client.replay(
+            channels=["trade", "book_delta"],
+            symbols=[symbol],
+            frm=_BASE_TS,
+            to=_BASE_TS + 10_000_000_000,
+            limit=limit,
+        )
+    )
+
+    assert len(records) == limit, (
+        f"Expected exactly {limit} records from global merge, got {len(records)}"
+    )
+    local_tss = [r.local_ts for r in records]
+    assert local_tss == sorted(local_tss), f"limited replay must stay sorted: {local_tss}"
+    # Earliest N of the interleaved stream: trade, book_delta, trade
+    assert [type(r).__name__ for r in records] == ["Trade", "BookDelta", "Trade"]
+    assert local_tss == [
+        _BASE_TS,
+        _BASE_TS + 1_000_000_000,
+        _BASE_TS + 2_000_000_000,
+    ]
+
+
+async def test_replay_limit_single_channel(tmp_path: pathlib.Path) -> None:
+    """limit still caps a single-channel replay."""
+    from crypcodile.client.client import CrypcodileClient
+
+    await _write_two_symbol_fixtures(tmp_path)
+    client = CrypcodileClient(data_dir=tmp_path)
+    records = list(
+        client.replay(
+            channels=["trade"],
+            symbols=["deribit:BTC-PERPETUAL", "deribit:ETH-PERPETUAL"],
+            frm=_BASE_TS,
+            to=_BASE_TS + 3_000_000_000,
+            limit=2,
+        )
+    )
+    assert len(records) == 2
+    assert [r.local_ts for r in records] == sorted(r.local_ts for r in records)
+    assert records[0].local_ts == _BASE_TS
+    assert records[1].local_ts == _BASE_TS + 500_000_000

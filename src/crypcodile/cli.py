@@ -3,33 +3,98 @@
 Commands
 --------
 query          -- Execute DuckDB SQL against the data lake; print result table.
-catalog        -- List all channels present in the data lake with row counts.
+catalog        -- List channels (filesystem list_channels) with row counts; --symbols inventory.
+catalog-summary -- Print channel/exchange_on_disk counts (one-shot discovery).
+catalog-stats  -- Per-channel row counts via list_channels + COUNT(*) (-1 on fail).
+catalog-dates  -- List hive date= partitions for a channel (list_dates).
+catalog-symbols -- List distinct inventory symbols (--channel / --exchange).
+catalog-inventory -- Full inventory rows with optional --channel / --exchange filters.
+catalog-exchanges -- List on-disk hive exchange= partitions.
+list-exchanges -- List registered factory connector names (no lake).
+search         -- Ranked symbol search over the data lake inventory (--channel / --exchange).
+resolve-symbols -- Resolve free-form symbols to canonical catalog ids.
+data-coverage  -- Inventory coverage rows for one symbol (optional channel/exchange).
 export         -- Export a channel x symbols x time range to a file.
 replay         -- Stream canonical Records from the data lake, printed to stdout.
 collect        -- Run live connectors and write data to the Parquet lake.
+backfill       -- Fetch historical REST data into the Parquet lake.
 funding-apr    -- Print per-event funding APR for a perpetual symbol.
-basis          -- Print spot-future or perpetual basis.
+basis          -- Print spot-future, spot-perp, or mark/index perpetual basis.
 iv-surface     -- Print the implied-vol surface snapshot.
 term-structure -- Print the ATM IV term structure.
+vol-skew       -- Print per-strike IV and delta for a single expiry.
+risk-reversal  -- Print risk-reversal and butterfly from vol skew.
+open-interest  -- Aggregate open interest across exchanges from the lake.
+liquidity-depth -- Per-block bid/ask depth at ±1/2/5% from mid (book snapshots).
+sequencer-latency -- Sequencer production interval and ingestion delay (lake).
+peg-deviation  -- Stablecoin peg deviation (lake or pure --price).
+chaos-score    -- Normalized [0, 100] chaos score from pure risk metrics.
+lending-stress -- LTV/health-factor stress under collateral haircut (pure nums).
+gas-vol        -- Correlate gas costs vs volatility from CSV/JSON inputs.
+smart-money    -- Summarize smart-money net flow from transfers CSV + watchlist.
+label-transfers -- Label/filter transfer CSV rows via watchlist JSON (no RPC).
+mev-sandwich   -- Flag sandwich patterns in trade sequences (CSV/JSON offline).
+funding-predict -- Next-period funding rate from rates list or CSV/JSON (offline).
 
 Usage examples::
 
     crypcodile query "SELECT count(*) FROM trade" --data-dir /data
     crypcodile catalog --data-dir /data
+    crypcodile catalog --symbols --data-dir /data
+    crypcodile catalog-summary --data-dir /data
+    crypcodile catalog-stats --data-dir /data
+    crypcodile catalog-dates --channel trade --data-dir /data
+    crypcodile catalog-symbols --channel trade --exchange deribit --data-dir /data
+    crypcodile catalog-inventory --channel trade --exchange deribit --data-dir /data
+    crypcodile catalog-exchanges --data-dir /data
+    crypcodile list-exchanges  # registered connectors (factory; no lake)
+    crypcodile search BTC --channel trade --exchange deribit --data-dir /data
+    crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
+    crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade --exchange deribit
     crypcodile export --channel trade --symbols BTC-PERPETUAL --from 0 --to 9e18 \\
                      --fmt csv --dest out/trades.csv --data-dir /data
     crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL \\
                      --from 0 --to 9e18 --data-dir /data
     crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \\
                       --channels trade --data-dir /data
+    crypcodile collect --exchange binance --exchange deribit --symbols BTC \\
+                      --channels trade --data-dir /data
+    crypcodile collect --exchange binance,bybit --symbols BTCUSDT \\
+                      --channels trade --data-dir /data
+    crypcodile backfill --exchange binance --channel trade --symbols BTCUSDT \\
+                       --from 1700000000000000000 --to 1700000100000000000 --data-dir /data
     crypcodile funding-apr --symbol deribit:BTC-PERPETUAL \\
                           --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile basis --future deribit:BTC-FUTURE --spot binance-spot:BTCUSDT \\
                     --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile basis --perp deribit:BTC-PERPETUAL \\
                     --start 0 --end 9999999999999999999 --data-dir /data
+    crypcodile basis --spot binance-spot:BTCUSDT --perp deribit:BTC-PERPETUAL \\
+                    --start 0 --end 9999999999999999999 --data-dir /data
     crypcodile iv-surface --underlying BTC --at 1704067200000000000 --data-dir /data
     crypcodile term-structure --underlying BTC --at 1704067200000000000 --data-dir /data
+    crypcodile vol-skew --underlying BTC --expiry-ns 1735689600000000000 \\
+                       --at 1704067200000000000 --data-dir /data
+    crypcodile risk-reversal --underlying BTC --expiry-ns 1735689600000000000 \\
+                            --at 1704067200000000000 --target-delta 0.25 --data-dir /data
+    crypcodile open-interest --symbol BTC --start 0 --end 9999999999999999999 \\
+                            --data-dir /data
+    crypcodile liquidity-depth --symbol base_onchain:DEGEN-WETH --data-dir /data
+    crypcodile sequencer-latency --exchange base_onchain --data-dir /data
+    crypcodile peg-deviation --price 0.98 --threshold 0.01
+    crypcodile peg-deviation --symbol base_onchain:USDC-USDbC --data-dir /data
+    crypcodile chaos-score --volatility 0.05 --stablecoin-deviation 0.002 \\
+                          --orderbook-imbalance 0.1 --sequencer-delay 1.0
+    crypcodile lending-stress --collateral-usd 10000 --debt-usd 5000 \\
+                             --liquidation-threshold 0.8 --haircut-pct 0.20
+    crypcodile gas-vol --gas-file gas.csv --vol-file vol.csv
+    crypcodile smart-money --transfers transfers.csv --watchlist watchlist.json
+    crypcodile label-transfers --transfers transfers.csv --watchlist watchlist.json \\
+                              --min-usd 100000
+    crypcodile mev-sandwich --trades swaps.csv
+    crypcodile mev-sandwich --trades swaps.json --sandwiches-only
+    crypcodile funding-predict --rates 0.0001,0.0002,0.00015
+    crypcodile funding-predict --file funding.csv --window 5
 """
 
 from __future__ import annotations
@@ -347,8 +412,9 @@ def prompt_time_range_helper(
 # Top-level imports used by collect (kept at module scope so tests can patch
 # them without reloading the module).
 # ---------------------------------------------------------------------------
+from crypcodile.client.backfill import run_historical_backfill
 from crypcodile.client.collect import collect as collect_live
-from crypcodile.exchanges.factory import make_connector
+from crypcodile.exchanges.factory import list_exchanges, make_connector
 from crypcodile.ingest.transport import AiohttpWsTransport
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.store.parquet_sink import ParquetSink
@@ -494,11 +560,38 @@ def normalize_user_symbol(exchange: str, symbol: str) -> str:
 
 
 def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: list[str] | str | None = None) -> list[str]:
-    """Resolve user entered symbols to matching catalog symbols if possible."""
+    """Resolve user entered symbols to matching catalog symbols if possible.
+
+    Prefers :meth:`CrypcodileClient.resolve_symbols` with ``ambiguous="first"``
+    when the lake has catalog data. Falls back to the legacy Catalog walk on
+    empty lakes or any client failure (keeps original input on no match).
+    """
+    # Prefer client façade when catalog has data.
+    try:
+        from crypcodile.client.client import CrypcodileClient
+
+        client = CrypcodileClient(data_dir=data_dir)
+        if client.list_channels():
+            channel: str | None = None
+            if isinstance(channels, str):
+                channel = channels
+            elif isinstance(channels, (list, tuple)) and len(channels) == 1:
+                channel = channels[0]
+            # Multi-channel filters are not supported by resolve_symbols;
+            # leave channel=None so inventory spans the lake.
+            return client.resolve_symbols(
+                list(symbols_input or []),
+                channel=channel,
+                ambiguous="first",
+            )
+    except Exception:
+        pass
+
+    # Legacy fallback: walk registered Catalog symbols directly.
     from crypcodile.store.catalog import Catalog
-    
+
     all_registered = None
-    
+
     def get_registered():
         nonlocal all_registered
         if all_registered is not None:
@@ -513,7 +606,7 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
                 else:
                     ch_list = list(channels)
                 target_channels = [c for c in ch_list if c in target_channels]
-                
+
             for ch in target_channels:
                 try:
                     df = cat.query(f'SELECT DISTINCT symbol FROM "{ch}"')
@@ -571,9 +664,9 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
         sym_clean = sym.strip()
         if not sym_clean:
             continue
-            
-        # If the input contains a colon, it has exchange:symbol structure.
-        # We normalize the raw symbol part using normalize_user_symbol.
+
+        # Fast path: if the input is already in canonical format (e.g. exchange:symbol)
+        # we can bypass checking the DB entirely to avoid slow startup queries.
         if ":" in sym_clean:
             parts = sym_clean.split(":", 1)
             exc = parts[0]
@@ -581,45 +674,68 @@ def resolve_input_symbols(data_dir: Path, symbols_input: list[str], channels: li
             normalized_raw = normalize_user_symbol(exc, raw)
             resolved.append(f"{exc}:{normalized_raw}")
             continue
-            
-        reg_symbols_set = get_registered()
-        
-        # First, try to match against registered database symbols
-        match = find_match(reg_symbols_set, sym_clean)
-        if match is not None:
-            resolved.append(match)
-            continue
-            
-        # Second, try to match against COMMON_DEFAULT_SYMBOLS
-        candidate_defaults = COMMON_DEFAULT_SYMBOLS
-        if is_derivative:
-            candidate_defaults = [s for s in COMMON_DEFAULT_SYMBOLS if not s.startswith("binance-spot:") and not s.startswith("coinbase:") and not s.startswith("bybit-spot:") and not s.startswith("base_onchain:")]
-        elif is_options:
-            candidate_defaults = []
 
-        match = find_match(set(candidate_defaults), sym_clean)
-        if match is not None:
-            resolved.append(match)
+        reg_symbols_set = get_registered()
+
+        # 1. Exact match in registered symbols
+        if sym_clean in reg_symbols_set:
+            resolved.append(sym_clean)
             continue
-            
-        # Third, if still no match, guess the exchange and normalize the symbol
+
+        reg_symbols = sorted(list(reg_symbols_set))
+
+        # 2. Case-insensitive exact match
+        lower_sym = sym_clean.lower()
+        matched = False
+        for reg in reg_symbols:
+            if reg.lower() == lower_sym:
+                resolved.append(reg)
+                matched = True
+                break
+        if matched:
+            continue
+
+        # 3. Prefix-less match (e.g., "BTC-PERPETUAL" matching "deribit:BTC-PERPETUAL")
+        for reg in reg_symbols:
+            if ":" in reg:
+                parts = reg.split(":", 1)
+                if parts[1].lower() == lower_sym:
+                    resolved.append(reg)
+                    matched = True
+                    break
+        if matched:
+            continue
+
+        # 4. Fuzzy substring match (e.g., "btc" matching "deribit:BTC-PERPETUAL")
+        matches = []
+        for reg in reg_symbols:
+            if lower_sym in reg.lower():
+                matches.append(reg)
+        if len(matches) >= 1:
+            resolved.append(matches[0])
+            continue
+
+        # 5. No registered match — guess the exchange and normalize (legacy UX
+        # heuristic preserved from the visualizer line) so bare tickers like
+        # "btcusdt" resolve to a sensible exchange:SYMBOL instead of passing
+        # through unresolved. Channel context (is_derivative / is_options) picks
+        # the venue.
         guessed_exchange = "binance-spot"
         if is_derivative:
             guessed_exchange = "binance-usdm"
         elif is_options:
             guessed_exchange = "deribit"
 
-        lower_sym = sym_clean.lower()
         if "perp" in lower_sym or "perpetual" in lower_sym or lower_sym.endswith("-perp"):
             guessed_exchange = "deribit"
-            
+
         normalized_raw = normalize_user_symbol(guessed_exchange, sym_clean)
         if guessed_exchange in ("binance-spot", "binance-usdm") and not normalized_raw.endswith("USDT") and not normalized_raw.endswith("USD"):
             if len(normalized_raw) <= 5:
                 normalized_raw = f"{normalized_raw}USDT"
-                
+
         resolved.append(f"{guessed_exchange}:{normalized_raw}")
-        
+
     return resolved
 
 
@@ -783,17 +899,56 @@ def query(
 @app.command()
 def catalog(
     data_dir: _DataDirOpt = Path("data"),
+    symbols: Annotated[
+        bool,
+        typer.Option(
+            "--symbols",
+            help="Print inventory summary (exchange, channel, symbol, coverage).",
+        ),
+    ] = False,
 ) -> None:
-    """List channels present in the data lake with their row counts."""
+    """List channels present in the data lake with their row counts.
+
+    Channel discovery uses the filesystem ``list_channels`` walk
+    (``exchange=*/channel=*``), so empty partition directories appear even
+    before parquet parts exist. Row counts query registered DuckDB views;
+    unregistered / empty partitions report ``0``.
+
+    Use ``--symbols`` to print a per-symbol inventory summary instead
+    (inventory still requires queryable parquet/views; empty partitions
+    alone yield "No data found").
+    """
     from crypcodile.client.client import CrypcodileClient
     from crypcodile.store.catalog import Catalog
 
     data_dir = resolve_data_dir(data_dir)
 
-    cat: Catalog = CrypcodileClient(data_dir=data_dir)._catalog
+    client = CrypcodileClient(data_dir=data_dir)
+    cat: Catalog = client._catalog
 
-    # Discover channels from the registered views.
-    channels: list[str] = sorted(cat._registered_channels)
+    if symbols:
+        # Inventory is DuckDB/view-backed (needs parquet). Empty partition
+        # dirs discovered by filesystem list_channels do not invent symbols.
+        inv = client.inventory()
+        if len(inv) == 0:
+            typer.echo("No data found in: " + str(data_dir))
+            raise typer.Exit(code=0)
+        # Inventory summary table.
+        cols = ["exchange", "channel", "symbol", "min_ts", "max_ts", "row_count"]
+        typer.echo(
+            f"{'exchange':<16}  {'channel':<16}  {'symbol':<32}  "
+            f"{'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+        )
+        typer.echo("-" * 128)
+        for row in inv.select(cols).iter_rows(named=True):
+            typer.echo(
+                f"{row['exchange']:<16}  {row['channel']:<16}  {row['symbol']:<32}  "
+                f"{row['min_ts']:>20}  {row['max_ts']:>20}  {row['row_count']:>10,}"
+            )
+        raise typer.Exit(code=0)
+
+    # Filesystem discovery (parity with catalog-summary / REST / MCP).
+    channels: list[str] = client.list_channels()
 
     if not channels:
         typer.echo("No data found in: " + str(data_dir))
@@ -801,13 +956,474 @@ def catalog(
 
     typer.echo(f"{'channel':<24}  {'rows':>10}")
     typer.echo("-" * 36)
+    registered = set(cat._registered_channels)
     for ch in channels:
-        try:
-            row_df = cat.query(f'SELECT count(*) AS n FROM "{ch}"')
-            n = int(row_df["n"][0])
-        except Exception:
-            n = -1
+        if ch not in registered:
+            # Empty partition dir (no parquet → no DuckDB view).
+            n = 0
+        else:
+            try:
+                escaped = ch.replace('"', '""')
+                row_df = cat.query(f'SELECT count(*) AS n FROM "{escaped}"')
+                n = int(row_df["n"][0])
+            except Exception:
+                n = 0
         typer.echo(f"{ch:<24}  {n:>10,}")
+
+
+# ---------------------------------------------------------------------------
+# catalog-summary
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-summary")
+def catalog_summary(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print one-shot lake catalog summary (channels + exchanges on disk).
+
+    Delegates to :meth:`CrypcodileClient.catalog_summary` — same contract as
+    REST ``GET /api/v1/catalog/summary`` / MCP ``catalog_summary``:
+    channel list, on-disk hive exchange partitions, and counts (filesystem
+    walks; empty partitions included). Empty lake prints zero counts and
+    empty lists; exit 0.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+    summary = client.catalog_summary()
+    channels: list[str] = summary["channels"]  # type: ignore[assignment]
+    exchanges_on_disk: list[str] = summary["exchanges_on_disk"]  # type: ignore[assignment]
+
+    typer.echo(f"channel_count:  {summary['channel_count']}")
+    typer.echo(f"exchange_count: {summary['exchange_count']}")
+    typer.echo(
+        "channels: "
+        + (", ".join(channels) if channels else "(none)")
+    )
+    typer.echo(
+        "exchanges_on_disk: "
+        + (", ".join(exchanges_on_disk) if exchanges_on_disk else "(none)")
+    )
+
+
+# ---------------------------------------------------------------------------
+# catalog-stats
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-stats")
+def catalog_stats(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print per-channel row counts for the local lake.
+
+    Delegates to :meth:`CrypcodileClient.catalog_stats` — same contract as
+    REST ``GET /api/v1/catalog/stats`` / MCP ``catalog_stats``: discovers
+    channels via filesystem ``list_channels``, then runs a lightweight
+    ``COUNT(*)`` per channel (``-1`` on query failure). Empty lake prints
+    ``channel_count: 0`` and ``row_counts: (none)``; exit 0. Avoids heavy
+    inventory aggregation.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+    stats = client.catalog_stats()
+    row_counts: dict[str, int] = stats["row_counts"]  # type: ignore[assignment]
+    channel_count = int(stats["channel_count"])  # type: ignore[arg-type]
+
+    typer.echo(f"channel_count:  {channel_count}")
+    if not row_counts:
+        typer.echo("row_counts: (none)")
+        raise typer.Exit(code=0)
+
+    typer.echo("row_counts:")
+    for ch, n in row_counts.items():
+        typer.echo(f"  {ch}: {n}")
+
+
+# ---------------------------------------------------------------------------
+# catalog-dates
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-dates")
+def catalog_dates(
+    channel: Annotated[
+        str,
+        typer.Option(
+            "--channel",
+            help="Channel name, e.g. trade (required).",
+        ),
+    ],
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """List distinct hive ``date=`` partitions for a channel.
+
+    Mirrors REST ``GET /api/v1/catalog/dates`` / MCP ``list_dates`` via
+    :meth:`CrypcodileClient.list_dates` (filesystem walk; no DuckDB).
+    Empty / whitespace channel after strip, unknown channel, or empty lake
+    prints ``No dates.`` and exits 0. Dates are sorted ascending
+    (typically ``YYYY-MM-DD``), one per line.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    channel = (channel or "").strip()
+    if not channel:
+        if is_interactive_stdin():
+            channel = typer.prompt("Channel").strip()
+        if not channel:
+            typer.echo("Error: --channel is required.", err=True)
+            raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    dates = client.list_dates(channel)
+    if not dates:
+        typer.echo("No dates.")
+        raise typer.Exit(code=0)
+    for d in dates:
+        typer.echo(d)
+
+
+# ---------------------------------------------------------------------------
+# catalog-symbols
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-symbols")
+def catalog_symbols(
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """List distinct symbols present in the lake inventory.
+
+    Delegates to :meth:`CrypcodileClient.list_symbols` — same contract as
+    REST ``GET /api/v1/catalog/symbols`` / MCP ``list_symbols``: optional
+    ``--channel`` and ``--exchange`` filters (empty/whitespace → no filter).
+    Empty lake or no match prints ``No symbols.`` and exits 0. Symbols are
+    sorted, one per line. Lighter than ``catalog --symbols`` (symbol strings
+    only, no per-channel coverage rows).
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+    symbols = client.list_symbols(channel=channel, exchange=exchange)
+    if not symbols:
+        typer.echo("No symbols.")
+        raise typer.Exit(code=0)
+    for sym in symbols:
+        typer.echo(sym)
+
+
+# ---------------------------------------------------------------------------
+# catalog-inventory
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-inventory")
+def catalog_inventory(
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print full lake inventory rows (exchange/channel/symbol coverage).
+
+    Mirrors REST ``GET /api/v1/catalog/inventory`` / MCP ``inventory_snapshot``:
+    optional ``--channel`` and ``--exchange`` filters (empty/whitespace →
+    no filter). Empty lake or no match prints ``No inventory.`` and exits 0.
+    Columns match ``catalog --symbols`` / ``data-coverage`` (exchange,
+    channel, symbol, min_ts, max_ts, row_count). Heavier than
+    ``catalog-symbols`` (coverage rows, not symbol strings only).
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+
+    client = CrypcodileClient(data_dir=data_dir)
+    inv = client.inventory(channel=ch, exchange=ex)
+    if len(inv) == 0:
+        typer.echo("No inventory.")
+        raise typer.Exit(code=0)
+
+    cols = ["exchange", "channel", "symbol", "min_ts", "max_ts", "row_count"]
+    typer.echo(
+        f"{'exchange':<16}  {'channel':<16}  {'symbol':<32}  "
+        f"{'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+    )
+    typer.echo("-" * 128)
+    for row in inv.select(cols).iter_rows(named=True):
+        typer.echo(
+            f"{row['exchange']:<16}  {row['channel']:<16}  {row['symbol']:<32}  "
+            f"{row['min_ts']:>20}  {row['max_ts']:>20}  {row['row_count']:>10,}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# catalog-exchanges
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="catalog-exchanges")
+def catalog_exchanges(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """List distinct hive ``exchange=`` partitions present on disk.
+
+    Mirrors REST ``GET /api/v1/catalog/exchanges`` / MCP
+    ``list_exchanges_on_disk`` via
+    :meth:`CrypcodileClient.list_exchanges_on_disk` (filesystem walk).
+    Empty lake prints ``No exchanges.`` and exits 0. Distinct from factory
+    connector registry (``list-exchanges`` / ``list_exchanges``). Sorted, one
+    per line.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    client = CrypcodileClient(data_dir=data_dir)
+    exchanges = client.list_exchanges_on_disk()
+    if not exchanges:
+        typer.echo("No exchanges.")
+        raise typer.Exit(code=0)
+    for ex in exchanges:
+        typer.echo(ex)
+
+
+# ---------------------------------------------------------------------------
+# list-exchanges (factory registry; no lake)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="list-exchanges")
+def list_exchanges_cmd() -> None:
+    """List registered exchange connector names from the factory registry.
+
+    Mirrors REST ``GET /api/v1/exchanges`` / MCP ``list_registered_exchanges``
+    via :func:`crypcodile.exchanges.factory.list_exchanges`. Does not touch
+    the data lake. Distinct from ``catalog-exchanges`` (hive partitions on
+    disk). Sorted, one per line.
+    """
+    for ex in list_exchanges():
+        typer.echo(ex)
+
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="Symbol search query.")] = "",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Maximum number of results."),
+    ] = 20,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Ranked symbol search over the data lake inventory.
+
+    Optional ``--channel`` and ``--exchange`` filters (empty/whitespace →
+    no filter) narrow inventory before ranking.  Prints a table of matching
+    symbols with score and coverage.  Empty results print ``No matches.``
+    and exit 0.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    query = query.strip()
+    if not query:
+        if is_interactive_stdin():
+            query = typer.prompt("Search query").strip()
+        if not query:
+            typer.echo("Error: search query is required.", err=True)
+            raise typer.Exit(code=1)
+
+    ch = (channel or "").strip() or None
+    ex = (exchange or "").strip() or None
+
+    client = CrypcodileClient(data_dir=data_dir)
+    df = client.search_symbols(
+        query, channel=ch, exchange=ex, limit=limit
+    )
+
+    if len(df) == 0:
+        typer.echo("No matches.")
+        raise typer.Exit(code=0)
+
+    typer.echo(
+        f"{'symbol':<32}  {'exchange':<12}  {'channels':<24}  "
+        f"{'score':>5}  {'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+    )
+    typer.echo("-" * 140)
+    for row in df.iter_rows(named=True):
+        typer.echo(
+            f"{row['symbol']:<32}  {row['exchange']:<12}  {row['channels']:<24}  "
+            f"{row['score']:>5}  {row['min_ts']:>20}  {row['max_ts']:>20}  "
+            f"{row['row_count']:>10,}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# resolve-symbols
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="resolve-symbols")
+def resolve_symbols_cmd(
+    symbols: Annotated[
+        str,
+        typer.Argument(
+            help="Comma-separated free-form symbol(s) to resolve.",
+        ),
+    ] = "",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    ambiguous: Annotated[
+        str,
+        typer.Option(
+            "--ambiguous",
+            help="Multi-match policy: error (default), first, or all.",
+        ),
+    ] = "error",
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Resolve free-form symbol inputs to canonical catalog symbols.
+
+    Mirrors REST ``GET /api/v1/resolve-symbols`` / MCP ``resolve_symbols`` via
+    :meth:`CrypcodileClient.resolve_symbols`.
+
+    *symbols* is comma-separated (e.g. ``BTC-PERPETUAL,ETH-PERPETUAL``).
+    Empty/whitespace *channel* → no filter. *ambiguous* defaults to
+    ``error`` (also used when blank). Success prints one canonical symbol
+    per line. Empty input after strip exits non-zero. No match, ambiguous
+    multi-match when ``ambiguous=error``, or invalid mode prints the error
+    and exits 1.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    raw = (symbols or "").strip()
+    if not raw:
+        if is_interactive_stdin():
+            raw = typer.prompt("Symbols (comma-separated)").strip()
+        if not raw:
+            typer.echo("Error: symbols argument is required.", err=True)
+            raise typer.Exit(code=1)
+
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        typer.echo("Error: symbols argument is required.", err=True)
+        raise typer.Exit(code=1)
+
+    ch = (channel or "").strip() or None
+    mode = (ambiguous or "").strip() or "error"
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        resolved = client.resolve_symbols(parts, channel=ch, ambiguous=mode)  # type: ignore[arg-type]
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    if not resolved:
+        typer.echo("No matches.")
+        raise typer.Exit(code=0)
+    for sym in resolved:
+        typer.echo(sym)
+
+
+# ---------------------------------------------------------------------------
+# data-coverage
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="data-coverage")
+def data_coverage_cmd(
+    symbol: Annotated[
+        str,
+        typer.Option(
+            "--symbol",
+            help="Exact catalog symbol (e.g. deribit:BTC-PERPETUAL).",
+        ),
+    ] = "",
+    channel: Annotated[
+        str | None,
+        typer.Option("--channel", help="Optional channel filter."),
+    ] = None,
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Optional exchange filter."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print inventory coverage rows for one symbol.
+
+    Delegates to :meth:`CrypcodileClient.data_coverage` — same contract as
+    REST ``GET /api/v1/data-coverage`` / MCP ``data_coverage``: lake inventory
+    filtered to an exact ``symbol`` match, with optional ``--channel`` and
+    ``--exchange`` (empty/whitespace → no filter). Empty / missing symbol
+    after strip exits non-zero. Empty lake or no match prints ``No coverage.``
+    and exits 0. Columns match ``catalog --symbols`` inventory summary.
+    """
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    symbol = (symbol or "").strip()
+    if not symbol:
+        if is_interactive_stdin():
+            symbol = typer.prompt("Symbol").strip()
+        if not symbol:
+            typer.echo("Error: --symbol is required.", err=True)
+            raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    matched = client.data_coverage(symbol, channel=channel, exchange=exchange)
+    if len(matched) == 0:
+        typer.echo("No coverage.")
+        raise typer.Exit(code=0)
+
+    cols = ["exchange", "channel", "symbol", "min_ts", "max_ts", "row_count"]
+    typer.echo(
+        f"{'exchange':<16}  {'channel':<16}  {'symbol':<32}  "
+        f"{'min_ts':>20}  {'max_ts':>20}  {'row_count':>10}"
+    )
+    typer.echo("-" * 128)
+    for row in matched.select(cols).iter_rows(named=True):
+        typer.echo(
+            f"{row['exchange']:<16}  {row['channel']:<16}  {row['symbol']:<32}  "
+            f"{row['min_ts']:>20}  {row['max_ts']:>20}  {row['row_count']:>10,}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -985,8 +1601,8 @@ def select_collect_params_interactively(
 ) -> tuple[str, list[str], list[str]]:
     """Select exchange, channels, and symbols interactively for live data collection."""
     import sys
-    
-    valid_exchanges = ["binance", "bybit", "coinbase", "deribit", "okx", "base_onchain"]
+
+    valid_exchanges = list_exchanges()
     valid_channels = ["trade", "book_ticker", "book_snapshot", "book_delta"]
     
     suggested_symbols = {
@@ -994,8 +1610,11 @@ def select_collect_params_interactively(
         "bybit": ["BTCUSDT", "ETHUSDT"],
         "coinbase": ["BTC-USD", "ETH-USD"],
         "deribit": ["BTC-PERPETUAL", "ETH-PERPETUAL", "SOL-PERPETUAL"],
+        "derive": ["BTC", "ETH"],
         "okx": ["BTC-USDT", "ETH-USDT"],
-        "base_onchain": ["cbBTC-USDC", "AERO-USDC", "WETH-USDC", "DEGEN-WETH", "WELL-WETH"]
+        "base_onchain": ["cbBTC-USDC", "AERO-USDC", "WETH-USDC", "DEGEN-WETH", "WELL-WETH"],
+        "gmx_synthetix": ["GMX:BTC-USD", "GMX:ETH-USD", "SYNTHETIX:ETH-USD"],
+        "superchain": ["WETH-USDC", "USDC-USDT", "OP-USDC"],
     }
 
     # 1. Select Exchange
@@ -1374,9 +1993,52 @@ async def run_dashboard(monitoring_sink: MonitoringSink, exchange: str, symbols:
 # ---------------------------------------------------------------------------
 # collect  (T7b-collect — live connector wiring)
 # ---------------------------------------------------------------------------
+
+
+def expand_csv_options(values: list[str] | None) -> list[str]:
+    """Expand repeated CLI options that may also contain commas.
+
+    ``--exchange a --exchange b`` and ``--exchange a,b`` both yield
+    ``["a", "b"]``.  Empty segments are dropped; order is preserved.
+    """
+    if not values:
+        return []
+    out: list[str] = []
+    for raw in values:
+        for part in str(raw).split(","):
+            item = part.strip()
+            if item:
+                out.append(item)
+    return out
+
+
+def unique_preserve(items: list[str]) -> list[str]:
+    """Return *items* de-duplicated while preserving first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 @app.command()
 def collect(
-    exchange: Annotated[str | None, typer.Option("--exchange", help="Exchange name, e.g. deribit.")] = None,
+    exchange: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exchange",
+            help=(
+                "Exchange name(s). Repeat the flag and/or use commas for "
+                "multi-exchange collect (same symbols/channels for every "
+                "exchange; symbols are normalized per exchange). Valid: "
+                + ", ".join(list_exchanges())
+                + "."
+            ),
+        ),
+    ] = None,
     symbols: Annotated[
         list[str] | None,
         typer.Option("--symbols", help="Symbol(s) to collect. Repeat for multiple."),
@@ -1386,29 +2048,97 @@ def collect(
         typer.Option("--channels", help="Channel(s) to subscribe. Repeat for multiple."),
     ] = None,
     data_dir: _DataDirOpt = Path("data"),
+    dlq_report: Annotated[
+        Path | None,
+        typer.Option(
+            "--dlq-report",
+            help=(
+                "Path for dead-letter report JSON written on stop when the DLQ "
+                "is non-empty. Default: {data_dir}/dlq_report.json."
+            ),
+        ),
+    ] = None,
+    max_reconnects: Annotated[
+        int | None,
+        typer.Option(
+            "--max-reconnects",
+            help=(
+                "Maximum connector reconnect attempts after a transport failure. "
+                "Default: unlimited (-1). Use 0 to disable reconnects."
+            ),
+        ),
+    ] = None,
+    duration_seconds: Annotated[
+        float | None,
+        typer.Option(
+            "--duration-seconds",
+            help="Auto-stop collection after this many seconds.",
+        ),
+    ] = None,
 ) -> None:
-    """Collect live market data from an exchange and write to the Parquet data lake.
+    """Collect live market data from one or more exchanges into the Parquet lake.
 
     Press Ctrl-C (SIGINT) to stop gracefully — the sink is flushed before exit.
+    Unparseable frames land in a dead-letter queue; on stop a JSON report is
+    written when the queue is non-empty (see --dlq-report).
 
-    Valid exchange names: binance, bybit, coinbase, deribit, okx.
+    Use --duration-seconds to auto-stop after a fixed wall-clock duration, and
+    --max-reconnects to cap reconnect attempts (default unlimited).
 
-    Example::
+    Multi-exchange: pass ``--exchange`` multiple times and/or comma-separate
+    names (``--exchange binance,deribit``).  One connector is built per
+    exchange.  **Limitation:** the same symbol and channel lists are applied
+    to every exchange (each symbol string is normalized for that exchange,
+    e.g. ``BTC`` → ``BTCUSDT`` on binance and ``BTC-PERPETUAL`` on deribit).
+    Per-exchange symbol maps are not supported yet.
+
+    Valid exchange names: {exchanges}.
+
+    Examples::
 
         crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
                           --channels trade --channels book_delta --data-dir data
+
+        crypcodile collect --exchange binance --exchange deribit \
+                          --symbols BTC --channels trade --data-dir data
+
+        crypcodile collect --exchange binance,bybit --symbols BTCUSDT \
+                          --channels trade --data-dir data
     """
+    exchanges = unique_preserve(
+        [e.lower() for e in expand_csv_options(exchange)]
+    )
+
     if not is_interactive_stdin():
-        if not exchange or not symbols or not channels:
-            typer.echo("Error: exchange, symbols, and channels are required in non-interactive mode.", err=True)
+        if not exchanges or not symbols or not channels:
+            typer.echo(
+                "Error: exchange, symbols, and channels are required in "
+                "non-interactive mode.",
+                err=True,
+            )
             raise typer.Exit(code=1)
     else:
-        # Interactive
-        if not exchange or not symbols or not channels:
-            exchange, symbols, channels = select_collect_params_interactively(exchange, symbols, channels)
+        # Interactive — wizard is single-exchange; multi-exchange only via flags.
+        if not exchanges or not symbols or not channels:
+            if len(exchanges) > 1:
+                if not channels:
+                    ch_input = typer.prompt("Channel (e.g. trade)")
+                    channels = [c.strip() for c in ch_input.split(",") if c.strip()]
+                if not symbols:
+                    sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
+                    symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+            else:
+                ex_single = exchanges[0] if exchanges else None
+                ex_single, symbols, channels = select_collect_params_interactively(
+                    ex_single, symbols, channels
+                )
+                exchanges = [ex_single] if ex_single else []
 
-        if not exchange:
-            exchange = typer.prompt("Exchange (e.g. deribit)")
+        if not exchanges:
+            exchange_prompt = typer.prompt("Exchange (e.g. deribit)")
+            exchanges = unique_preserve(
+                [e.lower() for e in expand_csv_options([exchange_prompt])]
+            )
         if not symbols:
             sym_input = prompt_symbol("Symbol (e.g. BTC)", data_dir)
             symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
@@ -1416,12 +2146,13 @@ def collect(
             ch_input = typer.prompt("Channel (e.g. trade)")
             channels = [c.strip() for c in ch_input.split(",") if c.strip()]
 
-    if symbols and exchange:
-        symbols = [normalize_user_symbol(exchange, s) for s in symbols]
-
-    if not exchange or not symbols or not channels:
+    if not exchanges or not symbols or not channels:
         typer.echo("Error: Exchange, symbols, and channels are required.", err=True)
         raise typer.Exit(code=1)
+
+    # Raw user symbols; normalized per exchange when building connectors.
+    raw_symbols = [s for s in symbols if s and str(s).strip()]
+    channel_list = list(channels)
 
     sink = ParquetSink(
         data_dir=data_dir,
@@ -1429,40 +2160,107 @@ def collect(
         flush_interval_seconds=5.0,
     )
     registry = InstrumentRegistry()
+    monitoring_sink = MonitoringSink(sink)
 
+    connectors: list = []
+    per_exchange_symbols: dict[str, list[str]] = {}
     try:
-        connector = make_connector(
-            exchange=exchange,
-            symbols=list(symbols),
-            channels=list(channels),
-            out=sink,
-            registry=registry,
-        )
+        for ex in exchanges:
+            ex_symbols = [
+                normalize_user_symbol(ex, s) for s in raw_symbols if str(s).strip()
+            ]
+            ex_symbols = [s for s in ex_symbols if s]
+            if not ex_symbols:
+                typer.echo(
+                    f"Error: no valid symbols after normalization for exchange {ex!r}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            per_exchange_symbols[ex] = ex_symbols
+            connector = make_connector(
+                exchange=ex,
+                symbols=ex_symbols,
+                channels=channel_list,
+                out=sink,
+                registry=registry,
+            )
+            # Wire live WS transport (may already be set by tests/monkeypatch).
+            if connector.transport is None:
+                connector.transport = AiohttpWsTransport(connector.ws_url)
+            connector.out = monitoring_sink
+            connectors.append(connector)
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    # Wire the live WebSocket transport (may be replaced by a FakeTransport in
-    # tests via monkeypatching make_connector).
-    if connector.transport is None:
-        connector.transport = AiohttpWsTransport(connector.ws_url)
+    # Log line keeps single-exchange shape for backward-compatible tests.
+    if len(exchanges) == 1:
+        exchange_log = f"exchange={exchanges[0]!r}"
+        symbols_log = per_exchange_symbols[exchanges[0]]
+    else:
+        exchange_log = f"exchanges={exchanges!r}"
+        symbols_log = per_exchange_symbols
 
     typer.echo(
-        f"Starting collection: exchange={exchange!r} symbols={symbols} "
-        f"channels={channels} data_dir={data_dir}"
+        f"Starting collection: {exchange_log} symbols={symbols_log} "
+        f"channels={channel_list} data_dir={data_dir}"
+        + (f" max_reconnects={max_reconnects}" if max_reconnects is not None else "")
+        + (f" duration_seconds={duration_seconds}" if duration_seconds is not None else "")
     )
 
-    monitoring_sink = MonitoringSink(sink)
-    connector.out = monitoring_sink
+    collect_kwargs: dict = {
+        "dlq_report_path": dlq_report,
+        "data_dir": data_dir,
+    }
+    if max_reconnects is not None:
+        collect_kwargs["max_reconnects"] = max_reconnects
+
+    async def _run_collect_live() -> None:
+        """Run collect_live, optionally auto-stopping after duration_seconds."""
+        if duration_seconds is None:
+            await collect_live(connectors, monitoring_sink, **collect_kwargs)
+            return
+
+        collect_task = asyncio.create_task(
+            collect_live(connectors, monitoring_sink, **collect_kwargs)
+        )
+
+        async def _cancel_after() -> None:
+            await asyncio.sleep(duration_seconds)
+            collect_task.cancel()
+
+        timer_task = asyncio.create_task(_cancel_after())
+        try:
+            await collect_task
+        except asyncio.CancelledError:
+            # Expected on duration expiry (and on outer cancellation).
+            pass
+        finally:
+            timer_task.cancel()
+            try:
+                await timer_task
+            except asyncio.CancelledError:
+                pass
+
+    # Dashboard label: comma-joined exchange names.
+    dashboard_exchange = ",".join(exchanges)
+    # Prefer first exchange's normalized symbols for the status panel.
+    dashboard_symbols = per_exchange_symbols[exchanges[0]]
 
     if is_interactive_stdin():
 
         async def collect_with_dashboard():
             dashboard_task = asyncio.create_task(
-                run_dashboard(monitoring_sink, exchange, symbols, channels, data_dir)
+                run_dashboard(
+                    monitoring_sink,
+                    dashboard_exchange,
+                    dashboard_symbols,
+                    channel_list,
+                    data_dir,
+                )
             )
             try:
-                await collect_live([connector], monitoring_sink)
+                await _run_collect_live()
             finally:
                 dashboard_task.cancel()
                 try:
@@ -1476,11 +2274,187 @@ def collect(
             pass
     else:
         try:
-            asyncio.run(collect_live([connector], monitoring_sink))
+            asyncio.run(_run_collect_live())
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
 
     typer.echo("Collection stopped. Data written to: " + str(data_dir))
+
+
+# Fill collect help from the factory registry (includes derive, superchain, …).
+collect.__doc__ = (collect.__doc__ or "").format(
+    exchanges=", ".join(list_exchanges())
+)
+
+
+# ---------------------------------------------------------------------------
+# backfill  — historical REST data into the Parquet lake
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def backfill(
+    exchange: Annotated[
+        str | None,
+        typer.Option("--exchange", help="Exchange name: binance, bybit, okx, deribit."),
+    ] = None,
+    channel: Annotated[
+        str | None,
+        typer.Option(
+            "--channel",
+            help="Channel to backfill: trade, funding, ohlcv, open_interest.",
+        ),
+    ] = None,
+    symbols: Annotated[
+        list[str] | None,
+        typer.Option("--symbols", help="Symbol(s) to backfill. Repeat for multiple."),
+    ] = None,
+    frm: Annotated[
+        int | None,
+        typer.Option("--from", "--start", help="Start of time range (nanoseconds UTC)."),
+    ] = None,
+    to: Annotated[
+        int | None,
+        typer.Option("--to", "--end", help="End of time range (nanoseconds UTC)."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+    market: Annotated[
+        str,
+        typer.Option("--market", help="Binance market: spot|usdm|coinm."),
+    ] = "spot",
+    category: Annotated[
+        str,
+        typer.Option("--category", help="Bybit category: spot|linear|inverse."),
+    ] = "linear",
+    inst_type: Annotated[
+        str,
+        typer.Option("--inst-type", help="OKX instType: SPOT|SWAP|FUTURES."),
+    ] = "SWAP",
+    interval: Annotated[
+        str,
+        typer.Option("--interval", help="OHLCV interval for Binance klines (e.g. 1m)."),
+    ] = "1m",
+    period: Annotated[
+        str,
+        typer.Option("--period", help="Open-interest hist period for Binance (e.g. 5m)."),
+    ] = "5m",
+) -> None:
+    """Fetch historical market data via REST and write to the Parquet data lake.
+
+    Supported exchanges: binance, bybit, okx, deribit.
+    Channel availability depends on the exchange:
+
+    - binance: trade, ohlcv, open_interest
+    - bybit:   trade, funding, open_interest
+    - okx:     trade, funding, open_interest
+    - deribit: trade, funding
+
+    Time bounds accept ``--from``/``--to`` or aliases ``--start``/``--end``
+    (nanoseconds UTC).
+
+    Example::
+
+        crypcodile backfill --exchange binance --channel trade \\
+                           --symbols BTCUSDT \\
+                           --from 1700000000000000000 --to 1700000100000000000 \\
+                           --data-dir data
+    """
+    from crypcodile.client.backfill import SUPPORTED_EXCHANGES
+
+    if not is_interactive_stdin():
+        if not exchange or not channel or not symbols:
+            typer.echo(
+                "Error: --exchange, --channel, and --symbols are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        if frm is None or to is None:
+            typer.echo(
+                "Error: --from/--start and --to/--end are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if not exchange:
+            exchange = typer.prompt(
+                "Exchange (binance, bybit, okx, deribit)"
+            )
+        if not channel:
+            channel = typer.prompt("Channel (e.g. trade)")
+        if not symbols:
+            sym_input = typer.prompt("Symbol(s), comma-separated (e.g. BTCUSDT)")
+            symbols = [s.strip() for s in sym_input.split(",") if s.strip()]
+        if frm is None:
+            frm = int(typer.prompt("Start ns (--from)", default="0"))
+        if to is None:
+            to = int(typer.prompt("End ns (--to)", default="9999999999999999999"))
+
+    if not exchange or not channel or not symbols:
+        typer.echo("Error: --exchange, --channel, and --symbols are required.", err=True)
+        raise typer.Exit(code=1)
+    if frm is None or to is None:
+        typer.echo("Error: --from/--start and --to/--end are required.", err=True)
+        raise typer.Exit(code=1)
+    if frm > to:
+        typer.echo("Error: --from must be <= --to.", err=True)
+        raise typer.Exit(code=1)
+
+    exchange = exchange.lower().strip()
+    channel = channel.lower().strip()
+
+    if exchange not in SUPPORTED_EXCHANGES:
+        typer.echo(
+            f"Error: Unsupported exchange {exchange!r} for backfill. "
+            f"Supported: {sorted(SUPPORTED_EXCHANGES)}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    symbols = [normalize_user_symbol(exchange, s) for s in symbols if s.strip()]
+    if not symbols:
+        typer.echo("Error: At least one symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    sink = ParquetSink(
+        data_dir=data_dir,
+        max_buffer_rows=10_000,
+        flush_interval_seconds=5.0,
+    )
+
+    typer.echo(
+        f"Starting backfill: exchange={exchange!r} channel={channel!r} "
+        f"symbols={symbols} from={frm} to={to} data_dir={data_dir}"
+    )
+
+    try:
+        count = asyncio.run(
+            run_historical_backfill(
+                exchange=exchange,
+                channel=channel,
+                symbols=list(symbols),
+                start_ns=int(frm),
+                end_ns=int(to),
+                sink=sink,
+                market=market,
+                category=category,
+                inst_type=inst_type,
+                interval=interval,
+                period=period,
+            )
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        typer.echo("Backfill interrupted.", err=True)
+        raise typer.Exit(code=0) from None
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Backfill complete: {count} records written to {data_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -1576,11 +2550,17 @@ def basis_cmd(
     ] = None,
     spot: Annotated[
         str | None,
-        typer.Option("--spot", help="Canonical spot symbol (spot-future mode)."),
+        typer.Option(
+            "--spot",
+            help="Canonical spot symbol (spot-future or spot-perp mode).",
+        ),
     ] = None,
     perp: Annotated[
         str | None,
-        typer.Option("--perp", help="Canonical perpetual symbol (perp mode)."),
+        typer.Option(
+            "--perp",
+            help="Canonical perpetual symbol (mark/index mode alone, or spot-perp with --spot).",
+        ),
     ] = None,
     expiry: Annotated[
         int | None,
@@ -1588,9 +2568,12 @@ def basis_cmd(
     ] = None,
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
-    """Print spot-future or perpetual basis.
+    """Print spot-future, spot-perp, or mark/index perpetual basis.
 
-    Use --future/--spot for spot-future mode, or --perp for perpetual mode.
+    Modes:
+      --perp alone              mark vs index (derivative_ticker)
+      --future and --spot       spot-future basis (trade ASOF join)
+      --spot and --perp         true spot-perp basis (spot vs perp mark)
     """
     from crypcodile.client.client import CrypcodileClient
 
@@ -1609,24 +2592,36 @@ def basis_cmd(
         if not spot:
             spot = None
 
-    # We will prompt for time range after mode/symbols are resolved
-
-    if perp is not None and (future is not None or spot is not None):
-        typer.echo("Error: --perp and --future/--spot are mutually exclusive.", err=True)
+    # --perp and --future cannot be combined; --spot + --perp is spot-perp mode.
+    if perp is not None and future is not None:
+        typer.echo(
+            "Error: --perp and --future are mutually exclusive "
+            "(use --spot with --perp for spot-perp basis, or --future with --spot "
+            "for spot-future basis).",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
+    # Classify mode once symbols are known (None after empty-strip).
+    def _basis_mode(
+        p: str | None, f: str | None, s: str | None
+    ) -> str | None:
+        if p is not None and s is not None and f is None:
+            return "spot_perp"
+        if p is not None and s is None and f is None:
+            return "perp"
+        if f is not None and s is not None and p is None:
+            return "spot_future"
+        return None
+
     if not is_interactive_stdin():
-        if perp is None and (future is None or spot is None):
-            typer.echo("Error: Either --perp, or both --future and --spot must be specified in non-interactive mode.", err=True)
-            raise typer.Exit(code=1)
-        if perp is not None and not perp:
-            typer.echo("Error: --perp symbol is empty.", err=True)
-            raise typer.Exit(code=1)
-        if future is not None and not future:
-            typer.echo("Error: --future symbol is empty.", err=True)
-            raise typer.Exit(code=1)
-        if spot is not None and not spot:
-            typer.echo("Error: --spot symbol is empty.", err=True)
+        mode = _basis_mode(perp, future, spot)
+        if mode is None:
+            typer.echo(
+                "Error: Specify one of: --perp; both --future and --spot; "
+                "or both --spot and --perp in non-interactive mode.",
+                err=True,
+            )
             raise typer.Exit(code=1)
         if start is None:
             start = 0
@@ -1634,9 +2629,10 @@ def basis_cmd(
             end = 9999999999999999999
     else:
         # Interactive
-        # If perp is None and only one of future or spot is specified, skip prompting for mode
-        if perp is None and (future is not None or spot is not None):
-            # Skip prompting, set mode implicitly to futures/spot, and only prompt for the missing futures/spot symbol
+        mode = _basis_mode(perp, future, spot)
+
+        # Partial spot-future: only one of future/spot given (no perp)
+        if mode is None and perp is None and (future is not None or spot is not None):
             if not future:
                 _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
                 if selected_futures:
@@ -1649,16 +2645,55 @@ def basis_cmd(
                     spot = selected_spots[0]
                 if not spot:
                     spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
-        # If neither perp nor future/spot is specified, ask user what mode they want
-        elif perp is None and future is None and spot is None:
-            mode = typer.prompt("Basis mode", default="perp")
-            if mode == "perp":
-                _, selected_symbols = select_symbols_interactively(data_dir, channel="derivative_ticker")
-                if selected_symbols:
-                    perp = selected_symbols[0]
+            mode = _basis_mode(perp, future, spot)
+
+        # Partial spot-perp: only one of spot/perp given (no future)
+        elif mode is None and future is None and (perp is not None or spot is not None):
+            if not perp:
+                _, selected_perps = select_symbols_interactively(
+                    data_dir, channel="derivative_ticker"
+                )
+                if selected_perps:
+                    perp = selected_perps[0]
                 if not perp:
-                    perp = prompt_symbol("Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker")
-            else:
+                    perp = prompt_symbol(
+                        "Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker"
+                    )
+            if not spot:
+                _, selected_spots = select_symbols_interactively(
+                    data_dir, channel="trade"
+                )
+                if selected_spots:
+                    spot = selected_spots[0]
+                if not spot:
+                    spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+            mode = _basis_mode(perp, future, spot)
+
+        # Nothing specified: ask for mode
+        elif mode is None and perp is None and future is None and spot is None:
+            mode_choice = typer.prompt(
+                "Basis mode (perp | spot-future | spot-perp)",
+                default="perp",
+            ).strip().lower()
+            if mode_choice in ("spot-perp", "spot_perp", "spotperp"):
+                typer.echo("\nSelect spot symbol:")
+                _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
+                if selected_spots:
+                    spot = selected_spots[0]
+                typer.echo("\nSelect perpetual symbol:")
+                _, selected_perps = select_symbols_interactively(
+                    data_dir, channel="derivative_ticker"
+                )
+                if selected_perps:
+                    perp = selected_perps[0]
+                if not spot:
+                    spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+                if not perp:
+                    perp = prompt_symbol(
+                        "Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker"
+                    )
+                mode = "spot_perp"
+            elif mode_choice in ("spot-future", "spot_future", "future", "futures"):
                 typer.echo("\nSelect futures symbol:")
                 _, selected_futures = select_symbols_interactively(data_dir, channel="trade")
                 if selected_futures:
@@ -1667,45 +2702,81 @@ def basis_cmd(
                 _, selected_spots = select_symbols_interactively(data_dir, channel="trade")
                 if selected_spots:
                     spot = selected_spots[0]
-                
                 if not future:
                     future = prompt_symbol("Futures symbol (e.g. BTC)", data_dir, channel="trade")
                 if not spot:
                     spot = prompt_symbol("Spot symbol (e.g. BTC)", data_dir, channel="trade")
+                mode = "spot_future"
+            else:
+                # Default / "perp"
+                _, selected_symbols = select_symbols_interactively(
+                    data_dir, channel="derivative_ticker"
+                )
+                if selected_symbols:
+                    perp = selected_symbols[0]
+                if not perp:
+                    perp = prompt_symbol(
+                        "Perpetual symbol (e.g. BTC)", data_dir, channel="derivative_ticker"
+                    )
+                mode = "perp"
 
         if start is None or end is None:
-            ch = "derivative_ticker" if perp is not None else "trade"
-            syms = [perp] if perp is not None else ([future, spot] if future and spot else None)
-            resolved_start, resolved_end = prompt_time_range_helper(data_dir, ch, syms, default_start=0, default_end=9999999999999999999)
+            if mode == "perp":
+                ch = "derivative_ticker"
+                syms = [perp] if perp else None
+            elif mode == "spot_perp":
+                ch = "derivative_ticker"
+                syms = [p for p in (perp, spot) if p]
+            else:
+                ch = "trade"
+                syms = [s for s in (future, spot) if s] or None
+            resolved_start, resolved_end = prompt_time_range_helper(
+                data_dir, ch, syms, default_start=0, default_end=9999999999999999999
+            )
             if start is None:
                 start = resolved_start
             if end is None:
                 end = resolved_end
+
+        if mode is None:
+            mode = _basis_mode(perp, future, spot)
 
     if perp:
         resolved = resolve_input_symbols(data_dir, [perp], ["derivative_ticker", "ticker"])
         if resolved:
             perp = resolved[0]
     if future:
-        resolved = resolve_input_symbols(data_dir, [future], ["trade", "derivative_ticker", "ticker"])
+        resolved = resolve_input_symbols(
+            data_dir, [future], ["trade", "derivative_ticker", "ticker"]
+        )
         if resolved:
             future = resolved[0]
     if spot:
-        resolved = resolve_input_symbols(data_dir, [spot], ["trade", "ticker"])
+        # Spot-perp may use trade or book_snapshot mid; include book_snapshot for resolve.
+        spot_channels = ["trade", "ticker", "book_snapshot"]
+        resolved = resolve_input_symbols(data_dir, [spot], spot_channels)
         if resolved:
             spot = resolved[0]
+
+    # Re-derive mode after resolution (symbols may still be None if resolve failed).
+    mode = _basis_mode(perp, future, spot)
 
     client = CrypcodileClient(data_dir=data_dir)
 
     try:
-        if perp is not None:
+        if mode == "spot_perp":
+            assert perp is not None and spot is not None
+            df = client.spot_perp_basis(spot, perp, start, end)
+        elif mode == "perp":
+            assert perp is not None
             df = client.perp_basis(perp, start, end)
-        elif future is not None and spot is not None:
+        elif mode == "spot_future":
+            assert future is not None and spot is not None
             df = client.spot_future_basis(future, spot, start, end, expiry_ns=expiry)
         else:
             typer.echo(
-                "Error: provide either --perp <symbol> or both --future <symbol> and "
-                "--spot <symbol>.",
+                "Error: provide either --perp <symbol>; both --future <symbol> and "
+                "--spot <symbol>; or both --spot <symbol> and --perp <symbol>.",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -1993,6 +3064,273 @@ def term_structure_cmd(
 
 
 # ---------------------------------------------------------------------------
+# vol-skew
+# ---------------------------------------------------------------------------
+
+
+def get_available_option_expiries(
+    data_dir: Path,
+    underlying: str | None = None,
+    at_ns: int | None = None,
+) -> list[int]:
+    """Return distinct option expiries (ns UTC), optionally filtered by underlying / snapshot."""
+    from crypcodile.store.catalog import Catalog
+
+    cat = Catalog(data_dir)
+    if "options_chain" not in cat._registered_channels:
+        return []
+
+    clauses: list[str] = []
+    if underlying:
+        clauses.append(f"UPPER(underlying) = '{underlying.upper()}'")
+    if at_ns is not None:
+        clauses.append(f"local_ts <= {int(at_ns)}")
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    try:
+        sql = (
+            f"SELECT DISTINCT expiry FROM options_chain{where} "
+            "ORDER BY expiry ASC LIMIT 50"
+        )
+        df = cat.query(sql)
+        return [int(x) for x in df["expiry"].to_list() if x is not None]
+    except Exception:
+        return []
+
+
+def _prompt_option_underlying_at_expiry(
+    data_dir: Path,
+    underlying: str | None,
+    at: int | None,
+    expiry_ns: int | None,
+) -> tuple[str | None, int | None, int | None]:
+    """Interactive prompts for underlying / snapshot / expiry used by vol-skew & risk-reversal."""
+    import datetime
+
+    if not underlying:
+        underlyings = get_available_option_underlyings(data_dir)
+        if underlyings:
+            typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+        underlying = typer.prompt("Underlying asset (e.g. BTC)").strip()
+
+    if at is None:
+        snapshots = get_available_option_snapshots(data_dir, underlying)
+        if not snapshots:
+            underlyings = get_available_option_underlyings(data_dir)
+            if underlyings:
+                typer.echo(f"⚠️  No options snapshots found for underlying '{underlying}'.")
+                typer.echo(f"Available option underlyings in database: {', '.join(underlyings)}")
+                snapshots = get_available_option_snapshots(data_dir, None)
+                if snapshots:
+                    typer.echo("Here are the latest available options snapshots across all assets:")
+            else:
+                typer.echo(
+                    "⚠️  No option data (options_chain channel) found in the database. "
+                    "Please collect options data first."
+                )
+
+        if snapshots:
+            typer.echo("\n--- Available Options Snapshots (latest first) ---")
+            for idx, ts in enumerate(snapshots, 1):
+                try:
+                    dt_str = datetime.datetime.fromtimestamp(
+                        ts // 1_000_000_000, tz=datetime.UTC
+                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                except Exception:
+                    dt_str = "Invalid timestamp"
+                typer.echo(f"  [{idx}] {ts} ({dt_str})")
+            choice = typer.prompt("Select snapshot by number or enter custom", default="1").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(snapshots):
+                at = snapshots[int(choice) - 1]
+            else:
+                try:
+                    at = int(choice)
+                except ValueError:
+                    at = None
+        else:
+            at_str = typer.prompt(
+                "Snapshot time (nanoseconds UTC, e.g. 1704067200000000000)"
+            ).strip()
+            try:
+                at = int(at_str)
+            except ValueError:
+                at = None
+
+    if expiry_ns is None:
+        expiries = get_available_option_expiries(data_dir, underlying, at)
+        if expiries:
+            typer.echo("\n--- Available Expiries ---")
+            for idx, exp in enumerate(expiries, 1):
+                try:
+                    dt_str = datetime.datetime.fromtimestamp(
+                        exp // 1_000_000_000, tz=datetime.UTC
+                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                except Exception:
+                    dt_str = "Invalid timestamp"
+                typer.echo(f"  [{idx}] {exp} ({dt_str})")
+            choice = typer.prompt("Select expiry by number or enter custom", default="1").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(expiries):
+                expiry_ns = expiries[int(choice) - 1]
+            else:
+                try:
+                    expiry_ns = int(choice)
+                except ValueError:
+                    expiry_ns = None
+        else:
+            exp_str = typer.prompt(
+                "Expiry (nanoseconds UTC, e.g. 1735689600000000000)"
+            ).strip()
+            try:
+                expiry_ns = int(exp_str)
+            except ValueError:
+                expiry_ns = None
+
+    return underlying, at, expiry_ns
+
+
+@app.command(name="vol-skew")
+def vol_skew_cmd(
+    underlying: Annotated[
+        str | None,
+        typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
+    ] = None,
+    expiry_ns: Annotated[
+        int | None,
+        typer.Option(
+            "--expiry-ns",
+            "--expiry",
+            help="Option expiry (nanoseconds UTC).",
+        ),
+    ] = None,
+    at: Annotated[
+        int | None,
+        typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
+    ] = None,
+    rate: Annotated[
+        float,
+        typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
+    ] = 0.0,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print per-strike IV and delta for a single expiry (vol skew)."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not underlying or at is None or expiry_ns is None:
+            typer.echo(
+                "Error: underlying, expiry-ns, and at snapshot instant are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        underlying, at, expiry_ns = _prompt_option_underlying_at_expiry(
+            data_dir, underlying, at, expiry_ns
+        )
+
+    if not underlying or at is None or expiry_ns is None:
+        typer.echo(
+            "Error: Underlying, expiry (expiry-ns), and snapshot instant (at) are required.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if len(df) == 0:
+        typer.echo("No options data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# risk-reversal
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="risk-reversal")
+def risk_reversal_cmd(
+    underlying: Annotated[
+        str | None,
+        typer.Option("--underlying", help="Underlying asset identifier, e.g. BTC."),
+    ] = None,
+    expiry_ns: Annotated[
+        int | None,
+        typer.Option(
+            "--expiry-ns",
+            "--expiry",
+            help="Option expiry (nanoseconds UTC).",
+        ),
+    ] = None,
+    at: Annotated[
+        int | None,
+        typer.Option("--at", help="Snapshot instant (nanoseconds UTC)."),
+    ] = None,
+    rate: Annotated[
+        float,
+        typer.Option("--rate", help="Continuous risk-free rate (default 0.0)."),
+    ] = 0.0,
+    target_delta: Annotated[
+        float,
+        typer.Option(
+            "--target-delta",
+            help="Target absolute delta for RR/BF (default 0.25).",
+        ),
+    ] = 0.25,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Print risk-reversal and butterfly from the vol skew at a single expiry."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not underlying or at is None or expiry_ns is None:
+            typer.echo(
+                "Error: underlying, expiry-ns, and at snapshot instant are required "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        underlying, at, expiry_ns = _prompt_option_underlying_at_expiry(
+            data_dir, underlying, at, expiry_ns
+        )
+
+    if not underlying or at is None or expiry_ns is None:
+        typer.echo(
+            "Error: Underlying, expiry (expiry-ns), and snapshot instant (at) are required.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        skew_df = client.vol_skew(underlying, expiry_ns, at, rate=rate)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if len(skew_df) == 0:
+        typer.echo("No options data found.")
+        raise typer.Exit(code=0)
+
+    try:
+        rr, bf = client.risk_reversal_butterfly(skew_df, target_delta=target_delta)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"risk_reversal: {rr}")
+    typer.echo(f"butterfly: {bf}")
+
+
+# ---------------------------------------------------------------------------
 # slippage (Task R1)
 # ---------------------------------------------------------------------------
 
@@ -2192,6 +3530,105 @@ def ofi_cmd(
 
 
 # ---------------------------------------------------------------------------
+# liquidity-depth (block-level book depth from lake snapshots)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="liquidity-depth")
+def liquidity_depth_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option(
+            "--symbol",
+            help="Canonical symbol, e.g. base_onchain:DEGEN-WETH or deribit:BTC-PERPETUAL.",
+        ),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Calculate per-block bid/ask liquidity depth at ±1%, ±2%, ±5% from mid-price."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo("Error: symbol is required in non-interactive mode.", err=True)
+            raise typer.Exit(code=1)
+    else:
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(
+                data_dir, channel="book_snapshot"
+            )
+            if selected_symbols:
+                symbol = selected_symbols[0]
+
+        if not symbol:
+            symbol = prompt_symbol(
+                "Symbol (e.g. base_onchain:DEGEN-WETH)",
+                data_dir,
+                channel="book_snapshot",
+            )
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo("Error: Symbol is required.", err=True)
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_block_liquidity_depth(symbol)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No book snapshots found for the given symbol.")
+        raise typer.Exit(code=0)
+
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# sequencer-latency (block production interval + ingestion delay from lake)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="sequencer-latency")
+def sequencer_latency_cmd(
+    exchange: Annotated[
+        str,
+        typer.Option(
+            "--exchange",
+            help="Exchange name to measure (e.g. base_onchain).",
+        ),
+    ] = "base_onchain",
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Measure sequencer production intervals and local ingestion delay from the lake."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+    exchange = (exchange or "").strip() or "base_onchain"
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_sequencer_latency(exchange)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No sequencer latency data found.")
+        raise typer.Exit(code=0)
+
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
 # whale-alerts (Task R3)
 # ---------------------------------------------------------------------------
 
@@ -2297,6 +3734,705 @@ def whale_alerts_cmd(
         })
     df_formatted = pl.DataFrame(formatted_rows)
     typer.echo(df_formatted)
+
+
+# ---------------------------------------------------------------------------
+# open-interest (Base risk analytics)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="open-interest")
+def open_interest_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option(
+            "--symbol",
+            help="Substring filter for symbols (e.g. BTC). Omit to aggregate all.",
+        ),
+    ] = None,
+    start: Annotated[
+        int | None,
+        typer.Option("--start", help="Start of time range (nanoseconds UTC)."),
+    ] = None,
+    end: Annotated[
+        int | None,
+        typer.Option("--end", help="End of time range (nanoseconds UTC)."),
+    ] = None,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Aggregate open interest across exchanges with forward-fill alignment."""
+    from crypcodile.client.client import CrypcodileClient
+
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if start is None:
+            start = 0
+        if end is None:
+            end = 9999999999999999999
+    else:
+        if symbol is None:
+            symbol = typer.prompt(
+                "Symbol filter (e.g. BTC, empty for all)",
+                default="",
+                show_default=False,
+            )
+            if not symbol:
+                symbol = None
+        if start is None or end is None:
+            resolved_start, resolved_end = prompt_time_range_helper(
+                data_dir,
+                "open_interest",
+                [symbol] if symbol else None,
+                default_start=0,
+                default_end=9999999999999999999,
+            )
+            if start is None:
+                start = resolved_start
+            if end is None:
+                end = resolved_end
+
+    if start is None:
+        start = 0
+    if end is None:
+        end = 9999999999999999999
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.aggregate_open_interest(symbol, start, end)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No open interest data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# peg-deviation (Base risk analytics)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="peg-deviation")
+def peg_deviation_cmd(
+    symbol: Annotated[
+        str | None,
+        typer.Option(
+            "--symbol",
+            help="Canonical stablecoin symbol for lake mode, e.g. base_onchain:USDC-USDbC.",
+        ),
+    ] = None,
+    price: Annotated[
+        float | None,
+        typer.Option(
+            "--price",
+            help="Mid price for pure mode (no lake). Absolute deviation from $1.00.",
+        ),
+    ] = None,
+    bid: Annotated[
+        float | None,
+        typer.Option("--bid", help="Bid price for pure mode (paired with --ask)."),
+    ] = None,
+    ask: Annotated[
+        float | None,
+        typer.Option("--ask", help="Ask price for pure mode (paired with --bid)."),
+    ] = None,
+    threshold: Annotated[
+        float,
+        typer.Option("--threshold", help="Deviation alert threshold (e.g. 0.01 = 1%)."),
+    ] = 0.01,
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Detect stablecoin peg deviation from $1.00 (lake or pure --price/--bid/--ask)."""
+    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+    from crypcodile.client.client import CrypcodileClient
+
+    # Pure path: --price or --bid/--ask
+    mid: float | None = price
+    if mid is None and bid is not None and ask is not None:
+        mid = (float(bid) + float(ask)) / 2.0
+
+    if mid is not None:
+        result = peg_deviation_from_price(mid, threshold=threshold)
+        typer.echo(
+            f"price: {result['price']}\n"
+            f"deviation_pct: {result['deviation_pct']}\n"
+            f"threshold: {result['threshold']}\n"
+            f"is_alert_triggered: {result['is_alert_triggered']}"
+        )
+        raise typer.Exit(code=0)
+
+    # Lake path
+    data_dir = resolve_data_dir(data_dir)
+
+    if not is_interactive_stdin():
+        if not symbol:
+            typer.echo(
+                "Error: provide --price/--bid+--ask (pure) or --symbol (lake) "
+                "in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if not symbol:
+            _, selected_symbols = select_symbols_interactively(
+                data_dir, channel="book_ticker"
+            )
+            if selected_symbols:
+                symbol = selected_symbols[0]
+        if not symbol:
+            symbol = prompt_symbol(
+                "Symbol (e.g. base_onchain:USDC-USDbC)",
+                data_dir,
+                channel="book_ticker",
+            )
+
+    if symbol:
+        resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_ticker")
+        if not resolved_syms:
+            resolved_syms = resolve_input_symbols(data_dir, [symbol], "book_snapshot")
+        if resolved_syms:
+            symbol = resolved_syms[0]
+
+    if not symbol:
+        typer.echo(
+            "Error: Symbol is required for lake mode (or pass --price for pure mode).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    client = CrypcodileClient(data_dir=data_dir)
+    try:
+        df = client.calculate_peg_deviation(symbol, threshold)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if len(df) == 0:
+        typer.echo("No peg deviation data found.")
+        raise typer.Exit(code=0)
+    typer.echo(df)
+
+
+# ---------------------------------------------------------------------------
+# chaos-score (Base risk analytics — pure numeric inputs)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="chaos-score")
+def chaos_score_cmd(
+    volatility: Annotated[
+        float,
+        typer.Option(
+            "--volatility",
+            help="Realized or implied volatility (soft-thresholded; higher -> more chaos).",
+        ),
+    ] = 0.0,
+    stablecoin_deviation: Annotated[
+        float,
+        typer.Option(
+            "--stablecoin-deviation",
+            help="Absolute peg deviation from $1.00 (e.g. 0.02 = 2 cents).",
+        ),
+    ] = 0.0,
+    orderbook_imbalance: Annotated[
+        float,
+        typer.Option(
+            "--orderbook-imbalance",
+            help="Order book imbalance in [-1, 1] (abs used; higher -> more chaos).",
+        ),
+    ] = 0.0,
+    sequencer_delay: Annotated[
+        float,
+        typer.Option(
+            "--sequencer-delay",
+            help="Sequencer / exchange latency in seconds.",
+        ),
+    ] = 0.0,
+) -> None:
+    """Compute a normalized [0, 100] chaos score from pure risk metrics (no lake)."""
+    from crypcodile.analytics.risk import calculate_chaos_score
+
+    score = calculate_chaos_score(
+        volatility=volatility,
+        stablecoin_deviation=stablecoin_deviation,
+        orderbook_imbalance=orderbook_imbalance,
+        sequencer_delay=sequencer_delay,
+    )
+    typer.echo(
+        f"volatility: {volatility}\n"
+        f"stablecoin_deviation: {stablecoin_deviation}\n"
+        f"orderbook_imbalance: {orderbook_imbalance}\n"
+        f"sequencer_delay: {sequencer_delay}\n"
+        f"chaos_score: {score}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# lending-stress (Base risk analytics — pure numeric LTV / health-factor)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="lending-stress")
+def lending_stress_cmd(
+    collateral_usd: Annotated[
+        float,
+        typer.Option(
+            "--collateral-usd",
+            help="Current collateral value in USD.",
+        ),
+    ],
+    debt_usd: Annotated[
+        float,
+        typer.Option(
+            "--debt-usd",
+            help="Current debt value in USD.",
+        ),
+    ],
+    liquidation_threshold: Annotated[
+        float,
+        typer.Option(
+            "--liquidation-threshold",
+            help="Liquidation threshold as a fraction (e.g. 0.8 for 80%).",
+        ),
+    ],
+    haircut_pct: Annotated[
+        float,
+        typer.Option(
+            "--haircut-pct",
+            help="Collateral haircut as fraction or percent (0.20 or 20 for 20%).",
+        ),
+    ],
+) -> None:
+    """Stress-test a lending position's health factor under a collateral haircut (no lake/RPC)."""
+    from crypcodile.analytics.lending_stress import lending_stress_test
+
+    result = lending_stress_test(
+        collateral_usd=collateral_usd,
+        debt_usd=debt_usd,
+        liquidation_threshold=liquidation_threshold,
+        haircut_pct=haircut_pct,
+    )
+
+    def _fmt_hf(value: float) -> str:
+        if value == float("inf"):
+            return "inf"
+        return str(value)
+
+    typer.echo(
+        f"collateral_usd: {collateral_usd}\n"
+        f"debt_usd: {debt_usd}\n"
+        f"liquidation_threshold: {liquidation_threshold}\n"
+        f"haircut_pct: {haircut_pct}\n"
+        f"current_health_factor: {_fmt_hf(float(result['current_health_factor']))}\n"
+        f"simulated_health_factor: {_fmt_hf(float(result['simulated_health_factor']))}\n"
+        f"is_liquidatable: {result['is_liquidatable']}\n"
+        f"simulated_is_liquidatable: {result['simulated_is_liquidatable']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# gas-vol (Base risk analytics — pure DF inputs)
+# ---------------------------------------------------------------------------
+
+
+def _load_series_dataframe(path: Path) -> "pl.DataFrame":
+    """Load a CSV or JSON/JSONL series file into a Polars DataFrame."""
+    import polars as pl
+
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pl.read_csv(path)
+    if suffix == ".jsonl" or suffix == ".ndjson":
+        return pl.read_ndjson(path)
+    if suffix == ".json":
+        return pl.read_json(path)
+    # Fallback: try CSV then JSON
+    try:
+        return pl.read_csv(path)
+    except Exception:
+        return pl.read_json(path)
+
+
+@app.command(name="gas-vol")
+def gas_vol_cmd(
+    gas_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--gas-file",
+            help="CSV/JSON path with local_ts and a gas column (gas_price/gas_cost).",
+        ),
+    ] = None,
+    vol_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--vol-file",
+            help="CSV/JSON path with local_ts and a volatility column (volatility/vol).",
+        ),
+    ] = None,
+) -> None:
+    """Correlate gas costs with volatility (Pearson & Spearman) from CSV/JSON inputs."""
+    import json
+
+    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
+
+    if not is_interactive_stdin():
+        if gas_file is None or vol_file is None:
+            typer.echo(
+                "Error: --gas-file and --vol-file are required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if gas_file is None:
+            gas_file = Path(typer.prompt("Path to gas series file (CSV/JSON)"))
+        if vol_file is None:
+            vol_file = Path(typer.prompt("Path to volatility series file (CSV/JSON)"))
+
+    if gas_file is None or vol_file is None:
+        typer.echo("Error: --gas-file and --vol-file are required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        gas_df = _load_series_dataframe(gas_file)
+        vol_df = _load_series_dataframe(vol_file)
+    except Exception as e:
+        typer.echo(f"Error loading input files: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = gas_to_volatility_correlation(gas_df, vol_df)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(json.dumps(result, indent=2, allow_nan=True))
+
+
+# ---------------------------------------------------------------------------
+# smart-money / label-transfers (pure CSV + watchlist; no RPC)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="smart-money")
+def smart_money_cmd(
+    transfers: Annotated[
+        Path | None,
+        typer.Option(
+            "--transfers",
+            help="CSV/JSON/JSONL of transfers (from, to, usd_value[, timestamp]).",
+        ),
+    ] = None,
+    watchlist: Annotated[
+        Path | None,
+        typer.Option(
+            "--watchlist",
+            help="JSON watchlist: addr->label map, list of addresses, or "
+            '{"addresses": [...]} / {"watchlist": {...}}.',
+        ),
+    ] = None,
+) -> None:
+    """Summarize smart-money capital flows from a transfers file + address watchlist."""
+    import polars as pl
+
+    from crypcodile.analytics.smart_money import load_watchlist, summarize_smart_money
+
+    if not is_interactive_stdin():
+        if transfers is None or watchlist is None:
+            typer.echo(
+                "Error: --transfers and --watchlist are required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if transfers is None:
+            transfers = Path(typer.prompt("Path to transfers CSV/JSON"))
+        if watchlist is None:
+            watchlist = Path(typer.prompt("Path to watchlist JSON"))
+
+    if transfers is None or watchlist is None:
+        typer.echo("Error: --transfers and --watchlist are required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        xfer_df = _load_series_dataframe(transfers)
+        labels = load_watchlist(watchlist)
+    except Exception as e:
+        typer.echo(f"Error loading inputs: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if not labels:
+        typer.echo("Error: watchlist is empty.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        rows = summarize_smart_money(xfer_df.to_dicts(), labels)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if not rows:
+        typer.echo("No smart-money activity found for watchlist addresses.")
+        raise typer.Exit(code=0)
+
+    typer.echo(pl.DataFrame(rows))
+
+
+@app.command(name="label-transfers")
+def label_transfers_cmd(
+    transfers: Annotated[
+        Path | None,
+        typer.Option(
+            "--transfers",
+            help="CSV/JSON/JSONL of transfers (from, to[, usd_value, ...]).",
+        ),
+    ] = None,
+    watchlist: Annotated[
+        Path | None,
+        typer.Option(
+            "--watchlist",
+            help="JSON watchlist: addr->label map or list of addresses.",
+        ),
+    ] = None,
+    min_usd: Annotated[
+        float | None,
+        typer.Option(
+            "--min-usd",
+            help="Optional USD threshold filter before labeling (whale filter).",
+        ),
+    ] = None,
+    known_only: Annotated[
+        bool,
+        typer.Option(
+            "--known-only",
+            help="Only emit rows where from or to is on the watchlist.",
+        ),
+    ] = False,
+) -> None:
+    """Label transfer rows with watchlist names; optionally filter by USD (no RPC)."""
+    import polars as pl
+
+    from crypcodile.analytics.smart_money import load_watchlist
+    from crypcodile.analytics.whale_transfers import (
+        filter_transfers_by_usd,
+        label_transfer_addresses,
+    )
+
+    if not is_interactive_stdin():
+        if transfers is None or watchlist is None:
+            typer.echo(
+                "Error: --transfers and --watchlist are required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if transfers is None:
+            transfers = Path(typer.prompt("Path to transfers CSV/JSON"))
+        if watchlist is None:
+            watchlist = Path(typer.prompt("Path to watchlist JSON"))
+
+    if transfers is None or watchlist is None:
+        typer.echo("Error: --transfers and --watchlist are required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        xfer_df = _load_series_dataframe(transfers)
+        labels = load_watchlist(watchlist)
+    except Exception as e:
+        typer.echo(f"Error loading inputs: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    rows: list[dict] = xfer_df.to_dicts()
+    try:
+        if min_usd is not None:
+            rows = filter_transfers_by_usd(rows, min_usd)
+        rows = label_transfer_addresses(rows, labels)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    if known_only:
+        rows = [r for r in rows if r.get("is_known")]
+
+    if not rows:
+        typer.echo("No transfers matched filters.")
+        raise typer.Exit(code=0)
+
+    typer.echo(pl.DataFrame(rows))
+
+
+# ---------------------------------------------------------------------------
+# mev-sandwich (pure trade-sequence sandwich flags; CSV/JSON offline)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="mev-sandwich")
+def mev_sandwich_cmd(
+    trades: Annotated[
+        Path | None,
+        typer.Option(
+            "--trades",
+            help=(
+                "CSV/JSON/JSONL trade sequence with columns "
+                "block, pool, log_index, sender, is_buy."
+            ),
+        ),
+    ] = None,
+    sandwiches_only: Annotated[
+        bool,
+        typer.Option(
+            "--sandwiches-only",
+            help="Only emit rows flagged as sandwich legs (frontrun/victim/backrun).",
+        ),
+    ] = False,
+) -> None:
+    """Flag MEV sandwich patterns in an offline trade sequence (no RPC/lake)."""
+    import polars as pl
+
+    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+
+    if not is_interactive_stdin():
+        if trades is None:
+            typer.echo(
+                "Error: --trades is required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if trades is None:
+            trades = Path(typer.prompt("Path to trades CSV/JSON"))
+
+    if trades is None:
+        typer.echo("Error: --trades is required.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        df = _load_series_dataframe(trades)
+    except Exception as e:
+        typer.echo(f"Error loading trades file: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        out = detect_sandwiches(df)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    n_flagged = int(out.filter(pl.col("is_sandwich")).height) if out.height else 0
+    if sandwiches_only:
+        out = out.filter(pl.col("is_sandwich"))
+
+    if out.height == 0:
+        typer.echo(
+            "No sandwich legs found." if sandwiches_only else "No trades in input."
+        )
+        raise typer.Exit(code=0)
+
+    typer.echo(out)
+    typer.echo(
+        f"sandwich_legs: {n_flagged} / {df.height}",
+        err=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# funding-predict (pure offline rates / CSV — rolling mean or XGBoost)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="funding-predict")
+def funding_predict_cmd(
+    rates: Annotated[
+        str | None,
+        typer.Option(
+            "--rates",
+            help="Comma-separated historical funding rates (e.g. 0.0001,0.0002,0.00015).",
+        ),
+    ] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            help="CSV/JSON/JSONL with a funding_rate column (optional feature columns).",
+        ),
+    ] = None,
+    window: Annotated[
+        int,
+        typer.Option(
+            "--window",
+            help="Rolling window size for the heuristic fallback (default: 5).",
+        ),
+    ] = 5,
+) -> None:
+    """Predict next-period funding rate from pure offline history (no lake/RPC).
+
+    Uses XGBoost when installed and trainable; otherwise a rolling-mean fallback.
+    Provide either ``--rates`` or ``--file``.
+    """
+    import json
+
+    from crypcodile.analytics.funding_prediction import predict_next_funding
+
+    if not is_interactive_stdin():
+        if rates is None and file is None:
+            typer.echo(
+                "Error: --rates or --file is required in non-interactive mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        if rates is None and file is None:
+            choice = typer.prompt("Input mode: rates or file", default="rates")
+            if str(choice).strip().lower().startswith("f"):
+                file = Path(typer.prompt("Path to funding history CSV/JSON"))
+            else:
+                rates = typer.prompt(
+                    "Comma-separated funding rates (e.g. 0.0001,0.0002)"
+                )
+
+    if rates is None and file is None:
+        typer.echo("Error: --rates or --file is required.", err=True)
+        raise typer.Exit(code=1)
+
+    if rates is not None and file is not None:
+        typer.echo(
+            "Error: provide only one of --rates or --file, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if window < 1:
+        typer.echo("Error: --window must be >= 1.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        if rates is not None:
+            parts = [p.strip() for p in rates.split(",") if p.strip()]
+            if not parts:
+                typer.echo("Error: --rates is empty.", err=True)
+                raise typer.Exit(code=1)
+            try:
+                rate_list = [float(p) for p in parts]
+            except ValueError as e:
+                typer.echo(f"Error: invalid --rates value: {e}", err=True)
+                raise typer.Exit(code=1)
+            result = predict_next_funding(rate_list, window_size=window)
+        else:
+            assert file is not None
+            df = _load_series_dataframe(file)
+            result = predict_next_funding(df, window_size=window)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(json.dumps(result, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -2806,13 +4942,6 @@ def indicators(
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Calculate technical analysis indicators (SMA, EMA, RSI, MACD, BB) using Polars."""
-    from crypcodile.analytics import (
-        calculate_bollinger_bands,
-        calculate_ema,
-        calculate_macd,
-        calculate_rsi,
-        calculate_sma,
-    )
     from crypcodile.client.client import CrypcodileClient
 
     data_dir = resolve_data_dir(data_dir)
@@ -2844,55 +4973,21 @@ def indicators(
 
     client = CrypcodileClient(data_dir=data_dir)
     try:
-        df = client.resample(symbol, frm, to, interval, fill_empty=True)
-        if len(df) == 0:
+        res = client.get_indicators(
+            symbol,  # type: ignore[arg-type]
+            frm,  # type: ignore[arg-type]
+            to,  # type: ignore[arg-type]
+            interval=interval,
+            indicator=indicator,
+            period=period,
+        )
+        if len(res) == 0:
             typer.echo("No data found for the given symbol and time range.")
             return
-
-        # Sort by bar timestamp to ensure calculations are correct
-        df = df.sort("bar")
-        close_series = df["close"]
-
-        if indicator == "sma":
-            res = df.with_columns(calculate_sma(close_series, period).alias("sma"))
-        elif indicator == "ema":
-            res = df.with_columns(calculate_ema(close_series, period).alias("ema"))
-        elif indicator == "rsi":
-            res = df.with_columns(calculate_rsi(close_series, period).alias("rsi"))
-        elif indicator == "macd":
-            macd, signal, hist = calculate_macd(close_series)
-            res = df.with_columns(
-                macd.alias("macd"),
-                signal.alias("signal"),
-                hist.alias("hist")
-            )
-        elif indicator == "bb":
-            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
-            res = df.with_columns(
-                upper.alias("bb_upper"),
-                middle.alias("bb_middle"),
-                lower.alias("bb_lower")
-            )
-        elif not indicator or indicator == "all":
-            # calculate all indicators and append
-            macd, signal, hist = calculate_macd(close_series)
-            upper, middle, lower = calculate_bollinger_bands(close_series, period=period)
-            res = df.with_columns(
-                calculate_sma(close_series, period).alias("sma"),
-                calculate_ema(close_series, period).alias("ema"),
-                calculate_rsi(close_series, period).alias("rsi"),
-                macd.alias("macd"),
-                signal.alias("signal"),
-                hist.alias("hist"),
-                upper.alias("bb_upper"),
-                middle.alias("bb_middle"),
-                lower.alias("bb_lower")
-            )
-        else:
-            typer.echo(f"Error: Unknown indicator '{indicator}'", err=True)
-            raise typer.Exit(code=1)
-
         typer.echo(res)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

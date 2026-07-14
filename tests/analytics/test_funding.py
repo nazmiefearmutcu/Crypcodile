@@ -203,6 +203,41 @@ def test_funding_apr_symbol_isolation(populated_lake: Path) -> None:
     assert len(df) == 0
 
 
+def test_funding_apr_dedupes_duplicate_funding_timestamp(tmp_path: Path) -> None:
+    """Live lakes re-emit the same settlement; cumulative must not explode.
+
+    Three distinct funding events are each written multiple times with the same
+    ``funding_timestamp``.  Output must still be 3 rows and cumulative funding
+    must match the sum of the unique rates — not N× that sum.
+    """
+    records: list[Funding] = []
+    for i, rate in enumerate(_RATES):
+        ts = _BASE_NS + i * _8H_NS
+        # Simulate 5 re-emits of the same settlement event.
+        for _ in range(5):
+            records.append(_make_funding(ts, rate, _INTERVAL_HOURS))
+    asyncio.run(_write_funding(tmp_path, records))
+    catalog = Catalog(tmp_path)
+
+    df = funding_apr(catalog, _SYMBOL, _BASE_NS, _BASE_NS + 3 * _8H_NS)
+    assert len(df) == 3, f"expected 3 deduped rows, got {len(df)}"
+
+    last_cum = df["cumulative_funding"][-1]
+    expected_cum = 0.0001 + (-0.0002) + 0.0003  # = 0.0002, not 5×
+    assert abs(last_cum - expected_cum) < 1e-9, (
+        f"last cumulative={last_cum}, expected≈{expected_cum} "
+        f"(duplicates inflated the sum)"
+    )
+
+    rates = df["funding_rate"].to_list()
+    for actual, expected in zip(rates, _RATES, strict=True):
+        assert abs(actual - expected) < 1e-12
+
+    summary = funding_summary(catalog, _SYMBOL, _BASE_NS, _BASE_NS + 3 * _8H_NS)
+    assert summary["n_events"][0] == 3
+    assert abs(summary["total_funding"][0] - expected_cum) < 1e-9
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: funding_summary (catalog-backed)
 # ---------------------------------------------------------------------------

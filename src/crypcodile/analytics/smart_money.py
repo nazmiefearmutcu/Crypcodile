@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
 
 
 class SmartMoneyTracker:
@@ -62,3 +64,141 @@ class SmartMoneyTracker:
     def get_address_state(self, address: str) -> dict[str, Any] | None:
         """Get the current flow state metrics for a specific address."""
         return self.flows.get(address.lower())
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Return all tracked address states sorted by total volume descending."""
+        rows = list(self.flows.values())
+        rows.sort(key=lambda r: float(r.get("total_volume_usd", 0.0)), reverse=True)
+        return rows
+
+
+def load_watchlist(path: str | Path) -> dict[str, str]:
+    """Load a watchlist JSON mapping address -> label (case-normalized keys).
+
+    Accepted shapes:
+    - ``{"0xabc...": "label", ...}``
+    - ``["0xabc...", ...]`` (label equals address)
+    - ``{"addresses": ["0x...", ...]}``
+    - ``{"watchlist": {"0x...": "label"}}`` or ``{"labels": {...}}``
+    """
+    path = Path(path)
+    with path.open(encoding="utf-8") as fh:
+        payload = json.load(fh)
+    return normalize_watchlist(payload)
+
+
+def normalize_watchlist(payload: Any) -> dict[str, str]:
+    """Normalize various watchlist JSON shapes to ``{addr_lower: label}``.
+
+    Blank / whitespace-only address keys are dropped (same contract as list
+    entries) so empty ``from``/``to`` fields never match a phantom label.
+    """
+    if payload is None:
+        return {}
+
+    def _addr_key(raw: Any) -> str | None:
+        if raw is None:
+            return None
+        key = str(raw).strip().lower()
+        return key if key else None
+
+    if isinstance(payload, Mapping):
+        if "watchlist" in payload and isinstance(payload["watchlist"], Mapping):
+            out: dict[str, str] = {}
+            for k, v in payload["watchlist"].items():
+                key = _addr_key(k)
+                if key is not None:
+                    out[key] = str(v)
+            return out
+        if "labels" in payload and isinstance(payload["labels"], Mapping):
+            out = {}
+            for k, v in payload["labels"].items():
+                key = _addr_key(k)
+                if key is not None:
+                    out[key] = str(v)
+            return out
+        if "addresses" in payload and isinstance(payload["addresses"], Sequence):
+            return {
+                str(a).strip().lower(): str(a).strip()
+                for a in payload["addresses"]
+                if a is not None and str(a).strip()
+            }
+        # Flat address -> label map (skip non-address-looking nested containers)
+        out = {}
+        for k, v in payload.items():
+            if isinstance(v, (dict, list)):
+                continue
+            key = _addr_key(k)
+            if key is None:
+                continue
+            out[key] = str(v)
+        return out
+
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        return {
+            str(a).strip().lower(): str(a).strip()
+            for a in payload
+            if a is not None and str(a).strip()
+        }
+
+    raise TypeError(
+        "watchlist must be a JSON object (addr->label) or list of addresses"
+    )
+
+
+def transfers_from_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Coerce tabular transfer rows into SmartMoneyTracker event dicts."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        from_addr = row.get("from") or row.get("from_address") or row.get("sender")
+        to_addr = row.get("to") or row.get("to_address") or row.get("recipient")
+        if from_addr is None and to_addr is None:
+            continue
+        usd_raw = row.get("usd_value", row.get("amount", row.get("value", 0.0)))
+        try:
+            usd_value = float(usd_raw if usd_raw is not None else 0.0)
+        except (TypeError, ValueError):
+            usd_value = 0.0
+        ts_raw = row.get("timestamp", row.get("local_ts", 0))
+        try:
+            ts = int(ts_raw if ts_raw is not None else 0)
+        except (TypeError, ValueError):
+            ts = 0
+        out.append(
+            {
+                "from": str(from_addr) if from_addr is not None else None,
+                "to": str(to_addr) if to_addr is not None else None,
+                "usd_value": usd_value,
+                "timestamp": ts,
+            }
+        )
+    return out
+
+
+def summarize_smart_money(
+    transfers: Iterable[Mapping[str, Any]],
+    smart_addresses: Sequence[str] | set[str] | Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Process transfers and return per-address flow summary rows.
+
+    ``smart_addresses`` may be a list/set of addresses or an address->label map.
+    When labels are available they are attached as a ``label`` field.
+    """
+    if isinstance(smart_addresses, Mapping):
+        labels = {str(k).lower(): str(v) for k, v in smart_addresses.items()}
+        addresses: set[str] = set(labels.keys())
+    else:
+        labels = {}
+        addresses = {str(a).lower() for a in smart_addresses}
+
+    tracker = SmartMoneyTracker(addresses)
+    for transfer in transfers_from_rows(transfers):
+        tracker.process_transfer(transfer)
+
+    rows = tracker.snapshot()
+    if labels:
+        for row in rows:
+            addr_key = str(row.get("address", "")).lower()
+            if addr_key in labels:
+                row["label"] = labels[addr_key]
+    return rows

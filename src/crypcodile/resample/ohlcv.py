@@ -21,6 +21,8 @@ Design (Appendix §4 / §5):
                  count(*) AS num_trades
           FROM trade
           WHERE symbol=? AND local_ts BETWEEN ? AND ?
+          AND price IS NOT NULL AND NOT is_nan(price)
+          AND amount IS NOT NULL AND NOT is_nan(amount)
           GROUP BY 1, 2
           ORDER BY 2
 
@@ -104,6 +106,8 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str) -> str:
         "WHERE symbol = ?\n"
         "  AND local_ts >= ?\n"
         "  AND local_ts <= ?\n"
+        "  AND price IS NOT NULL AND NOT isnan(price)\n"
+        "  AND amount IS NOT NULL AND NOT isnan(amount)\n"
         "GROUP BY 1, 2, 3\n"
         "ORDER BY 1"
     )
@@ -139,6 +143,8 @@ def _build_fill_sql(
         "    WHERE symbol = ?\n"
         "      AND local_ts >= ?\n"
         "      AND local_ts <= ?\n"
+        "      AND price IS NOT NULL AND NOT isnan(price)\n"
+        "      AND amount IS NOT NULL AND NOT isnan(amount)\n"
         "    GROUP BY 1, 2\n"
         "),\n"
         "grid AS (\n"

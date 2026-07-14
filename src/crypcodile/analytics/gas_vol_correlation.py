@@ -32,11 +32,17 @@ def gas_to_volatility_correlation(
     vol_cols = [c for c in vol_df.columns if "vol" in c.lower()]
     vol_col = vol_cols[0] if vol_cols else [c for c in vol_df.columns if c != "local_ts"][0]
 
-    # Align dataframes on local_ts (sorted inner join or ASOF join)
-    # Using sorted inner join as default
-    joined = gas_df.join(vol_df, on="local_ts", how="inner")
-    
-    # Drop rows with null values in the target columns
+    # Align series on local_ts via nearest-time ASOF join so irregularly
+    # sampled gas and vol still pair (exact inner join drops almost everything).
+    gas_aligned = gas_df.select(["local_ts", gas_col]).sort("local_ts")
+    vol_aligned = vol_df.select(["local_ts", vol_col]).sort("local_ts")
+    joined = gas_aligned.join_asof(
+        vol_aligned,
+        on="local_ts",
+        strategy="nearest",
+    )
+
+    # Drop rows with null values in the target columns (unmatched asof keys)
     joined = joined.drop_nulls(subset=[gas_col, vol_col])
 
     if len(joined) < 2:

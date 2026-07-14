@@ -196,6 +196,10 @@ class OrderBook:
         amount >  0.0 → set/overwrite the absolute size at that price.
         """
         for price, amount in levels:
+            if price <= 0:
+                raise ValueError(f"price must be positive, got {price}")
+            if amount < 0:
+                raise ValueError(f"amount must be non-negative, got {amount}")
             if amount == 0.0:
                 side.pop(price, None)  # silent no-op if level is already absent
             else:

@@ -86,12 +86,24 @@ class AiohttpWsTransport:
     async def connect(self) -> None:
         import aiohttp  # lazy — keeps CLI import-time fast
 
+        # Merge of two hardening lines: env-gated SSL (certifi CA) from the
+        # FlowMap visualizer line + session-leak safety from the ralph line.
+        # Create the session first with the resolved SSL connector; only publish
+        # it on self after ws_connect succeeds. If ws_connect raises, close the
+        # session here so callers that never reach close() cannot leak it.
         ssl_arg = self._resolve_ssl()
         connector = aiohttp.TCPConnector(ssl=ssl_arg)
-        self._session = aiohttp.ClientSession(connector=connector)
-        self._ws = await self._session.ws_connect(
-            self._url, heartbeat=20.0, ssl=ssl_arg
-        )
+        session = aiohttp.ClientSession(connector=connector)
+        try:
+            ws = await session.ws_connect(self._url, heartbeat=20.0, ssl=ssl_arg)
+        except Exception:
+            try:
+                await session.close()
+            except Exception:
+                pass
+            raise
+        self._session = session
+        self._ws = ws
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self._iter()

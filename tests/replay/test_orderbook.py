@@ -279,3 +279,24 @@ def test_none_seq_snapshot_futures_shape_delta_does_not_silently_pass() -> None:
     # With the fix it must raise BookGap (cannot validate continuity).
     with pytest.raises(BookGap):
         book.apply(_make_delta(seq_id=101, prev_seq_id=100))
+
+
+def test_orderbook_invalid_values() -> None:
+    book = OrderBook()
+    # 1. Non-positive price in snapshot
+    with pytest.raises(ValueError, match="price must be positive"):
+        book.apply(_make_snapshot(seq=1, bids=[(0.0, 5.0)]))
+
+    # 2. Negative amount in snapshot
+    with pytest.raises(ValueError, match="amount must be non-negative"):
+        book.apply(_make_snapshot(seq=1, bids=[(100.0, -1.0)]))
+
+    # 3. Non-positive price in delta
+    book.apply(_make_snapshot(seq=1, bids=[(100.0, 5.0)]))
+    with pytest.raises(ValueError, match="price must be positive"):
+        book.apply(_make_delta(seq_id=2, prev_seq_id=1, bids=[(-5.0, 1.0)]))
+
+    # 4. Negative amount in delta
+    with pytest.raises(ValueError, match="amount must be non-negative"):
+        book.apply(_make_delta(seq_id=2, prev_seq_id=1, bids=[(100.0, -2.0)]))
+

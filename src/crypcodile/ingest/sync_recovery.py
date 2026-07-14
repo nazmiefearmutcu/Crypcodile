@@ -32,6 +32,33 @@ class SyncRecovery:
         val = self.state.get(pool)
         return int(val) if val is not None else None
 
-    def save_last_block(self, pool: str, block: int) -> None:
+    def save_last_block(
+        self,
+        pool: str,
+        block: int,
+        seen_logs: dict[tuple[str, int], bool] | None = None,
+    ) -> None:
+        """Persist cursor for ``pool``.
+
+        When ``seen_logs`` is provided, co-persist it in the same write so a
+        crash after advancing the cursor cannot re-emit already-processed logs
+        on restart (overlap re-query).
+        """
         self.state[pool] = block
+        if seen_logs is not None:
+            self.state["seen_logs"] = [[k[0], k[1]] for k in seen_logs.keys()]
         self._save()
+
+    def get_seen_logs(self) -> dict[tuple[str, int], bool]:
+        raw = self.state.get("seen_logs", [])
+        res = {}
+        for entry in raw:
+            if isinstance(entry, list) and len(entry) >= 2:
+                res[(str(entry[0]), int(entry[1]))] = True
+        return res
+
+    def save_seen_logs(self, logs: dict[tuple[str, int], bool]) -> None:
+        serialized = [[k[0], k[1]] for k in logs.keys()]
+        self.state["seen_logs"] = serialized
+        self._save()
+

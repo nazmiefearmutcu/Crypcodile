@@ -1,14 +1,11 @@
 # Progress Log
 
-- Last visited: 2026-06-18T20:55:00+03:00
-- Status: Analyzed `src/crypcodile/cli.py` and test suite structures. Preparing to run local pytest suite.
+- Last visited: 2026-07-14
+- Branch: `ralph/continuous-dev`
+- Status: Continuous loop Waves 1–66 COMPLETE (since `66b44af`). Version `0.1.044`.
 
-## Checklist
-- [x] Read and analyze `src/crypcodile/cli.py` commands
-- [x] Read existing CLI tests in `tests/test_cli.py`, `tests/test_cli_collect.py`, and `tests/analytics/test_client_cli.py`
-- [ ] Audit for structural bugs, syntax errors, and TODOs
-- [ ] Audit for input validation errors
-- [ ] Audit for unhandled exceptions (empty lake, network, schema)
-- [ ] Audit for interactive prompt safety
-- [ ] Generate `handoff.md` with structured findings
-- [ ] Send message to parent agent
+## Ralph continuous-dev (0.1.044)
+
+On `ralph/continuous-dev` at **0.1.044**, continuous-dev rotation continues. Wave 66: broad critical regression **866 passed** (baseline), then **data-coverage optional `--exchange` / `exchange=`** on Client + CLI + REST + MCP (inventory parity; strip empty → no filter). Post-feature critical suites **870 passed** (+4). Remaining candidates: Bybit book resync, indicator CLI modes, portal polish.
+
+See `docs/ralph/LOOP_STATE.md` for full wave tables and commits.

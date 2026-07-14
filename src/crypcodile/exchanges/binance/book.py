@@ -19,18 +19,20 @@ OrderBookSync state machine:
 """
 
 from collections.abc import Iterable
-from enum import StrEnum
 from typing import Any, Literal
 
+from crypcodile.ingest.book_sync import SyncResult
 from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.records import BookDelta, Record
-from crypcodile.util.time import ms_to_ns
+from crypcodile.schema.records import BookDelta, BookSnapshot, Record
+from crypcodile.util.time import ms_to_ns, now_ns
 
-
-class SyncResult(StrEnum):
-    DROP = "drop"
-    APPLY = "apply"
-    RESYNC = "resync"
+# Re-export for callers that import SyncResult from this module.
+__all__ = [
+    "OrderBookSync",
+    "SyncResult",
+    "normalize_depth",
+    "parse_rest_depth_snapshot",
+]
 
 
 class OrderBookSync:
@@ -50,6 +52,17 @@ class OrderBookSync:
         self._snapshot_id = last_update_id
         self._prev_u = None
         self._have_first = False
+
+    def note_applied(self, u: int) -> None:
+        """Record that a delta ending at update id *u* was applied.
+
+        Used after :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`
+        replays buffered deltas past a REST snapshot so the next live event
+        checks continuity against the last applied ``u`` rather than re-running
+        first-event rules against the snapshot id.
+        """
+        self._have_first = True
+        self._prev_u = u
 
     def feed(self, U: int, u: int, pu: int | None) -> SyncResult:
         """Process one depth diff event and return the action to take.
@@ -117,6 +130,46 @@ def _levels(raw: list[list[Any]]) -> list[tuple[float, float]]:
     qty=0 means remove the level (canonical removal signal).
     """
     return [(float(px), float(qty)) for px, qty in raw]
+
+
+def parse_rest_depth_snapshot(
+    data: dict[str, Any],
+    *,
+    symbol_raw: str,
+    venue: str,
+    local_ts: int | None = None,
+    registry: InstrumentRegistry | None = None,
+) -> BookSnapshot:
+    """Parse a Binance REST depth response into a :class:`BookSnapshot`.
+
+    Spot: ``GET /api/v3/depth`` → ``lastUpdateId``, ``bids``, ``asks``.
+    Futures: ``GET /fapi/v1/depth`` (or dapi) — same shape (optional ``E``/``T``).
+    """
+    inst = registry.get_raw(venue, symbol_raw) if registry is not None else None
+    canonical = inst.canonical if inst is not None else f"{venue}:{symbol_raw}"
+
+    # Spot/futures REST depth use lastUpdateId; tolerate rare `u` aliases.
+    last_update_id = data.get("lastUpdateId", data.get("u"))
+
+    bids = _levels(data.get("bids", []))
+    asks = _levels(data.get("asks", []))
+
+    e_ts = data.get("E")
+    exchange_ts = ms_to_ns(e_ts) if e_ts is not None else None
+    ts = local_ts if local_ts is not None else now_ns()
+
+    return BookSnapshot(
+        exchange=venue,
+        symbol=canonical,
+        symbol_raw=symbol_raw,
+        exchange_ts=exchange_ts,
+        local_ts=ts,
+        bids=bids,
+        asks=asks,
+        depth=len(bids) + len(asks),
+        sequence_id=int(last_update_id) if last_update_id is not None else None,
+        is_snapshot=True,
+    )
 
 
 def normalize_depth(

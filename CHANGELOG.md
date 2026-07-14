@@ -11,6 +11,153 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 ### Merged
 - Reconciled the FlowMap visualizer branch with the Technical Analysis Indicators engine branch (both forked from 0.1.042); both feature sets now coexist.
 
+- Folds in the discovery / catalog / analytics CLI+REST+MCP surfaces from the ralph continuous-dev line (previously drafted under 0.1.044); its sections follow.
+
+### Added
+- **data-coverage exchange filter**: Optional `exchange` on `CrypcodileClient.data_coverage(symbol, channel=, exchange=)` and all surfaces — CLI `data-coverage --exchange`, REST `GET /api/v1/data-coverage?exchange=`, MCP `data_coverage` tool arg. Empty/whitespace → no filter (parity with inventory / catalog-inventory / list_symbols). Narrows inventory before exact-symbol match.
+- **CLI catalog-inventory**: `crypcodile catalog-inventory` prints full lake inventory coverage rows (exchange/channel/symbol/min_ts/max_ts/row_count) with optional `--channel` / `--exchange` filters (empty/whitespace → no filter). Empty lake or no match → `No inventory.` (exit 0). Parity with REST `GET /api/v1/catalog/inventory` and MCP `inventory_snapshot`; heavier than `catalog-symbols` (coverage table, not symbol strings only). Distinct from unfiltered `catalog --symbols`.
+- **CLI catalog-stats / MCP catalog_stats**: `crypcodile catalog-stats` prints per-channel row counts via filesystem `list_channels` + lightweight `COUNT(*)` (`client.query`); query failure for a channel reports `-1`. Empty lake → `channel_count: 0` / `row_counts: (none)`. MCP `catalog_stats` returns `{row_counts, channel_count}` (TOOLS + tools/call + capabilities `mcp_tools_hint`). Parity with REST `GET /api/v1/catalog/stats`; avoids heavy inventory aggregation.
+- **API catalog stats discovery**: `GET /api/v1/catalog/stats` returns per-channel row counts via filesystem `list_channels` + lightweight `COUNT(*)` per channel (`client.query`); query failure for a channel reports `-1` (empty partition / missing view). Response `{row_counts, channel_count}`; empty lake → `{}` / `0`. Avoids heavy inventory aggregation. Listed in capabilities.
+- **CLI list-exchanges / MCP list_registered_exchanges**: `crypcodile list-exchanges` prints sorted factory connector names via `factory.list_exchanges` (no lake; one per line). MCP `list_registered_exchanges` mirrors REST `GET /api/v1/exchanges` for agents (TOOLS + tools/call + capabilities `mcp_tools_hint`). Distinct from lake on-disk `catalog-exchanges` / `list_exchanges_on_disk` (hive `exchange=` partitions). Top-level `crypcodile --help` Commands panel lists `list-exchanges` (module docstring Commands list + registration test).
+- **CLI search --exchange docs + tests**: `crypcodile search` already accepted optional `--exchange` (and `--channel`); module/help docstrings, usage example, and README now document it. Empty/whitespace filters strip to no filter at the CLI (parity with `catalog-symbols`). New CLI tests cover exchange filter hit/miss and strip behaviour.
+- **CLI resolve-symbols / data-coverage**: `crypcodile resolve-symbols <comma-separated>` wraps `client.resolve_symbols` with optional `--channel` and `--ambiguous=error|first|all` (empty/whitespace channel → no filter; blank ambiguous → `error`; ValueError → exit 1 with message; success → one canonical symbol per line). `crypcodile data-coverage --symbol` prints inventory coverage rows for an exact symbol match with optional `--channel` (empty lake / no match → `No coverage.`; exit 0). Parity with REST `/api/v1/resolve-symbols` + `/api/v1/data-coverage` and MCP tools.
+- **MCP resolve_symbols tool**: `resolve_symbols` wraps `CrypcodileClient.resolve_symbols` for free-form → canonical catalog symbol resolution over MCP (list or comma-separated input; optional `channel` / `ambiguous=error|first|all`; empty input → `[]`; no match / ambiguous / invalid mode → `{error: ...}`; listed in capabilities `mcp_tools_hint`). Mirrors REST `GET /api/v1/resolve-symbols`.
+- **CLI catalog-dates / catalog-symbols / catalog-exchanges**: `crypcodile catalog-dates --channel` lists hive `date=` partitions via `client.list_dates`; `catalog-symbols` lists distinct inventory symbols with optional `--channel` / `--exchange` (empty/whitespace → no filter); `catalog-exchanges` lists on-disk hive `exchange=` partitions via `client.list_exchanges_on_disk`. Empty results print `No dates.` / `No symbols.` / `No exchanges.` and exit 0 — parity with REST/MCP discovery surfaces.
+- **MCP list_symbols tool**: `list_symbols` wraps inventory distinct symbols with optional `channel` / `exchange` filters (empty/whitespace → no filter; empty lake → `[]`; listed in capabilities `mcp_tools_hint`). Lighter than `inventory_snapshot`; mirrors REST `GET /api/v1/catalog/symbols`.
+- **API catalog symbols discovery**: `GET /api/v1/catalog/symbols?channel=&exchange=` returns sorted distinct inventory symbols (lighter than full inventory rows; empty/whitespace filters → no filter; empty lake → `[]`; listed in capabilities).
+- **MCP search_symbols exchange filter**: `search_symbols` accepts optional `exchange` (alongside existing `channel` / `limit`) and forwards it to `client.search_symbols` — parity with REST/CLI/Catalog.
+- **API catalog/search channel + exchange filters**: `GET /api/v1/catalog/search` accepts optional `channel` and `exchange` query params (empty/whitespace → no filter; values stripped) and forwards them to `client.search_symbols` — parity with CLI `search` / `Catalog.search_symbols`.
+- **CLI catalog-summary**: `crypcodile catalog-summary` prints one-shot lake discovery via client `list_channels` + `list_exchanges_on_disk` (channel/exchange counts and lists; empty lake → zero counts / `(none)`). Mirrors REST `GET /api/v1/catalog/summary` and MCP `catalog_summary`.
+- **MCP catalog_summary tool**: `catalog_summary` wraps `list_channels` + `list_exchanges_on_disk` with counts, returning `{channels, exchanges_on_disk, exchange_count, channel_count}` (empty lake → empty lists + zero counts; listed in capabilities `mcp_tools_hint`). Mirrors REST `GET /api/v1/catalog/summary` for agents without HTTP.
+- **API catalog summary discovery**: `GET /api/v1/catalog/summary` returns `{channels, exchanges_on_disk, exchange_count, channel_count}` in one call for agent discovery (empty lake → empty lists + zero counts; listed in capabilities). Combines `list_channels` + `list_exchanges_on_disk`.
+- **MCP list_exchanges_on_disk tool**: `list_exchanges_on_disk` wraps `CrypcodileClient.list_exchanges_on_disk` for hive `exchange=` partition discovery over MCP (empty lake → `[]`; listed in capabilities `mcp_tools_hint`). Distinct from factory connector registry.
+- **API catalog exchanges discovery**: `GET /api/v1/catalog/exchanges` lists distinct hive `exchange=` partitions present on disk (sorted; empty lake → `[]`). Wired through `Catalog.list_exchanges_on_disk` / `CrypcodileClient.list_exchanges_on_disk` and listed in capabilities. Distinct from `GET /api/v1/exchanges` (factory registry of registered connectors).
+- **MCP list_dates tool**: `list_dates` wraps `CrypcodileClient.list_dates(channel)` for hive `date=` partition discovery over MCP (strip empty channel → `[]`; listed in capabilities `mcp_tools_hint`).
+- **Shared `crypcodile.util.json_safe`**: `json_safe_float` / `json_safe_records` extracted once and re-exported by `api_server` and `mcp_server` (dedupe of prior private copies).
+
+### Changed
+- **Client list_symbols DRY**: `CrypcodileClient.list_symbols(channel=, exchange=)` returns sorted distinct inventory symbols (empty/whitespace filters → no filter; empty lake / no match → `[]`). REST `GET /api/v1/catalog/symbols`, MCP `list_symbols`, and CLI `catalog-symbols` all delegate to this single method (one contract, no duplicated inventory→unique-symbol logic).
+- **Client data_coverage DRY**: `CrypcodileClient.data_coverage(symbol, channel=, exchange=)` returns inventory coverage rows for an exact symbol match (empty/whitespace symbol → empty DF; empty/whitespace channel/exchange → no filter). REST `GET /api/v1/data-coverage`, MCP `data_coverage`, and CLI `data-coverage` all delegate to this single method (one contract, no duplicated inventory filter logic).
+- **Client catalog_stats DRY**: `CrypcodileClient.catalog_stats()` returns `{row_counts, channel_count}` via `list_channels` + lightweight `COUNT(*)` per channel (double-quote SQL escape; query failure → `-1`). REST `GET /api/v1/catalog/stats`, MCP `catalog_stats`, and CLI `catalog-stats` all delegate to this single method (one contract, no duplicated COUNT logic).
+- **Client catalog_summary DRY**: `CrypcodileClient.catalog_summary()` returns `{channels, exchanges_on_disk, exchange_count, channel_count}` (composes `list_channels` + `list_exchanges_on_disk`). REST `GET /api/v1/catalog/summary`, MCP `catalog_summary`, and CLI `catalog-summary` all delegate to this single method (one contract, no duplicated count logic).
+- **CLI catalog uses filesystem list_channels**: `crypcodile catalog` discovers channels via client `list_channels` (hive walk) so empty partition dirs appear with `0` rows; `catalog --symbols` remains inventory-backed (parquet/views only) and still works when empty partitions coexist with real data.
+- **Catalog.list_channels filesystem discovery**: walks hive `exchange=*/channel=*` without requiring DuckDB view registration, so empty partition dirs (no parquet yet) still appear in channel listings; `_refresh_views` skips empty / relative `channel=` suffixes.
+- **Hive partition suffix safety**: shared `_is_safe_hive_suffix` rejects path separators, null/control bytes, glob metacharacters (`* ? [ ]`), relative (`.`, `..`), empty, and leading/trailing whitespace suffixes in `list_channels`, `list_exchanges_on_disk`, `list_dates`, and `_refresh_views`. Channel dirs are resolve-checked under the lake root (symlink escape defence).
+
+### Fixed
+- **Catalog empty-partition view registration**: `_create_view` skips channels with no `part-*.parquet` (and swallows race failures) so `Catalog` / client construction no longer raises DuckDB "No files found" when hive `channel=` dirs exist without data — unblocks CLI `catalog` / `catalog --symbols` with filesystem `list_channels`.
+- **MCP list[dict] DF JSON safety**: `_json_safe_records` on MCP handlers that return DataFrame row dicts (OFI, slippage, whale alerts, vol suite, basis trio, indicators, depth, sequencer latency, open interest, discovery search/coverage/inventory, MEV sandwiches, smart-money, label-transfers) plus inline `query_market_data` / `get_funding_apr` tools/call paths — NaN/±Inf floats encode as JSON `null` (parity with REST).
+- **API POST row-list JSON safety**: `_json_safe_records` applied to `POST /api/v1/simulate-price-impact`, `/smart-money`, and `/label-transfers` so NaN/±Inf floats in returned row dicts encode as JSON `null` (matches lake DF and pure-float REST boundaries).
+- **API/MCP pure float JSON safety**: non-finite floats from pure offline analytics are mapped to JSON `null` via `_json_safe_float` at REST/MCP boundaries — covers `chaos-score` (±Inf inputs → NaN score), `peg-deviation` (Inf/NaN price), `funding-predict` (Inf/NaN history), `gas-vol` (undefined correlations), and the prior `lending-stress` zero-debt health-factor case. Prevents Starlette `ValueError: Out of range float values are not JSON compliant`.
+- **API/MCP lending-stress JSON safety**: zero-debt health factors (`float('inf')` in pure analytics) are returned as JSON `null` at the REST and MCP boundaries so Starlette/JSON-RPC encoding no longer raises `ValueError: Out of range float values are not JSON compliant`.
+
+### Changed
+- **API capabilities discovery lists expanded**: `GET /api/v1/capabilities` `rest` now covers free routes previously missing from the short list (`status`, `capabilities`, `catalog/scan`, `perp-basis`, `spot-future-basis`, whale/slippage/vol suite, base-risk pure endpoints, `funding-predict`, `simulate-price-impact`, etc.); `mcp_tools_hint` aligned with major MCP tools including `get_onchain_price` / `get_base_market_data`. Paid/admin routes still omitted.
+
+### Added
+- **API catalog dates discovery**: `GET /api/v1/catalog/dates?channel=` lists distinct hive `date=` partitions for a channel from the filesystem (sorted; empty channel/lake → `[]`; path-safe). Wired through `Catalog.list_dates` / `CrypcodileClient.list_dates` and listed in capabilities.
+- **API capabilities endpoint**: `GET /api/v1/capabilities` — free agent discovery returning `{rest, mcp_tools_hint}` hardcoded lists of free REST routes (METHOD + path) and MCP tool names (no payment, no lake; defensive list copies).
+- **API ready probe**: `GET /api/v1/ready` — k8s-style readiness (same body as `/api/v1/health`; HTTP **200** when `ok`, **503** when lake unavailable). Prometheus remains at `GET /metrics`.
+- **API label-transfers endpoint**: `POST /api/v1/label-transfers` body `{transfers, watchlist, known_only?, min_usd?}` wrapping pure offline `label_transfer_addresses` (+ optional `filter_transfers_by_usd`); empty transfers → `[]`; empty watchlist still returns unlabeled rows; negative `min_usd` → 400.
+- **API gas-vol / mev-sandwich / smart-money endpoints**: `POST /api/v1/gas-vol`, `/mev-sandwich`, `/smart-money` pure JSON offline analytics (no lake, no payment).
+- **API funding-predict endpoint**: `GET /api/v1/funding-predict` with comma-separated `rates` and optional `window_size` wrapping pure offline `predict_next_funding` (no payment, no lake; empty/invalid rates or window → 400).
+- **API health/status endpoints**: `GET /api/v1/health` and alias `GET /api/v1/status` — free lightweight probe returning `ok`, `crypcodile.__version__`, and `lake_channels` count (no payment). Empty lake is still `ok`; `list_channels` failure reports `ok: false` with `lake_unavailable`.
+- **API version endpoint**: `GET /api/v1/version` — free meta probe returning `{version}` only (no payment, no lake).
+- **API exchanges endpoint**: `GET /api/v1/exchanges` — free listing of sorted registered exchange connector names via `list_exchanges()` (no payment, no lake).
+- **API resolve-symbols endpoint**: `GET /api/v1/resolve-symbols` with comma-separated `symbols`, optional `channel`, and `ambiguous=error|first|all` wrapping `CrypcodileClient.resolve_symbols` (list of canonical symbols on success; ambiguous/no-match → 400; no payment).
+- **API spot-future-basis endpoint**: `GET /api/v1/spot-future-basis` with `future`/`spot`/`start`/`end`/`limit` wrapping `CrypcodileClient.spot_future_basis` (trade ASOF join; hard row limit 10000; no payment).
+- **API perp-basis endpoint**: `GET /api/v1/perp-basis` with `symbol`/`start`/`end`/`limit` wrapping `CrypcodileClient.perp_basis` (mark–index basis; hard row limit 10000; no payment). Skipped bulk `/api/v1/export` lake dump in favor of this bounded analytics surface.
+- **MCP get_spot_future_basis tool**: Spot–future basis via ASOF join over MCP (`future_symbol`/`spot_symbol`/`start`/`end`; optional `expiry_ns` for `annualized_pct`). Completes the basis trio with `get_perp_basis` and `get_spot_perp_basis`.
+- **MCP label_transfers tool**: Pure offline transfer labeling via `label_transfer_addresses` (`transfers` + `watchlist`; optional `min_usd` / `known_only`).
+- **API data-coverage endpoint**: `GET /api/v1/data-coverage` with `symbol` + optional `channel` wrapping inventory filter for per-symbol coverage (read-only, no payment; same contract as MCP `data_coverage`).
+- **API open-interest endpoint**: `GET /api/v1/open-interest` with optional symbols, time range, and row limit (read-only lake HTTP surface for OI aggregation).
+- **API funding-apr endpoint**: `GET /api/v1/funding-apr` REST endpoint for funding APR analytics.
+- **API indicators endpoint**: `GET /api/v1/indicators` wrapping `get_indicators` (symbol/start/end/interval/indicator/period; hard row limit 10000; unknown indicator → 400).
+- **API OFI endpoint**: `GET /api/v1/ofi` wrapping `calculate_ofi` (symbol/start/end/interval; hard row limit 10000; invalid interval → 400).
+- **API whale-alerts endpoint**: `GET /api/v1/whale-alerts` wrapping `track_whale_alerts` (symbol/start/end/min_usd; hard row limit 10000; negative min_usd → 400).
+- **API slippage endpoint**: `GET /api/v1/slippage` wrapping `estimate_slippage` (query: symbol, side, size; validation errors → 400).
+- **API spot-perp basis endpoint**: `GET /api/v1/basis` with `spot` + `perp` query params wrapping `spot_perp_basis` (bounded rows, no payment).
+- **API vol-skew endpoint**: `GET /api/v1/vol-skew` with `underlying`, `expiry_ns`, `at`, `rate`, `limit` wrapping `CrypcodileClient.vol_skew` (hard row limit 10000).
+- **API risk-reversal endpoint**: `GET /api/v1/risk-reversal` with `underlying`, `expiry_ns`, `at`, `rate`, `target_delta` wrapping `vol_skew` then `risk_reversal_butterfly` (returns `risk_reversal` / `butterfly`, nulls when empty).
+- **API lending-stress endpoint**: `GET /api/v1/lending-stress` pure query params matching CLI (`collateral_usd`, `debt_usd`, `liquidation_threshold`, `haircut_pct`) wrapping `lending_stress_test`.
+- **API base risk analytics endpoints**: `GET /api/v1/liquidity-depth`, `/sequencer-latency`, `/chaos-score`, `/peg-deviation` (lake + pure risk metrics, no payment).
+- **API iv-surface and term-structure endpoints**: `GET /api/v1/iv-surface` and `GET /api/v1/term-structure` wrapping client options analytics (hard row limit 10000).
+- **MCP MEV sandwich detection tool**: Expose MEV sandwich detection over MCP.
+- **MCP chaos-score tool**: Base risk / chaos scoring available as an MCP tool.
+- **MCP get_peg_deviation tool**: Pure `peg_deviation_from_price` over MCP (`price` required; optional `threshold`/`target`; no data lake).
+- **MCP get_lending_stress tool**: Pure numeric lending health-factor stress test over MCP (wraps `lending_stress_test`).
+- **Derive poll connector factory registration**: Register the Derive poll connector in the exchange factory registry.
+- **Catalog inventory and ranked symbol search**: Store-layer inventory listing and ranked symbol search over the data catalog.
+- **Search system (client, CLI, MCP)**: Client `resolve_symbols`, CLI search, and MCP discovery tools for symbol resolution.
+- **MCP analytics tools**: Exposed slippage, OFI, whale alerts, IV surface, and term-structure tools over MCP.
+- **MCP vol-skew tool**: Added `get_vol_skew` analytics tool on the MCP server.
+- **MCP basis analytics tools**: Exposed basis analytics tools over MCP.
+- **MCP liquidity-depth and sequencer-latency tools**: Liquidity-depth and sequencer-latency analytics available as MCP tools.
+- **Client/MCP indicators surface**: Technical analysis indicators exposed via client API and MCP.
+- **CLI vol-skew and risk-reversal**: New `vol-skew` and risk-reversal commands for options skew analytics.
+- **CLI base risk analytics**: Exposed base risk analytics commands on the CLI.
+- **CLI liquidity-depth command**: Liquidity-depth analytics command on the CLI.
+- **CLI sequencer-latency command**: Sequencer-latency analytics command on the CLI.
+- **CLI lending-stress command**: Expose pure `lending_stress_test` as `crypcodile lending-stress` with collateral/debt/threshold/haircut options.
+- **CLI collect duration and max-reconnects**: Collect accepts duration and max-reconnects options for bounded runs and reconnect caps.
+- **Public `list_exchanges`**: Factory-registry-backed public exchange listing for CLI/API consumers.
+- **API lake catalog list and search**: Lake catalog list and search endpoints on the API.
+- **API lake catalog scan**: Wire `GET /api/v1/catalog/scan` to client scan with a hard row limit (10000).
+- **API lake catalog inventory**: Lake catalog inventory endpoint on the API.
+- **API bounded read-only SQL query**: Bounded read-only SQL / lake query endpoint for safe HTTP reads.
+- **MCP funding prediction tool**: Funding-rate prediction analytics available as an MCP tool.
+- **CLI funding-predict command**: Offline `funding-predict` CLI via rates or file (XGBoost when trainable, rolling-mean fallback).
+- **CLI multi-exchange collect**: Collect across multiple exchanges in a single CLI invocation.
+- **Superchain connector factory registration**: Register the superchain on-chain connector in the exchange factory registry.
+- **Dead-letter queue drain on collect stop**: Drain the ingest dead-letter queue when collect stops and emit a stop report.
+- **Book resync bridge (Binance)**: On depth sequence gaps, buffer live deltas, REST re-fetch `/depth`, and emit snapshot plus post-snapshot deltas via `OrderBookSync` + `BookResyncBridge`.
+- **Book resync bridge (OKX)**: On `books` `seqId`/`prevSeqId` gaps, buffer live deltas, REST re-fetch `/market/books`, and emit snapshot plus post-snapshot deltas via `OkxOrderBookSync` + `BookResyncBridge` (WS snapshot bootstrap preferred; register after successful bootstrap).
+- **Shared book-sync helpers**: Extracted `SyncResult`, `BookSyncMachine` protocol, and buffer filter for multi-venue resync.
+- **Smart-money / whale-transfer CLI**: CLI surface for smart-money and whale-transfer analytics.
+- **CLI backfill command**: Historical REST backfill command with client-side backfill orchestration.
+- **CLI chaos-score command**: New `chaos-score` command for base risk / chaos scoring.
+- **CLI spot-perp basis mode**: True spot–perp basis via `--spot X --perp Y` (ASOF join of spot vs perp mark); keep `--perp` alone as mark/index and `--future`/`--spot` as spot–future.
+
+### Fixed
+- **Blank watchlist address keys**: `normalize_watchlist` and `label_transfer_addresses` drop blank/whitespace address keys and never treat missing/empty transfer sides as labeled (prevents phantom `is_known` from `""` keys).
+- **OI symbol filter literal match**: `aggregate_open_interest` uses Polars `str.contains(..., literal=True)` so dots/parens in filter tokens are not regex metacharacters (e.g. `BTC.USDT` no longer matches `BTCXUSDT`); empty/whitespace filter tokens are ignored instead of matching every symbol via `contains("")`.
+- **resolve_symbols empty channel**: Empty / whitespace `channel` is treated as no filter (was falsely resolving nothing via inventory filter on unregistered `""`).
+- **Catalog inventory empty channel/exchange**: Empty or whitespace `channel`/`exchange` inventory filters are treated as no filter (same contract as `resolve_symbols`), so `channel=""` no longer falsely empties inventory/search.
+- **Option expiry parse (OKX/Bybit)**: When the instrument registry has no entry (or no expiry), option normalizers parse the `DDMMMYY` date token from the symbol into midnight-UTC nanoseconds, matching Binance/Deribit behavior.
+- **Derive options timestamps in nanoseconds**: Store Derive options `local_ts` / `expiry` in nanoseconds UTC (schema convention); convert on-chain expiry seconds and compute `t_years` from ns.
+- **Aave health factor zero**: Treat Aave HF raw `0` as a real zero health factor (underwater), not infinity; only max `uint256` means “no debt” / infinite HF.
+- **Catalog search non-positive limit**: `Catalog.search_symbols` returns empty schema for `limit < 1` instead of Polars ``head(-n)`` (which drops the last *n* rows).
+- **Atomic parquet compact**: Compact uses rename-before-delete; in-flight work is awaited on stop; compact executor is awaited across start/stop cancel paths.
+- **Atomic parquet part writes**: Parquet part files written via temp path then atomic rename for crash-safe durability.
+- **Parquet sink buffer durability**: Drop sink buffer only after durable write; re-buffer rows when a flush is cancelled.
+- **Multi-partition rebuffer**: After a partial multi-partition flush, re-buffer only partitions that were not durably written.
+- **Partition path sanitization**: Sanitize parquet partition path components; validate catalog scan limits and escape channel IDs.
+- **API payment CAS and sim defaults**: Compare-and-swap payment spend before serve; disable simulation by default; lock admin behind admin key.
+- **Atomic fail-loud payment DB persistence**: Payment DB writes are atomic and fail loudly on persistence errors.
+- **Pending-only paid transitions**: Enforce pending-only transitions to paid for verify and simulate payment flows.
+- **MCP stdin EOF**: Exit cleanly on stdin EOF without hanging the executor.
+- **Polars min_samples**: Update analytics from deprecated `min_periods` to `min_samples`.
+- **WebSocket connect session leak**: Close the aiohttp session when WebSocket connect fails.
+- **Binance book bridge bootstrap**: Register the book resync bridge only after a successful bootstrap.
+- **Whitespace-only catalog search**: Treat whitespace-only search queries as empty.
+- **Portal Python backend detection**: Detect the Python API backend via catalog/channels and metrics first; fall back to free `GET /api/v1/ready` 200 (Python readiness), then `GET /api/v1/health` 200, then admin payments including FastAPI JSON 404 when `ADMIN_API_KEY` is unset.
+- **Payment refund on serve failure**: Restore paid status when market-data serve fails after payment CAS spend.
+- **Multi-symbol OI exchange overwrite**: Keep multi-symbol open interest without clobbering exchange identity across symbols.
+- **Read-only SQL query hardening**: Harden the bounded read-only SQL / lake query API endpoint.
+- **Superchain identity and recovery state**: Fix superchain connector identity and per-exchange recovery state isolation.
+- **Seen logs cursor advances**: Persist on-chain seen logs together with cursor advances so restarts do not reprocess.
+- **IV fit without underlying price**: Skip IV surface fit when underlying price is missing instead of failing the fit path.
+- **Gas–vol correlation asof align**: ASOF-align gas and vol series before correlation so mismatched timestamps do not skew results.
+- **Null OI samples in aggregation**: Skip null open-interest samples during OI aggregation.
+
+### Changed
+- **CLI symbol resolution**: Resolve symbols via `client.resolve_symbols` for consistent catalog-backed lookup.
+- **Bybit book resync deferred**: Shared book-sync helpers land for multi-venue use; Bybit `BookResyncBridge` wiring deferred (REST `u` aligns with `orderbook.1000` while the connector uses `orderbook.50`; recovery remains re-snapshot/re-subscribe).
+- **Exchange list alignment**: Align CLI exchange lists with the factory registry.
+- **CLI exchange lists via registry**: Collect help and interactive suggestions include `derive` and `superchain` via `list_exchanges()`.
+- **Search docs**: Document search and discovery commands in the README.
+- **REST API endpoint matrix**: README documents a brief `/api/v1/*` matrix covering ops/meta, catalog/discovery, market-data, query, derivatives, microstructure, options, and Base/risk routes.
+
 ## [0.1.044] - 2026-07-04
 ### Changed
 - **High-Performance GUI Event Loop**: Resolved infinite paint loops in the PyQt6 visualizer caused by auto-range updates triggering recursive signal feedback. Added an update guard flag (`_updating_plots`) and disabled auto-range.

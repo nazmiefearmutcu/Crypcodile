@@ -2,10 +2,19 @@
 
 **Deterministic Market Data Infrastructure for Quantitative Research and Autonomous Agents**
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.043-blue.svg)](https://pypi.org/project/crypcodile/)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.044-blue.svg)](https://pypi.org/project/crypcodile/)
 [![Python Supported](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Base Ecosystem](https://img.shields.io/badge/ecosystem-Base_L2-0052FF.svg)](https://base.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+### 0.1.044 continuous-dev highlights
+
+- **Multi-exchange collect** — one CLI collect across venues
+- **Search** — ranked symbol search + catalog coverage (CLI/MCP)
+- **Backfill** — historical REST backfill orchestration
+- **REST catalog / query / OI** — lake catalog, bounded SQL query, open-interest surfaces
+- **Superchain / Derive** — factory-registered connectors in exchange lists
+- **MCP analytics pack** — slippage, OFI, whale alerts, IV/basis/vol-skew, liquidity-depth, and related tools
 
 ---
 
@@ -70,6 +79,25 @@ Crypcodile pioneers this integration via its natively embedded **Model Context P
 uv run crypcodile mcp --data-dir data
 ```
 
+## Search / Discovery
+
+Find symbols, list catalog coverage, and expose the same discovery surface to agents via MCP (`search_symbols`, `list_symbols`, `resolve_symbols`, `list_data_channels`, `list_exchanges_on_disk`, `list_registered_exchanges`, `list_dates`, `catalog_summary`, `catalog_stats`, `data_coverage`):
+
+```bash
+crypcodile search "btc" --channel trade --exchange deribit
+crypcodile catalog --symbols
+crypcodile catalog-summary   # channels + exchanges_on_disk counts (mirrors REST/MCP)
+crypcodile catalog-stats     # per-channel COUNT(*) row counts (-1 on fail; mirrors REST/MCP)
+crypcodile catalog-dates --channel trade          # hive date= partitions (list_dates)
+crypcodile catalog-symbols --channel trade --exchange deribit  # distinct inventory symbols
+crypcodile catalog-inventory --channel trade --exchange deribit  # full inventory rows (REST/MCP parity)
+crypcodile catalog-exchanges  # on-disk hive exchange= partitions
+crypcodile list-exchanges     # registered factory connectors (no lake; ≠ catalog-exchanges)
+crypcodile resolve-symbols BTC-PERPETUAL --channel trade --ambiguous first
+crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade --exchange deribit
+crypcodile mcp  # tools: search_symbols, list_symbols, resolve_symbols, inventory_snapshot, list_data_channels, list_exchanges_on_disk, list_registered_exchanges, list_dates, catalog_summary, catalog_stats, data_coverage
+```
+
 ## 4. Analytics
 
 Beyond data routing, Crypcodile ships with `crypcodile.analytics`, providing optimized implementations for derivatives research and CLI commands like `funding_apr` and `iv_surface`:
@@ -132,6 +160,24 @@ Visualize live swap volumes, liquidity depth, and price feeds streaming directly
 ### 2. Node.js Micropayment-Gated API Portal
 Inspect our micropayment architecture for on-chain services.
 - **Vercel**: The `api_portal` contains a pre-configured [vercel.json](src/crypcodile/api_portal/vercel.json) file. Link the repo, select the `src/crypcodile/api_portal/` folder as the root directory, and deploy in one click.
+
+### REST API endpoint matrix (`/api/v1/*`)
+
+Python FastAPI surface in `src/crypcodile/api_server.py` (local lake + free probes; some routes are payment-gated demos):
+
+| Group | Methods / paths | Notes |
+|-------|-----------------|-------|
+| **Ops / meta** | `GET /health`, `/status`, `/version`, `/exchanges` | Free; no payment. `/version` → `{version}` only |
+| **Catalog / discovery** | `GET /catalog/channels`, `/catalog/search`, `/catalog/inventory`, `/catalog/scan`, `/data-coverage`, `/resolve-symbols` | Lake inventory & symbol resolve |
+| **Market data (gated)** | `GET /market-data`; `POST /simulate-payment` | x402 demo gating |
+| **Query** | `POST /query` | Bounded read-only SQL against the lake |
+| **Derivatives / OI** | `GET /open-interest`, `/funding-apr`, `/funding-predict`, `/basis`, `/perp-basis`, `/spot-future-basis` | Funding & basis surfaces; `/funding-predict` is pure offline (comma-separated `rates`) |
+| **Microstructure** | `GET /indicators`, `/ofi`, `/whale-alerts`, `/slippage`; `POST /simulate-price-impact` | Indicators & flow |
+| **Offline analytics** | `POST /gas-vol`, `/mev-sandwich`, `/smart-money`, `/label-transfers` | Pure JSON body; no lake / no payment |
+| **Options** | `GET /iv-surface`, `/term-structure`, `/vol-skew`, `/risk-reversal` | IV / skew analytics |
+| **Base / risk** | `GET /liquidity-depth`, `/sequencer-latency`, `/chaos-score`, `/peg-deviation`, `/lending-stress` | L2 & DeFi risk |
+
+Paths above are relative to `/api/v1`. OpenAPI-style detail is available via the running API server.
 
 ---
 

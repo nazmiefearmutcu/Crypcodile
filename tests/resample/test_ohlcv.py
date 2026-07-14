@@ -301,3 +301,37 @@ def test_buy_sell_volume_invariant_with_unknown_trades(data_dir_with_unknown: Pa
         f"buy_volume({row['buy_volume']}) + sell_volume({row['sell_volume']}) "
         f"!= volume({row['volume']}), delta={delta}"
     )
+
+
+def test_resample_nan_trades_ignored(tmp_path: Path) -> None:
+    import math
+    trades = [
+        _make_trade(_ts(0), 100.0, 1.0, Side.BUY, "t_ok1"),
+        _make_trade(_ts(int(0.5 * _1S_NS)), float("nan"), 2.0, Side.SELL, "t_nan_price"),
+        _make_trade(_ts(int(0.8 * _1S_NS)), 102.0, float("nan"), Side.BUY, "t_nan_amount"),
+        _make_trade(_ts(int(1.5 * _1S_NS)), 105.0, 1.5, Side.SELL, "t_ok2"),
+    ]
+    asyncio.run(_write_trades(tmp_path, trades))
+    cat = Catalog(tmp_path)
+    
+    # Resample
+    df = resample_ohlcv(cat, "deribit:BTC-PERPETUAL", _ts(0), _ts(int(2 * _1S_NS)), "1s")
+    
+    # We should have 2 non-empty bars (at second 0 and second 1)
+    # The nan price/amount trades must be entirely ignored.
+    assert len(df) == 2
+    
+    row0 = df.row(0, named=True)
+    assert row0["open"] == 100.0
+    assert row0["close"] == 100.0
+    assert row0["high"] == 100.0
+    assert row0["low"] == 100.0
+    assert row0["volume"] == 1.0
+    assert row0["num_trades"] == 1
+
+    row1 = df.row(1, named=True)
+    assert row1["open"] == 105.0
+    assert row1["close"] == 105.0
+    assert row1["volume"] == 1.5
+    assert row1["num_trades"] == 1
+

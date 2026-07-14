@@ -159,6 +159,35 @@ async def test_collect_empty_connectors_is_noop(tmp_path: pathlib.Path) -> None:
     assert sink.records == []
 
 
+async def test_collect_drains_dlq_and_writes_report(tmp_path: pathlib.Path) -> None:
+    """On stop, unparseable frames in the DLQ produce data_dir/dlq_report.json."""
+    from crypcodile.client.collect import collect
+    from crypcodile.ingest.deadletter import DEFAULT_DLQ_REPORT_NAME
+    from crypcodile.sink.memory import MemorySink
+
+    sink = MemorySink()
+    # One good trade frame + one unparseable frame → DLQ item
+    conn = _make_connector(
+        sink,
+        frames=[_TRADES_FRAME, b"not-valid-json{{{"],
+        symbol="BTC-PERPETUAL",
+    )
+
+    await collect([conn], sink, max_reconnects=0, data_dir=tmp_path)
+
+    report_path = tmp_path / DEFAULT_DLQ_REPORT_NAME
+    assert report_path.is_file(), "expected DLQ report under data_dir after collect stop"
+    body = json.loads(report_path.read_text(encoding="utf-8"))
+    assert body["count"] == 1
+    assert body["items"][0]["error_type"] == "JSONDecodeError"
+    assert body["items"][0]["raw"] == "not-valid-json{{{"
+    # Queue emptied
+    assert conn._dlq.drain() == []
+
+    trades = [r for r in sink.records if isinstance(r, Trade)]
+    assert len(trades) == 1
+
+
 async def test_collect_sigint_closes_sink(tmp_path: pathlib.Path) -> None:
     """Simulated cancellation (analogous to SIGINT) triggers sink.close().
 

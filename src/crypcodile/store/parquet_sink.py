@@ -10,6 +10,8 @@ Write policy:
     has elapsed, or explicitly via ``flush()`` / ``close()``.
   - A new ``part-{uuid}.parquet`` file is written on every flush; existing files are
     **never appended to** (Parquet footers are immutable).
+  - Each part is written via temp file + same-directory rename so readers never
+    observe a partial ``part-*.parquet`` if the process crashes mid-write.
 
 Compression: ZSTD level 5 (streaming sweet spot per Appendix §4).
 Row group size: 250 000 rows.
@@ -174,16 +176,36 @@ def _channel_schema(channel: str) -> dict[str, Any]:
     return {**_COMMON_FIELDS, **extra}
 
 
+def _sanitize_path_segment(value: str, *, field: str) -> str:
+    """Sanitize a hive-partition path segment before joining under data_dir.
+
+    Rejects empty values, path separators, null bytes, and ``.`` / ``..`` so a
+    hostile exchange/channel/date cannot escape the lake root via path
+    traversal when building ``part_dir``.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Invalid {field} path segment: {value!r}")
+    if "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(
+            f"Invalid {field} path segment (contains separator or null): {value!r}"
+        )
+    if value in (".", ".."):
+        raise ValueError(f"Invalid {field} path segment: {value!r}")
+    return value
+
+
 def _coerce_levels(
     rows: list[dict[str, Any]], field: str
 ) -> None:
     """Convert list-of-tuples book levels to list-of-dicts in-place.
 
     Polars ``pl.List(pl.Struct(...))`` requires dicts, not tuples.
+    Idempotent: already-coerced dict levels are left unchanged so a retry
+    after a failed write (which may have partially coerced rows) is safe.
     """
     for row in rows:
         levels = row.get(field)
-        if levels is not None:
+        if levels is not None and levels and not isinstance(levels[0], dict):
             row[field] = [{"price": px, "amount": amt} for px, amt in levels]
 
 
@@ -250,27 +272,60 @@ class ParquetSink(Sink):
     # ------------------------------------------------------------------
 
     async def _flush_channel(self, channel: str) -> None:
-        """Write a channel's buffer to one or more Parquet files and clear it."""
+        """Write a channel's buffer to one or more Parquet files.
+
+        Rows are detached for the write attempt.  Each partition group is
+        tracked in ``written`` after a successful write.  On any non-success
+        path (write failure, ``CancelledError``, or other ``BaseException``)
+        only rows whose partition key is **not** in ``written`` are
+        re-buffered (prepended ahead of any rows concurrent ``put()`` may
+        have added while the write was in flight).  Already-durable
+        partitions are not re-queued, avoiding duplicates on retry.
+        """
+        # Detach current buffer so concurrent put() appends to a fresh list
+        # via defaultdict, while we own the snapshot for this flush.
         rows = self._buffers.pop(channel, [])
         if not rows:
             return
 
-        # Group rows by (exchange, date, bucket) — each group → one file
-        groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            key = (row["exchange"], row["date"], row["bucket"])
-            groups[key].append(row)
-
-        for (exchange, date, bucket), group_rows in groups.items():
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                self._write_parquet_sync,
-                channel,
-                exchange,
-                date,
-                bucket,
-                group_rows,
+        # Use try/finally + success flag so unwritten rows are re-buffered on
+        # ANY non-success path, including CancelledError / BaseException
+        # (which ``except Exception`` does not catch).
+        ok = False
+        written: set[tuple[str, str, int]] = set()
+        try:
+            # Group rows by (exchange, date, bucket) — each group → one file
+            groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = (
+                defaultdict(list)
             )
+            for row in rows:
+                key = (row["exchange"], row["date"], row["bucket"])
+                groups[key].append(row)
+
+            for (exchange, date, bucket), group_rows in groups.items():
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self._write_parquet_sync,
+                    channel,
+                    exchange,
+                    date,
+                    bucket,
+                    group_rows,
+                )
+                written.add((exchange, date, bucket))
+            ok = True
+        finally:
+            if not ok:
+                # Partial or total failure: re-buffer only partitions that
+                # never completed a durable write.  Prepend remaining ahead of
+                # concurrent put() rows so order is remaining + pending.
+                remaining = [
+                    r
+                    for r in rows
+                    if (r["exchange"], r["date"], r["bucket"]) not in written
+                ]
+                pending = self._buffers.get(channel, [])
+                self._buffers[channel] = remaining + pending
 
     def _write_parquet_sync(
         self,
@@ -281,16 +336,29 @@ class ParquetSink(Sink):
         rows: list[dict[str, Any]],
     ) -> None:
         """Synchronous Parquet write (runs in executor to avoid blocking the loop)."""
-        # Build output path
+        # Sanitize path components from record fields before joining under data_dir.
+        exchange = _sanitize_path_segment(exchange, field="exchange")
+        channel = _sanitize_path_segment(channel, field="channel")
+        date = _sanitize_path_segment(date, field="date")
+
+        data_dir = self._data_dir.resolve()
         part_dir = (
-            self._data_dir
+            data_dir
             / f"exchange={exchange}"
             / f"channel={channel}"
             / f"date={date}"
             / f"bucket={bucket}"
         )
+        part_dir = part_dir.resolve()
+        if not part_dir.is_relative_to(data_dir):
+            raise ValueError(
+                f"Partition path escapes data_dir: {part_dir} not under {data_dir}"
+            )
         part_dir.mkdir(parents=True, exist_ok=True)
-        out_path = part_dir / f"part-{uuid.uuid4().hex}.parquet"
+        part_id = uuid.uuid4().hex
+        # Temp name is not part-* so catalog / hive readers ignore in-progress writes.
+        temp_path = part_dir / f"temp-part-{part_id}.parquet"
+        out_path = part_dir / f"part-{part_id}.parquet"
 
         # Coerce book levels (list-of-tuples → list-of-dicts)
         if channel in ("book_snapshot", "book_delta"):
@@ -305,9 +373,20 @@ class ParquetSink(Sink):
         ]
         df = pl.DataFrame(filtered_rows, schema=schema)
 
-        df.write_parquet(
-            out_path,
-            compression="zstd",
-            compression_level=5,
-            row_group_size=250_000,
-        )
+        # Crash safety: write temp in the same directory, then rename to the
+        # final part-*.parquet. Same-directory rename is atomic on POSIX so
+        # readers never see a truncated part file if the process dies mid-write.
+        try:
+            df.write_parquet(
+                temp_path,
+                compression="zstd",
+                compression_level=5,
+                row_group_size=250_000,
+            )
+            temp_path.replace(out_path)
+        except Exception:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise

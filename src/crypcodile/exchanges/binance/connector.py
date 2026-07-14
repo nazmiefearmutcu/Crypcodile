@@ -6,6 +6,20 @@ Appendix §3.2 + §7:
 - Combined-stream URL format: ``<base>?streams=<topic1>/<topic2>/...``
 - Subscribe frame: ``{"method": "SUBSCRIBE", "params": [...topics], "id": <int>}``
 - Topics use lowercase symbol + ``@<streamName>``, e.g. ``btcusdt@aggTrade``.
+
+Book path (sequence-gap resync)
+--------------------------------
+When ``book_delta`` / ``book_snapshot`` channels are subscribed, depth diffs
+are gated through :class:`~crypcodile.exchanges.binance.book.OrderBookSync`
+and :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`:
+
+1. First depth for a symbol → REST ``/depth`` snapshot seeds the sync machine.
+2. Continuous ``depthUpdate`` events → APPLY / DROP via ``OrderBookSync``.
+3. Sequence gap (``SyncResult.RESYNC``) → buffer live deltas, re-fetch REST
+   snapshot, emit snapshot + post-snapshot buffered deltas.
+
+Override :meth:`~crypcodile.exchanges.base.Connector._handle_message` is the
+integration point; non-depth messages still use the pure normalizer path.
 """
 
 from __future__ import annotations
@@ -13,15 +27,20 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
-from typing import Any
-
-import aiohttp
+from typing import Any, Literal
 
 from crypcodile.exchanges.base import Connector
+from crypcodile.exchanges.binance.book import (
+    OrderBookSync,
+    normalize_depth,
+    parse_rest_depth_snapshot,
+)
+from crypcodile.ingest.gap_bridge import BookResyncBridge
 from crypcodile.ingest.transport import Transport
 from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crypcodile.schema.records import Record
+from crypcodile.schema.records import BookDelta, BookSnapshot, Record
 from crypcodile.sink.base import Sink
+from crypcodile.util.time import now_ns
 
 from .normalize import normalize_message
 
@@ -127,6 +146,11 @@ class BinanceConnector(Connector):
         self._sub_topics = build_channels(symbols, channels, market=market)
         # venue tag forwarded to normalize_message so records carry the right exchange label
         self._venue = f"binance-{market}"
+        # Per-symbol book sync + resync bridge (lazy, only for book channels).
+        self._book_syncs: dict[str, OrderBookSync] = {}
+        self._book_bridges: dict[str, BookResyncBridge] = {}
+        # limit for REST depth snapshots (Binance max 5000; 1000 is standard).
+        self.book_depth_limit: int = 1000
 
     def normalize(self, msg: object, local_ts: int) -> Iterable[Record]:
         if isinstance(msg, dict):
@@ -141,8 +165,139 @@ class BinanceConnector(Connector):
         """Return the list of Binance stream topic strings."""
         return self._sub_topics
 
+    # ------------------------------------------------------------------
+    # Book resync integration (BookResyncBridge)
+    # ------------------------------------------------------------------
+
+    def _wants_book_sync(self) -> bool:
+        """True when book channels are requested (enable gap → REST resync)."""
+        return any(c in ("book_delta", "book_snapshot") for c in self.channels)
+
+    @staticmethod
+    def _is_depth_message(msg: dict[str, Any]) -> bool:
+        stream = msg.get("stream", "") or ""
+        if "@depth" in stream:
+            return True
+        data = msg.get("data", msg)
+        return isinstance(data, dict) and data.get("e") == "depthUpdate"
+
+    def _sync_venue(self) -> Literal["spot", "futures"]:
+        """Map connector market → OrderBookSync venue ('spot' | 'futures')."""
+        return "futures" if self.market in ("usdm", "coinm") else "spot"
+
+    def _depth_rest_path(self) -> str:
+        if self.market == "usdm":
+            return "/fapi/v1/depth"
+        if self.market == "coinm":
+            return "/dapi/v1/depth"
+        return "/api/v3/depth"
+
+    async def fetch_book_snapshot(self, symbol: str) -> BookSnapshot:
+        """Fetch a REST order-book snapshot for *symbol* (raw exchange symbol).
+
+        Used as the ``fetch_snapshot`` callback for
+        :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`.  Tests may
+        monkeypatch this method to avoid network I/O.
+        """
+        url = f"{self.rest_url}{self._depth_rest_path()}"
+        data = await self.http_get(
+            url,
+            params={"symbol": symbol.upper(), "limit": self.book_depth_limit},
+        )
+        return parse_rest_depth_snapshot(
+            data,
+            symbol_raw=symbol.upper(),
+            venue=self._venue,
+            local_ts=now_ns(),
+            registry=self.registry,
+        )
+
+    async def _ensure_book_bridge(
+        self, symbol_raw: str
+    ) -> tuple[OrderBookSync, BookResyncBridge]:
+        """Return (create if needed) OrderBookSync + BookResyncBridge for *symbol_raw*.
+
+        On first use: REST-fetch a snapshot, emit it, and seed the sync machine.
+        Bridges are registered only after a successful bootstrap with a usable
+        ``sequence_id`` so a failed fetch does not permanently DROP the symbol.
+        """
+        key = symbol_raw.upper()
+        if key not in self._book_bridges:
+            sync = OrderBookSync(venue=self._sync_venue())
+            bridge = BookResyncBridge(
+                sync=sync,
+                fetch_snapshot=self.fetch_book_snapshot,
+                symbol=key,
+            )
+
+            # Bootstrap anchor so the first depth diffs can APPLY.
+            # Register only after success — a failed fetch must leave the key
+            # absent so the next depth message retries bootstrap.
+            snap = await self.fetch_book_snapshot(key)
+            if snap.sequence_id is None:
+                raise ValueError(
+                    f"Binance book bootstrap [{key}]: snapshot missing sequence_id"
+                )
+            sync.set_snapshot(last_update_id=snap.sequence_id)
+            await self.out.put(snap)
+            self._book_syncs[key] = sync
+            self._book_bridges[key] = bridge
+            log.info(
+                "Binance book bootstrap [%s]: snapshot seq=%s",
+                key,
+                snap.sequence_id,
+            )
+        return self._book_syncs[key], self._book_bridges[key]
+
+    async def _handle_depth_message(self, msg: dict[str, Any], local_ts: int) -> None:
+        """Normalize one depthUpdate, gate via OrderBookSync + BookResyncBridge."""
+        data: dict[str, Any] = msg.get("data", msg)
+        symbol_raw: str = data["s"]
+        sync, bridge = await self._ensure_book_bridge(symbol_raw)
+
+        U = int(data["U"])
+        u = int(data["u"])
+        pu = data.get("pu")
+        pu_int: int | None = int(pu) if pu is not None else None
+
+        for rec in normalize_depth(
+            msg, local_ts=local_ts, venue=self._venue, registry=self.registry
+        ):
+            if not isinstance(rec, BookDelta):
+                await self.out.put(rec)
+                continue
+
+            result = sync.feed(U=U, u=u, pu=pu_int)
+            emit = bridge.feed_sync_result(result, rec)
+            if emit is not None:
+                await self.out.put(emit)
+
+            if bridge.is_resyncing:
+                # Inline REST resync (single-coroutine; buffers already held).
+                applied = await bridge.complete_resync()
+                for r in applied:
+                    await self.out.put(r)
+
+    async def _handle_message(self, msg: object, local_ts: int) -> None:
+        """Route depth updates through BookResyncBridge; all else default path.
+
+        Integration point documented on
+        :meth:`crypcodile.exchanges.base.Connector._handle_message`.
+        """
+        if (
+            isinstance(msg, dict)
+            and self._wants_book_sync()
+            and self._is_depth_message(msg)
+        ):
+            await self._handle_depth_message(msg, local_ts)
+            return
+        await super()._handle_message(msg, local_ts)
+
     async def _subscribe(self, transport: Transport) -> None:  # pragma: no cover
         """Send a Binance SUBSCRIBE frame over the transport."""
+        # Drop book state on (re)subscribe so a reconnect re-bootstraps REST.
+        self._book_syncs.clear()
+        self._book_bridges.clear()
         topics = self.subscribe_channels()
         if topics:
             frame = json.dumps(

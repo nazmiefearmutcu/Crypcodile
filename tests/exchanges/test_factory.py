@@ -1,6 +1,7 @@
-"""Tests for exchanges.factory.make_connector (Task T7a).
+"""Tests for exchanges.factory (Task T7a + list_exchanges).
 
 No live network calls.  Tests cover:
+- list_exchanges returns sorted registered names
 - make_connector returns the correct Connector subclass for each known exchange name
 - Unknown exchange name raises ValueError with a clear message listing valid names
 """
@@ -24,6 +25,50 @@ def _make(exchange: str, **kw):  # type: ignore[no-untyped-def]
         registry=InstrumentRegistry(),
         **kw,
     )
+
+
+# ---------------------------------------------------------------------------
+# list_exchanges
+# ---------------------------------------------------------------------------
+
+
+def test_list_exchanges_sorted() -> None:
+    from crypcodile.exchanges.factory import list_exchanges
+
+    names = list_exchanges()
+    assert names == sorted(names)
+    assert names == [
+        "base_onchain",
+        "binance",
+        "bybit",
+        "coinbase",
+        "deribit",
+        "derive",
+        "gmx_synthetix",
+        "okx",
+        "superchain",
+    ]
+    assert "derive" in names
+
+
+def test_list_exchanges_returns_copy() -> None:
+    """Callers can mutate the returned list without affecting the registry."""
+    from crypcodile.exchanges.factory import list_exchanges
+
+    a = list_exchanges()
+    a.append("not-an-exchange")
+    b = list_exchanges()
+    assert "not-an-exchange" not in b
+    assert a is not b
+
+
+def test_list_exchanges_usable_with_make_connector() -> None:
+    """Every name from list_exchanges constructs without ValueError."""
+    from crypcodile.exchanges.factory import list_exchanges
+
+    for name in list_exchanges():
+        conn = _make(name)
+        assert conn is not None
 
 
 # ---------------------------------------------------------------------------
@@ -66,11 +111,52 @@ def test_make_connector_deribit() -> None:
     assert isinstance(conn, DeribitConnector)
 
 
+def test_make_connector_derive() -> None:
+    from crypcodile.exchanges.derive.connector import DerivePollConnector
+
+    conn = _make(
+        "derive",
+        rpc_url="http://dummy-rpc.example",
+        viewer_address="0x1111111111111111111111111111111111111111",
+    )
+    assert isinstance(conn, DerivePollConnector)
+    assert conn.name == "derive"
+    assert conn.rpc_url == "http://dummy-rpc.example"
+    assert conn.viewer_address == "0x1111111111111111111111111111111111111111"
+
+
 def test_make_connector_base_onchain() -> None:
     from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
 
     conn = _make("base_onchain")
     assert isinstance(conn, BaseOnchainConnector)
+
+
+def test_make_connector_superchain() -> None:
+    from unittest.mock import MagicMock, patch
+
+    from crypcodile.exchanges.superchain.connector import SuperchainConnector
+
+    mock_transport = MagicMock()
+    mock_transport.rpc_urls = ["http://localhost:8545"]
+    with patch(
+        "crypcodile.exchanges.base_onchain.connector.BaseOnchainTransport",
+        return_value=mock_transport,
+    ) as mock_cls:
+        # Default SuperchainConnector.exchange is "superchain"; do not pass
+        # exchange= here — it collides with make_connector's exchange name.
+        conn = _make(
+            "superchain",
+            rpc_url="http://localhost:8545",
+            chain_id=10,
+        )
+    assert isinstance(conn, SuperchainConnector)
+    assert conn.chain_id == 10
+    assert conn.name == "superchain"
+    mock_cls.assert_called_once()
+    # rpc_url is the first positional arg to BaseOnchainTransport
+    assert mock_cls.call_args.args[0] == "http://localhost:8545"
+    assert conn.transport is mock_transport
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +169,16 @@ def test_make_connector_unknown_raises() -> None:
         _make("unknownexchange")
     # Error message must list all valid names
     msg = str(exc_info.value)
-    for name in ("binance", "bybit", "okx", "coinbase", "deribit", "base_onchain"):
+    for name in (
+        "binance",
+        "bybit",
+        "okx",
+        "coinbase",
+        "deribit",
+        "derive",
+        "base_onchain",
+        "superchain",
+    ):
         assert name in msg, f"Expected {name!r} in error message: {msg!r}"
 
 

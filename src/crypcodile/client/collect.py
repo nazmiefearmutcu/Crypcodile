@@ -32,8 +32,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 
 from crypcodile.exchanges.base import Connector
+from crypcodile.ingest.deadletter import report_drained_dlqs
 from crypcodile.sink.base import Sink
 
 log = logging.getLogger(__name__)
@@ -59,6 +61,8 @@ async def collect(
     sink: Sink,
     *,
     max_reconnects: int = -1,
+    dlq_report_path: Path | str | None = None,
+    data_dir: Path | str | None = None,
 ) -> None:
     """Run *connectors* concurrently, writing all emitted Records into *sink*.
 
@@ -75,6 +79,10 @@ async def collect(
                         raises on the first failure, which is then isolated and
                         logged (useful when transports exhaust naturally in
                         tests).
+        dlq_report_path: Optional explicit path for the dead-letter report JSON
+                        written on stop when the DLQ is non-empty.
+        data_dir:       If set and *dlq_report_path* is not, a non-empty DLQ
+                        is written to ``{data_dir}/dlq_report.json``.
 
     Behaviour on errors:
         If a connector raises an exception it is logged and the remaining
@@ -85,6 +93,10 @@ async def collect(
         The ``CancelledError`` from the outer task is re-raised after
         ``sink.close()`` completes, giving callers the normal asyncio
         cancellation semantics.
+
+    On stop (normal or cancelled), each connector's dead-letter queue is drained.
+    If any items were present, a summary is logged and a JSON report may be
+    written (see *dlq_report_path* / *data_dir*).
     """
     if not connectors:
         await sink.close()
@@ -92,6 +104,7 @@ async def collect(
 
     # Check if target sink is a ParquetSink and spin up compactor
     compactor = None
+    inferred_data_dir: Path | str | None = data_dir
     try:
         from crypcodile.store.parquet_sink import ParquetSink
         from crypcodile.store.compactor import ParquetCompactor
@@ -101,6 +114,8 @@ async def collect(
             target_sink = getattr(target_sink, "target")
             
         if isinstance(target_sink, ParquetSink):
+            if inferred_data_dir is None:
+                inferred_data_dir = target_sink._data_dir
             compactor = ParquetCompactor(
                 data_dir=target_sink._data_dir,
                 min_age_seconds=10.0,
@@ -130,6 +145,14 @@ async def collect(
             except Exception as e:
                 log.warning("Error stopping ParquetCompactor service: %s", e)
         await sink.close()
+        try:
+            report_drained_dlqs(
+                connectors,
+                report_path=dlq_report_path,
+                data_dir=inferred_data_dir,
+            )
+        except Exception as e:
+            log.warning("DLQ drain/report failed: %s", e)
 
     if _cancelled:
         raise asyncio.CancelledError()
