@@ -2545,6 +2545,14 @@ def run_flowmap_gui(initial_symbol: str, data_dir: str, historical_hours: float)
         sys.stderr.flush()
         return
 
+    # Same SSL bootstrap as standalone FlowMap (empty python.org CA store).
+    try:
+        from flowmap.ssl_bootstrap import bootstrap_ssl
+
+        bootstrap_ssl()
+    except Exception as exc:
+        sys.stderr.write(f"SSL bootstrap skipped: {exc}\n")
+
     app = QApplication(sys.argv)
     win = FlowmapWindow(initial_symbol=initial_symbol, data_dir=data_dir, historical_hours=historical_hours)
     win.show()
@@ -2604,10 +2612,15 @@ def flowmap(
 
     typer.echo(f"Launched flowmap visualizer process for {symbol}.")
     
+    import os
+    if os.environ.get("CRYPCODILE_SHELL") == "1":
+        return
+
     try:
         gui_process.join()
     except (KeyboardInterrupt, SystemExit):
         gui_process.terminate()
+
 
 # ---------------------------------------------------------------------------
 # gas-tracker
@@ -2648,6 +2661,8 @@ def gas_tracker() -> None:
 @app.command()
 def shell() -> None:
     """Start an interactive Crypcodile shell."""
+    import os
+    os.environ["CRYPCODILE_SHELL"] = "1"
     import shlex
     import click
     from prompt_toolkit import PromptSession

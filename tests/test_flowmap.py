@@ -18,6 +18,7 @@ def test_flowmap_help() -> None:
     assert "--data-dir" in result.output
 
 
+
 def test_flowmap_missing_symbol_non_interactive() -> None:
     """Verify that the flowmap command fails if symbol is missing in non-interactive mode."""
     with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
@@ -25,6 +26,7 @@ def test_flowmap_missing_symbol_non_interactive() -> None:
         result = runner.invoke(app, ["flowmap"])
         assert result.exit_code != 0
         assert "Error: symbol is required" in result.output
+
 
 
 @patch("multiprocessing.Process")
@@ -65,3 +67,4 @@ def test_flowmap_command_orchestration(
     assert target_args[2] == 1.0
 
     mock_process_instance.start.assert_called_once()
+

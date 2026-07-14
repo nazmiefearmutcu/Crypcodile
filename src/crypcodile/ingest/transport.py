@@ -57,19 +57,40 @@ class AiohttpWsTransport:
 
     Args:
         url: Full WebSocket URL, e.g. ``wss://www.deribit.com/ws/api/v2``.
+        ssl: Passed to aiohttp as the SSL argument.  ``None`` (default) uses
+            certifi CA bundle when available, else system defaults.  ``False``
+            disables verification (dev only).  An ``ssl.SSLContext`` is used
+            as-is.
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, ssl: Any = None) -> None:
         self._url = url
+        self._ssl = ssl  # None → resolve at connect(); False/SSLContext explicit
         # Typed as Any to avoid importing aiohttp at module level (lazy import).
         self._session: Any = None  # aiohttp.ClientSession
         self._ws: Any = None  # aiohttp.ClientWebSocketResponse
 
+    def _resolve_ssl(self) -> Any:
+        if self._ssl is not None:
+            return self._ssl
+        try:
+            import ssl as ssl_mod
+
+            import certifi
+
+            return ssl_mod.create_default_context(cafile=certifi.where())
+        except Exception:
+            return True  # aiohttp default verification
+
     async def connect(self) -> None:
         import aiohttp  # lazy — keeps CLI import-time fast
 
-        self._session = aiohttp.ClientSession()
-        self._ws = await self._session.ws_connect(self._url, heartbeat=20.0)
+        ssl_arg = self._resolve_ssl()
+        connector = aiohttp.TCPConnector(ssl=ssl_arg)
+        self._session = aiohttp.ClientSession(connector=connector)
+        self._ws = await self._session.ws_connect(
+            self._url, heartbeat=20.0, ssl=ssl_arg
+        )
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self._iter()
@@ -93,15 +114,19 @@ class AiohttpWsTransport:
             await self._ws.send_str(text)
 
     async def close(self) -> None:
-        if self._ws is not None:
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
-        if self._session is not None:
-            try:
-                await self._session.close()
-            except Exception:
-                pass
+        ws, session = self._ws, self._session
         self._ws = None
         self._session = None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        if session is not None:
+            try:
+                await session.close()
+                # Drain connector cleanup so callers do not leave pending
+                # tasks when the event loop is about to be closed.
+                await session.wait_closed()
+            except Exception:
+                pass

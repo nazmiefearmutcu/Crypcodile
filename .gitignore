@@ -54,3 +54,8 @@ tmp/
 tmp_pytest/
 tmp_pytest_stress/
 tmp_test_run/
+
+# Bug-hunt debug artefacts (GUI captures + temp verify scripts)
+window_shot_*.png
+tmp_verify_*.py
+tmp_verify_*.txt
