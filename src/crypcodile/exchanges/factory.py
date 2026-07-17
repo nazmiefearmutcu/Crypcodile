@@ -47,6 +47,15 @@ _REGISTRY: dict[str, tuple[str, str]] = {
 
 _VALID_NAMES = sorted(_REGISTRY)
 
+# Connectors whose lazily-imported modules require an optional dependency
+# group ("extra").  Used to turn a bare ModuleNotFoundError into an
+# actionable install hint.
+_CONNECTOR_EXTRAS: dict[str, str] = {
+    "base_onchain": "onchain",
+    "gmx_synthetix": "onchain",
+    "superchain": "onchain",
+}
+
 
 def list_exchanges() -> list[str]:
     """Sorted registered exchange names."""
@@ -94,7 +103,16 @@ def make_connector(
             f"Unknown exchange {exchange!r}. Valid names: {_VALID_NAMES}"
         )
     module_path, class_name = entry
-    cls: type[Connector] = getattr(import_module(module_path), class_name)
+    try:
+        cls: type[Connector] = getattr(import_module(module_path), class_name)
+    except ModuleNotFoundError as e:
+        extra = _CONNECTOR_EXTRAS.get(exchange)
+        if extra is not None:
+            raise ModuleNotFoundError(
+                f"Connector {exchange!r} requires optional dependencies "
+                f"(missing: {e.name}) — install with: pip install 'crypcodile[{extra}]'"
+            ) from e
+        raise
     return cls(
         symbols=symbols,
         channels=channels,

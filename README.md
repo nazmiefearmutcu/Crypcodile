@@ -20,8 +20,20 @@ reads use a default Base RPC endpoint you can override.
 uv pip install crypcodile     # or: pip install crypcodile
 ```
 
+That gives you the core streaming engine: every CEX connector, the Parquet
+lake, replay, and the CLI. The heavier surfaces live behind extras:
+
+```bash
+uv pip install 'crypcodile[gui]'     # FlowMap visualizer + gas tracker (PyQt6/pyqtgraph)
+uv pip install 'crypcodile[ml]'      # xgboost/scipy analytics (funding prediction, Black-Scholes)
+uv pip install 'crypcodile[web]'     # FastAPI x402 API server + Streamlit examples
+uv pip install 'crypcodile[onchain]' # Base L2 / GMX / Superchain connectors + MCP server (web3)
+uv pip install 'crypcodile[full]'    # all of the above
+```
+
 One-shot installers if you prefer: [`install.sh`](install.sh) (macOS/Linux),
-[`install.ps1`](install.ps1) (Windows).
+[`install.ps1`](install.ps1) (Windows). Both install `crypcodile[full]`, so
+the desktop app works out of the box.
 
 ## First ten minutes
 
@@ -41,6 +53,7 @@ crypcodile query "SELECT count(*) FROM records WHERE channel='trade'"
 crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL
 
 # open the order-flow visualizer on live Binance data
+# (desktop app — needs the [gui] or [full] extra)
 crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
@@ -81,6 +94,7 @@ iceberg / large-lot trackers. Three data sources: live, lake replay, or a
 built-in synthetic market for poking at the UI offline.
 
 ```bash
+# needs the [gui] extra: uv pip install 'crypcodile[gui]'   (or [full])
 crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
@@ -136,7 +150,7 @@ dashboard and a Farcaster frame server under [`examples/`](examples/).
 ## Tests
 
 ```bash
-uv sync
+uv sync --all-extras
 pytest tests/ -v
 ```
 

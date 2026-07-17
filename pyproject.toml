@@ -16,6 +16,7 @@ dependencies = [
     "rich>=13",
     "mmh3>=5.2.1",
     "numpy>=1.24",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +24,6 @@ gui = [
     "PyQt6>=6.0.0",
     "pyqtgraph>=0.13.0",
     "matplotlib>=3.7.0",
-    "prompt-toolkit>=3.0",
 ]
 ml = [
     "xgboost>=1.7.0",
@@ -33,6 +33,7 @@ web = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "streamlit>=1.58.0",
+    "crypcodile[onchain]",
 ]
 onchain = [
     "web3>=6.0.0",

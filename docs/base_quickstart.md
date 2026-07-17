@@ -6,10 +6,14 @@ This quickstart guides you through using **Crypcodile** to monitor on-chain swap
 
 Ensure you have installed Crypcodile and synced the data pipeline:
 ```bash
-pip install crypcodile
+pip install 'crypcodile[onchain]'
 # or with uv
-uv pip install crypcodile
+uv pip install 'crypcodile[onchain]'
 ```
+
+The Base connector reads L2 RPC logs via `web3`, which ships in the
+`onchain` extra (a bare `pip install crypcodile` gives you the core
+CEX/lake engine only).
 
 ## Python Implementation
 

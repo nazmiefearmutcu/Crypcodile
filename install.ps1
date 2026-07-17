@@ -166,7 +166,7 @@ Run-Step "Upgrading pip..." {
 
 # 6. Installs the CLI package
 Run-Step "Installing Crypcodile..." {
-    & $pipExe install "git+https://github.com/nazmiefearmutcu/Crypcodile.git"
+    & $pipExe install "crypcodile[full] @ git+https://github.com/nazmiefearmutcu/Crypcodile.git"
 }
 
 # 7. Adds $env:USERPROFILE\.crypcodile\venv\Scripts to the User PATH environment variable

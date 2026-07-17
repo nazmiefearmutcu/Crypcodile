@@ -613,6 +613,7 @@ dependencies = [
     { name = "msgspec" },
     { name = "numpy" },
     { name = "polars" },
+    { name = "prompt-toolkit" },
     { name = "pyarrow" },
     { name = "rich" },
     { name = "typer" },
@@ -623,7 +624,6 @@ dependencies = [
 full = [
     { name = "fastapi" },
     { name = "matplotlib" },
-    { name = "prompt-toolkit" },
     { name = "pyqt6" },
     { name = "pyqtgraph" },
     { name = "scipy" },
@@ -634,7 +634,6 @@ full = [
 ]
 gui = [
     { name = "matplotlib" },
-    { name = "prompt-toolkit" },
     { name = "pyqt6" },
     { name = "pyqtgraph" },
 ]
@@ -649,6 +648,7 @@ web = [
     { name = "fastapi" },
     { name = "streamlit" },
     { name = "uvicorn" },
+    { name = "web3" },
 ]
 
 [package.dev-dependencies]
@@ -665,6 +665,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "crypcodile", extras = ["gui", "ml", "web", "onchain"], marker = "extra == 'full'" },
+    { name = "crypcodile", extras = ["onchain"], marker = "extra == 'web'" },
     { name = "duckdb", specifier = ">=1.0" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.100.0" },
     { name = "matplotlib", marker = "extra == 'gui'", specifier = ">=3.7.0" },
@@ -672,7 +673,7 @@ requires-dist = [
     { name = "msgspec", specifier = ">=0.18" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "polars", specifier = ">=1.0" },
-    { name = "prompt-toolkit", marker = "extra == 'gui'", specifier = ">=3.0" },
+    { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "pyarrow", specifier = ">=16" },
     { name = "pyqt6", marker = "extra == 'gui'", specifier = ">=6.0.0" },
     { name = "pyqtgraph", marker = "extra == 'gui'", specifier = ">=0.13.0" },

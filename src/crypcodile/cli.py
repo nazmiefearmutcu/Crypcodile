@@ -4448,8 +4448,16 @@ def mcp(
     import asyncio
     import sys
 
-    from crypcodile.mcp_server import serve_stdio
-    
+    try:
+        from crypcodile.mcp_server import serve_stdio
+    except ModuleNotFoundError as e:
+        typer.echo(
+            f"Error: the MCP server needs optional dependencies (missing: {e.name}). "
+            "Install with: pip install 'crypcodile[onchain]'",
+            err=True,
+        )
+        raise typer.Exit(code=1) from e
+
     if sys.stdin.isatty():
         typer.echo("Warning: MCP server is running on stdio and expects JSON-RPC input.", err=True)
         typer.echo("It is meant to be run by an AI client (like Claude Desktop), not run interactively.", err=True)
@@ -4530,7 +4538,11 @@ def api(
         try:
             import uvicorn
         except ImportError:
-            typer.echo("Error: uvicorn is required to run the Python FastAPI API server.", err=True)
+            typer.echo(
+                "Error: uvicorn is required to run the Python FastAPI API server. "
+                "Install with: pip install 'crypcodile[web]'",
+                err=True,
+            )
             raise typer.Exit(code=1)
         typer.echo(f"Starting Crypcodile x402 API server on http://{host}:{port}...", err=True)
         uvicorn.run("crypcodile.api_server:app", host=host, port=port, log_level="info")
@@ -4677,7 +4689,10 @@ def run_flowmap_gui(initial_symbol: str, data_dir: str, historical_hours: float)
         from PyQt6.QtWidgets import QApplication
         from crypcodile.gui.flowmap_window import FlowmapWindow
     except ImportError as e:
-        sys.stderr.write(f"GUI dependencies not available: {e}\n")
+        sys.stderr.write(
+            f"GUI dependencies not available: {e}\n"
+            "Install with: pip install 'crypcodile[gui]'\n"
+        )
         sys.stderr.flush()
         return
 
@@ -4770,7 +4785,11 @@ def gas_tracker() -> None:
         from PyQt6.QtWidgets import QApplication, QMainWindow
         from crypcodile.gui.widgets.gas_tracker import GasTrackerWidget
     except ImportError as e:
-        typer.echo(f"GUI dependencies not available: {e}", err=True)
+        typer.echo(
+            f"GUI dependencies not available: {e}. "
+            "Install with: pip install 'crypcodile[gui]'",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     app_qt = QApplication.instance()

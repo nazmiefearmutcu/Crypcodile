@@ -139,7 +139,7 @@ run_step "Creating virtual environment..." "create_venv"
 run_step "Upgrading pip..." "\"\$HOME/.crypcodile/venv/bin/pip\" install --upgrade pip"
 
 # 6. Installs the CLI package
-run_step "Installing Crypcodile..." "\"\$HOME/.crypcodile/venv/bin/pip\" install \"git+https://github.com/nazmiefearmutcu/Crypcodile.git\""
+run_step "Installing Crypcodile..." "\"\$HOME/.crypcodile/venv/bin/pip\" install \"crypcodile[full] @ git+https://github.com/nazmiefearmutcu/Crypcodile.git\""
 
 # 7. Configures a wrapper script at ~/.local/bin/crypcodile
 configure_wrapper() {

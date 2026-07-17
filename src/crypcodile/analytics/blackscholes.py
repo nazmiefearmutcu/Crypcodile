@@ -427,7 +427,12 @@ class SciPyGreeksSolverAdapter(GreeksSolverAdapter):
             else:
                 return D * max(strike - forward, 0.0)
 
-        import scipy.stats
+        try:
+            import scipy.stats
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "scipy is required for Black-Scholes analytics — install 'crypcodile[ml]'"
+            ) from e
 
         sqrt_t = math.sqrt(t_years)
         d1 = (math.log(forward / strike) + 0.5 * vol * vol * t_years) / (vol * sqrt_t)
@@ -453,7 +458,12 @@ class SciPyGreeksSolverAdapter(GreeksSolverAdapter):
         if t_years <= 0 or vol == 0.0:
             return Greeks(delta=0.0, gamma=0.0, vega=0.0, theta=0.0, rho=0.0)
 
-        import scipy.stats
+        try:
+            import scipy.stats
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "scipy is required for Black-Scholes analytics — install 'crypcodile[ml]'"
+            ) from e
 
         D = math.exp(-rate * t_years)
         sqrt_t = math.sqrt(t_years)
@@ -500,7 +510,12 @@ class SciPyGreeksSolverAdapter(GreeksSolverAdapter):
             if price <= intrinsic or price >= upper:
                 return None
 
-            import scipy.optimize
+            try:
+                import scipy.optimize
+            except ModuleNotFoundError as e:
+                raise ModuleNotFoundError(
+                    "scipy is required for Black-Scholes analytics — install 'crypcodile[ml]'"
+                ) from e
 
             def f(v: float) -> float:
                 return self.price(forward, strike, t_years, v, opt_type, rate) - price
