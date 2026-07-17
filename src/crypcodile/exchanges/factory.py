@@ -52,6 +52,7 @@ _VALID_NAMES = sorted(_REGISTRY)
 # actionable install hint.
 _CONNECTOR_EXTRAS: dict[str, str] = {
     "base_onchain": "onchain",
+    "derive": "onchain",
     "gmx_synthetix": "onchain",
     "superchain": "onchain",
 }
