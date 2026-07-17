@@ -24,29 +24,24 @@ from __future__ import annotations
 
 from typing import Any
 
+from importlib import import_module
+
 from crypcodile.exchanges.base import Connector
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
-from crypcodile.exchanges.binance.connector import BinanceConnector
-from crypcodile.exchanges.bybit.connector import BybitConnector
-from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
-from crypcodile.exchanges.deribit.connector import DeribitConnector
-from crypcodile.exchanges.derive.connector import DerivePollConnector
-from crypcodile.exchanges.okx.connector import OKXConnector
-from crypcodile.exchanges.gmx_synthetix.connector import GMXSynthetixConnector
-from crypcodile.exchanges.superchain.connector import SuperchainConnector
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.sink.base import Sink
 
-_REGISTRY: dict[str, type[Connector]] = {
-    "binance": BinanceConnector,
-    "bybit": BybitConnector,
-    "coinbase": CoinbaseConnector,
-    "deribit": DeribitConnector,
-    "derive": DerivePollConnector,
-    "okx": OKXConnector,
-    "base_onchain": BaseOnchainConnector,
-    "gmx_synthetix": GMXSynthetixConnector,
-    "superchain": SuperchainConnector,
+# Connectors are imported lazily so that pulling in one exchange never pays
+# for another's dependency tree (e.g. derive -> analytics -> numpy).
+_REGISTRY: dict[str, tuple[str, str]] = {
+    "binance": ("crypcodile.exchanges.binance.connector", "BinanceConnector"),
+    "bybit": ("crypcodile.exchanges.bybit.connector", "BybitConnector"),
+    "coinbase": ("crypcodile.exchanges.coinbase.connector", "CoinbaseConnector"),
+    "deribit": ("crypcodile.exchanges.deribit.connector", "DeribitConnector"),
+    "derive": ("crypcodile.exchanges.derive.connector", "DerivePollConnector"),
+    "okx": ("crypcodile.exchanges.okx.connector", "OKXConnector"),
+    "base_onchain": ("crypcodile.exchanges.base_onchain.connector", "BaseOnchainConnector"),
+    "gmx_synthetix": ("crypcodile.exchanges.gmx_synthetix.connector", "GMXSynthetixConnector"),
+    "superchain": ("crypcodile.exchanges.superchain.connector", "SuperchainConnector"),
 }
 
 
@@ -93,11 +88,13 @@ def make_connector(
         If *exchange* is not a recognised name.  The error message lists all
         valid names.
     """
-    cls = _REGISTRY.get(exchange)
-    if cls is None:
+    entry = _REGISTRY.get(exchange)
+    if entry is None:
         raise ValueError(
             f"Unknown exchange {exchange!r}. Valid names: {_VALID_NAMES}"
         )
+    module_path, class_name = entry
+    cls: type[Connector] = getattr(import_module(module_path), class_name)
     return cls(
         symbols=symbols,
         channels=channels,
