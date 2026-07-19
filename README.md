@@ -1,265 +1,235 @@
-<p align="center"><img src="assets/logo.svg" width="88" alt="Crypcodile logo"></p>
+<p align="center"><img src="assets/logo.svg" width="84" alt="Crypcodile"></p>
 
-# Crypcodile
+<h1 align="center">Crypcodile</h1>
 
-Crypto market-data engine with a deterministic core. It pulls order books,
-trades, funding and on-chain DEX events from **100+ venues** — nine
-hand-written native connectors plus the entire [ccxt](https://github.com/ccxt/ccxt)
-universe behind one universal connector — into one Parquet + DuckDB data lake,
-replays any slice of it byte-for-byte, and runs options and microstructure
-analytics on top. It ships with **FlowMap**, a GPU order-flow visualizer, and
-an **MCP server** so LLM agents can read real prices instead of inventing them.
+<p align="center"><b>A deterministic engine for the whole crypto market.</b><br>
+Pull order books, trades, funding and on-chain DEX events from 100+ venues into one
+Parquet lake — then replay any slice of it byte-for-byte.</p>
 
-Point it at a single symbol, or pull a whole exchange's market —
-`crypcodile collect-market --exchange binance --top 200` resolves the 200
-most-liquid pairs from the live universe and streams them all into the same
-lake.
+<p align="center"><sub>Python 3.12+ · Apache-2.0 · public market data needs no API keys</sub></p>
 
-Python 3.12+, Apache-2.0. Public market data needs no API keys; on-chain
-reads use a default Base RPC endpoint you can override.
+---
+
+Every market-data tool can fetch a price. Two things make this one different.
+
+**One schema for everything.** A hand-written Deribit connector, a ccxt Kraken
+venue, and a Uniswap V3 pool on Base all emit the *same* record types. So a
+question like "show me every BTC trade across all my sources" is one SQL
+statement, not three codebases.
+
+**The lake is deterministic.** What lands on disk is normalized, validated, and
+replayable — `replay` a window today or next year and you get identical bytes.
+No hidden clocks, no re-fetching, no drift.
+
+On top of that sits an options and microstructure analytics library, **FlowMap**
+(a GPU order-flow visualizer), and an **MCP server** so LLM agents read real
+prices instead of inventing them.
 
 ![FlowMap rendering live BTCUSDT order flow](docs/media/flowmap-btcusdt-live.png)
 
 ## Install
 
 ```bash
-uv pip install crypcodile     # or: pip install crypcodile
+uv pip install crypcodile          # or: pip install crypcodile
 ```
 
-That gives you the core streaming engine: every CEX connector, the Parquet
-lake, replay, and the CLI. The heavier surfaces live behind extras:
+The base install is the whole streaming core: every native connector, the
+Parquet lake, replay, and the 47-command CLI. Heavier surfaces are opt-in extras
+so you never pay for a dependency tree you don't use:
 
 ```bash
-uv pip install 'crypcodile[market]'  # 100+ exchanges via the universal ccxt connector
-uv pip install 'crypcodile[gui]'     # FlowMap visualizer + gas tracker (PyQt6/pyqtgraph)
-uv pip install 'crypcodile[ml]'      # xgboost/scipy analytics (funding prediction, Black-Scholes)
-uv pip install 'crypcodile[web]'     # FastAPI x402 API server + Streamlit examples
-uv pip install 'crypcodile[onchain]' # Base L2 / GMX / Superchain connectors + MCP server (web3)
-uv pip install 'crypcodile[full]'    # all of the above
+uv pip install 'crypcodile[market]'   # +100 exchanges via the universal ccxt connector
+uv pip install 'crypcodile[gui]'      # FlowMap visualizer + gas tracker (PyQt6)
+uv pip install 'crypcodile[ml]'       # funding prediction + Black-Scholes (xgboost/scipy)
+uv pip install 'crypcodile[web]'      # FastAPI server + Streamlit examples
+uv pip install 'crypcodile[onchain]'  # Base L2 / GMX / Superchain connectors (web3)
+uv pip install 'crypcodile[full]'     # everything
 ```
 
-One-shot installers if you prefer: [`install.sh`](install.sh) (macOS/Linux),
-[`install.ps1`](install.ps1) (Windows). Both install `crypcodile[full]`, so
-the desktop app works out of the box.
+Prefer one command? [`install.sh`](install.sh) (macOS/Linux) and
+[`install.ps1`](install.ps1) (Windows) install `crypcodile[full]`.
 
-## First ten minutes
+## Five minutes
 
 ```bash
-# stream Deribit BTC perp trades + book deltas into a local Parquet lake
+# stream Deribit BTC-perp trades + book deltas into a local lake
 crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
     --channels trade --channels book_delta --data-dir data
 
-# ...or pull a whole exchange's market: the 100 most-liquid USDT spot pairs
-# on Kraken, resolved live and streamed into the same lake ([market] extra)
-crypcodile collect-market --exchange kraken --top 100 --quote USDT \
-    --kind spot --channels trade --channels book_ticker
+# the lake is just partitioned Parquet — ask it anything in DuckDB SQL
+crypcodile query "SELECT count(*) FROM records WHERE channel = 'trade'"
 
-# see every venue you can reach (native connectors + 100+ ccxt exchanges)
-crypcodile markets
-# and the tradable universe of any one of them, ranked by volume
-crypcodile universe binance --top 20 --quote USDT --kind spot
-
-# find out what you actually have
-crypcodile search "btc" --channel trade --exchange deribit
-crypcodile data-coverage --symbol deribit:BTC-PERPETUAL --channel trade
-
-# ask the lake anything — it's just DuckDB over partitioned Parquet
-crypcodile query "SELECT count(*) FROM records WHERE channel='trade'"
-
-# replay the same window later; identical bytes, every run
+# replay that window later — identical bytes, every run
 crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL
 
-# open the order-flow visualizer on live Binance data
-# (desktop app — needs the [gui] or [full] extra)
+# open the order-flow visualizer on live Binance data  ([gui] extra)
 crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
-There is also an interactive shell (`crypcodile shell`) with history and
-tab-completion; every command works inside it. No lake yet? `replay` and
-`query` fall back to the sample data in [`test_data/`](test_data/), so the
-commands above work offline on a fresh clone.
+No lake yet? `replay` and `query` fall back to the bundled sample in
+[`test_data/`](test_data/), so a fresh clone works offline. There's also an
+interactive shell — `crypcodile shell` — with history and tab-completion, and
+every command runs inside it.
 
-## Commands
+## Reaching the whole market
 
-47 commands behind one binary. The clusters:
+Crypcodile speaks to **108 venues**: ten native connectors, hand-written for
+fidelity, plus the entire [ccxt](https://github.com/ccxt/ccxt) family (104
+exchanges) behind one universal connector. When a name exists in both, the
+native connector wins.
 
-| Cluster | Commands |
+| | Venues |
 |---|---|
-| Lake | `collect` `collect-market` `backfill` `replay` `query` `export` |
-| Discovery | `census` `markets` `universe` `search` `resolve-symbols` `data-coverage` `catalog` `catalog-summary` `catalog-stats` `catalog-dates` `catalog-symbols` `catalog-inventory` `catalog-exchanges` `list-exchanges` |
-| Options & funding | `iv-surface` `term-structure` `vol-skew` `risk-reversal` `funding-apr` `funding-predict` `basis` `open-interest` |
-| Microstructure | `ofi` `slippage` `whale-alerts` `liquidity-depth` `indicators` |
-| On-chain / L2 risk | `sequencer-latency` `peg-deviation` `chaos-score` `lending-stress` `gas-vol` `smart-money` `label-transfers` `mev-sandwich` |
-| Desktop | `flowmap` `gas-tracker` |
-| Servers | `mcp` `api` |
-| Housekeeping | `shell` `update` |
+| **Native** | Binance · Bybit · Coinbase · Deribit · OKX · Base on-chain (Uniswap V3, Aerodrome) · GMX/Synthetix · Derive · Superchain · CoinGecko |
+| **Universal** | any of ccxt's 104 exchanges — Kraken, KuCoin, MEXC, Gate, HTX, Bitget, … |
 
-Every venue sits behind the same record schema. Native connectors are
-hand-written for maximum fidelity — Binance, Bybit, Coinbase, Deribit, OKX,
-Base on-chain (Uniswap V3, Aerodrome), GMX/Synthetix, Derive, Superchain, and a
-**CoinGecko** connector for the whole coin universe — while one **universal**
-connector wraps the entire [ccxt](https://github.com/ccxt/ccxt) family (100+
-exchanges), so any of them normalizes into the exact same `Trade` /
-`BookSnapshot` / `BookTicker` / `Funding` / `OHLCV` records. When a name exists
-in both, the native connector wins. Ingest survives disconnects with
-gap-bridging and a dead-letter queue
-([`src/crypcodile/ingest/`](src/crypcodile/ingest/)); whatever made it to disk
-is normalized, validated and replayable.
-
-### Pulling the whole market
-
-The ccxt connector is REST-poll-first (works on every venue) with an opt-in
-ccxt.pro WebSocket path (`--use-ws`). When a venue supports the multi-symbol
-subscriptions (`watchTradesForSymbols` / `watchTickers`), the *entire* requested
-symbol list rides a **single socket** per channel — the difference between
-streaming three symbols and streaming a whole exchange's book. Name a *slice of
-the market* and Crypcodile resolves the concrete symbols from the live universe:
+You don't have to name symbols. Name a *slice of the market* and Crypcodile
+resolves the concrete list from the live universe:
 
 ```bash
-# every USDT perpetual on three venues at once, order books included
-crypcodile collect-market --exchange bybit,okx,mexc --all \
-    --quote USDT --kind perpetual --channels book_snapshot --limit 400
-
-# the 200 most-liquid pairs on binance over one WebSocket
+# the 200 most-liquid pairs on Binance, streamed over a single WebSocket
 crypcodile collect-market --exchange binance --top 200 --use-ws \
     --channels trade --channels book_ticker
 
-# rank a venue's universe by 24h volume (feeds --top / scripting)
-crypcodile universe okx --top 50 --quote USDT --kind spot --symbols-only
+# every USDT perpetual across three venues at once, order books included
+crypcodile collect-market --exchange bybit,okx,mexc --all \
+    --quote USDT --kind perpetual --channels book_snapshot --limit 400
 
-# the whole coin universe (17k+ coins, incl. long-tail no CEX lists)
+# the whole coin universe — 17k+ coins, including the long tail no CEX lists
 crypcodile collect --exchange coingecko --symbols _ --channels ohlcv
 ```
 
-Want to *see* the whole market at once? `crypcodile census` measures it live —
-venue market counts (ccxt), the coin universe + market cap + dominance
-(CoinGecko), and DeFi TVL (DeFiLlama) — and writes a self-contained
-`census.html` dashboard. Every number is live from keyless public feeds.
+Two design choices make that scale honestly. The ccxt path is **REST-poll-first**
+(works on every venue) but upgrades to a **single multi-symbol WebSocket** per
+channel where the exchange supports it (`watchTradesForSymbols` / `watchTickers`)
+— the difference between one socket for three symbols and one socket for a whole
+exchange's book. And `universe` ranks any venue's markets by live 24h volume, so
+`--top N` covers the liquid core instead of ten thousand dead pairs.
+
+### The whole market, on one screen
+
+`crypcodile census` measures the market live and writes a self-contained HTML
+dashboard — venue market counts (ccxt), the coin universe + market cap +
+dominance (CoinGecko), and total value locked (DeFiLlama). Every figure comes
+from a keyless public feed; a recent run:
+
+> **108** reachable venues · **34,171** markets across the majors ·
+> **17,657** active coins · **$2.29T** market cap · **$75.8B** DeFi TVL
 
 ```bash
-crypcodile census                 # → census.html + a terminal summary
+crypcodile census                  # → census.html + a terminal summary
 ```
+
+## The 47 commands
+
+| Cluster | Commands |
+|---|---|
+| **Lake** | `collect` · `collect-market` · `backfill` · `replay` · `query` · `export` |
+| **Discovery** | `census` · `markets` · `universe` · `search` · `resolve-symbols` · `data-coverage` · `catalog*` (7) · `list-exchanges` |
+| **Options & funding** | `iv-surface` · `term-structure` · `vol-skew` · `risk-reversal` · `funding-apr` · `funding-predict` · `basis` · `open-interest` |
+| **Microstructure** | `ofi` · `slippage` · `whale-alerts` · `liquidity-depth` · `indicators` |
+| **On-chain / L2 risk** | `sequencer-latency` · `peg-deviation` · `chaos-score` · `lending-stress` · `gas-vol` · `smart-money` · `label-transfers` · `mev-sandwich` |
+| **Desktop** | `flowmap` · `gas-tracker` |
+| **Servers** | `mcp` · `api` |
+| **Shell** | `shell` · `update` |
+
+Ingest survives disconnects with sequence-gap bridging and a dead-letter queue
+([`src/crypcodile/ingest/`](src/crypcodile/ingest/)); whatever reaches disk is
+normalized against the [16-record schema](src/crypcodile/schema/records.py) and
+replayable.
 
 ## FlowMap
 
 ![FlowMap settings and trackers panel](docs/media/flowmap-btcusdt-settings.png)
 
 FlowMap paints resting book depth over time as a liquidity heatmap and layers
-the rest of the tape on top: aggressor-colored trade bubbles, VWAP and BBO
-tags, COB/CVP/SVP volume profiles, a cumulative-delta strip, DOM ladder, and
-iceberg / large-lot trackers. Three data sources: live, lake replay, or a
-built-in synthetic market for poking at the UI offline.
+the tape on top: aggressor-colored trade bubbles, VWAP and BBO tags,
+COB/CVP/SVP volume profiles, a cumulative-delta strip, a DOM ladder, and
+iceberg / large-lot trackers. Feed it live data, a lake replay, or a built-in
+synthetic market for poking at the UI offline.
 
 ```bash
-# needs the [gui] extra: uv pip install 'crypcodile[gui]'   (or [full])
 crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
-Rendering is `QOpenGLWidget` by default with a pure-NumPy density engine
-behind it (force a backend with `FLOWMAP_RENDERER=opengl|cpu`). The uncapped
-offscreen benchmark does 100+ FPS at 1920×1080 on Apple Silicon; the window
-itself stays comfortably at vsync.
+It renders on `QOpenGLWidget` with a pure-NumPy density engine behind it (pin a
+backend with `FLOWMAP_RENDERER=opengl|cpu`). The uncapped offscreen benchmark
+clears 100 FPS at 1920×1080 on Apple Silicon; the window itself sits at vsync.
 
 ## Analytics
 
-The same lake feeds a library of options and microstructure analytics, exposed
-three ways: as CLI commands, as MCP tools, and as plain Python over a
-`Catalog`. Two runnable examples in [`examples/`](examples/) show the shape:
+The lake feeds an options + microstructure library, reachable three ways — CLI,
+MCP tool, or plain Python over a `Catalog`. Two runnable examples in
+[`examples/`](examples/):
 
 ```python
-# examples/analytics_funding.py — perpetual funding, annualized
 from crypcodile.analytics.funding import funding_apr
+from crypcodile.analytics.volsurface import iv_surface
 from crypcodile.store.catalog import Catalog
 
 catalog = Catalog(data_dir="data")
-df = funding_apr(catalog, "binance:BTCUSDT", from_ns, to_ns)   # → Polars DataFrame
-
-# examples/analytics_iv_surface.py — Black-Scholes implied-vol surface
-from crypcodile.analytics.volsurface import iv_surface
-
-surface = iv_surface(catalog, "BTC", at_ns, rate=0.0)          # strike × expiry × IV
+apr     = funding_apr(catalog, "binance:BTCUSDT", from_ns, to_ns)  # Polars DataFrame
+surface = iv_surface(catalog, "BTC", at_ns, rate=0.0)             # strike × expiry × IV
 ```
 
-CLI equivalents: `crypcodile funding-apr --symbol binance:BTCUSDT` and
-`crypcodile iv-surface --underlying BTC`. The full set spans OFI, slippage,
-whale alerts, term structure, vol skew, risk reversal, spot–perp / spot–future
-basis, open interest and the L2/DeFi-risk family — every one of them reading
-the same normalized records, whether they came from a native connector or any
-ccxt venue.
+The full set spans OFI, slippage, whale alerts, term structure, vol skew, risk
+reversal, spot–perp / spot–future basis, open interest, and an L2/DeFi-risk
+family (sequencer latency, peg deviation, lending stress, MEV-sandwich
+detection). Each reads the same normalized records — native venue or ccxt, it
+can't tell the difference.
 
 ## For agents (MCP)
 
-`crypcodile mcp --data-dir data` starts a Model Context Protocol server over
-stdio. Every tool is read-only and deterministic — answers come from the lake
-and the chain, not from the model's imagination.
+```bash
+crypcodile mcp --data-dir data     # Model Context Protocol server over stdio
+```
 
-- market data: `get_base_market_data` · `get_onchain_price` ·
-  `query_market_data` (bounded DuckDB SQL)
-- discovery: `search_symbols` · `list_symbols` · `resolve_symbols` ·
-  `inventory_snapshot` · `data_coverage` · `catalog_summary` · `catalog_stats` ·
-  `list_data_channels` · `list_dates` · `list_exchanges_on_disk` ·
-  `list_registered_exchanges`
-- analytics: OFI, slippage, whale alerts, IV surface / term structure /
-  vol skew / risk reversal, funding APR + prediction, spot–perp and
-  spot–future basis, open interest, liquidity depth, sequencer latency,
-  peg deviation, lending stress, MEV sandwich detection, smart-money labels
-
-Works with Claude, Cursor, or anything else that speaks MCP.
+Every tool is read-only and deterministic — answers come from the lake and the
+chain, never the model's imagination. Tools cover market-data reads (bounded
+DuckDB SQL, on-chain prices), catalog discovery (`search_symbols`,
+`list_all_exchanges`, coverage, inventory), and the analytics library. Works
+with Claude, Cursor, or anything that speaks MCP.
 
 ## REST API
 
-`crypcodile api` serves the same lake over FastAPI (`/api/v1/*`), with a few
-payment-gated demo routes:
-
-| Group | Paths |
-|---|---|
-| Ops | `/health` `/status` `/version` `/exchanges` |
-| Catalog | `/catalog/channels` `/catalog/search` `/catalog/inventory` `/catalog/scan` `/data-coverage` `/resolve-symbols` |
-| Query | `POST /query` (bounded read-only SQL) |
-| Derivatives | `/open-interest` `/funding-apr` `/funding-predict` `/basis` `/perp-basis` `/spot-future-basis` |
-| Microstructure | `/indicators` `/ofi` `/whale-alerts` `/slippage` `POST /simulate-price-impact` |
-| Options | `/iv-surface` `/term-structure` `/vol-skew` `/risk-reversal` |
-| L2 / DeFi risk | `/liquidity-depth` `/sequencer-latency` `/chaos-score` `/peg-deviation` `/lending-stress` |
-| Offline analytics | `POST /gas-vol` `/mev-sandwich` `/smart-money` `/label-transfers` |
-| Gated demo | `GET /market-data` + `POST /simulate-payment` (x402) |
+`crypcodile api` serves the same lake over FastAPI at `/api/v1/*` — ops and
+catalog discovery, a bounded read-only `POST /query`, the derivatives and
+microstructure analytics, and a payment-gated demo route over the x402 protocol.
 
 ## Base L2
 
 `BaseOnchainConnector` reads Uniswap V3 and Aerodrome swap/reserve events from
-Base RPC logs and emits the same record types as the CEX connectors, so
-cross-venue queries are one SQL statement instead of two codebases. Start
-with [docs/base_quickstart.md](docs/base_quickstart.md); there is a Streamlit
-dashboard and a Farcaster frame server under [`examples/`](examples/).
+Base RPC logs and emits the same record types as the CEX connectors, so a
+cross-venue query is one SQL statement instead of two codebases. Start with
+[docs/base_quickstart.md](docs/base_quickstart.md); there's a Streamlit
+dashboard and a Farcaster frame server under [`examples/`](examples/). Public
+data needs no keys; on-chain reads use a default Base RPC you can override.
 
 ## Tests
 
 ```bash
 uv sync --all-extras
-pytest tests/ -v
+pytest tests/
 ```
 
-1,764 test functions across 136 files, including a local mock RPC server for
+1,760 test functions across 141 files: a local mock-RPC server for
 degraded-network E2E runs (`tests/e2e/`), adversarial payload suites, and a
-regression file fed by real exchange API anomalies (`test_empirical_bugs.py`).
-`mypy --strict` and Ruff run on `src/`. CI-friendly: Qt and Matplotlib are
-forced headless, and BLAS thread caps keep Apple Silicon imports fast.
+regression file seeded by real exchange API anomalies. `mypy --strict` and Ruff
+gate `src/`. CI-friendly — Qt and Matplotlib run headless, and BLAS thread caps
+keep imports fast on Apple Silicon.
 
-## What it is not
+## What it isn't
 
-- Not a trading bot. There is no order-execution path, on purpose.
-- Not a hosted service. Everything runs on your machine, against your lake.
-- FlowMap is a desktop app; it needs a display (the data pipeline doesn't).
-- Options analytics need options data — point `iv-surface` at a lake with
-  Deribit snapshots in it.
-
-## Media
-
-Slide decks (16:9 and 9:16) with real screenshots live in
-[docs/media/promo/](docs/media/promo/) — use them for talks or posts.
+- **Not a trading bot.** There is no order-execution path, by design.
+- **Not a hosted service.** Everything runs on your machine, against your lake.
+- **Not magic.** Options analytics need options data — point `iv-surface` at a
+  lake with Deribit snapshots in it, not an empty directory.
+- FlowMap is a desktop app; it needs a display. The data pipeline doesn't.
 
 ## Contributing
 
-PRs welcome. Read `CHANGELOG.md` for recent direction and make sure the E2E
-and adversarial suites pass before opening one.
+PRs welcome. Skim [`CHANGELOG.md`](CHANGELOG.md) for direction, keep the
+`mypy --strict` and Ruff gates green, and make sure the E2E and adversarial
+suites pass before opening one.
 
 Apache-2.0 — see [LICENSE](LICENSE).

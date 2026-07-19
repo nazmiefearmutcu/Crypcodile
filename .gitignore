@@ -52,8 +52,14 @@ verify_sub1.py
 # Temporary folders
 tmp/
 tmp_pytest/
+tmp_pytest_cache/
 tmp_pytest_stress/
 tmp_test_run/
+
+# Test-run logs (never commit)
+test_failures.txt
+test_out.txt
+test_run_details.txt
 
 # Bug-hunt debug artefacts (GUI captures + temp verify scripts)
 window_shot_*.png
@@ -62,4 +68,5 @@ tmp_verify_*.txt
 
 # AI agent workspace files
 docs/superpowers/
+docs/ralph/
 .ralph/
