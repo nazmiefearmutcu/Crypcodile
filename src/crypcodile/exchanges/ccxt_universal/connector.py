@@ -383,30 +383,46 @@ class CCXTConnector(Connector):
     # ------------------------------------------------------------------
 
     async def _run_ws(self, max_reconnects: int) -> None:
+        """Stream over ccxt.pro, one socket per channel when the venue allows it.
+
+        The scalability win: when a venue supports the ``*ForSymbols`` /
+        ``watchTickers`` multi-symbol subscriptions, the ENTIRE requested symbol
+        list rides a single WebSocket per channel instead of one task (and often
+        one socket) per symbol — the difference between streaming three symbols
+        and streaming a whole exchange's book.  Venues without the multi-symbol
+        variant fall back to per-symbol ``watch*`` streams, and channels with no
+        WS support at all fall back to polling.
+        """
         ex = self._make_exchange(ws=True)
         try:
             await ex.load_markets()
             self._register_markets(ex)
+            symbols = [
+                self._resolved[s] for s in self.symbols if s in self._resolved
+            ]
+            if not symbols:
+                return
             tasks: list[asyncio.Task[None]] = []
-            for requested in self.symbols:
-                unified = self._resolved.get(requested)
-                if unified is None:
+            for channel in self.channels:
+                multi = self._multi_stream_for(ex, channel, symbols, max_reconnects)
+                if multi is not None:
+                    tasks.append(asyncio.create_task(multi))
                     continue
-                for channel in self.channels:
-                    cap = _CHANNEL_WS_CAP.get(channel)
-                    if cap is None or not ex.has.get(cap):
-                        # Fall back to polling this single (symbol, channel).
+                # No multi-symbol stream for this channel → per-symbol streams.
+                cap = _CHANNEL_WS_CAP.get(channel)
+                for unified in symbols:
+                    if cap is not None and ex.has.get(cap):
+                        tasks.append(
+                            asyncio.create_task(
+                                self._ws_stream(ex, channel, unified, max_reconnects)
+                            )
+                        )
+                    else:
                         tasks.append(
                             asyncio.create_task(
                                 self._ws_poll_fallback(channel, unified)
                             )
                         )
-                        continue
-                    tasks.append(
-                        asyncio.create_task(
-                            self._ws_stream(ex, channel, unified, max_reconnects)
-                        )
-                    )
             if not tasks:
                 return
             await asyncio.gather(*tasks)
@@ -414,6 +430,126 @@ class CCXTConnector(Connector):
             await ex.close()
             if self._session is not None and not self._session.closed:
                 await self._session.close()
+
+    def _multi_stream_for(
+        self, ex: Any, channel: str, symbols: list[str], max_reconnects: int
+    ) -> Any:
+        """Return a single multi-symbol stream coroutine for *channel*, or ``None``.
+
+        ``None`` means the venue has no whole-list subscription for this channel
+        and the caller should fall back to per-symbol streams.
+        """
+        if channel == "trade" and ex.has.get("watchTradesForSymbols"):
+            return self._ws_multi_trades(ex, symbols, max_reconnects)
+        if channel in ("book_snapshot", "book_delta") and ex.has.get(
+            "watchOrderBookForSymbols"
+        ):
+            return self._ws_multi_book(ex, symbols, max_reconnects)
+        if channel in ("book_ticker", "derivative_ticker") and ex.has.get(
+            "watchTickers"
+        ):
+            return self._ws_multi_tickers(ex, symbols, max_reconnects)
+        return None
+
+    async def _ws_retry_guard(
+        self, attempt: int, max_reconnects: int, label: str, exc: Exception
+    ) -> int:
+        """Shared WS error handling: log, honour max_reconnects, backoff, bump attempt."""
+        log.warning(
+            "%s: ws %s error (attempt %d): %s", self.ccxt_id, label, attempt, exc
+        )
+        if max_reconnects == 0 or (max_reconnects > 0 and attempt >= max_reconnects):
+            raise exc
+        await asyncio.sleep(backoff_delays(attempt, jitter=0.25, rand=random.random()))
+        return attempt + 1
+
+    async def _ws_multi_trades(
+        self, ex: Any, symbols: list[str], max_reconnects: int
+    ) -> None:
+        """One socket → trades for EVERY symbol (``watchTradesForSymbols``)."""
+        attempt = 0
+        while True:
+            try:
+                trades = await ex.watch_trades_for_symbols(symbols)
+                local_ts = now_ns()
+                for t in trades:
+                    sym = t.get("symbol")
+                    if not sym:
+                        continue
+                    rec = norm.normalize_trade(
+                        t,
+                        exchange=self.ccxt_id,
+                        symbol_raw=sym,
+                        local_ts=local_ts,
+                        registry=self.registry,
+                    )
+                    if rec is not None:
+                        await self.out.put(rec)
+                attempt = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                attempt = await self._ws_retry_guard(
+                    attempt, max_reconnects, "trades-multi", exc
+                )
+
+    async def _ws_multi_book(
+        self, ex: Any, symbols: list[str], max_reconnects: int
+    ) -> None:
+        """One socket → order books for EVERY symbol (``watchOrderBookForSymbols``).
+
+        ccxt returns the single book that just updated (tagged with its symbol);
+        we snapshot that one and loop.
+        """
+        attempt = 0
+        while True:
+            try:
+                ob = await ex.watch_order_book_for_symbols(symbols)
+                sym = ob.get("symbol")
+                if sym:
+                    snap = norm.normalize_order_book(
+                        ob,
+                        exchange=self.ccxt_id,
+                        symbol_raw=sym,
+                        local_ts=now_ns(),
+                        depth=self.book_depth,
+                        registry=self.registry,
+                    )
+                    await self.out.put(snap)
+                attempt = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                attempt = await self._ws_retry_guard(
+                    attempt, max_reconnects, "book-multi", exc
+                )
+
+    async def _ws_multi_tickers(
+        self, ex: Any, symbols: list[str], max_reconnects: int
+    ) -> None:
+        """One socket → tickers for EVERY symbol (``watchTickers``)."""
+        attempt = 0
+        while True:
+            try:
+                tickers = await ex.watch_tickers(symbols)
+                local_ts = now_ns()
+                for sym, ticker in tickers.items():
+                    for rec in norm.normalize_ticker(
+                        ticker,
+                        exchange=self.ccxt_id,
+                        symbol_raw=sym,
+                        local_ts=local_ts,
+                        registry=self.registry,
+                        is_contract=(sym in self._contracts),
+                    ):
+                        await self.out.put(rec)
+                attempt = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                attempt = await self._ws_retry_guard(
+                    attempt, max_reconnects, "tickers-multi", exc
+                )
 
     async def _ws_stream(
         self, ex: Any, channel: str, unified: str, max_reconnects: int

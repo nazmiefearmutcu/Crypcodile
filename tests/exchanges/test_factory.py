@@ -42,6 +42,7 @@ def test_list_exchanges_sorted() -> None:
         "binance",
         "bybit",
         "coinbase",
+        "coingecko",
         "deribit",
         "derive",
         "gmx_synthetix",

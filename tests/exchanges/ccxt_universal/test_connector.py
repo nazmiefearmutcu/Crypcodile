@@ -7,7 +7,10 @@ are all exercised deterministically.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+
+import pytest
 
 from crypcodile.exchanges.ccxt_universal.connector import CCXTConnector
 from crypcodile.instruments.registry import InstrumentRegistry
@@ -207,3 +210,52 @@ def test_transport_is_none_and_urls_empty():
     assert conn.transport is None
     assert conn.ws_url == ""
     assert conn.name == "fake"
+
+
+# --------------------------------------------------------------------------- #
+# multi-symbol WebSocket (the scalability path)
+# --------------------------------------------------------------------------- #
+
+class FakeWSExchange:
+    """ccxt.pro stand-in whose ``*ForSymbols`` streams yield one batch then stop."""
+
+    def __init__(self, **caps: bool) -> None:
+        self.has = {
+            "watchTradesForSymbols": True,
+            "watchOrderBookForSymbols": True,
+            "watchTickers": True,
+            **caps,
+        }
+        self._trade_calls = 0
+
+    async def watch_trades_for_symbols(self, symbols: list[str]) -> list[dict[str, Any]]:
+        self._trade_calls += 1
+        if self._trade_calls == 1:
+            return [
+                {"id": "1", "symbol": "BTC/USDT", "timestamp": 1, "side": "buy",
+                 "price": 100.0, "amount": 1.0},
+                {"id": "2", "symbol": "ETH/USDT", "timestamp": 2, "side": "sell",
+                 "price": 50.0, "amount": 2.0},
+            ]
+        raise asyncio.CancelledError  # break the infinite loop
+
+
+def test_multi_stream_routing_follows_capabilities():
+    conn, _ex, _sink, _reg = _make(["BTC/USDT"], ["trade"])
+    ex = FakeWSExchange()
+    coro = conn._multi_stream_for(ex, "trade", ["BTC/USDT"], -1)
+    assert coro is not None
+    coro.close()  # never awaited — close to avoid a warning
+
+    ex.has["watchTradesForSymbols"] = False
+    assert conn._multi_stream_for(ex, "trade", ["BTC/USDT"], -1) is None
+
+
+async def test_ws_multi_trades_streams_every_symbol_on_one_socket():
+    conn, _ex, sink, _reg = _make(["BTC/USDT", "ETH/USDT"], ["trade"])
+    ws = FakeWSExchange()
+    with pytest.raises(asyncio.CancelledError):
+        await conn._ws_multi_trades(ws, ["BTC/USDT", "ETH/USDT"], max_reconnects=-1)
+    # both symbols were normalized from the single multi-symbol batch
+    assert {r.symbol_raw for r in sink.records} == {"BTC/USDT", "ETH/USDT"}
+    assert all(isinstance(r, Trade) for r in sink.records)

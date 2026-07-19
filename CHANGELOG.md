@@ -4,6 +4,16 @@ All notable changes to the **Crypcodile** project will be documented in this fil
 
 ---
 
+## [0.1.047] - 2026-07-19
+### Added
+- **Multi-symbol WebSocket — one socket per whole exchange**: `CCXTConnector`'s ccxt.pro path now prefers the multi-symbol subscriptions (`watchTradesForSymbols` / `watchOrderBookForSymbols` / `watchTickers`, supported on 34–54 of the 78 WS venues) so the *entire* requested symbol list streams over a **single** WebSocket per channel instead of one task per symbol. Venues without the multi-symbol variant fall back to per-symbol `watch*`; channels with no WS support fall back to polling. Verified live: 15 symbols → one socket → trades from 12 distinct symbols in 12 s.
+- **CoinGecko connector — the whole coin universe**: new native `coingecko` connector pulls CoinGecko's full paginated coin list (~17k coins by market cap, keyless public API) and emits a genuine 24 h OHLCV candle per coin — reconstructing `open` from the 24 h change, using the API's 24 h high/low — so "the entire crypto market" includes the long-tail assets no single CEX lists, not just the venues. `client.py` fetch helpers are reused by `census`.
+- **`census` command — the whole market, quantified**: `crypcodile census` concurrently measures three axes — market counts across the major venues (ccxt `load_markets`, by kind), the coin universe + total market cap + BTC/ETH dominance + 24 h movers (CoinGecko), and total value locked across every chain (DeFiLlama) — prints a terminal summary and writes a self-contained, theme-aware `census.html` dashboard (and optional `--json`). Every figure is live from keyless public feeds; the render module (`crypcodile.census`) is pure and unit-tested against a fixture.
+
+### Changed
+- **`market` extra now also powers the census** venue enumeration; CoinGecko/DeFiLlama need no key. Version 0.1.046 → 0.1.047.
+- **Ruff**: `census.py` is exempt from `E501` (per-file-ignore) — it embeds a self-contained HTML/CSS dashboard template whose markup lines legitimately exceed 100 cols.
+
 ## [0.1.046] - 2026-07-19
 ### Added
 - **Universal ccxt connector — the whole crypto market behind one class**: new `crypcodile.exchanges.ccxt_universal.CCXTConnector` wraps the entire [ccxt](https://github.com/ccxt/ccxt) unified API (104 REST venues / 78 WebSocket venues as of ccxt 4.5), turning Crypcodile's nine native connectors into **100+ reachable exchanges**. It is poll-first (`fetch_trades` / `fetch_order_book` / `fetch_ticker` / `fetch_ohlcv` / `fetch_funding_rate` work on essentially every venue) with an opt-in ccxt.pro WebSocket path (`use_ws`) per (symbol, channel) where the venue advertises the matching `watch*` capability. Every venue normalizes into the exact same `Trade` / `BookSnapshot` / `BookTicker` / `DerivativeTicker` / `Funding` / `OHLCV` records the native connectors emit, so the Parquet lake, replay, analytics, FlowMap and MCP surfaces treat a ccxt venue identically. Installed via the new `[market]` extra (`pip install 'crypcodile[market]'`); folded into `[full]`.

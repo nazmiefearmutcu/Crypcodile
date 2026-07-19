@@ -41,6 +41,7 @@ _REGISTRY: dict[str, tuple[str, str]] = {
     "base_onchain": ("crypcodile.exchanges.base_onchain.connector", "BaseOnchainConnector"),
     "gmx_synthetix": ("crypcodile.exchanges.gmx_synthetix.connector", "GMXSynthetixConnector"),
     "superchain": ("crypcodile.exchanges.superchain.connector", "SuperchainConnector"),
+    "coingecko": ("crypcodile.exchanges.coingecko.connector", "CoinGeckoConnector"),
 }
 
 

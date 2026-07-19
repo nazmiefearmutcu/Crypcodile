@@ -1,6 +1,6 @@
 [project]
 name = "crypcodile"
-version = "0.1.046"
+version = "0.1.047"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -81,6 +81,10 @@ line-length = 100
 src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+[tool.ruff.lint.per-file-ignores]
+# census.py embeds a self-contained HTML/CSS dashboard template as a string
+# literal; its markup lines legitimately exceed the 100-col limit.
+"src/crypcodile/census.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

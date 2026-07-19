@@ -81,12 +81,12 @@ commands above work offline on a fresh clone.
 
 ## Commands
 
-46 commands behind one binary. The clusters:
+47 commands behind one binary. The clusters:
 
 | Cluster | Commands |
 |---|---|
 | Lake | `collect` `collect-market` `backfill` `replay` `query` `export` |
-| Discovery | `markets` `universe` `search` `resolve-symbols` `data-coverage` `catalog` `catalog-summary` `catalog-stats` `catalog-dates` `catalog-symbols` `catalog-inventory` `catalog-exchanges` `list-exchanges` |
+| Discovery | `census` `markets` `universe` `search` `resolve-symbols` `data-coverage` `catalog` `catalog-summary` `catalog-stats` `catalog-dates` `catalog-symbols` `catalog-inventory` `catalog-exchanges` `list-exchanges` |
 | Options & funding | `iv-surface` `term-structure` `vol-skew` `risk-reversal` `funding-apr` `funding-predict` `basis` `open-interest` |
 | Microstructure | `ofi` `slippage` `whale-alerts` `liquidity-depth` `indicators` |
 | On-chain / L2 risk | `sequencer-latency` `peg-deviation` `chaos-score` `lending-stress` `gas-vol` `smart-money` `label-transfers` `mev-sandwich` |
@@ -94,11 +94,12 @@ commands above work offline on a fresh clone.
 | Servers | `mcp` `api` |
 | Housekeeping | `shell` `update` |
 
-Every venue sits behind the same record schema. Nine **native** connectors are
+Every venue sits behind the same record schema. Native connectors are
 hand-written for maximum fidelity — Binance, Bybit, Coinbase, Deribit, OKX,
-Base on-chain (Uniswap V3, Aerodrome), GMX/Synthetix, Derive and Superchain —
-and one **universal** connector wraps the whole [ccxt](https://github.com/ccxt/ccxt)
-family (100+ exchanges) so any of them normalizes into the exact same `Trade` /
+Base on-chain (Uniswap V3, Aerodrome), GMX/Synthetix, Derive, Superchain, and a
+**CoinGecko** connector for the whole coin universe — while one **universal**
+connector wraps the entire [ccxt](https://github.com/ccxt/ccxt) family (100+
+exchanges), so any of them normalizes into the exact same `Trade` /
 `BookSnapshot` / `BookTicker` / `Funding` / `OHLCV` records. When a name exists
 in both, the native connector wins. Ingest survives disconnects with
 gap-bridging and a dead-letter queue
@@ -108,17 +109,35 @@ is normalized, validated and replayable.
 ### Pulling the whole market
 
 The ccxt connector is REST-poll-first (works on every venue) with an opt-in
-ccxt.pro WebSocket path (`--use-ws`) where the exchange supports it. Name a
-*slice of the market* and Crypcodile resolves the concrete symbols from the
-live universe:
+ccxt.pro WebSocket path (`--use-ws`). When a venue supports the multi-symbol
+subscriptions (`watchTradesForSymbols` / `watchTickers`), the *entire* requested
+symbol list rides a **single socket** per channel — the difference between
+streaming three symbols and streaming a whole exchange's book. Name a *slice of
+the market* and Crypcodile resolves the concrete symbols from the live universe:
 
 ```bash
 # every USDT perpetual on three venues at once, order books included
 crypcodile collect-market --exchange bybit,okx,mexc --all \
     --quote USDT --kind perpetual --channels book_snapshot --limit 400
 
+# the 200 most-liquid pairs on binance over one WebSocket
+crypcodile collect-market --exchange binance --top 200 --use-ws \
+    --channels trade --channels book_ticker
+
 # rank a venue's universe by 24h volume (feeds --top / scripting)
 crypcodile universe okx --top 50 --quote USDT --kind spot --symbols-only
+
+# the whole coin universe (17k+ coins, incl. long-tail no CEX lists)
+crypcodile collect --exchange coingecko --symbols _ --channels ohlcv
+```
+
+Want to *see* the whole market at once? `crypcodile census` measures it live —
+venue market counts (ccxt), the coin universe + market cap + dominance
+(CoinGecko), and DeFi TVL (DeFiLlama) — and writes a self-contained
+`census.html` dashboard. Every number is live from keyless public feeds.
+
+```bash
+crypcodile census                 # → census.html + a terminal summary
 ```
 
 ## FlowMap

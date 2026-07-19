@@ -1372,6 +1372,78 @@ def universe_cmd(
 
 
 # ---------------------------------------------------------------------------
+# census  — a live, quantified snapshot of the entire crypto market
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="census")
+def census_cmd(
+    venue: Annotated[
+        list[str] | None,
+        typer.Option("--venue", help="Venue(s) to deep-enumerate. Default: curated majors."),
+    ] = None,
+    coin_pages: Annotated[
+        int,
+        typer.Option("--coin-pages", help="Pages of 250 coins to sample for movers (default 1)."),
+    ] = 1,
+    output: Annotated[
+        Path,
+        typer.Option("--output", help="Path for the self-contained HTML dashboard."),
+    ] = Path("census.html"),
+    json_output: Annotated[
+        Path | None,
+        typer.Option("--json", help="Also write the raw census JSON here."),
+    ] = None,
+) -> None:
+    """Snapshot the ENTIRE crypto market — venues, coins, DeFi — as a live dashboard.
+
+    Concurrently measures three axes and folds them into one picture:
+    market counts across the major venues (ccxt), the whole coin universe +
+    market cap + dominance (CoinGecko), and total value locked (DeFiLlama).
+    Every number is live from keyless public APIs — nothing synthetic.
+
+    Prints a summary, writes a self-contained ``census.html`` dashboard you can
+    open in any browser, and optionally the raw JSON.
+
+    Examples::
+
+        crypcodile census
+        crypcodile census --venue binance,bybit,okx --coin-pages 2 --json census.json
+    """
+    import datetime as _dt
+    import json as _json
+
+    from crypcodile import census as census_mod
+    from crypcodile.util.time import now_ns
+
+    venue_list = unique_preserve(expand_csv_options(venue)) or None
+    gen_ns = now_ns()
+    typer.echo("Measuring the whole market (venues + coins + DeFi)…", err=True)
+    try:
+        snapshot = asyncio.run(
+            census_mod.market_census(
+                generated_ns=gen_ns, venues=venue_list, coin_pages=coin_pages
+            )
+        )
+    except Exception as exc:  # network / API failure
+        typer.echo(f"Error: census failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(census_mod.render_terminal(snapshot))
+
+    iso = _dt.datetime.fromtimestamp(gen_ns / 1e9, tz=_dt.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
+    )
+    output.write_text(
+        census_mod.render_html(snapshot, generated_iso=iso), encoding="utf-8"
+    )
+    typer.echo(f"Dashboard: {output}")
+    if json_output is not None:
+        json_output.write_text(_json.dumps(snapshot, indent=2), encoding="utf-8")
+        typer.echo(f"JSON: {json_output}")
+
+
+# ---------------------------------------------------------------------------
 # search
 # ---------------------------------------------------------------------------
 
