@@ -138,6 +138,32 @@ def test_list_registered_exchanges_matches_factory() -> None:
     assert tool["inputSchema"]["properties"] == {}
 
 
+def test_list_all_exchanges_native_plus_ccxt() -> None:
+    """list_all_exchanges reports native + ccxt tiers and their union."""
+    from crypcodile.exchanges.factory import (
+        list_all_exchanges,
+        list_ccxt_exchanges,
+        list_exchanges,
+    )
+    from crypcodile.mcp_server import TOOLS, handle_list_all_exchanges
+
+    result = handle_list_all_exchanges()
+    assert set(result.keys()) == {"native", "ccxt", "all", "count"}
+    assert result["native"] == list_exchanges()
+    assert result["ccxt"] == list_ccxt_exchanges()
+    assert result["all"] == list_all_exchanges()
+    assert result["count"] == len(result["all"])
+    # union contains the native connectors plus (when ccxt is installed) more.
+    assert set(result["native"]).issubset(set(result["all"]))
+    assert result["count"] >= len(result["native"])
+
+    names = {t["name"] for t in TOOLS}
+    assert "list_all_exchanges" in names
+    tool = next(t for t in TOOLS if t["name"] == "list_all_exchanges")
+    assert tool["inputSchema"]["required"] == []
+    assert tool["inputSchema"]["properties"] == {}
+
+
 def test_list_registered_exchanges_uses_factory(monkeypatch) -> None:
     """Handler delegates to factory.list_exchanges."""
     from crypcodile import mcp_server

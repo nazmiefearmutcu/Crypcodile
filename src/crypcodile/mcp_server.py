@@ -380,6 +380,30 @@ def handle_list_registered_exchanges() -> list[str]:
     return list_exchanges()
 
 
+def handle_list_all_exchanges() -> dict[str, object]:
+    """Return every venue Crypcodile can pull from: native connectors + ccxt.
+
+    Mirrors CLI ``markets``. ``native`` are the hand-written connectors;
+    ``ccxt`` are the venues served by the universal ccxt connector (empty when
+    the ``market`` extra is not installed); ``all`` is their sorted union;
+    ``count`` is ``len(all)``. Native names take precedence when a name appears
+    in both. Does not touch the data lake or any network connectors.
+    """
+    from crypcodile.exchanges.factory import (
+        list_all_exchanges,
+        list_ccxt_exchanges,
+        list_exchanges,
+    )
+
+    all_ex = list_all_exchanges()
+    return {
+        "native": list_exchanges(),
+        "ccxt": list_ccxt_exchanges(),
+        "all": all_ex,
+        "count": len(all_ex),
+    }
+
+
 def handle_catalog_summary(client: CrypcodileClient) -> dict[str, object]:
     """One-shot lake catalog summary for agent discovery.
 
@@ -1093,6 +1117,22 @@ TOOLS = [
             "registry (e.g. binance, deribit, base_onchain). Sorted ascending. "
             "Does not touch the data lake. Distinct from list_exchanges_on_disk "
             "(hive partitions present on disk)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "list_all_exchanges",
+        "description": (
+            "List every venue Crypcodile can pull from: native hand-written "
+            "connectors PLUS the 100+ ccxt-served exchanges (universal "
+            "connector). Returns {native, ccxt, all, count}; ccxt is empty when "
+            "the 'market' extra is not installed. Native names take precedence "
+            "when a name appears in both. Mirrors CLI markets. Use this to "
+            "discover the whole reachable market before collect-market."
         ),
         "inputSchema": {
             "type": "object",
@@ -2162,6 +2202,13 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                                 "error": (
                                     f"list_registered_exchanges failed: {e}"
                                 )
+                            }
+                    elif tool_name == "list_all_exchanges":
+                        try:
+                            tool_result = handle_list_all_exchanges()
+                        except Exception as e:
+                            tool_result = {
+                                "error": f"list_all_exchanges failed: {e}"
                             }
                     elif tool_name == "catalog_summary":
                         try:

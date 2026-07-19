@@ -1,6 +1,6 @@
 [project]
 name = "crypcodile"
-version = "0.1.045"
+version = "0.1.046"
 description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -38,8 +38,13 @@ web = [
 onchain = [
     "web3>=6.0.0",
 ]
+market = [
+    # Universal multi-exchange venue set: 100+ CEXes via ccxt's unified API
+    # (ccxt bundles ccxt.pro for WebSocket streaming, so no separate dep).
+    "ccxt>=4.5",
+]
 full = [
-    "crypcodile[gui,ml,web,onchain]",
+    "crypcodile[gui,ml,web,onchain,market]",
 ]
 
 

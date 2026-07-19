@@ -22,9 +22,8 @@ forwarded to the connector constructor unchanged.
 
 from __future__ import annotations
 
-from typing import Any
-
 from importlib import import_module
+from typing import Any
 
 from crypcodile.exchanges.base import Connector
 from crypcodile.instruments.registry import InstrumentRegistry
@@ -59,8 +58,41 @@ _CONNECTOR_EXTRAS: dict[str, str] = {
 
 
 def list_exchanges() -> list[str]:
-    """Sorted registered exchange names."""
+    """Sorted names of the **native** (hand-written) connectors.
+
+    Kept native-only for backward compatibility (help text, existing tests).
+    For the full set including every ccxt venue, use :func:`list_all_exchanges`.
+    """
     return list(_VALID_NAMES)
+
+
+def list_ccxt_exchanges() -> list[str]:
+    """Sorted ccxt exchange ids available via the universal connector.
+
+    Returns ``[]`` when ccxt is not installed (the ``market`` extra), so callers
+    can treat "no ccxt" as simply "no extra venues" rather than an error.
+    """
+    try:
+        import ccxt
+    except ModuleNotFoundError:
+        return []
+    return sorted(ccxt.exchanges)
+
+
+def list_all_exchanges() -> list[str]:
+    """Sorted union of native connectors and every ccxt venue.
+
+    Native names take precedence conceptually (they route to the higher-fidelity
+    hand-written connector), but a name appearing in both is listed once.
+    """
+    return sorted(set(_VALID_NAMES) | set(list_ccxt_exchanges()))
+
+
+def is_ccxt_exchange(name: str) -> bool:
+    """True when *name* is served by the universal ccxt connector (and not native)."""
+    if name in _REGISTRY:
+        return False
+    return name in set(list_ccxt_exchanges())
 
 
 def make_connector(
@@ -100,12 +132,14 @@ def make_connector(
     """
     entry = _REGISTRY.get(exchange)
     if entry is None:
-        raise ValueError(
-            f"Unknown exchange {exchange!r}. Valid names: {_VALID_NAMES}"
-        )
+        # Not a native connector — fall through to the universal ccxt venue set.
+        return _make_ccxt_connector(exchange, symbols, channels, out, registry, **kw)
     module_path, class_name = entry
+    # module_path is a fixed value from the literal `_REGISTRY` whitelist above
+    # (never raw user input — unknown keys raise ValueError before this point),
+    # so the dynamic import cannot load attacker-controlled modules.
     try:
-        cls: type[Connector] = getattr(import_module(module_path), class_name)
+        cls: type[Connector] = getattr(import_module(module_path), class_name)  # nosemgrep
     except ModuleNotFoundError as e:
         extra = _CONNECTOR_EXTRAS.get(exchange)
         if extra is not None:
@@ -119,5 +153,50 @@ def make_connector(
         channels=channels,
         out=out,
         registry=registry,
+        **kw,
+    )
+
+
+def _make_ccxt_connector(
+    exchange: str,
+    symbols: list[str],
+    channels: list[str],
+    out: Sink,
+    registry: InstrumentRegistry,
+    **kw: Any,
+) -> Connector:
+    """Build a :class:`CCXTConnector` for any ccxt exchange id.
+
+    Raises
+    ------
+    ModuleNotFoundError
+        When ccxt is not installed — with the ``crypcodile[market]`` install hint.
+    ValueError
+        When *exchange* is neither a native connector nor a ccxt exchange id.
+    """
+    try:
+        import ccxt
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            f"Exchange {exchange!r} is served by the universal ccxt connector, "
+            f"which needs the 'market' extra — install with: "
+            f"pip install 'crypcodile[market]'"
+        ) from e
+
+    if exchange not in ccxt.exchanges:
+        raise ValueError(
+            f"Unknown exchange {exchange!r}. Native: {_VALID_NAMES}. "
+            f"Or pass any of the {len(ccxt.exchanges)} ccxt exchange ids "
+            f"(see `crypcodile markets`)."
+        )
+
+    from crypcodile.exchanges.ccxt_universal.connector import CCXTConnector
+
+    return CCXTConnector(
+        symbols=symbols,
+        channels=channels,
+        out=out,
+        registry=registry,
+        ccxt_id=exchange,
         **kw,
     )

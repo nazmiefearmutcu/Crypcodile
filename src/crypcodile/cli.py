@@ -414,7 +414,12 @@ def prompt_time_range_helper(
 # ---------------------------------------------------------------------------
 from crypcodile.client.backfill import run_historical_backfill
 from crypcodile.client.collect import collect as collect_live
-from crypcodile.exchanges.factory import list_exchanges, make_connector
+from crypcodile.exchanges.factory import (
+    list_all_exchanges,
+    list_ccxt_exchanges,
+    list_exchanges,
+    make_connector,
+)
 from crypcodile.ingest.transport import AiohttpWsTransport
 from crypcodile.instruments.registry import InstrumentRegistry
 from crypcodile.store.parquet_sink import ParquetSink
@@ -1223,6 +1228,147 @@ def list_exchanges_cmd() -> None:
     """
     for ex in list_exchanges():
         typer.echo(ex)
+
+
+# ---------------------------------------------------------------------------
+# markets  — every supported venue (native connectors + ccxt universe)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="markets")
+def markets_cmd(
+    search: Annotated[
+        str | None,
+        typer.Option("--search", help="Case-insensitive substring filter on venue id."),
+    ] = None,
+    native_only: Annotated[
+        bool, typer.Option("--native-only", help="Show only hand-written connectors.")
+    ] = False,
+    ccxt_only: Annotated[
+        bool, typer.Option("--ccxt-only", help="Show only ccxt-served venues.")
+    ] = False,
+) -> None:
+    """List every exchange Crypcodile can pull from — the whole venue universe.
+
+    Two tiers are shown: the native hand-written connectors (higher fidelity,
+    used automatically when their name is requested) and the ccxt-served venues
+    (the long tail — 100+ exchanges via the universal connector).  A name in
+    both routes to the native connector.  Install the ccxt tier with
+    ``pip install 'crypcodile[market]'``.
+    """
+    native = sorted(list_exchanges())
+    ccxt_ids = list_ccxt_exchanges()
+
+    def _match(name: str) -> bool:
+        return search is None or search.lower() in name.lower()
+
+    if not ccxt_only:
+        shown = [n for n in native if _match(n)]
+        typer.echo(f"Native connectors ({len(shown)}/{len(native)}):")
+        for n in shown:
+            typer.echo(f"  {n}")
+
+    if not native_only:
+        native_set = set(native)
+        # ccxt ids that are shadowed by a native connector are tagged.
+        shown = [c for c in ccxt_ids if _match(c)]
+        if ccxt_ids:
+            typer.echo(f"ccxt venues ({len(shown)}/{len(ccxt_ids)}):")
+            for c in shown:
+                tag = "  (native override)" if c in native_set else ""
+                typer.echo(f"  {c}{tag}")
+        elif not ccxt_only:
+            typer.echo(
+                "ccxt venues: none — install the extra with "
+                "`pip install 'crypcodile[market]'`."
+            )
+
+    if not native_only:
+        typer.echo(
+            f"\nTotal reachable venues: {len(list_all_exchanges())}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# universe  — enumerate / rank the tradable set of one venue (the whole market)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="universe")
+def universe_cmd(
+    exchange: Annotated[str, typer.Argument(help="Exchange id (native or ccxt).")],
+    top: Annotated[
+        int | None,
+        typer.Option("--top", help="Rank by 24h quote volume and show the top N symbols."),
+    ] = None,
+    quote: Annotated[
+        str | None,
+        typer.Option("--quote", help="Filter to a quote currency, e.g. USDT / USD."),
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option("--kind", help="Kind filter: spot/perpetual/future/option (repeatable)."),
+    ] = None,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Max rows to print when not using --top.")
+    ] = 50,
+    symbols_only: Annotated[
+        bool, typer.Option("--symbols-only", help="Print bare symbols (script-friendly).")
+    ] = False,
+) -> None:
+    """Enumerate — or volume-rank — the entire tradable universe of one venue.
+
+    This is the "what is the whole market here" command.  With ``--top N`` it
+    returns the N most-liquid symbols (ready to feed ``collect-market``); without
+    it, it lists the filtered instrument set.
+
+    Examples::
+
+        crypcodile universe binance --top 20 --quote USDT --kind spot
+        crypcodile universe kraken --quote USD --kind spot --limit 100
+        crypcodile universe bybit --top 10 --kind perpetual --symbols-only
+    """
+    import asyncio as _asyncio
+
+    from crypcodile.instruments.registry import Kind
+    from crypcodile.instruments.universe import (
+        exchange_instruments,
+        filter_instruments,
+        top_symbols_by_volume,
+    )
+
+    kinds: set[Kind] | None = None
+    if kind:
+        try:
+            kinds = {Kind(k.lower()) for k in expand_csv_options(kind)}
+        except ValueError as exc:
+            typer.echo(f"Error: invalid --kind ({exc}).", err=True)
+            raise typer.Exit(code=1) from exc
+
+    try:
+        if top is not None:
+            syms = _asyncio.run(
+                top_symbols_by_volume(exchange, top, quote=quote, kinds=kinds)
+            )
+            if not syms:
+                typer.echo("No symbols matched.", err=True)
+                raise typer.Exit(code=0)
+            for s in syms:
+                typer.echo(s)
+            return
+
+        insts = _asyncio.run(exchange_instruments(exchange))
+    except (ValueError, ModuleNotFoundError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    insts = filter_instruments(insts, kinds=kinds, quote=quote)
+    typer.echo(f"{exchange}: {len(insts)} instrument(s) match.", err=True)
+    for inst in insts[:limit]:
+        if symbols_only:
+            typer.echo(inst.symbol_raw)
+        else:
+            typer.echo(f"  {inst.symbol_raw:24s} {inst.kind.value:10s} {inst.base}/{inst.quote}")
 
 
 # ---------------------------------------------------------------------------
@@ -2285,6 +2431,239 @@ def collect(
 collect.__doc__ = (collect.__doc__ or "").format(
     exchanges=", ".join(list_exchanges())
 )
+
+
+# ---------------------------------------------------------------------------
+# collect-market  — pull a whole exchange's market (the "entire market" switch)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="collect-market")
+def collect_market_cmd(
+    exchange: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exchange",
+            help="Exchange id(s), native or ccxt. Repeat and/or comma-separate.",
+        ),
+    ] = None,
+    channels: Annotated[
+        list[str] | None,
+        typer.Option("--channels", help="Channel(s) to collect (e.g. trade, book_ticker)."),
+    ] = None,
+    top: Annotated[
+        int | None,
+        typer.Option("--top", help="Collect the N highest 24h-volume symbols per exchange."),
+    ] = None,
+    all_symbols: Annotated[
+        bool,
+        typer.Option("--all", help="Collect every matching symbol (bounded by --limit)."),
+    ] = False,
+    quote: Annotated[
+        str | None,
+        typer.Option("--quote", help="Quote-currency filter (default USDT). Empty string = any."),
+    ] = "USDT",
+    kind: Annotated[
+        list[str] | None,
+        typer.Option("--kind", help="Kind filter: spot / perpetual / future / option. Repeatable."),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Safety cap on symbols per exchange for --all (default 500)."),
+    ] = 500,
+    poll_interval: Annotated[
+        float,
+        typer.Option("--poll-interval", help="Seconds between REST poll cycles (ccxt venues)."),
+    ] = 2.0,
+    use_ws: Annotated[
+        bool,
+        typer.Option("--use-ws", help="Prefer ccxt.pro WebSocket streams where supported."),
+    ] = False,
+    book_depth: Annotated[
+        int,
+        typer.Option("--book-depth", help="Order-book levels kept per snapshot (ccxt venues)."),
+    ] = 50,
+    data_dir: _DataDirOpt = Path("data"),
+    duration_seconds: Annotated[
+        float | None,
+        typer.Option("--duration-seconds", help="Auto-stop after this many seconds."),
+    ] = None,
+    max_reconnects: Annotated[
+        int | None,
+        typer.Option("--max-reconnects", help="Cap reconnect attempts (default unlimited)."),
+    ] = None,
+    dlq_report: Annotated[
+        Path | None,
+        typer.Option("--dlq-report", help="Dead-letter report path (default under --data-dir)."),
+    ] = None,
+) -> None:
+    """Pull a whole exchange's market into the Parquet lake — the "entire market" switch.
+
+    Instead of naming symbols, you name a *slice of the market* and Crypcodile
+    resolves the concrete symbols from the live universe:
+
+    * ``--top N``  → the N most-liquid symbols per exchange (by 24h quote volume).
+    * ``--all``    → every matching symbol, bounded by ``--limit`` for safety.
+
+    Combine with ``--quote`` / ``--kind`` to scope (e.g. all USDT perpetuals).
+    Point ``--exchange`` at any ccxt venue (see ``crypcodile markets``) or a
+    native connector.  Press Ctrl-C to stop; the sink is flushed on exit.
+
+    Examples::
+
+        # Top-200 USDT spot markets on binance
+        crypcodile collect-market --exchange binance --top 200 \
+            --quote USDT --kind spot --channels trade --channels book_ticker
+
+        # Every USDT perpetual on bybit + okx + mexc, order books included
+        crypcodile collect-market --exchange bybit,okx,mexc --all \
+            --quote USDT --kind perpetual --channels book_snapshot --limit 400
+
+        # Whole market via WebSocket where available
+        crypcodile collect-market --exchange kraken --top 50 --use-ws \
+            --channels trade --channels book_ticker
+    """
+    from crypcodile.instruments.registry import Kind
+    from crypcodile.instruments.universe import (
+        exchange_instruments,
+        filter_instruments,
+        top_symbols_by_volume,
+    )
+
+    exchanges = unique_preserve([e.lower() for e in expand_csv_options(exchange)])
+    channel_list = unique_preserve(expand_csv_options(channels))
+
+    if not exchanges or not channel_list:
+        typer.echo("Error: --exchange and --channels are required.", err=True)
+        raise typer.Exit(code=1)
+    if top is None and not all_symbols:
+        typer.echo("Error: specify --top N or --all to choose the market slice.", err=True)
+        raise typer.Exit(code=1)
+    if top is not None and all_symbols:
+        typer.echo("Error: use either --top or --all, not both.", err=True)
+        raise typer.Exit(code=1)
+
+    quote_filter = quote if quote else None  # empty string → any quote
+    kinds: set[Kind] | None = None
+    if kind:
+        try:
+            kinds = {Kind(k.lower()) for k in expand_csv_options(kind)}
+        except ValueError as exc:
+            typer.echo(f"Error: invalid --kind ({exc}).", err=True)
+            raise typer.Exit(code=1) from exc
+
+    # ---- Resolve the concrete symbol list per exchange from the live universe.
+    per_exchange_symbols: dict[str, list[str]] = {}
+    for ex in exchanges:
+        try:
+            if top is not None:
+                syms = asyncio.run(
+                    top_symbols_by_volume(ex, top, quote=quote_filter, kinds=kinds)
+                )
+            else:
+                insts = asyncio.run(exchange_instruments(ex))
+                filtered = filter_instruments(insts, kinds=kinds, quote=quote_filter)
+                syms = [i.symbol_raw for i in filtered]
+                if len(syms) > limit:
+                    typer.echo(
+                        f"Note: {ex} has {len(syms)} matching symbols; capping to "
+                        f"--limit={limit}. Raise --limit to widen.",
+                        err=True,
+                    )
+                    syms = syms[:limit]
+        except (ValueError, ModuleNotFoundError) as exc:
+            typer.echo(f"Error resolving universe for {ex!r}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        if syms:
+            per_exchange_symbols[ex] = syms
+        else:
+            typer.echo(f"Warning: no symbols matched on {ex!r} — skipping.", err=True)
+
+    if not per_exchange_symbols:
+        typer.echo("Error: no symbols resolved on any exchange.", err=True)
+        raise typer.Exit(code=1)
+
+    total_streams = sum(
+        len(s) for s in per_exchange_symbols.values()
+    ) * len(channel_list)
+    typer.echo(
+        f"Resolved {sum(len(s) for s in per_exchange_symbols.values())} symbol(s) "
+        f"across {len(per_exchange_symbols)} exchange(s) x {len(channel_list)} "
+        f"channel(s) = {total_streams} stream(s)."
+    )
+
+    sink = ParquetSink(data_dir=data_dir, max_buffer_rows=10_000, flush_interval_seconds=5.0)
+    registry = InstrumentRegistry()
+    monitoring_sink = MonitoringSink(sink)
+
+    # collect-market resolves symbols from the ccxt universe (unified format,
+    # e.g. "BTC/USDT"), so every ccxt-supported venue MUST use the universal
+    # connector — even the five names that also have a native connector
+    # (binance/bybit/okx/coinbase/deribit), because the native connectors
+    # expect a different raw-symbol format ("BTCUSDT"). Native-ONLY venues
+    # (on-chain, Derive) enumerated via their own list_instruments, so their
+    # native symbols pair with the native connector.
+    from crypcodile.exchanges.ccxt_universal.connector import CCXTConnector
+
+    ccxt_ids = set(list_ccxt_exchanges())
+    connectors: list = []
+    for ex, syms in per_exchange_symbols.items():
+        if ex in ccxt_ids:
+            connector = CCXTConnector(
+                symbols=syms,
+                channels=channel_list,
+                out=sink,
+                registry=registry,
+                ccxt_id=ex,
+                poll_interval=poll_interval,
+                use_ws=use_ws,
+                book_depth=book_depth,
+            )
+        else:
+            connector = make_connector(
+                exchange=ex,
+                symbols=syms,
+                channels=channel_list,
+                out=sink,
+                registry=registry,
+            )
+        if connector.transport is None:
+            connector.transport = AiohttpWsTransport(connector.ws_url)
+        connector.out = monitoring_sink
+        connectors.append(connector)
+
+    collect_kwargs: dict = {"dlq_report_path": dlq_report, "data_dir": data_dir}
+    if max_reconnects is not None:
+        collect_kwargs["max_reconnects"] = max_reconnects
+
+    async def _run() -> None:
+        if duration_seconds is None:
+            await collect_live(connectors, monitoring_sink, **collect_kwargs)
+            return
+        task = asyncio.create_task(collect_live(connectors, monitoring_sink, **collect_kwargs))
+
+        async def _cancel_after() -> None:
+            await asyncio.sleep(duration_seconds)
+            task.cancel()
+
+        timer = asyncio.create_task(_cancel_after())
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            timer.cancel()
+            try:
+                await timer
+            except asyncio.CancelledError:
+                pass
+
+    typer.echo(f"Starting market collection → {data_dir}  (Ctrl-C to stop)")
+    try:
+        asyncio.run(_run())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    typer.echo("Collection stopped. Data written to: " + str(data_dir))
 
 
 # ---------------------------------------------------------------------------
