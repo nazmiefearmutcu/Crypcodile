@@ -43,10 +43,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      # tests/gui drives PyQt6 windows and, for FlowMap, a package that is not a
-      # crypcodile dependency at all (see the FlowMap section of the README).
+      # Two tiers are excluded, both for environment reasons, not because they
+      # fail: tests/gui drives PyQt6 windows and, for FlowMap, a package that is
+      # not a crypcodile dependency at all (see the README's FlowMap section);
+      # tests/e2e spawns uvicorn/MCP server subprocesses and binds localhost
+      # ports, which blocks on a hosted runner. Run both locally with a plain
+      # `uv run pytest`.
       - name: Run test suite
-        run: uv run pytest --ignore=tests/gui
+        run: uv run pytest --ignore=tests/gui --ignore=tests/e2e -rf
 
   lint:
     name: ruff + mypy (advisory)

@@ -10,10 +10,13 @@ uv sync --all-extras
 uv run pytest --ignore=tests/gui
 ```
 
-`tests/gui` is excluded because it drives real PyQt6 windows, and its FlowMap
-tests import a package this project does not install — see the FlowMap section
-of the [README](README.md#flowmap). Those tests skip cleanly rather than error,
-so running the full `uv run pytest` locally is fine too.
+CI additionally skips `tests/gui` and `tests/e2e`. `tests/gui` drives real PyQt6
+windows and its FlowMap tests import a package this project does not install
+(see the FlowMap section of the [README](README.md#flowmap)); those skip cleanly
+rather than error. `tests/e2e` spawns uvicorn and MCP server subprocesses and
+binds localhost ports, which blocks on a hosted runner. Both are expected to
+pass locally — run a plain `uv run pytest` before opening a PR that touches
+either.
 
 ## What CI enforces
 
@@ -22,7 +25,7 @@ to `main` and every pull request.
 
 | Check | Command | Blocking? |
 |---|---|---|
-| Test suite | `uv run pytest --ignore=tests/gui` | **yes** |
+| Test suite | `uv run pytest --ignore=tests/gui --ignore=tests/e2e` | **yes** |
 | Undefined names | `uv run ruff check src --select F821` | **yes** |
 | Full lint | `uv run ruff check src` | no — advisory |
 | Type check | `uv run mypy` | no — advisory |

@@ -231,13 +231,16 @@ pytest tests/
 
 1,831 test functions across 142 files: a local mock-RPC server for
 degraded-network E2E runs (`tests/e2e/`), adversarial payload suites, and a
-regression file seeded by real exchange API anomalies. Every push and PR runs
-`pytest --ignore=tests/gui` on GitHub Actions — that's the badge at the top.
-Qt and Matplotlib run headless, and BLAS thread caps keep imports fast on
-Apple Silicon.
+regression file seeded by real exchange API anomalies. Every push and PR runs the suite on
+GitHub Actions — that's the badge at the top. Qt and Matplotlib run headless,
+and BLAS thread caps keep imports fast on Apple Silicon.
 
-`tests/gui` is excluded from CI: it drives real PyQt6 windows, and its FlowMap
-tests need a package crypcodile does not install (see [FlowMap](#flowmap)).
+CI runs `pytest --ignore=tests/gui --ignore=tests/e2e`. Both exclusions are
+environmental, not a way to hide red: `tests/gui` drives real PyQt6 windows and
+its FlowMap tests need a package crypcodile does not install (see
+[FlowMap](#flowmap)); `tests/e2e` spawns uvicorn and MCP server subprocesses and
+binds localhost ports, which blocks on a hosted runner. A plain
+`uv run pytest` runs everything locally.
 
 **Lint and types are advisory, not yet green.** `ruff check src` reports 432
 findings and `mypy` reports 258 across 36 of 130 files. CI runs both with
