@@ -192,17 +192,32 @@ class ParquetCompactor:
                 # Only after durable compact file exists, remove source parts.
                 # Skip the compacted file itself if it were in `files` (it isn't —
                 # we rename after listing originals).
+                #
+                # Two phases on purpose: rename every source out of the `part-*`
+                # namespace first so a crash mid-cleanup can never leave the
+                # catalog reading both the sources and the compacted output, then
+                # unlink. Phase two is what actually reclaims the disk space.
+                retired: list[Path] = []
                 for f in files:
                     if f.resolve() == compacted_file.resolve():
                         continue
                     try:
-                        old_f = f.with_name(f.name.replace("part-", "old-"))
+                        old_f = f.with_name(f.name.replace("part-", "old-", 1))
                         f.rename(old_f)
-                        old_files.append(old_f)
-                    except Exception as err:
-                        log.error(f"Failed to delete original file {f}: {err}")
+                        retired.append(old_f)
+                    except OSError as err:
+                        log.error(f"Failed to retire original file {f}: {err}")
+
+                for old_f in retired:
+                    try:
+                        old_f.unlink()
+                    except OSError as err:
+                        log.error(f"Failed to delete retired file {old_f}: {err}")
             except Exception as e:
-                log.error(f"Failed compaction for {bucket_dir}: {e}")
+                # log.exception, not log.error: a bug in this block used to be
+                # reported as a plain one-line "failure" with no traceback, which
+                # is how an undefined name went unnoticed while the lake grew.
+                log.exception(f"Failed compaction for {bucket_dir}: {e}")
                 # On any failure after writing temp: clean up temp; never delete originals
                 # if compacted file is not durable.
                 if temp_file is not None:

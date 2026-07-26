@@ -63,6 +63,52 @@ async def test_parquet_compactor_merges_multiple_files(tmp_path: pathlib.Path) -
 
 
 @pytest.mark.asyncio
+async def test_compaction_leaves_no_retired_files_behind(tmp_path: pathlib.Path) -> None:
+    """Regression: compaction used to rename sources to ``old-*`` and never unlink them.
+
+    ``_compact_sync`` appended each renamed source to an ``old_files`` list that was
+    never defined, so every cleanup raised ``NameError`` into a broad ``except`` that
+    logged it as "Failed to delete original file". The rename had already happened by
+    then, so the lake kept a full copy of every compacted part forever and grew
+    without bound on each run. Only ``part-*`` was ever asserted on, so no test saw it.
+    """
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=2, flush_interval_seconds=9999)
+    await sink.put(_trade(10.0))
+    await sink.put(_trade(20.0))
+    await sink.flush()
+
+    await sink.put(_trade(30.0))
+    await sink.put(_trade(40.0))
+    await sink.flush()
+
+    pre_files = list(tmp_path.rglob("part-*.parquet"))
+    assert len(pre_files) >= 2
+    bytes_before = sum(f.stat().st_size for f in tmp_path.rglob("*.parquet"))
+
+    compactor = ParquetCompactor(data_dir=tmp_path, min_age_seconds=0.0, poll_interval=1.0)
+    await compactor.compact()
+
+    leftovers = list(tmp_path.rglob("old-*"))
+    assert leftovers == [], f"compaction left retired source files behind: {leftovers}"
+
+    # Nothing outside the single compacted part may survive — no temp files either.
+    survivors = list(tmp_path.rglob("*.parquet"))
+    assert len(survivors) == 1, f"expected only the compacted part, found {survivors}"
+    assert survivors[0].name.startswith("part-compacted-")
+
+    # The whole point of compaction: the lake must not grow.
+    assert survivors[0].stat().st_size <= bytes_before
+
+    # And the compacted file still holds every row.
+    assert sorted(pl.read_parquet(survivors[0])["price"].to_list()) == [10.0, 20.0, 30.0, 40.0]
+
+    # A second pass over an already-compacted bucket is a no-op, not a re-copy.
+    await compactor.compact()
+    assert list(tmp_path.rglob("old-*")) == []
+    assert len(list(tmp_path.rglob("*.parquet"))) == 1
+
+
+@pytest.mark.asyncio
 async def test_parquet_compactor_ignores_recent_files(tmp_path: pathlib.Path) -> None:
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=2, flush_interval_seconds=9999)
     await sink.put(_trade(10.0))
