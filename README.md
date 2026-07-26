@@ -21,9 +21,10 @@ statement, not three codebases.
 replayable — `replay` a window today or next year and you get identical bytes.
 No hidden clocks, no re-fetching, no drift.
 
-On top of that sits an options and microstructure analytics library, **FlowMap**
-(a GPU order-flow visualizer), and an **MCP server** so LLM agents read real
-prices instead of inventing them.
+On top of that sits an options and microstructure analytics library, an **MCP
+server** so LLM agents read real prices instead of inventing them, and a bridge
+to **FlowMap**, a GPU order-flow visualizer that lives in a separate project
+(see [FlowMap](#flowmap) — it is not installable from here).
 
 ![FlowMap rendering live BTCUSDT order flow](docs/media/flowmap-btcusdt-live.png)
 
@@ -39,7 +40,7 @@ so you never pay for a dependency tree you don't use:
 
 ```bash
 uv pip install 'crypcodile[market]'   # +100 exchanges via the universal ccxt connector
-uv pip install 'crypcodile[gui]'      # FlowMap visualizer + gas tracker (PyQt6)
+uv pip install 'crypcodile[gui]'      # gas tracker + Qt runtime (PyQt6)
 uv pip install 'crypcodile[ml]'       # funding prediction + Black-Scholes (xgboost/scipy)
 uv pip install 'crypcodile[web]'      # FastAPI server + Streamlit examples
 uv pip install 'crypcodile[onchain]'  # Base L2 / GMX / Superchain connectors (web3)
@@ -62,8 +63,8 @@ crypcodile query "SELECT count(*) FROM records WHERE channel = 'trade'"
 # replay that window later — identical bytes, every run
 crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL
 
-# open the order-flow visualizer on live Binance data  ([gui] extra)
-crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
+# serve the lake over HTTP  ([web] extra)
+crypcodile api --data-dir data
 ```
 
 No lake yet? `replay` and `query` fall back to the bundled sample in
@@ -129,7 +130,7 @@ crypcodile census                  # → census.html + a terminal summary
 | **Options & funding** | `iv-surface` · `term-structure` · `vol-skew` · `risk-reversal` · `funding-apr` · `funding-predict` · `basis` · `open-interest` |
 | **Microstructure** | `ofi` · `slippage` · `whale-alerts` · `liquidity-depth` · `indicators` |
 | **On-chain / L2 risk** | `sequencer-latency` · `peg-deviation` · `chaos-score` · `lending-stress` · `gas-vol` · `smart-money` · `label-transfers` · `mev-sandwich` |
-| **Desktop** | `flowmap` · `gas-tracker` |
+| **Desktop** | `gas-tracker` · `flowmap` (needs a separate FlowMap checkout — [see below](#flowmap)) |
 | **Servers** | `mcp` · `api` |
 | **Shell** | `shell` · `update` |
 
@@ -140,16 +141,28 @@ replayable.
 
 ## FlowMap
 
+> **Not installable from this repo.** `crypcodile flowmap` is a *bridge*, not a
+> bundled feature. It imports a top-level `flowmap` package — the Qt front-end of
+> a separate project that crypcodile does not vendor, declare as a dependency, or
+> install. That package is not published on PyPI, and the public
+> [flowmap](https://github.com/nazmiefearmutcu/flowmap) repository ships a
+> `flowmap_server` package rather than the `flowmap` UI package this bridge
+> imports. `pip install 'crypcodile[gui]'` installs PyQt6 for the gas tracker; it
+> cannot supply FlowMap. Without a local checkout on `FLOWMAP_HOME`/`PYTHONPATH`,
+> `crypcodile flowmap` prints exactly that and exits. The screenshots below are
+> from the author's local checkout. Everything else in crypcodile runs without it.
+
 ![FlowMap settings and trackers panel](docs/media/flowmap-btcusdt-settings.png)
 
 FlowMap paints resting book depth over time as a liquidity heatmap and layers
 the tape on top: aggressor-colored trade bubbles, VWAP and BBO tags,
 COB/CVP/SVP volume profiles, a cumulative-delta strip, a DOM ladder, and
-iceberg / large-lot trackers. Feed it live data, a lake replay, or a built-in
+iceberg / large-lot trackers. Fed by live data, a lake replay, or a built-in
 synthetic market for poking at the UI offline.
 
 ```bash
-crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
+FLOWMAP_HOME=/path/to/flowmap-checkout \
+    crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
 It renders on `QOpenGLWidget` with a pure-NumPy density engine behind it (pin a
@@ -224,7 +237,8 @@ keep imports fast on Apple Silicon.
 - **Not a hosted service.** Everything runs on your machine, against your lake.
 - **Not magic.** Options analytics need options data — point `iv-surface` at a
   lake with Deribit snapshots in it, not an empty directory.
-- FlowMap is a desktop app; it needs a display. The data pipeline doesn't.
+- **Not a FlowMap distribution.** `crypcodile flowmap` bridges to a separate
+  project you must already have checked out; it is not installed by any extra.
 
 ## Contributing
 

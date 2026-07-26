@@ -5142,12 +5142,20 @@ def run_flowmap_gui(initial_symbol: str, data_dir: str, historical_hours: float)
 
     try:
         from PyQt6.QtWidgets import QApplication
-        from crypcodile.gui.flowmap_window import FlowmapWindow
     except ImportError as e:
         sys.stderr.write(
-            f"GUI dependencies not available: {e}\n"
+            f"Qt is not installed: {e}\n"
             "Install with: pip install 'crypcodile[gui]'\n"
         )
+        sys.stderr.flush()
+        return
+
+    try:
+        from crypcodile.gui.flowmap_window import FlowmapWindow
+    except ImportError as e:
+        # The [gui] extra installs PyQt6 — it cannot install the separate FlowMap
+        # UI package, so do not tell the user it can.
+        sys.stderr.write(f"{e}\n")
         sys.stderr.flush()
         return
 

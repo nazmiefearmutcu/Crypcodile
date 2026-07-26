@@ -3,6 +3,15 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 
+# The `flowmap` UI package is a separate project that crypcodile neither declares
+# nor installs (see crypcodile.gui.flowmap_window.FLOWMAP_REQUIREMENT). Without
+# this guard the whole module errored at *collection* on any clean install, which
+# aborted `pytest tests/` outright instead of skipping one file.
+pytest.importorskip(
+    "flowmap",
+    reason="separate FlowMap UI package not installed; set FLOWMAP_HOME to run these",
+)
+
 try:
     import PyQt6
     HAS_GUI_LIBS = True

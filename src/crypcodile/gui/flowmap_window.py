@@ -66,32 +66,41 @@ def compute_hist_vis_rows(
     return max(int(min_vis_rows), vr)
 
 
-# Append the independent flowmap directory to python's import path (portable).
-# Order: FLOWMAP_HOME env → sibling of Crypcodile repo → common local checkouts.
-def _resolve_flowmap_path() -> str | None:
-    candidates = []
-    env = os.environ.get("FLOWMAP_HOME")
-    if env:
-        candidates.append(env)
-    here = os.path.dirname(os.path.abspath(__file__))
-    # .../Crypcodile/src/crypcodile/gui → up to home/workspace siblings
-    for rel in (
-        os.path.join(here, "..", "..", "..", "..", "flowmap"),  # ~/Crypcodile → ~/flowmap
-        os.path.join(here, "..", "..", "..", "..", "..", "flowmap"),
-        os.path.expanduser("~/flowmap"),
-    ):
-        candidates.append(os.path.abspath(rel))
-    for c in candidates:
-        if c and os.path.isdir(c) and os.path.isdir(os.path.join(c, "flowmap")):
-            return c
-    return None
+FLOWMAP_REQUIREMENT = (
+    "crypcodile.gui.flowmap_window wraps the Qt front-end of the separate FlowMap "
+    "project, which provides a top-level `flowmap` package (flowmap.ui.main_window, "
+    "flowmap.core).\n"
+    "\n"
+    "crypcodile does not vendor, declare, or install it. It is not on PyPI, and the "
+    "public repository https://github.com/nazmiefearmutcu/flowmap publishes a "
+    "`flowmap_server` package, not the `flowmap` UI package this module imports — so "
+    "`pip install crypcodile[gui]` cannot supply it and neither can pip from that repo.\n"
+    "\n"
+    "If you have a checkout that exposes a top-level `flowmap` package, point "
+    "FLOWMAP_HOME at its parent directory (or put it on PYTHONPATH) and retry. "
+    "Otherwise `crypcodile flowmap` is unavailable; everything else in crypcodile — "
+    "collect, replay, query, api, mcp, and the analytics — runs without it."
+)
 
-flowmap_path = _resolve_flowmap_path()
-if flowmap_path and flowmap_path not in sys.path:
-    sys.path.insert(0, flowmap_path)
+# Explicit opt-in only. This used to probe ~/flowmap and two guessed parent
+# directories, which quietly worked on exactly one machine and produced a
+# bare ImportError everywhere else.
+_flowmap_home = os.environ.get("FLOWMAP_HOME")
+if _flowmap_home and os.path.isdir(_flowmap_home) and _flowmap_home not in sys.path:
+    sys.path.insert(0, _flowmap_home)
 
-from flowmap.ui.main_window import MainWindow as StandaloneMainWindow
-from flowmap.core import Level2Snapshot, Level2Update, Trade, BBO, Side as FlowmapSide, is_buy_side
+try:
+    from flowmap.ui.main_window import MainWindow as StandaloneMainWindow
+    from flowmap.core import (
+        Level2Snapshot,
+        Level2Update,
+        Trade,
+        BBO,
+        Side as FlowmapSide,
+        is_buy_side,
+    )
+except ImportError as _err:  # pragma: no cover - depends on an external checkout
+    raise ImportError(FLOWMAP_REQUIREMENT) from _err
 
 def dict_to_flowmap_objects(event: dict) -> list:
     channel = event.get("channel")
