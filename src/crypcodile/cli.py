@@ -100,8 +100,9 @@ Usage examples::
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
-from typing import Any, Annotated
+from typing import TYPE_CHECKING, Any, Annotated
 
 import typer
 import typer.rich_utils
@@ -111,6 +112,9 @@ typer.rich_utils.STYLE_OPTION = "bold dark_green"
 typer.rich_utils.STYLE_COMMANDS_PANEL_BORDER = "dark_green"
 typer.rich_utils.STYLE_OPTIONS_PANEL_BORDER = "dark_green"
 typer.rich_utils.STYLE_COMMANDS_TABLE_FIRST_COLUMN = "bold dark_green"
+
+if TYPE_CHECKING:  # polars is imported lazily inside commands to keep startup fast
+    import polars as pl
 
 def is_interactive_stdin() -> bool:
     import sys

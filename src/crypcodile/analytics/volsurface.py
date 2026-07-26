@@ -34,6 +34,7 @@ no data exists — consistent with the ``resample_ohlcv`` / ``funding_apr`` cont
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import duckdb
 import polars as pl

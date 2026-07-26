@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +26,9 @@ from crypcodile.util.json_safe import (
     json_safe_float as _json_safe_float,
     json_safe_records as _json_safe_records,
 )
+
+if TYPE_CHECKING:  # Catalog is imported lazily inside _get_api_catalog()
+    from crypcodile.store.catalog import Catalog
 
 log = logging.getLogger(__name__)
 

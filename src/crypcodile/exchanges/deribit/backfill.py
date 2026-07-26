@@ -15,7 +15,10 @@ Appendix §3.1:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # aiohttp is only needed for the live fetch helpers' annotations
+    import aiohttp
 
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import Funding, Liquidation, Record, Trade
@@ -222,6 +225,8 @@ async def _live_fetch_trades(  # pragma: no cover
     end_ts_ms: int,
     count: int,
     start_ts_ms: int,
+    *,
+    rest_base: str = "https://www.deribit.com/api/v2",
     session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one trades page from the Deribit REST API."""

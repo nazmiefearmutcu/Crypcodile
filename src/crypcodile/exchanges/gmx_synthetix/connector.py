@@ -15,6 +15,7 @@ from crypcodile.ingest.transport import Transport
 from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import Record, Trade, Funding, Liquidation
+from crypcodile.sink.base import Sink
 
 log = logging.getLogger(__name__)
 

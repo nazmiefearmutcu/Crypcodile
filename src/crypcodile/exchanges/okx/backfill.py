@@ -19,7 +19,10 @@ OKX default funding interval is 8 hours.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # aiohttp is only needed for the live fetch helpers' annotations
+    import aiohttp
 
 from crypcodile.schema.records import Funding, OpenInterest, Record, Trade
 from crypcodile.util.time import ms_to_ns
@@ -337,6 +340,8 @@ async def _live_fetch_trades(  # pragma: no cover
     after: str | None,
     before: str | None,
     limit: int,
+    *,
+    rest_base: str = REST_BASE,
     session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one trades page from the OKX V5 REST API."""

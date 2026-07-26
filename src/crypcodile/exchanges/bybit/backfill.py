@@ -15,7 +15,10 @@ Bybit default funding interval is 8 hours.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # aiohttp is only needed for the live fetch helpers' annotations
+    import aiohttp
 
 from crypcodile.schema.enums import Side
 from crypcodile.schema.records import Funding, OpenInterest, Record, Trade
