@@ -6,7 +6,9 @@ Gate 3 — every emitted prov_basis has a registered formula (Task 13).
 Gate 4 — every capability appears in all three surfaces (Phase 2).
 """
 
+import ast
 import inspect
+import pathlib
 from collections import Counter
 from typing import get_args
 
@@ -274,3 +276,128 @@ def test_gate1_the_union_discriminates_by_tag() -> None:
     decoded = msgspec.json.decode(msgspec.json.encode(f), type=Record)
     assert type(decoded) is Funding
     assert decoded.prov_basis == "native"
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 — every capability is implemented for both asset classes.
+# ---------------------------------------------------------------------------
+
+
+def test_gate2_registry_is_not_empty():
+    from crocodile.core.capability import REGISTRY
+
+    assert REGISTRY, (
+        "an empty registry makes the symmetry gate vacuously true; "
+        "Phase 1 seeds it with `indicators`"
+    )
+
+
+def test_gate2_every_capability_is_symmetric():
+    from crocodile.core.capability import IRREDUCIBLE, REGISTRY, AssetClass
+
+    for cap in REGISTRY.values():
+        if cap.name in IRREDUCIBLE:
+            continue
+        assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}, (
+            f"{cap.name} implements {sorted(cap.impls)}; add the missing asset class "
+            f"or justify it in IRREDUCIBLE"
+        )
+
+
+def test_gate2_irreducible_entries_carry_a_justification():
+    from crocodile.core.capability import IRREDUCIBLE
+
+    for name, why in IRREDUCIBLE.items():
+        assert why.strip(), f"{name} is on IRREDUCIBLE with no justification"
+
+
+def test_gate2_params_schema_is_json_serialisable():
+    """Phase 2 uses this as the MCP inputSchema; a struct that cannot be
+    described has to be found now, not then."""
+    import msgspec
+
+    from crocodile.core.capability import REGISTRY
+
+    for cap in REGISTRY.values():
+        schema = msgspec.json.schema(cap.params)
+        assert schema.get("$ref") or schema.get("type"), cap.name
+
+
+# ---------------------------------------------------------------------------
+# Gate 3 — every emitted prov_basis has a registered confidence formula.
+# ---------------------------------------------------------------------------
+
+
+def _crocodile_sources() -> list[pathlib.Path]:
+    """Every ``crocodile`` source file, located from this file rather than from the cwd.
+
+    The two gates below scan source text. A relative ``Path("src/crocodile")`` resolves
+    against the working directory, so running pytest from anywhere but the repo root would
+    make ``rglob`` yield nothing and turn both gates permanently green — the failure mode a
+    conformance gate can least afford. Anchoring on ``__file__`` and asserting the tree is
+    non-empty means a gate that finds nothing says so instead of passing.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "crocodile"
+    files = sorted(root.rglob("*.py"))
+    assert files, f"no crocodile sources under {root}; these gates would pass vacuously"
+    return files
+
+
+def test_gate3_every_declared_basis_is_registered():
+    from crocodile.core.capability import REGISTRY
+    from crocodile.core.schema.provenance import load_all_bases, registered_bases
+
+    load_all_bases()
+    known = registered_bases()
+    for cap in REGISTRY.values():
+        for asset_class, impl in cap.impls.items():
+            assert impl.basis in known, (
+                f"{cap.name}/{asset_class} declares basis {impl.basis!r}, "
+                f"which has no registered confidence formula"
+            )
+
+
+def test_gate3_no_source_file_emits_an_unregistered_basis():
+    from crocodile.core.schema.provenance import load_all_bases, registered_bases
+
+    # Without this the registry reflects only what happens to have been imported,
+    # and a basis registered in an unimported module becomes a false offender.
+    load_all_bases()
+    known = registered_bases()
+    offenders = []
+    for path in _crocodile_sources():
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "prov_basis" and isinstance(kw.value, ast.Constant):
+                    value = kw.value.value
+                    if isinstance(value, str) and value not in known:
+                        offenders.append(f"{path}:{kw.value.lineno} {value!r}")
+    assert not offenders, f"unregistered prov_basis literals: {offenders}"
+
+
+def test_gate3_no_source_file_hand_writes_a_confidence():
+    """The bypass the basis gate alone does not catch.
+
+    ``prov_basis="yahoo_1m_vap", prov_confidence=0.93`` satisfies every other gate
+    while never touching the registry — the easy path routing around the
+    mechanism. Confidence must come from ``provenance_fields()``, so a literal
+    number at a call site is the signature of a hand-assembled tail.
+    """
+    offenders = []
+    for path in _crocodile_sources():
+        if path.name == "provenance.py":
+            continue  # the registry itself legitimately returns numbers
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg != "prov_confidence" or not isinstance(kw.value, ast.Constant):
+                    continue
+                if kw.value.value is not None:
+                    offenders.append(f"{path}:{kw.value.lineno} = {kw.value.value!r}")
+    assert not offenders, (
+        f"hand-written prov_confidence literals: {offenders}. "
+        f"Build the tail with provenance_fields(basis, inputs) instead."
+    )

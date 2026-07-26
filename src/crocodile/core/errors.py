@@ -9,6 +9,8 @@ depend on it without risking a cycle.
 
 from __future__ import annotations
 
+from typing import Any
+
 __all__ = [
     "BookGap",
     "CapabilityUnavailable",
@@ -67,6 +69,17 @@ class ProvenanceError(CrocodileError):
     """A record's provenance could not be established."""
 
 
+def _rebuild_capability_unavailable(
+    capability: str, asset_class: str, reason: str
+) -> CapabilityUnavailable:
+    """Reconstruct a :class:`CapabilityUnavailable` from its three fields.
+
+    Module scope, not a ``staticmethod``: pickle stores this callable by qualified name and
+    imports it back, so it has to be findable as ``crocodile.core.errors._rebuild_...``.
+    """
+    return CapabilityUnavailable(capability, asset_class, reason=reason)
+
+
 class CapabilityUnavailable(CrocodileError):
     """A capability has no implementation for this asset class in this deployment.
 
@@ -82,3 +95,19 @@ class CapabilityUnavailable(CrocodileError):
         self.asset_class = asset_class
         self.reason = reason
         super().__init__(f"capability {capability!r} unavailable for {asset_class}: {reason}")
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Rebuild from the three fields rather than from ``args``.
+
+        ``BaseException.__reduce__`` returns ``(cls, self.args, self.__dict__)``, and
+        ``args`` is the single formatted message this class handed to ``super().__init__``.
+        Reconstruction would therefore call the two-positional-argument constructor with one
+        argument and die with ``TypeError``. That ``TypeError`` is raised *during unpickling*,
+        so it replaces the error being transported and surfaces far from its origin — the
+        loudest possible failure in the one class that exists to cross a process or wire
+        boundary. This also covers ``copy`` and ``deepcopy``, which go through ``__reduce__``.
+        """
+        return (
+            _rebuild_capability_unavailable,
+            (self.capability, self.asset_class, self.reason),
+        )
