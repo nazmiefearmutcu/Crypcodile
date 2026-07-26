@@ -16,7 +16,7 @@ import pytest
 from crocodile.core.schema import records
 from crocodile.core.schema.enums import AssetClass, Channel, Side
 from crocodile.core.schema.provenance import Provenance, provenance_fields
-from crocodile.core.schema.records import Funding, OptionsChain, Record, Trade, _Header
+from crocodile.core.schema.records import OHLCV, Funding, OptionsChain, Record, Trade, _Header
 
 CANONICAL_HEADER = (
     "source",
@@ -95,9 +95,9 @@ def test_every_declared_record_is_reachable_through_the_union() -> None:
 @pytest.mark.parametrize("cls", _declared_record_types(), ids=lambda c: c.__name__)
 def test_gate1_record_header_conformance(cls: type[msgspec.Struct]) -> None:
     names = tuple(f.name for f in msgspec.structs.fields(cls))
-    assert (
-        names[: len(CANONICAL_HEADER)] == CANONICAL_HEADER
-    ), f"{cls.__name__} header is {names[: len(CANONICAL_HEADER)]}"
+    assert names[: len(CANONICAL_HEADER)] == CANONICAL_HEADER, (
+        f"{cls.__name__} header is {names[: len(CANONICAL_HEADER)]}"
+    )
 
 
 @pytest.mark.parametrize("cls", _declared_record_types(), ids=lambda c: c.__name__)
@@ -127,9 +127,9 @@ def test_gate1_no_record_defaults_to_unavailable(cls: type[msgspec.Struct]) -> N
     says so in its envelope rather than fabricating hole-records.
     """
     prov = next(f for f in msgspec.structs.fields(cls) if f.name == "prov")
-    assert (
-        prov.default is not Provenance.UNAVAILABLE
-    ), f"{cls.__name__} defaults prov to UNAVAILABLE; a record is always a real observation"
+    assert prov.default is not Provenance.UNAVAILABLE, (
+        f"{cls.__name__} defaults prov to UNAVAILABLE; a record is always a real observation"
+    )
 
 
 def test_gate1_the_header_base_is_not_kw_only() -> None:
@@ -245,6 +245,19 @@ def test_option_expiry_is_nanoseconds() -> None:
     """
     fields = {f.name: f.type for f in msgspec.structs.fields(OptionsChain)}
     assert fields["expiry"] is int, "expiry must be UTC epoch nanoseconds, not a date string"
+
+
+def test_ohlcv_keeps_vwap_and_keeps_it_optional() -> None:
+    """``vwap`` is the one equity bar field with no crypto counterpart.
+
+    Equity's ``Bar`` and crypto's ``OHLCV`` were nearly the same struct, which is exactly
+    what makes this field easy to lose: ``trade_count`` was a rename to ``num_trades``,
+    but ``vwap`` was not a rename at all. It must stay, and stay optional — most crypto
+    venues do not publish one, and ``0.0`` would be a false price where ``None`` is honest.
+    """
+    field = next(f for f in msgspec.structs.fields(OHLCV) if f.name == "vwap")
+    assert field.type == float | None, f"vwap must be float | None, got {field.type}"
+    assert field.default is None, "vwap must default to None, not to a fabricated price"
 
 
 def test_gate1_the_union_discriminates_by_tag() -> None:

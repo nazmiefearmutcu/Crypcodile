@@ -85,6 +85,13 @@ class Trade(_Header, frozen=True, kw_only=True, tag=Channel.TRADE.value, tag_fie
     price: float
     amount: float
     side: Side
+    """Aggressor side. Required, and equity is not exempt.
+
+    A tape that does not classify the aggressor writes ``Side.UNKNOWN`` rather than
+    omitting the field: that is a claim about the venue, where an absent field is merely
+    an adapter that did not say. Same reasoning that keeps ``source_ts`` required.
+    """
+
     liquidation: str | None = None
     l1_gas_fee: float | None = None
     l2_gas_fee: float | None = None
@@ -210,6 +217,15 @@ class Liquidation(
 
 
 class OHLCV(_Header, frozen=True, kw_only=True, tag=Channel.OHLCV.value, tag_field="channel"):
+    """One aggregated bar, for either asset class.
+
+    Equity's ``Bar`` and equity's own ``OHLCV`` were field-for-field identical, so only
+    one of them survives here. But equity and crypto were *not* identical: of equity's two
+    extra fields only ``trade_count`` was a rename, arriving as ``num_trades``. ``vwap``
+    had no crypto counterpart and is carried below so the equity adapters have somewhere
+    to put it.
+    """
+
     interval: str
     open: float
     high: float
@@ -219,6 +235,12 @@ class OHLCV(_Header, frozen=True, kw_only=True, tag=Channel.OHLCV.value, tag_fie
     buy_volume: float = 0.0
     sell_volume: float = 0.0
     num_trades: int | None = None
+    vwap: float | None = None
+    """Volume-weighted average price over the bar, or ``None`` if the source omits it.
+
+    Optional rather than defaulted to a number: most crypto venues do not publish a VWAP,
+    and ``None`` says "not reported" where ``0.0`` would be a false price.
+    """
 
 
 class Quote(_Header, frozen=True, kw_only=True, tag=Channel.QUOTE.value, tag_field="channel"):
