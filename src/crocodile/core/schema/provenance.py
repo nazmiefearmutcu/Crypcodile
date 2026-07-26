@@ -26,6 +26,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import sys
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Final, NamedTuple
@@ -112,7 +113,7 @@ _YAHOO_1M_VAP_SESSION_BARS: Final[int] = 390
 
 
 def register_basis(
-    basis: str, *, level: Provenance, inputs: Sequence[str]
+    basis: str, *, level: Provenance, inputs: Sequence[str], doc: str | None = None
 ) -> Callable[[ConfidenceFn], ConfidenceFn]:
     """Register the confidence formula for ``basis``.
 
@@ -124,6 +125,13 @@ def register_basis(
             here; it becomes the record's ``prov_inputs``. Note this is a different thing
             from the ``inputs`` mapping passed to :func:`confidence_for`, which carries the
             observable measurements a specific call has to hand.
+        doc: Optional description, preferred by :func:`describe` over the formula's
+            docstring. The docstring is the normal path and the rule below still applies to
+            it; this exists because ``python -OO`` strips docstrings, which would otherwise
+            leave :func:`describe` empty and blank the warning body the REST and MCP
+            surfaces must emit for every non-native record. A basis that supplies neither a
+            docstring nor ``doc`` yields an empty description under ``-OO``, so ``-OO`` is
+            not a supported mode for those surfaces.
 
     Raises:
         ValueError: if ``basis`` is already registered, or the formula has no docstring.
@@ -136,16 +144,21 @@ def register_basis(
     def decorate(fn: ConfidenceFn) -> ConfidenceFn:
         if basis in _REGISTRY:
             raise ValueError(f"provenance basis {basis!r} is already registered")
-        doc = (fn.__doc__ or "").strip()
+        docstring = (fn.__doc__ or "").strip()
         # Under -OO the interpreter strips docstrings at compile time, so this check has
         # nothing to inspect and would turn every registration into an import-time crash.
         # The rule is a development and CI discipline; neither runs with -OO.
-        if sys.flags.optimize < 2 and not doc:
+        if sys.flags.optimize < 2 and not docstring:
             raise ValueError(
                 f"confidence formula for {basis!r} has no docstring; "
                 f"a confidence number must be documented alongside its formula"
             )
-        _REGISTRY[basis] = _Registered(fn=fn, level=level, inputs=tuple(inputs), doc=doc)
+        _REGISTRY[basis] = _Registered(
+            fn=fn,
+            level=level,
+            inputs=tuple(inputs),
+            doc=(doc or "").strip() or docstring,
+        )
         return fn
 
     return decorate
@@ -198,10 +211,13 @@ def level_for(basis: str) -> Provenance:
 
 
 def describe(basis: str) -> str:
-    """Return the docstring of the formula registered for ``basis``.
+    """Return the description of the formula registered for ``basis``.
 
-    The REST and MCP surfaces use this as the body of the warning they are required to
-    emit whenever they serve a record whose ``prov`` is not :attr:`Provenance.NATIVE`.
+    This is the ``doc`` passed to :func:`register_basis` if there was one, and the formula's
+    docstring otherwise. The REST and MCP surfaces use it as the body of the warning they
+    are required to emit whenever they serve a record whose ``prov`` is not
+    :attr:`Provenance.NATIVE`. It is empty under ``python -OO`` for any basis that relied on
+    its docstring, since ``-OO`` strips docstrings.
     """
     return _lookup(basis).doc
 
@@ -223,23 +239,28 @@ def load_all_bases() -> None:
     Call this explicitly before treating :func:`registered_bases` as the complete set.
     A submodule that fails to import — a missing optional extra, most likely — is skipped
     rather than allowed to crash the caller, since a gate must still be able to run on a
-    partial install. The cost is that a basis inside such a module stays invisible.
+    partial install. The cost is that a basis inside such a module stays invisible. Any
+    other failure is warned about rather than swallowed, so a genuinely broken module is
+    not mistaken for an absent optional dependency.
     """
     import crocodile
 
-    prefix = f"{crocodile.__name__}."
-    for module in pkgutil.walk_packages(crocodile.__path__, prefix=prefix):
-        # Import nothing outside our own package. walk_packages reports whatever sits on
-        # __path__, which is mutable and, for a namespace package, can point elsewhere.
-        if not module.name.startswith(prefix):
-            continue
+    for module in pkgutil.walk_packages(crocodile.__path__, prefix=f"{crocodile.__name__}."):
         try:
-            # Names come from walk_packages over our own __path__ and are prefix-checked
-            # above, so no caller-supplied value reaches this import; a dynamic import is
-            # the whole point of the function, so there is no literal form to prefer.
+            # The names come from walk_packages over the package's own __path__, so no
+            # caller-supplied value reaches this import; and a dynamic import is the entire
+            # point of the function, so there is no literal form to prefer.
             # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
             importlib.import_module(module.name)
-        except Exception:
+        except ImportError:
+            continue
+        except Exception as exc:
+            warnings.warn(
+                f"crocodile: could not load provenance bases from {module.name!r}: "
+                f"{type(exc).__name__}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             continue
 
 
@@ -307,9 +328,11 @@ def _yahoo_1m_vap(inputs: Mapping[str, Any]) -> float:
     """Volume-at-price depth: confidence is the session coverage of the profile.
 
     ``min(n / 390, 1.0)``, where ``n`` counts volume-bearing 1-minute bars and 390 is one
-    full regular US session in such bars. The number reads directly as the fraction of a
-    session the profile has seen: 0.5 is half a session's bars, 1.0 is a full session or
-    more. A profile built from three bars is not a book.
+    full regular US session in such bars. The number reads as how many bars the profile
+    holds against that reference: 1.0 means at least as many volume-bearing bars as one
+    full session contains. That is not the same as having covered a session — 390 bars
+    drawn from three partial sessions also scores 1.0. A profile built from three bars is
+    not a book.
 
     Saturating at a full session says the profile is as well sampled as this method can
     make it — not that it has become a real order book. That claim is ``prov``'s job, and

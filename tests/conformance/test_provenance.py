@@ -185,6 +185,20 @@ def test_describe_returns_the_formula_docstring():
         describe("something_invented")
 
 
+def test_explicit_doc_is_preferred_over_the_docstring():
+    def formula(_):
+        """The docstring, which an explicit doc= must win over."""
+        return 1.0
+
+    register_basis(
+        "_test_explicit_doc",
+        level=Provenance.DERIVED,
+        inputs=[],
+        doc="Survives -OO, which strips docstrings.",
+    )(formula)
+    assert describe("_test_explicit_doc") == "Survives -OO, which strips docstrings."
+
+
 def test_load_all_bases_is_idempotent_and_survives_bad_imports():
     load_all_bases()
     assert _EXPECTED_BASES <= registered_bases()
