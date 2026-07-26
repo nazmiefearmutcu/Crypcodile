@@ -6,6 +6,10 @@
 Pull order books, trades, funding and on-chain DEX events from 100+ venues into one
 Parquet lake — then replay any slice of it byte-for-byte.</p>
 
+<p align="center">
+<a href="https://github.com/nazmiefearmutcu/Crypcodile/actions/workflows/tests.yml"><img src="https://github.com/nazmiefearmutcu/Crypcodile/actions/workflows/tests.yml/badge.svg?branch=main" alt="tests"></a>
+</p>
+
 <p align="center"><sub>Python 3.12+ · Apache-2.0 · public market data needs no API keys</sub></p>
 
 ---
@@ -225,11 +229,22 @@ uv sync --all-extras
 pytest tests/
 ```
 
-1,760 test functions across 141 files: a local mock-RPC server for
+1,831 test functions across 142 files: a local mock-RPC server for
 degraded-network E2E runs (`tests/e2e/`), adversarial payload suites, and a
-regression file seeded by real exchange API anomalies. `mypy --strict` and Ruff
-gate `src/`. CI-friendly — Qt and Matplotlib run headless, and BLAS thread caps
-keep imports fast on Apple Silicon.
+regression file seeded by real exchange API anomalies. Every push and PR runs
+`pytest --ignore=tests/gui` on GitHub Actions — that's the badge at the top.
+Qt and Matplotlib run headless, and BLAS thread caps keep imports fast on
+Apple Silicon.
+
+`tests/gui` is excluded from CI: it drives real PyQt6 windows, and its FlowMap
+tests need a package crypcodile does not install (see [FlowMap](#flowmap)).
+
+**Lint and types are advisory, not yet green.** `ruff check src` reports 432
+findings and `mypy` reports 258 across 36 of 130 files. CI runs both with
+`continue-on-error` so the debt stays visible and measured instead of quietly
+growing; it does *not* gate on them, and this README will not claim otherwise
+until they are actually clean. One exception is enforced: `ruff --select F821`
+(undefined names) must stay at zero, because that class is always a real bug.
 
 ## What it isn't
 
@@ -242,8 +257,10 @@ keep imports fast on Apple Silicon.
 
 ## Contributing
 
-PRs welcome. Skim [`CHANGELOG.md`](CHANGELOG.md) for direction, keep the
-`mypy --strict` and Ruff gates green, and make sure the E2E and adversarial
-suites pass before opening one.
+PRs welcome. Skim [`CHANGELOG.md`](CHANGELOG.md) for direction and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for what CI actually checks. In short: the
+test suite must pass and `ruff --select F821` must stay clean; ruff and mypy as
+a whole are advisory today, so please don't add to the pile but don't expect a
+green wall either.
 
 Apache-2.0 — see [LICENSE](LICENSE).

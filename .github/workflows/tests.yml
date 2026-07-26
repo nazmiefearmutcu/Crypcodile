@@ -1,0 +1,79 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    env:
+      # Qt and Matplotlib must not try to open a display on a headless runner.
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+    steps:
+      # Third-party actions are pinned to full commit SHAs; a mutable tag can be
+      # repointed by its owner. Comments record the human-readable version.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install "${PYTHON_VERSION}"
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # tests/gui drives PyQt6 windows and, for FlowMap, a package that is not a
+      # crypcodile dependency at all (see the FlowMap section of the README).
+      - name: Run test suite
+        run: uv run pytest --ignore=tests/gui
+
+  lint:
+    name: ruff + mypy (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # These two are NOT gates. src/ carries real lint and type debt, and this
+      # job exists to measure it honestly and keep it from growing unnoticed —
+      # not to claim a green check the code has not earned. See CONTRIBUTING.md.
+      - name: ruff check src (advisory)
+        continue-on-error: true
+        run: uv run ruff check src
+
+      - name: mypy (advisory)
+        continue-on-error: true
+        run: uv run mypy
+
+      # F821 is the one lint class that is always a real bug, never style.
+      # src/ is clean of it and must stay that way — this step does gate.
+      - name: ruff F821 undefined-name (blocking)
+        run: uv run ruff check src --select F821
