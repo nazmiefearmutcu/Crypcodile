@@ -31,6 +31,8 @@ from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Final, NamedTuple
 
+from crocodile.core.errors import ProvenanceError
+
 __all__ = [
     "ConfidenceFn",
     "ConfidenceFormulaError",
@@ -67,18 +69,15 @@ class Provenance(StrEnum):
 ConfidenceFn = Callable[[Mapping[str, Any]], float]
 
 
-# TODO(task-3): re-parent under CrocodileError
-class UnregisteredBasisError(LookupError):
+class UnregisteredBasisError(ProvenanceError, LookupError):
     """A ``prov_basis`` was used that has no registered confidence formula."""
 
 
-# TODO(task-3): re-parent under CrocodileError
-class ConfidenceInputError(ValueError):
+class ConfidenceInputError(ProvenanceError, ValueError):
     """Caller fault: the inputs handed to a confidence formula are missing or malformed."""
 
 
-# TODO(task-3): re-parent under CrocodileError
-class ConfidenceFormulaError(RuntimeError):
+class ConfidenceFormulaError(ProvenanceError, RuntimeError):
     """Formula fault: a registered formula raised, or returned a value outside ``[0, 1]``.
 
     Distinct from :class:`ConfidenceInputError` on purpose. A caller that degrades to
