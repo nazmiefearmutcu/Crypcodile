@@ -16,7 +16,7 @@ import pytest
 from crocodile.core.schema import records
 from crocodile.core.schema.enums import AssetClass, Channel, Side
 from crocodile.core.schema.provenance import Provenance, provenance_fields
-from crocodile.core.schema.records import Record, Trade, _Header
+from crocodile.core.schema.records import Funding, Record, Trade, _Header
 
 CANONICAL_HEADER = (
     "source",
@@ -198,3 +198,33 @@ def test_gate1_mutable_prov_inputs_default_is_not_shared() -> None:
     a.prov_inputs.append("MUTATED")
     assert b.prov_inputs == []
     assert _a_trade().prov_inputs == []
+
+
+def test_gate1_channel_enum_covers_every_record_tag() -> None:
+    """``Channel`` names at least every tag a record declares.
+
+    A subset, deliberately not an equality: ``Channel`` also carries members whose
+    structs arrive with the equity port, plus ``bar`` and ``book_ticker``, which have
+    stored data in existing lakes and stay as deprecated members after their structs
+    collapse into ``ohlcv`` and ``quote``. Deleting a member to green this gate would
+    be data loss wearing a passing build.
+    """
+    tags = {c.__struct_config__.tag for c in _declared_record_types()}
+    members = {c.value for c in Channel}
+    assert tags <= members, f"record tags with no Channel member: {sorted(tags - members)}"
+
+
+def test_gate1_the_union_discriminates_by_tag() -> None:
+    """What widening ``Record`` actually buys: a blob decodes back to its own class."""
+    f = Funding(
+        source="binance",
+        symbol="binance:BTCUSDT",
+        symbol_raw="BTCUSDT",
+        local_ts=1,
+        asset_class=AssetClass.CRYPTO,
+        source_ts=None,
+        funding_rate=0.0001,
+    )
+    decoded = msgspec.json.decode(msgspec.json.encode(f), type=Record)
+    assert type(decoded) is Funding
+    assert decoded.prov_basis == "native"

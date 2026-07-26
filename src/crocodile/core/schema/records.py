@@ -14,9 +14,11 @@ silently break the header. ``tests/conformance/test_gates.py`` enforces both hal
 
 from __future__ import annotations
 
+import math
+
 import msgspec
 
-from crocodile.core.schema.enums import AssetClass, Channel, Side, Tape
+from crocodile.core.schema.enums import AssetClass, Channel, OptType, Side, Tape
 from crocodile.core.schema.provenance import Provenance
 
 Level = tuple[float, float]
@@ -85,4 +87,194 @@ class Trade(_Header, frozen=True, kw_only=True, tag=Channel.TRADE.value, tag_fie
     venue: str | None = None
 
 
-Record = Trade
+class BookSnapshot(
+    _Header, frozen=True, kw_only=True, tag=Channel.BOOK_SNAPSHOT.value, tag_field="channel"
+):
+    bids: list[Level]
+    asks: list[Level]
+    depth: int
+    sequence_id: int | None = None
+    is_snapshot: bool = True
+
+
+class BookDelta(
+    _Header, frozen=True, kw_only=True, tag=Channel.BOOK_DELTA.value, tag_field="channel"
+):
+    bids: list[Level]
+    asks: list[Level]
+    seq_id: int | None = None
+    prev_seq_id: int | None = None
+    is_snapshot: bool = False
+
+
+class BookTicker(
+    _Header, frozen=True, kw_only=True, tag=Channel.BOOK_TICKER.value, tag_field="channel"
+):
+    bid_px: float
+    bid_sz: float
+    ask_px: float
+    ask_sz: float
+    update_id: int | None = None
+
+    @property
+    def price(self) -> float:
+        return round(math.sqrt(self.bid_px * self.ask_px), 6)
+
+
+class DerivativeTicker(
+    _Header, frozen=True, kw_only=True, tag=Channel.DERIVATIVE_TICKER.value, tag_field="channel"
+):
+    last_price: float | None = None
+    mark_price: float | None = None
+    index_price: float | None = None
+    funding_rate: float | None = None
+    predicted_funding_rate: float | None = None
+    funding_timestamp: int | None = None
+    open_interest: float | None = None
+
+
+class OptionsChain(
+    _Header, frozen=True, kw_only=True, tag=Channel.OPTIONS_CHAIN.value, tag_field="channel"
+):
+    underlying: str
+    underlying_price: float | None
+    strike: float
+    expiry: int
+    opt_type: OptType
+    mark_price: float | None = None
+    mark_iv: float | None = None  # decimal fraction (0.65 == 65%); all *_iv fields are decimal
+    bid_px: float | None = None
+    bid_sz: float | None = None
+    bid_iv: float | None = None  # decimal fraction
+    ask_px: float | None = None
+    ask_sz: float | None = None
+    ask_iv: float | None = None  # decimal fraction
+    last_price: float | None = None
+    open_interest: float | None = None
+    delta: float | None = None
+    gamma: float | None = None
+    vega: float | None = None
+    theta: float | None = None
+    rho: float | None = None
+
+
+class Funding(_Header, frozen=True, kw_only=True, tag=Channel.FUNDING.value, tag_field="channel"):
+    funding_rate: float
+    funding_timestamp: int | None = None
+    predicted_funding_rate: float | None = None
+    interval_hours: int | None = None
+
+
+class OpenInterest(
+    _Header, frozen=True, kw_only=True, tag=Channel.OPEN_INTEREST.value, tag_field="channel"
+):
+    open_interest: float
+    open_interest_value: float | None = None
+
+
+class Liquidation(
+    _Header, frozen=True, kw_only=True, tag=Channel.LIQUIDATION.value, tag_field="channel"
+):
+    price: float
+    amount: float
+    side: Side
+    id: str | None = None
+
+
+class OHLCV(_Header, frozen=True, kw_only=True, tag=Channel.OHLCV.value, tag_field="channel"):
+    interval: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    buy_volume: float = 0.0
+    sell_volume: float = 0.0
+    num_trades: int | None = None
+
+
+class FarcasterCorrelation(
+    _Header, frozen=True, kw_only=True, tag=Channel.FARCASTER_CORRELATION.value, tag_field="channel"
+):
+    mentions_24h: int
+    dev_activity_score: float
+    trending_rank: int
+
+
+class ReserveDataUpdated(
+    _Header, frozen=True, kw_only=True, tag=Channel.RESERVE_DATA_UPDATED.value, tag_field="channel"
+):
+    reserve: str
+    liquidity_rate: float
+    stable_borrow_rate: float
+    variable_borrow_rate: float
+    liquidity_index: int
+    variable_borrow_index: int
+
+
+class LiquidationCall(
+    _Header, frozen=True, kw_only=True, tag=Channel.LIQUIDATION_CALL.value, tag_field="channel"
+):
+    collateral_asset: str
+    debt_asset: str
+    user: str
+    debt_to_cover: float
+    liquidated_collateral_amount: float
+    liquidator: str
+    receive_a_token: bool
+
+
+class LimitOrderFill(
+    _Header, frozen=True, kw_only=True, tag=Channel.LIMIT_ORDER_FILL.value, tag_field="channel"
+):
+    tx_hash: str
+    log_index: int
+    protocol: str  # "1inch" | "0x"
+    maker: str
+    taker: str
+    maker_token: str
+    taker_token: str
+    maker_amount: float
+    taker_amount: float
+    order_hash: str
+
+
+class BalanceCorrection(
+    _Header, frozen=True, kw_only=True, tag=Channel.BALANCE_CORRECTION.value, tag_field="channel"
+):
+    holder_address: str
+    token_address: str
+    local_balance: float
+    onchain_balance: float
+    correction_amount: float
+
+
+class PoRUpdate(
+    _Header, frozen=True, kw_only=True, tag=Channel.POR_UPDATE.value, tag_field="channel"
+):
+    feed_address: str
+    token_address: str
+    reserves: float
+    total_supply: float
+    backing_ratio: float
+    is_backed: bool
+
+
+Record = (
+    Trade
+    | BookSnapshot
+    | BookDelta
+    | BookTicker
+    | DerivativeTicker
+    | OptionsChain
+    | Funding
+    | OpenInterest
+    | Liquidation
+    | OHLCV
+    | FarcasterCorrelation
+    | ReserveDataUpdated
+    | LiquidationCall
+    | LimitOrderFill
+    | BalanceCorrection
+    | PoRUpdate
+)
