@@ -18,7 +18,16 @@ import math
 
 import msgspec
 
-from crocodile.core.schema.enums import AssetClass, Channel, OptType, Side, Tape
+from crocodile.core.schema.enums import (
+    AssetClass,
+    Channel,
+    CorpActionType,
+    FundPeriod,
+    OptType,
+    SecurityType,
+    Side,
+    Tape,
+)
 from crocodile.core.schema.provenance import Provenance
 
 Level = tuple[float, float]
@@ -136,10 +145,28 @@ class DerivativeTicker(
 class OptionsChain(
     _Header, frozen=True, kw_only=True, tag=Channel.OPTIONS_CHAIN.value, tag_field="channel"
 ):
+    """One option contract's quote, greeks and open interest, for either asset class.
+
+    Equity called this ``OptionQuote`` and spoke a different dialect of the same
+    instrument: ``type``/``bid``/``ask``/``last``/``implied_volatility`` for what crypto
+    calls ``opt_type``/``bid_px``/``ask_px``/``last_price``/``mark_iv``. The crypto names
+    win — they distinguish a price from a size, and an equity feed that only publishes a
+    single IV per contract is publishing the mark. ``volume`` is the one equity field with
+    no crypto counterpart and it arrives unchanged.
+    """
+
     underlying: str
     underlying_price: float | None
     strike: float
     expiry: int
+    """Expiry as UTC epoch nanoseconds.
+
+    Equity stored ``YYYY-MM-DD``. Nanoseconds win: it is the unit every other timestamp
+    here uses, and a date cannot express the intraday expiry of a 0DTE or a weekly that
+    settles at the open rather than the close. Converting a date to nanoseconds is
+    total; converting back is not, which is the direction that must not lose anything.
+    """
+
     opt_type: OptType
     mark_price: float | None = None
     mark_iv: float | None = None  # decimal fraction (0.65 == 65%); all *_iv fields are decimal
@@ -150,6 +177,7 @@ class OptionsChain(
     ask_sz: float | None = None
     ask_iv: float | None = None  # decimal fraction
     last_price: float | None = None
+    volume: float | None = None
     open_interest: float | None = None
     delta: float | None = None
     gamma: float | None = None
@@ -191,6 +219,188 @@ class OHLCV(_Header, frozen=True, kw_only=True, tag=Channel.OHLCV.value, tag_fie
     buy_volume: float = 0.0
     sell_volume: float = 0.0
     num_trades: int | None = None
+
+
+class Quote(_Header, frozen=True, kw_only=True, tag=Channel.QUOTE.value, tag_field="channel"):
+    """A top-of-book quote as an equity feed publishes it.
+
+    Distinct from :class:`BookTicker`, which is the crypto spelling on the ``book_ticker``
+    channel: this one carries the consolidated-tape facts (``is_nbbo``, ``tape``) that a
+    venue-native crypto quote has no notion of.
+    """
+
+    bid_px: float
+    bid_sz: float
+    ask_px: float
+    ask_sz: float
+    is_nbbo: bool = False
+    is_consolidated: bool = False
+    conditions: list[str] | None = None
+    tape: Tape | None = None
+
+
+class DepthProfile(
+    _Header, frozen=True, kw_only=True, tag=Channel.DEPTH.value, tag_field="channel"
+):
+    """Aggregated resting size around a reference price.
+
+    Equity's version carried ``basis: str`` and ``is_synthetic: bool`` — the prototype the
+    provenance tail generalized. Both now live in the header as ``prov_basis`` and ``prov``.
+    """
+
+    bids: list[Level]
+    asks: list[Level]
+    reference_price: float
+    depth: int
+
+    @property
+    def is_synthetic(self) -> bool:
+        """Retained so existing `WHERE is_synthetic` queries keep working.
+
+        The claim now lives in `prov`; this is the old spelling of it.
+        """
+        return self.prov is Provenance.SYNTHETIC
+
+
+class Auction(_Header, frozen=True, kw_only=True, tag=Channel.AUCTION.value, tag_field="channel"):
+    paired_shares: float | None = None
+    imbalance_shares: float | None = None
+    imbalance_side: Side | None = None
+    reference_price: float | None = None
+    indicative_price: float | None = None
+    auction_type: str | None = None
+
+
+class TradingStatus(
+    _Header, frozen=True, kw_only=True, tag=Channel.TRADING_STATUS.value, tag_field="channel"
+):
+    status: str
+    reason: str | None = None
+    limit_up_price: float | None = None
+    limit_down_price: float | None = None
+    indicator: str | None = None
+
+
+class Instrument(
+    _Header, frozen=True, kw_only=True, tag=Channel.INSTRUMENT.value, tag_field="channel"
+):
+    """The persisted reference record for a listed security.
+
+    Not to be confused with the in-memory identity object of the same name that the
+    provider layer passes around; that one is not a record and is relocated separately.
+    """
+
+    name: str | None = None
+    cik: str | None = None
+    figi: str | None = None
+    composite_figi: str | None = None
+    share_class_figi: str | None = None
+    cusip: str | None = None
+    exchange: str | None = None
+    security_type: SecurityType | None = None
+    sic: str | None = None
+    shares_outstanding: int | None = None
+    listing_date: str | None = None
+    status: str | None = None
+
+
+class CorporateAction(
+    _Header, frozen=True, kw_only=True, tag=Channel.CORP_ACTION.value, tag_field="channel"
+):
+    ex_date: str  # YYYY-MM-DD
+    type: CorpActionType
+    value: float
+
+
+class Fundamental(
+    _Header, frozen=True, kw_only=True, tag=Channel.FUNDAMENTAL.value, tag_field="channel"
+):
+    taxonomy: str
+    tag: str
+    unit: str
+    val: float
+    end: str  # period_end
+    start: str | None = None  # for duration facts, None for instant facts
+    fy: int | None = None
+    fp: FundPeriod | None = None  # e.g., Q1, Q2, Q3, Q4, FY, TTM
+    form: str | None = None
+    filed: str | None = None
+    accn: str | None = None
+    frame: str | None = None
+
+
+class InsiderTransaction(
+    _Header, frozen=True, kw_only=True, tag=Channel.INSIDER.value, tag_field="channel"
+):
+    insider_name: str
+    position: str
+    transaction_type: str
+    transaction_date: str  # YYYY-MM-DD
+    shares: float | None = None
+    price: float | None = None
+    value: float | None = None
+    ownership: str | None = None  # "D" or "I"
+
+
+class Holding13F(
+    _Header, frozen=True, kw_only=True, tag=Channel.HOLDING_13F.value, tag_field="channel"
+):
+    manager_name: str
+    issuer_name: str
+    cusip: str
+    value: float
+    shares: float
+    shares_type: str
+    discretion: str | None = None
+    voting_sole: float | None = None
+    voting_shared: float | None = None
+    voting_none: float | None = None
+    report_date: str | None = None
+    accession_number: str | None = None
+
+
+class ShortInterest(
+    _Header, frozen=True, kw_only=True, tag=Channel.SHORT_INTEREST.value, tag_field="channel"
+):
+    settlement_date: str
+    short_interest: float
+    prev_short_interest: float | None = None
+    days_to_cover: float | None = None
+    change_pct: float | None = None
+
+
+class ShortVolume(
+    _Header, frozen=True, kw_only=True, tag=Channel.SHORT_VOLUME.value, tag_field="channel"
+):
+    date: str
+    short_volume: float
+    total_volume: float
+    short_exempt_volume: float | None = None
+
+
+class Filing(_Header, frozen=True, kw_only=True, tag=Channel.FILING.value, tag_field="channel"):
+    accession_number: str
+    form: str
+    filing_date: str
+    primary_document: str
+    document_url: str
+    report_date: str | None = None
+    is_xbrl: bool | None = None
+
+
+class MacroSeries(
+    _Header, frozen=True, kw_only=True, tag=Channel.MACRO_SERIES.value, tag_field="channel"
+):
+    date: str
+    value: float | None = None
+    realtime_start: str | None = None
+    realtime_end: str | None = None
+
+
+class IndexValue(
+    _Header, frozen=True, kw_only=True, tag=Channel.INDEX_VALUE.value, tag_field="channel"
+):
+    value: float
 
 
 class FarcasterCorrelation(
@@ -271,6 +481,20 @@ Record = (
     | OpenInterest
     | Liquidation
     | OHLCV
+    | Quote
+    | DepthProfile
+    | Auction
+    | TradingStatus
+    | Instrument
+    | CorporateAction
+    | Fundamental
+    | InsiderTransaction
+    | Holding13F
+    | ShortInterest
+    | ShortVolume
+    | Filing
+    | MacroSeries
+    | IndexValue
     | FarcasterCorrelation
     | ReserveDataUpdated
     | LiquidationCall

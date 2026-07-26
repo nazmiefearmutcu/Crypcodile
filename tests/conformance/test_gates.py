@@ -16,7 +16,7 @@ import pytest
 from crocodile.core.schema import records
 from crocodile.core.schema.enums import AssetClass, Channel, Side
 from crocodile.core.schema.provenance import Provenance, provenance_fields
-from crocodile.core.schema.records import Funding, Record, Trade, _Header
+from crocodile.core.schema.records import Funding, OptionsChain, Record, Trade, _Header
 
 CANONICAL_HEADER = (
     "source",
@@ -212,6 +212,39 @@ def test_gate1_channel_enum_covers_every_record_tag() -> None:
     tags = {c.__struct_config__.tag for c in _declared_record_types()}
     members = {c.value for c in Channel}
     assert tags <= members, f"record tags with no Channel member: {sorted(tags - members)}"
+
+
+def test_gate1_channel_members_without_a_record_are_deliberate() -> None:
+    """Channel may outlive a struct, but only on purpose.
+
+    Every member below names a partition directory that exists in a lake on disk, so the
+    member stays even though the equity struct that wrote it is gone:
+
+    ``bar`` — equity's ``Bar`` was field-for-field identical to equity's own ``OHLCV``;
+    both collapse into the canonical ``ohlcv``.
+    ``book_ticker`` — equity's ``BookTicker`` was an alias of ``Quote``, kept only "for
+    onchain normalized records". The crypto struct of that name survives, so this member
+    is not actually orphaned today; it is listed because the equity spelling is gone.
+    ``option_quote`` — equity's ``OptionQuote`` merged into ``options_chain``, which is
+    the same instrument with more precise field names and an epoch-nanosecond expiry.
+
+    Any *other* orphan is a porting mistake. The fix is never to delete a ``Channel``
+    member — that is data loss wearing a passing build — but to port the record.
+    """
+    DEPRECATED = {"bar", "book_ticker", "option_quote"}
+    tags = {c.__struct_config__.tag for c in _declared_record_types()}
+    orphans = {c.value for c in Channel} - tags - DEPRECATED
+    assert not orphans, f"Channel members with no record and no deprecation note: {sorted(orphans)}"
+
+
+def test_option_expiry_is_nanoseconds() -> None:
+    """Equity spelled expiry ``YYYY-MM-DD``; a date cannot express an intraday expiry.
+
+    Nanoseconds are the unit every other timestamp in this codebase uses, so the merge of
+    ``OptionQuote`` into ``OptionsChain`` converts rather than widens to ``int | str``.
+    """
+    fields = {f.name: f.type for f in msgspec.structs.fields(OptionsChain)}
+    assert fields["expiry"] is int, "expiry must be UTC epoch nanoseconds, not a date string"
 
 
 def test_gate1_the_union_discriminates_by_tag() -> None:
