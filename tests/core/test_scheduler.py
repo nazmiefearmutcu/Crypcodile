@@ -6,9 +6,9 @@ import tempfile
 
 import pytest
 
-from stockodile.scheduler.calendar import MARKET_TZ, USMarketCalendar
-from stockodile.scheduler.coordinator import ScheduledPullCoordinator
-from stockodile.scheduler.state import InMemoryStateStore, JSONFileStateStore
+from crocodile.core.scheduler.calendar import MARKET_TZ, USMarketCalendar
+from crocodile.core.scheduler.coordinator import ScheduledPullCoordinator
+from crocodile.core.scheduler.state import InMemoryStateStore, JSONFileStateStore
 
 
 def test_calendar_holidays() -> None:
@@ -369,7 +369,7 @@ def test_historical_holidays_awareness() -> None:
 
 def test_nth_weekday_of_month_bounds() -> None:
     """Test that nth_weekday_of_month returns None for invalid or out-of-bound inputs."""
-    from stockodile.scheduler.calendar import nth_weekday_of_month
+    from crocodile.core.scheduler.calendar import nth_weekday_of_month
 
     # 5th Monday of Jan 2026 (Jan 2026 has 4 Mondays: 5, 12, 19, 26)
     assert nth_weekday_of_month(2026, 1, 0, 5) is None

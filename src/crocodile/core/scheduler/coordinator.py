@@ -7,10 +7,10 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from stockodile.scheduler.calendar import MARKET_TZ, USMarketCalendar
-from stockodile.scheduler.state import SchedulerStateStore
+from crocodile.core.scheduler.calendar import MARKET_TZ, USMarketCalendar
+from crocodile.core.scheduler.state import SchedulerStateStore
 
-logger = logging.getLogger("stockodile.scheduler")
+logger = logging.getLogger("crocodile.scheduler")
 
 
 class PullTask:

@@ -4,12 +4,13 @@ import datetime
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
+import msgspec
 import polars as pl
 
-from stockodile.schema.enums import CorpActionType
-from stockodile.schema.records import Bar, CorporateAction
+from crocodile.core.schema.enums import CorpActionType
+from crocodile.core.schema.records import OHLCV, CorporateAction
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,8 @@ def _parse_date_safe(d: Any) -> datetime.date | None:
 def _ts_to_date(ts: int | float) -> datetime.date:
     """Convert epoch timestamp to UTC date.
 
-    Supports nanoseconds (Stockodile default), microseconds, milliseconds, and seconds
-    via magnitude bands.
+    Supports nanoseconds (the canonical header's unit), microseconds, milliseconds, and
+    seconds via magnitude bands.
     """
     ats = abs(float(ts))
     if ats > 1e17:  # nanoseconds (~1e18 for 2020s)
@@ -47,18 +48,42 @@ def _ts_to_date(ts: int | float) -> datetime.date:
     return datetime.datetime.fromtimestamp(seconds, tz=datetime.UTC).date()
 
 
-def _action_multipliers(act: CorporateAction) -> tuple[float, float]:
-    """Return (price_factor, share_factor) multipliers for one corporate action."""
+class _Event(NamedTuple):
+    """The three facts the factor walk reads off an action.
+
+    A DataFrame of ``(ex_date, type, value)`` rows carries nothing else — no source, no
+    asset class — so it is converted to these rather than to fabricated
+    :class:`CorporateAction` records with invented header fields.
+    """
+
+    ex_date: Any
+    type: CorpActionType
+    value: float
+
+
+def _action_multipliers(act_type: CorpActionType, value: float) -> tuple[float, float]:
+    """Return (price_factor, share_factor) multipliers for one corporate action.
+
+    ``TOKEN_SPLIT`` and ``CHAIN_MIGRATION`` share the split branch. A redenomination that
+    hands every holder ``value`` new units for one old one, and a migration that swaps a
+    series onto a new chain at a ratio, rebase price and quantity by exactly the factor a
+    stock split does — the arithmetic does not know which asset class it is in. Falling
+    through to ``(1.0, 1.0)`` here would silently leave a crypto series unadjusted.
+    """
     f_pr = 1.0
     f_shr = 1.0
-    if act.type == CorpActionType.SPLIT:
-        f_pr = act.value
-        f_shr = act.value
-    elif act.type == CorpActionType.DIVIDEND_STOCK:
-        f_pr = act.value + 1.0
-        f_shr = act.value + 1.0
-    elif act.type == CorpActionType.SPINOFF:
-        f_pr = act.value + 1.0
+    if act_type in (
+        CorpActionType.SPLIT,
+        CorpActionType.TOKEN_SPLIT,
+        CorpActionType.CHAIN_MIGRATION,
+    ):
+        f_pr = value
+        f_shr = value
+    elif act_type == CorpActionType.DIVIDEND_STOCK:
+        f_pr = value + 1.0
+        f_shr = value + 1.0
+    elif act_type == CorpActionType.SPINOFF:
+        f_pr = value + 1.0
     return f_pr, f_shr
 
 
@@ -79,6 +104,19 @@ def calculate_cumulative_factors(
     Returns:
         A dictionary mapping each date (as datetime.date) to a tuple of (CFACPR, CFACSHR).
     """
+    return _cumulative_factors(
+        (_Event(act.ex_date, act.type, act.value) for act in actions),
+        dates,
+        base_date=base_date,
+    )
+
+
+def _cumulative_factors(
+    events: Iterable[_Event],
+    dates: Sequence[datetime.date | str],
+    base_date: datetime.date | str | None = None,
+) -> dict[datetime.date, tuple[float, float]]:
+    """Walk the calendar backwards, compounding each ex-date's multipliers."""
     # 1. Parse and sort all unique dates from the price calendar
     parsed_dates_raw = {_parse_date_safe(d) for d in dates}
     parsed_dates = sorted({d for d in parsed_dates_raw if d is not None})
@@ -87,8 +125,8 @@ def calculate_cumulative_factors(
         return {}
 
     # 2. Group actions by ex_date
-    actions_by_date: dict[datetime.date, list[CorporateAction]] = defaultdict(list)
-    for act in actions:
+    actions_by_date: dict[datetime.date, list[_Event]] = defaultdict(list)
+    for act in events:
         ex_dt = _parse_date_safe(act.ex_date)
         if ex_dt is not None:
             actions_by_date[ex_dt].append(act)
@@ -122,7 +160,7 @@ def calculate_cumulative_factors(
         # Events on ex_date `d` affect all dates `< d` (i.e. dates after `d` in desc_dates)
         if d in actions_by_date:
             for act in actions_by_date[d]:
-                f_pr, f_shr = _action_multipliers(act)
+                f_pr, f_shr = _action_multipliers(act.type, act.value)
                 curr_pr *= f_pr
                 curr_shr *= f_shr
 
@@ -146,18 +184,18 @@ def calculate_cumulative_factors(
 
 
 def adjust_bars(
-    bars: Sequence[Bar],
+    bars: Sequence[OHLCV],
     factors: dict[datetime.date, tuple[float, float]],
-) -> list[Bar]:
+) -> list[OHLCV]:
     """
-    Adjust Bar open, high, low, close, and volume using cumulative factors.
+    Adjust OHLCV open, high, low, close, and volume using cumulative factors.
 
     Args:
-        bars: Sequence of Bar records.
+        bars: Sequence of OHLCV records.
         factors: A dictionary mapping date to (CFACPR, CFACSHR).
 
     Returns:
-        A list of new Bar records with adjusted fields.
+        A list of new OHLCV records with adjusted fields.
     """
     adjusted_bars = []
     for bar in bars:
@@ -166,20 +204,19 @@ def adjust_bars(
 
         cfacpr, cfacshr = factors.get(dt, (1.0, 1.0))
 
-        adj_bar = Bar(
-            provider=bar.provider,
-            symbol=bar.symbol,
-            symbol_raw=bar.symbol_raw,
-            source_ts=bar.source_ts,
-            local_ts=bar.local_ts,
-            interval=bar.interval,
+        # Replace rather than reconstruct: the header carries ten fields now, including
+        # the provenance tail, and enumerating them here would silently drop whichever
+        # one a later task adds.
+        adj_bar = msgspec.structs.replace(
+            bar,
             open=bar.open / cfacpr,
             high=bar.high / cfacpr,
             low=bar.low / cfacpr,
             close=bar.close / cfacpr,
             volume=bar.volume * cfacshr,
+            buy_volume=bar.buy_volume * cfacshr,
+            sell_volume=bar.sell_volume * cfacshr,
             vwap=bar.vwap / cfacpr if bar.vwap is not None else None,
-            trade_count=bar.trade_count,
         )
         adjusted_bars.append(adj_bar)
 
@@ -187,7 +224,7 @@ def adjust_bars(
 
 
 def calculate_total_returns(
-    bars: Sequence[Bar],
+    bars: Sequence[OHLCV],
     actions: Iterable[CorporateAction],
     factors: dict[datetime.date, tuple[float, float]],
 ) -> list[float | None]:
@@ -275,8 +312,8 @@ def adjust_dataframe(
     if df.is_empty():
         return df.clone()
 
-    # Extract actions as a list of CorporateAction if it's a DataFrame
-    action_list: list[CorporateAction] = []
+    # Reduce either input form to the (ex_date, type, value) triples the walk reads.
+    event_list: list[_Event] = []
     cash_div_list: list[dict[str, Any]] = []
 
     if isinstance(actions, pl.DataFrame):
@@ -294,23 +331,12 @@ def adjust_dataframe(
                 ex_date_str = str(ex_dt_val)
 
             val = float(row["value"])
-            action_list.append(
-                CorporateAction(
-                    provider="dataframe",
-                    symbol="DF",
-                    symbol_raw="DF",
-                    source_ts=None,
-                    local_ts=0,
-                    ex_date=ex_date_str,
-                    type=act_type,
-                    value=val,
-                )
-            )
+            event_list.append(_Event(ex_date_str, act_type, val))
             if act_type == CorpActionType.DIVIDEND_CASH:
                 cash_div_list.append({"ex_date": ex_date_str, "div_cash": val})
     else:
-        action_list = list(actions)
-        for act in action_list:
+        event_list = [_Event(act.ex_date, act.type, act.value) for act in actions]
+        for act in actions:
             if act.type == CorpActionType.DIVIDEND_CASH:
                 ex_dt_str = (
                     act.ex_date.isoformat()
@@ -325,7 +351,7 @@ def adjust_dataframe(
     )
 
     unique_dates = df_with_dt["_parsed_date"].drop_nulls().unique().to_list()
-    factors = calculate_cumulative_factors(action_list, unique_dates, base_date=base_date)
+    factors = _cumulative_factors(event_list, unique_dates, base_date=base_date)
 
     # Convert factors dictionary to a DataFrame for joining
     factor_rows = []

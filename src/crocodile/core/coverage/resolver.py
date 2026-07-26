@@ -1,7 +1,12 @@
-"""Coverage resolver for stockodile.
+"""Coverage resolver.
 
-Deduplicates and merges overlapping market data records from multiple sources.
-Supports prioritizing sources and merging both msgspec Record structures and Polars DataFrames.
+Deduplicates and merges overlapping market data records reported by several sources for
+the same ``(symbol, timestamp)``. Handles both msgspec record structures and Polars
+DataFrames.
+
+Equity arrived with this and crypto did not, which is backwards: 108 crypto venues quote
+the same BTC and nothing was reconciling them, while the side with a handful of providers
+per symbol held the only implementation.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from typing import Literal
 import msgspec
 import polars as pl
 
-from stockodile.schema.records import Record
+from crocodile.core.schema.records import Record
 
 
 class CoverageResolver:
@@ -23,15 +28,17 @@ class CoverageResolver:
         self,
         priority_list: Sequence[str],
         timestamp_col: str = "local_ts",
-        provider_col: str = "provider",
+        provider_col: str = "source",
         symbol_col: str = "symbol",
     ) -> None:
         """Initialize the CoverageResolver with source priorities.
 
         Args:
-            priority_list: List of provider/source names ordered by descending priority.
+            priority_list: List of venue/provider names ordered by descending priority.
             timestamp_col: Name of the timestamp column or field (defaults to 'local_ts').
-            provider_col: Name of the provider/source column or field (defaults to 'provider').
+            provider_col: Name of the source column or field. Defaults to 'source', the
+                unified header's name for it; a caller whose DataFrame spells the column
+                differently can still override it.
             symbol_col: Name of the symbol column or field (defaults to 'symbol').
         """
         self.priority_list = list(priority_list)
@@ -54,7 +61,7 @@ class CoverageResolver:
         """Merge a list of msgspec Record structures.
 
         Args:
-            records: List of msgspec Record structures (e.g. Bar, Trade, Quote).
+            records: List of msgspec Record structures (e.g. OHLCV, Trade, Quote).
             strategy: Resolving strategy. 'priority' picks the record from the
                       highest priority provider. 'fill_nulls' starts with the
                       highest priority record and fills None fields using values from
@@ -147,7 +154,7 @@ class CoverageResolver:
         for col, name in [
             (self.symbol_col, "symbol"),
             (self.timestamp_col, "timestamp"),
-            (self.provider_col, "provider"),
+            (self.provider_col, "source"),
         ]:
             if col not in df.columns:
                 raise ValueError(

@@ -3,14 +3,14 @@ import datetime
 import polars as pl
 import pytest
 
-from stockodile.corpactions.calculator import (
+from crocodile.core.corpactions.calculator import (
     adjust_bars,
     adjust_dataframe,
     calculate_cumulative_factors,
     calculate_total_returns,
 )
-from stockodile.schema.enums import CorpActionType
-from stockodile.schema.records import Bar, CorporateAction
+from crocodile.core.schema.enums import AssetClass, CorpActionType
+from crocodile.core.schema.records import OHLCV, CorporateAction
 
 
 def test_calculate_cumulative_factors_basic() -> None:
@@ -28,7 +28,8 @@ def test_calculate_cumulative_factors_basic() -> None:
 
     actions = [
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="TEST",
             symbol_raw="TEST",
             source_ts=None,
@@ -38,7 +39,8 @@ def test_calculate_cumulative_factors_basic() -> None:
             value=2.0,  # split ratio = 2.0
         ),
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="TEST",
             symbol_raw="TEST",
             source_ts=None,
@@ -71,7 +73,8 @@ def test_calculate_cumulative_factors_alternate_ex_date() -> None:
 
     actions = [
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="TEST",
             symbol_raw="TEST",
             source_ts=None,
@@ -103,8 +106,9 @@ def test_adjust_bars_and_returns() -> None:
     one_day_ms = 24 * 60 * 60 * 1000
 
     bars = [
-        Bar(
-            provider="test",
+        OHLCV(
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
             local_ts=base_ts,
@@ -116,8 +120,9 @@ def test_adjust_bars_and_returns() -> None:
             close=200.0,
             volume=100.0,
         ),
-        Bar(
-            provider="test",
+        OHLCV(
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
             local_ts=base_ts + one_day_ms,
@@ -129,8 +134,9 @@ def test_adjust_bars_and_returns() -> None:
             close=210.0,
             volume=100.0,
         ),
-        Bar(
-            provider="test",
+        OHLCV(
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
             local_ts=base_ts + 2 * one_day_ms,
@@ -142,8 +148,9 @@ def test_adjust_bars_and_returns() -> None:
             close=220.0,
             volume=100.0,
         ),
-        Bar(
-            provider="test",
+        OHLCV(
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
             local_ts=base_ts + 3 * one_day_ms,
@@ -155,8 +162,9 @@ def test_adjust_bars_and_returns() -> None:
             close=104.0,
             volume=200.0,
         ),
-        Bar(
-            provider="test",
+        OHLCV(
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
             local_ts=base_ts + 4 * one_day_ms,
@@ -179,18 +187,22 @@ def test_adjust_bars_and_returns() -> None:
     # Event 2: $0.50 cash dividend on Day 3
     actions = [
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
+            source_ts=None,
             local_ts=0,
             ex_date=dates[3].isoformat(),
             type=CorpActionType.SPLIT,
             value=2.0,
         ),
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
+            source_ts=None,
             local_ts=0,
             ex_date=dates[2].isoformat(),
             type=CorpActionType.DIVIDEND_CASH,
@@ -336,18 +348,22 @@ def test_malformed_dates() -> None:
     ]
     actions = [
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
+            source_ts=None,
             local_ts=0,
             ex_date="invalid-date",
             type=CorpActionType.SPLIT,
             value=2.0,
         ),
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="T",
             symbol_raw="T",
+            source_ts=None,
             local_ts=0,
             ex_date="2026-06-01",
             type=CorpActionType.SPLIT,
@@ -363,8 +379,9 @@ def test_malformed_dates() -> None:
 def test_adjust_bars_nanosecond_timestamps() -> None:
     """Production bars use nanoseconds; factors must apply."""
     ts_ns = int(datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC).timestamp() * 1e9)
-    bar = Bar(
-        provider="t",
+    bar = OHLCV(
+        source="t",
+        asset_class=AssetClass.EQUITY,
         symbol="T",
         symbol_raw="T",
         local_ts=ts_ns,
@@ -387,7 +404,8 @@ def test_cumulative_factors_include_holiday_ex_date() -> None:
     dates = [datetime.date(2026, 6, 1), datetime.date(2026, 6, 3)]
     actions = [
         CorporateAction(
-            provider="test",
+            source="test",
+            asset_class=AssetClass.EQUITY,
             symbol="TEST",
             symbol_raw="TEST",
             source_ts=None,
@@ -400,3 +418,107 @@ def test_cumulative_factors_include_holiday_ex_date() -> None:
     factors = calculate_cumulative_factors(actions, dates, base_date=dates[-1])
     assert factors[datetime.date(2026, 6, 3)] == (1.0, 1.0)
     assert factors[datetime.date(2026, 6, 1)] == (2.0, 2.0)
+
+
+def _crypto_action(act_type: CorpActionType, value: float) -> CorporateAction:
+    return CorporateAction(
+        source="binance",
+        symbol="LUNA",
+        symbol_raw="LUNAUSDT",
+        local_ts=1_700_000_000_000_000_000,
+        asset_class=AssetClass.CRYPTO,
+        source_ts=None,
+        ex_date="2026-01-15",
+        type=act_type,
+        value=value,
+    )
+
+
+def test_a_token_split_adjusts_like_an_equity_split() -> None:
+    """The whole reason corpactions belongs in core rather than in equity.
+
+    A token redenomination and a stock split are the same event class with the same
+    cumulative-factor mathematics; Task 4 added TOKEN_SPLIT to the enum for exactly this.
+    Asserting equality against the SPLIT run is what makes this a claim about the
+    arithmetic rather than about the branch merely producing *something*.
+    """
+    dates = [datetime.date(2026, 1, 14), datetime.date(2026, 1, 15)]
+
+    token = calculate_cumulative_factors(
+        [_crypto_action(CorpActionType.TOKEN_SPLIT, 10.0)], dates, base_date=dates[-1]
+    )
+    equity = calculate_cumulative_factors(
+        [_crypto_action(CorpActionType.SPLIT, 10.0)], dates, base_date=dates[-1]
+    )
+
+    assert token == equity
+    # The day before the ex-date is quoted in the old units, so it is scaled by the ratio.
+    assert token[datetime.date(2026, 1, 14)] == (10.0, 10.0)
+    assert token[datetime.date(2026, 1, 15)] == (1.0, 1.0)
+
+
+def test_a_chain_migration_rebases_the_series_too() -> None:
+    """The other crypto member of CorpActionType, on the same branch.
+
+    A migration that swaps a series onto a new chain at a ratio changes the units the
+    series is quoted in exactly as a redenomination does.
+    """
+    dates = [datetime.date(2026, 1, 14), datetime.date(2026, 1, 15)]
+    factors = calculate_cumulative_factors(
+        [_crypto_action(CorpActionType.CHAIN_MIGRATION, 4.0)], dates, base_date=dates[-1]
+    )
+    assert factors[datetime.date(2026, 1, 14)] == (4.0, 4.0)
+    assert factors[datetime.date(2026, 1, 15)] == (1.0, 1.0)
+
+
+def test_a_ticker_change_moves_no_prices() -> None:
+    """Not every action rebases: a rename leaves the factors at 1.0.
+
+    Without this, the split branch could swallow every member of the enum and the two
+    tests above would still pass.
+    """
+    dates = [datetime.date(2026, 1, 14), datetime.date(2026, 1, 15)]
+    factors = calculate_cumulative_factors(
+        [_crypto_action(CorpActionType.TICKER_CHANGE, 0.0)], dates, base_date=dates[-1]
+    )
+    assert factors[datetime.date(2026, 1, 14)] == (1.0, 1.0)
+    assert factors[datetime.date(2026, 1, 15)] == (1.0, 1.0)
+
+
+def test_adjust_bars_applies_a_token_split_to_a_crypto_series() -> None:
+    """End to end: a crypto OHLCV series carried through the CRSP-style adjustment."""
+    pre_ns = int(datetime.datetime(2026, 1, 14, tzinfo=datetime.UTC).timestamp() * 1e9)
+    post_ns = int(datetime.datetime(2026, 1, 15, tzinfo=datetime.UTC).timestamp() * 1e9)
+
+    def _bar(ts_ns: int, price: float, volume: float) -> OHLCV:
+        return OHLCV(
+            source="binance",
+            symbol="LUNA/USDT",
+            symbol_raw="LUNAUSDT",
+            local_ts=ts_ns,
+            asset_class=AssetClass.CRYPTO,
+            source_ts=ts_ns,
+            interval="1d",
+            open=price,
+            high=price,
+            low=price,
+            close=price,
+            volume=volume,
+        )
+
+    bars = [_bar(pre_ns, 100.0, 10.0), _bar(post_ns, 10.0, 100.0)]
+    factors = calculate_cumulative_factors(
+        [_crypto_action(CorpActionType.TOKEN_SPLIT, 10.0)],
+        [datetime.date(2026, 1, 14), datetime.date(2026, 1, 15)],
+        base_date=datetime.date(2026, 1, 15),
+    )
+
+    adjusted = adjust_bars(bars, factors)
+    # The 10:1 redenomination is undone: both days now quote the same adjusted price.
+    assert adjusted[0].close == pytest.approx(10.0)
+    assert adjusted[1].close == pytest.approx(10.0)
+    assert adjusted[0].volume == pytest.approx(100.0)
+    assert adjusted[1].volume == pytest.approx(100.0)
+    # The header survives the adjustment rather than being rebuilt field by field.
+    assert adjusted[0].asset_class is AssetClass.CRYPTO
+    assert adjusted[0].source == "binance"
