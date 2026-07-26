@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import pathlib
 import subprocess
 
@@ -132,6 +133,73 @@ def test_no_exception_class_escapes_the_root() -> None:
         and not issubclass(obj, CrocodileError)
     ]
     assert not strays, f"exception classes outside CrocodileError: {strays}"
+
+
+# ---------------------------------------------------------------------------
+# The promise the merge actually made
+# ---------------------------------------------------------------------------
+
+# Names that were public before the merge and are deliberately gone. Each needs
+# a reason, and the reason has to be better than "we did not need it".
+_DELIBERATELY_DROPPED = {
+    # A test stub that lived inside the equity fork's *duplicate* of the Base L2
+    # connector. The duplicate was deleted as fork residue — an on-chain
+    # connector inside an equities library — and the surviving crypto connector
+    # has the real CoinbaseSmartWalletDetector. Dropping a stub that shadowed a
+    # real implementation is the point of the deduplication, not a loss.
+    "DummySmartWalletDetector",
+}
+
+
+def _merged_public_names() -> set[str]:
+    names: set[str] = set()
+    for path in _package_files():
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                if not node.name.startswith("_"):
+                    names.add(node.name)
+    return names
+
+
+def test_no_capability_disappeared_in_the_merge() -> None:
+    """Every public name either fork had is still reachable, or is listed with a reason.
+
+    This is the assertion the merge needed from the start and did not have.
+    Seven capabilities were promoted away and lost — the read-only SQL guard,
+    the Catalog lifecycle, the non-bucketed lake reader, six resamplers,
+    `OrderBookSync`, the equity `from_row`, the equity `resample_ohlcv` — each
+    on the unmeasured assumption that the crypto copy was the superset. None of
+    the existing gates saw it, because they all ask whether an implementation
+    exists rather than whether one stopped existing. Nothing raised; queries
+    just came back empty.
+
+    The inventory beside this file is the two forks' public surface at the last
+    commit where both trees were intact. Deleting a name from it to make this
+    pass is the one thing that defeats it.
+    """
+    inventory = json.loads((pathlib.Path(__file__).parent / "premerge_public_api.json").read_text())
+    merged = _merged_public_names()
+
+    lost = {
+        fork: sorted(set(names) - merged - _DELIBERATELY_DROPPED)
+        for fork, names in inventory.items()
+        if not fork.startswith("_")
+    }
+    assert not any(lost.values()), (
+        "public names that existed before the merge and exist nowhere now: "
+        f"{ {k: v for k, v in lost.items() if v} }. Either restore them or add them to "
+        "_DELIBERATELY_DROPPED with a reason."
+    )
+
+
+def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
+    """A name that came back must leave the exemption list.
+
+    Otherwise the list grows into a place where losses go to be forgotten.
+    """
+    merged = _merged_public_names()
+    resurrected = sorted(_DELIBERATELY_DROPPED & merged)
+    assert not resurrected, f"these exist again and no longer need an exemption: {resurrected}"
 
 
 # ---------------------------------------------------------------------------
