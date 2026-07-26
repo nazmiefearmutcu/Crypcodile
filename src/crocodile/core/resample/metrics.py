@@ -60,8 +60,8 @@ from __future__ import annotations
 import duckdb
 import polars as pl
 
-from crypcodile.resample._interval import parse_interval as _parse_interval
-from crypcodile.store.catalog import Catalog
+from crocodile.core.resample._interval import parse_interval as _parse_interval
+from crocodile.core.store.catalog import Catalog
 
 # ---------------------------------------------------------------------------
 # SQL template

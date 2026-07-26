@@ -45,7 +45,7 @@ def parse_interval(interval: str) -> tuple[str, str]:
             f"Cannot parse interval {interval!r}. "
             f"Expected a number followed by s/m/h/d/w (e.g. '1s', '5m', '1h')."
         )
-    qty: str = m.group(1)            # validated: only digits
+    qty: str = m.group(1)  # validated: only digits
     unit: str = _UNIT_MAP[m.group(2)]  # validated: one of fixed unit words
     # Both components come from our own validation, not raw user input.
     interval_sql = f"INTERVAL '{qty} {unit}'"

@@ -1,7 +1,7 @@
 """Shared order-book sync primitives for multi-venue gap recovery.
 
 ``SyncResult`` and the buffer-filter helper are used by
-:class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`.  Venue-specific
+:class:`~crocodile.core.ingest.gap_bridge.BookResyncBridge`.  Venue-specific
 state machines (e.g. Binance ``OrderBookSync``) implement
 :class:`BookSyncMachine` and live under ``exchanges/<venue>/book.py``.
 
@@ -31,7 +31,7 @@ class SyncResult(StrEnum):
 
 @runtime_checkable
 class BookSyncMachine(Protocol):
-    """Minimal interface required by :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`.
+    """Minimal interface required by :class:`~crocodile.core.ingest.gap_bridge.BookResyncBridge`.
 
     Implementations must expose ``_venue`` for post-snapshot buffer filtering
     (``"spot"`` / ``"futures"`` today; future venues map to one of those
@@ -82,8 +82,4 @@ def filter_buffered_book_deltas(
 
     See :func:`keep_delta_after_snapshot` for venue boundary rules.
     """
-    return [
-        delta
-        for delta in buffer
-        if keep_delta_after_snapshot(delta, snap_seq, venue=venue)
-    ]
+    return [delta for delta in buffer if keep_delta_after_snapshot(delta, snap_seq, venue=venue)]

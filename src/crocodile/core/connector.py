@@ -17,13 +17,13 @@ from crocodile.core.errors import (
     SinkError,
     TransientConnectorError,
 )
+from crocodile.core.ingest.deadletter import DeadLetterQueue
+from crocodile.core.ingest.transport import Transport
 from crocodile.core.schema.records import Record
+from crocodile.core.sink.base import Sink
 
-# Still under crypcodile until Task 9 relocates the pipeline packages.
-from crypcodile.ingest.deadletter import DeadLetterQueue
-from crypcodile.ingest.transport import Transport
+# Still under crypcodile until Task 15 relocates the remaining packages.
 from crypcodile.instruments.registry import Instrument, InstrumentRegistry
-from crypcodile.sink.base import Sink
 from crypcodile.util.time import now_ns
 
 __all__ = [
@@ -173,7 +173,7 @@ class Connector(ABC):
 
         **Integration point for book resync:** connectors that need async
         side-effects during the message loop (e.g. Binance depth sequence-gap
-        recovery via :class:`~crypcodile.ingest.gap_bridge.BookResyncBridge`)
+        recovery via :class:`~crocodile.core.ingest.gap_bridge.BookResyncBridge`)
         should override this method.  Keep the default path for non-book
         channels so existing normalizers stay pure/sync.
 
@@ -182,10 +182,7 @@ class Connector(ABC):
         """
         for rec in self.normalize(msg, local_ts):
             try:
-                # The ABC speaks the canonical union; ``Sink`` is still typed on the
-                # legacy crypcodile one until Task 9 relocates it. ``--strict`` flags
-                # an unused ignore, so this line fails the moment that lands.
-                await self.out.put(rec)  # type: ignore[arg-type]
+                await self.out.put(rec)
             except SinkError:
                 raise
             except Exception as exc:

@@ -1,9 +1,9 @@
 """Gap-detect → backfill bridge (Task 4.3).
 
-Wires a :class:`~crypcodile.ingest.book_sync.BookSyncMachine` RESYNC to a
+Wires a :class:`~crocodile.core.ingest.book_sync.BookSyncMachine` RESYNC to a
 REST snapshot fetch, buffers live deltas during the resync window, and
 applies them after the snapshot arrives (dropping any with seq below the
-snapshot anchor — see :func:`~crypcodile.ingest.book_sync.filter_buffered_book_deltas`).
+snapshot anchor — see :func:`~crocodile.core.ingest.book_sync.filter_buffered_book_deltas`).
 
 Appendix §6:
   Gap ⇒ buffer live deltas, fire REST snapshot, apply REST then buffered
@@ -46,7 +46,7 @@ Primary production wiring:
 Bybit is deferred: REST ``u`` aligns only with ``orderbook.1000`` while the
 connector streams ``orderbook.50``; Bybit recovery is re-snapshot /
 re-subscribe, not this REST-anchored replay.  Shared helpers live in
-``crypcodile.ingest.book_sync`` for a future port.
+``crocodile.core.ingest.book_sync`` for a future port.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 
-from crypcodile.ingest.book_sync import (
+from crocodile.core.ingest.book_sync import (
     BookSyncMachine,
     SyncResult,
     filter_buffered_book_deltas,
@@ -148,8 +148,7 @@ class BookResyncBridge:
                 self._buffer = []
             else:
                 log.warning(
-                    "BookResyncBridge [%s]: RESYNC triggered at seq=%s; "
-                    "entering resync mode.",
+                    "BookResyncBridge [%s]: RESYNC triggered at seq=%s; entering resync mode.",
                     self._symbol,
                     delta.seq_id,
                 )
@@ -233,9 +232,8 @@ class BookResyncBridge:
         venue = getattr(self._sync, "_venue", "spot")
         if snap_seq is not None:
             for delta in self._buffer:
-                if (
-                    delta.seq_id is not None
-                    and not keep_delta_after_snapshot(delta, snap_seq, venue=venue)
+                if delta.seq_id is not None and not keep_delta_after_snapshot(
+                    delta, snap_seq, venue=venue
                 ):
                     log.debug(
                         "BookResyncBridge [%s]: dropping buffered delta seq=%s "
@@ -245,9 +243,7 @@ class BookResyncBridge:
                         snap_seq,
                         venue,
                     )
-        kept_deltas = filter_buffered_book_deltas(
-            self._buffer, snap_seq, venue=venue
-        )
+        kept_deltas = filter_buffered_book_deltas(self._buffer, snap_seq, venue=venue)
 
         # Clear state
         self._buffer = []

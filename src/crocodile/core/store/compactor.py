@@ -192,6 +192,13 @@ class ParquetCompactor:
                 # Only after durable compact file exists, remove source parts.
                 # Skip the compacted file itself if it were in `files` (it isn't —
                 # we rename after listing originals).
+                #
+                # `old_files` was never bound, so every append raised NameError into
+                # the handler below and each original was logged as a failed delete
+                # even though its rename had succeeded. Binding it restores the
+                # intended bookkeeping; the retirement of `old-*` files stays where
+                # it was — out of this loop.
+                old_files: list[Path] = []
                 for f in files:
                     if f.resolve() == compacted_file.resolve():
                         continue

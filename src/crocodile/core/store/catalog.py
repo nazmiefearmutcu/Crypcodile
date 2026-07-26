@@ -36,7 +36,7 @@ import duckdb
 import polars as pl
 
 # Stable schemas for inventory / search (empty-result contract).
-_INVENTORY_SCHEMA: dict[str, pl.DataType] = {
+_INVENTORY_SCHEMA: dict[str, type[pl.DataType]] = {
     "exchange": pl.Utf8,
     "channel": pl.Utf8,
     "symbol": pl.Utf8,
@@ -45,7 +45,7 @@ _INVENTORY_SCHEMA: dict[str, pl.DataType] = {
     "row_count": pl.Int64,
 }
 
-_SEARCH_SCHEMA: dict[str, pl.DataType] = {
+_SEARCH_SCHEMA: dict[str, type[pl.DataType]] = {
     "symbol": pl.Utf8,
     "exchange": pl.Utf8,
     "channels": pl.Utf8,
@@ -202,7 +202,7 @@ class Catalog:
                 return pl.DataFrame()
             placeholders = ", ".join("?" for _ in symbols_list)
             symbol_filter = f"symbol IN ({placeholders})"
-            params = symbols_list + [start_ns, end_ns]
+            params = [*symbols_list, start_ns, end_ns]
 
         # Cast/validate before interpolating into SQL — never trust a raw limit.
         if limit is not None:
@@ -229,7 +229,9 @@ class Catalog:
             ORDER BY local_ts
             {limit_clause}
         """
-        result = self._conn.execute(sql, params)  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        result = self._conn.execute(
+            sql, params
+        )  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
         df = result.pl()
         # Normalise: return a bare schemaless DataFrame when no rows match so
         # both empty-result paths have the same shape (consistent contract).
@@ -288,9 +290,7 @@ class Catalog:
             return []
 
         for exchange_dir in exchange_dirs:
-            if not exchange_dir.is_dir() or not exchange_dir.name.startswith(
-                "exchange="
-            ):
+            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
                 continue
             # Ensure resolved path stays under data_dir (defence in depth).
             try:
@@ -302,9 +302,7 @@ class Catalog:
             except OSError:
                 continue
             for chan_dir in children:
-                if not chan_dir.is_dir() or not chan_dir.name.startswith(
-                    "channel="
-                ):
+                if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
                     continue
                 # Resolve-check channel dirs too (symlink escape defence).
                 try:
@@ -602,9 +600,7 @@ class Catalog:
         else:
             exchange_expr = "''"
 
-        channel_expr = (
-            "channel" if has_channel else f"'{channel.replace(chr(39), chr(39) * 2)}'"
-        )
+        channel_expr = "channel" if has_channel else f"'{channel.replace(chr(39), chr(39) * 2)}'"
 
         where_parts: list[str] = []
         params: list[object] = []
@@ -635,7 +631,6 @@ class Catalog:
         except Exception:
             return None
 
-
     def _refresh_views(self) -> None:
         """Scan data_dir for channel directories and create/replace views."""
         channel_dir = self._data_dir
@@ -649,7 +644,7 @@ class Catalog:
             for chan_dir in exchange_dir.iterdir():
                 if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
                     continue
-                channel = chan_dir.name[len("channel="):]
+                channel = chan_dir.name[len("channel=") :]
                 # Skip empty / relative / glob-unsafe suffixes (invalid views).
                 if not _is_safe_hive_suffix(channel):
                     continue
@@ -696,15 +691,15 @@ class Catalog:
             )
         """
         try:
-            self._conn.execute(sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+            self._conn.execute(
+                sql
+            )  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
         except Exception:
             # Race: files vanished between glob check and execute, or corrupt.
             return
         self._registered_channels.add(channel)
 
-    def _build_date_globs(
-        self, channel: str, start_ns: int, end_ns: int
-    ) -> list[str]:
+    def _build_date_globs(self, channel: str, start_ns: int, end_ns: int) -> list[str]:
         """Return concrete glob patterns narrowed to dates in [start_ns, end_ns].
 
         We enumerate all ``exchange=*`` directories, then derive which UTC

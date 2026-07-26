@@ -17,6 +17,7 @@ from typing import Any
 import mmh3
 import msgspec.structs
 
+from crocodile.core.schema.records import Record as CanonicalRecord
 from crypcodile.schema.enums import OptType, Side
 from crypcodile.schema.records import (
     OHLCV,
@@ -24,16 +25,25 @@ from crypcodile.schema.records import (
     BookSnapshot,
     BookTicker,
     DerivativeTicker,
+    FarcasterCorrelation,
     Funding,
     Liquidation,
+    LiquidationCall,
     OpenInterest,
     OptionsChain,
     Record,
-    Trade,
-    FarcasterCorrelation,
     ReserveDataUpdated,
-    LiquidationCall,
+    Trade,
 )
+
+Flattenable = Record | CanonicalRecord
+"""What :func:`to_row` accepts.
+
+``to_row`` reads only the msgspec tag plus ``local_ts`` and ``symbol``, all of
+which both record families carry, so it flattens either. ``from_row`` is not
+symmetric: it constructs concrete legacy classes off the ``channel`` string and
+so still returns the legacy union.
+"""
 
 
 def _symbol_bucket(symbol: str) -> int:
@@ -59,7 +69,7 @@ def _convert_value(v: Any) -> Any:
     return v
 
 
-def to_row(record: Record) -> dict[str, Any]:
+def to_row(record: Flattenable) -> dict[str, Any]:
     """Flatten a Record Struct into a dict ready for Polars / Parquet.
 
     Added partition columns:
@@ -153,7 +163,9 @@ def from_row(row: dict[str, Any]) -> Record:
             l2_gas_fee=float(d["l2_gas_fee"]) if d.get("l2_gas_fee") is not None else None,
             gas_price=float(d["gas_price"]) if d.get("gas_price") is not None else None,
             sender=d.get("sender"),
-            is_smart_wallet=bool(d["is_smart_wallet"]) if d.get("is_smart_wallet") is not None else None,
+            is_smart_wallet=(
+                bool(d["is_smart_wallet"]) if d.get("is_smart_wallet") is not None else None
+            ),
         )
     if channel == "book_snapshot":
         return BookSnapshot(

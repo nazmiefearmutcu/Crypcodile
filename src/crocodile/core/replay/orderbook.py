@@ -24,15 +24,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from crocodile.core.errors import BookGap
 from crypcodile.schema.records import BookDelta, BookSnapshot
 
-
-class BookGap(Exception):
-    """Raised when a sequence continuity check fails.
-
-    Callers should catch this and trigger a REST resync to rebuild the book
-    from a fresh snapshot.
-    """
+# ``BookGap`` used to be declared here as a bare ``Exception``, so an
+# ``except BookGap`` written against ``crocodile.core.errors`` caught nothing
+# raised by this module and vice versa. The canonical class lives in
+# ``errors``; this module only re-exports it.
+__all__ = ["BookGap", "OrderBook"]
 
 
 class OrderBook:

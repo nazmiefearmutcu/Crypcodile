@@ -28,9 +28,9 @@ from typing import Any
 
 import polars as pl
 
-from crypcodile.schema.records import Record
-from crypcodile.sink.base import Sink
-from crypcodile.store.rows import to_row
+from crocodile.core.schema.records import Record
+from crocodile.core.sink.base import Sink
+from crocodile.core.store.rows import to_row
 
 # ---------------------------------------------------------------------------
 # Polars schema definitions per channel
@@ -186,17 +186,13 @@ def _sanitize_path_segment(value: str, *, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"Invalid {field} path segment: {value!r}")
     if "/" in value or "\\" in value or "\x00" in value:
-        raise ValueError(
-            f"Invalid {field} path segment (contains separator or null): {value!r}"
-        )
+        raise ValueError(f"Invalid {field} path segment (contains separator or null): {value!r}")
     if value in (".", ".."):
         raise ValueError(f"Invalid {field} path segment: {value!r}")
     return value
 
 
-def _coerce_levels(
-    rows: list[dict[str, Any]], field: str
-) -> None:
+def _coerce_levels(rows: list[dict[str, Any]], field: str) -> None:
     """Convert list-of-tuples book levels to list-of-dicts in-place.
 
     Polars ``pl.List(pl.Struct(...))`` requires dicts, not tuples.
@@ -295,9 +291,7 @@ class ParquetSink(Sink):
         written: set[tuple[str, str, int]] = set()
         try:
             # Group rows by (exchange, date, bucket) — each group → one file
-            groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = (
-                defaultdict(list)
-            )
+            groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
             for row in rows:
                 key = (row["exchange"], row["date"], row["bucket"])
                 groups[key].append(row)
@@ -320,9 +314,7 @@ class ParquetSink(Sink):
                 # never completed a durable write.  Prepend remaining ahead of
                 # concurrent put() rows so order is remaining + pending.
                 remaining = [
-                    r
-                    for r in rows
-                    if (r["exchange"], r["date"], r["bucket"]) not in written
+                    r for r in rows if (r["exchange"], r["date"], r["bucket"]) not in written
                 ]
                 pending = self._buffers.get(channel, [])
                 self._buffers[channel] = remaining + pending
@@ -351,9 +343,7 @@ class ParquetSink(Sink):
         )
         part_dir = part_dir.resolve()
         if not part_dir.is_relative_to(data_dir):
-            raise ValueError(
-                f"Partition path escapes data_dir: {part_dir} not under {data_dir}"
-            )
+            raise ValueError(f"Partition path escapes data_dir: {part_dir} not under {data_dir}")
         part_dir.mkdir(parents=True, exist_ok=True)
         part_id = uuid.uuid4().hex
         # Temp name is not part-* so catalog / hive readers ignore in-progress writes.
@@ -368,9 +358,7 @@ class ParquetSink(Sink):
         # Build DataFrame with explicit schema to ensure type consistency
         schema = _channel_schema(channel)
         # Keep only columns that appear in the schema (unknown extras dropped)
-        filtered_rows: list[dict[str, Any]] = [
-            {k: row.get(k) for k in schema} for row in rows
-        ]
+        filtered_rows: list[dict[str, Any]] = [{k: row.get(k) for k in schema} for row in rows]
         df = pl.DataFrame(filtered_rows, schema=schema)
 
         # Crash safety: write temp in the same directory, then rename to the

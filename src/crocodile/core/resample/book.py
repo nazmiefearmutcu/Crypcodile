@@ -8,7 +8,7 @@ fixed wall-clock intervals keyed on ``local_ts``.
 Design (Appendix §5):
 
     Resampling builds on the M2 ``OrderBook`` reconstruction engine
-    (``crypcodile.replay.orderbook``).  It never queries exchanges directly.
+    (``crocodile.core.replay.orderbook``).  It never queries exchanges directly.
 
 Emission semantics
 ------------------
@@ -67,7 +67,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 
-from crypcodile.replay.orderbook import OrderBook
+from crocodile.core.replay.orderbook import OrderBook
 from crypcodile.schema.records import BookDelta, BookSnapshot
 
 __all__ = ["resample_book_snapshots"]
@@ -95,7 +95,7 @@ def resample_book_snapshots(
         boundary timestamp, not the triggering record's ``local_ts``.
 
     Raises:
-        crypcodile.replay.orderbook.BookGap: Propagated from the underlying
+        crocodile.core.replay.orderbook.BookGap: Propagated from the underlying
                  ``OrderBook`` if a sequence continuity break is detected.
         ValueError: If ``interval_ns`` is not a positive integer.
     """
@@ -118,9 +118,7 @@ def resample_book_snapshots(
                 initialized = True
                 # Set the first boundary to the end of the interval that
                 # contains this snapshot.
-                next_boundary_ns = (
-                    (ts // interval_ns) * interval_ns + interval_ns
-                )
+                next_boundary_ns = (ts // interval_ns) * interval_ns + interval_ns
             # For deltas before the first snapshot, skip (engine would drop them)
             continue
 

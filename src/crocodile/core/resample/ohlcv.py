@@ -67,8 +67,8 @@ from __future__ import annotations
 import duckdb
 import polars as pl
 
-from crypcodile.resample._interval import parse_interval as _parse_interval
-from crypcodile.store.catalog import Catalog
+from crocodile.core.resample._interval import parse_interval as _parse_interval
+from crocodile.core.store.catalog import Catalog
 
 # ---------------------------------------------------------------------------
 # SQL templates (no user input interpolated — only validated interval tokens)
@@ -113,9 +113,7 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str) -> str:
     )
 
 
-def _build_fill_sql(
-    interval_sql: str, interval_label: str, start_ns: int, end_ns: int
-) -> str:
+def _build_fill_sql(interval_sql: str, interval_label: str, start_ns: int, end_ns: int) -> str:
     """Return the fill-enabled SQL.
 
     ``start_ns`` and ``end_ns`` are plain Python ints (not user-supplied

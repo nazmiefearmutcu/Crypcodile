@@ -1,19 +1,21 @@
-import os
 import json
 import logging
+import os
+from typing import Any
 
 log = logging.getLogger(__name__)
+
 
 class SyncRecovery:
     def __init__(self, state_path: str) -> None:
         self.state_path = state_path
-        self.state = {}
+        self.state: dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
         if os.path.exists(self.state_path):
             try:
-                with open(self.state_path, "r") as f:
+                with open(self.state_path) as f:
                     self.state = json.load(f)
             except Exception as e:
                 log.warning(f"Failed to load sync recovery state from {self.state_path}: {e}")
@@ -51,7 +53,7 @@ class SyncRecovery:
 
     def get_seen_logs(self) -> dict[tuple[str, int], bool]:
         raw = self.state.get("seen_logs", [])
-        res = {}
+        res: dict[tuple[str, int], bool] = {}
         for entry in raw:
             if isinstance(entry, list) and len(entry) >= 2:
                 res[(str(entry[0]), int(entry[1]))] = True
@@ -61,4 +63,3 @@ class SyncRecovery:
         serialized = [[k[0], k[1]] for k in logs.keys()]
         self.state["seen_logs"] = serialized
         self._save()
-
