@@ -5,11 +5,11 @@ use, listed nowhere. ``Settings`` replaces that with one object and one prefix.
 Legacy ``CRYPCODILE_*`` / ``STOCKODILE_*`` names are honoured for one minor
 version, with a deprecation warning.
 
-``Settings`` reads; it does not parse. Every value but ``data_dir`` stays the
-string the environment supplied, because the meaning of ``"true"`` or of a
-comma-separated URL list belongs to the code that consumes it, not to the code
-that finds it. What this module centralises is *which name carries which
-setting* — the question that previously required grepping for ``os.environ``.
+``Settings`` parses exactly as much as has a wrong answer. A flag becomes a
+``bool`` here, because ``bool("false")`` is ``True`` and a reader that forgets is
+wrong in the direction that turns a security control quietly on. Everything else
+stays the string the environment supplied: splitting a comma-separated URL list
+has no ambiguity for this module to resolve, so the caller keeps it.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class Settings(msgspec.Struct, frozen=True):
     """
 
     data_dir: Path = Path("data")
-    """Root of the local lake. The only field parsed into anything but a string."""
+    """Root of the local lake."""
 
     home: str | None = None
     """State directory for payment records and IPC files. ``None`` means ``~/.crocodile``.
@@ -72,8 +72,9 @@ class Settings(msgspec.Struct, frozen=True):
     finnhub_api_key: str | None = None
     """Finnhub token."""
 
-    finnhub_free_tier: str = "true"
-    """Whether to apply free-tier rate limits. Parsed by the connector."""
+    finnhub_free_tier: bool = True
+    """Whether to apply free-tier rate limits. Defaults on, so an unkeyed deployment
+    does not hammer an endpoint it has no allowance for."""
 
     coingecko_api_key: str | None = None
     """CoinGecko Pro key. Absent means the public rate-limited endpoint."""
@@ -84,14 +85,27 @@ class Settings(msgspec.Struct, frozen=True):
     stooq_zip_path: str | None = None
     """Path to a pre-downloaded Stooq bulk archive, bypassing the HTTP fetch."""
 
-    sec_user_agent: str = "Crocodile/0.1 (contact@crocodile.org)"
-    """SEC EDGAR requires a contactable User-Agent; it blocks requests without one."""
+    sec_user_agent: str | None = None
+    """Contact string sent to SEC EDGAR, which requires one and blocks requests without it.
+
+    Deliberately undefaulted. SEC's requirement is that the User-Agent identify
+    someone *contactable*, so an invented address satisfies the string check while
+    giving the regulator a dead mailbox — worse than refusing to guess, because it
+    fails silently. The contract for whichever task wires the EDGAR client: raise
+    :class:`~crocodile.core.errors.ConfigError` when this is needed and unset, naming
+    ``CROCODILE_SEC_USER_AGENT`` and what SEC expects in it.
+    """
 
     base_rpc_url: str = "https://base-rpc.publicnode.com"
     """Single Base L2 JSON-RPC endpoint, used when ``base_rpc_urls`` is empty."""
 
     base_rpc_urls: str = ""
-    """Comma-separated Base endpoints to rotate across. Split by the connector."""
+    """Comma-separated Base endpoints to rotate across.
+
+    Left a string on purpose, unlike the boolean flags: a comma split has no wrong
+    answer for this module to prevent, and how many endpoints to keep, in what order,
+    and what to do when one dies is the connector's policy rather than config's.
+    """
 
     custom_pools_ipc_file: str | None = None
     """Where the CLI and the on-chain connector exchange custom pool definitions."""
@@ -121,7 +135,7 @@ class Settings(msgspec.Struct, frozen=True):
     price_usdc: str = "0.001"
     """USDC charged per metered API request."""
 
-    trust_forwarded_for: str = "false"
+    trust_forwarded_for: bool = False
     """Whether to believe ``X-Forwarded-For`` when rate-limiting by client IP.
 
     Believing it behind no proxy lets any caller forge its own address and evade
@@ -133,14 +147,22 @@ class Settings(msgspec.Struct, frozen=True):
         """Read every known name out of ``env``, defaulting to :data:`os.environ`.
 
         Raises:
-            ConfigError: Two legacy prefixes disagree about the same setting.
+            ConfigError: Two legacy prefixes disagree about the same setting, or a
+                boolean field was given something that is not a boolean.
         """
         source: Mapping[str, str] = os.environ if env is None else env
         values: dict[str, Any] = {}
         for field in cls.__struct_fields__:
-            raw = _lookup(source, _VARS[field])
-            if raw is not None:
-                values[field] = Path(raw) if field in _PATH_FIELDS else raw
+            found = _lookup(source, _VARS[field])
+            if found is None:
+                continue
+            spelling, raw = found
+            if field in _BOOL_FIELDS:
+                values[field] = _parse_bool(spelling, raw)
+            elif field in _PATH_FIELDS:
+                values[field] = Path(raw)
+            else:
+                values[field] = raw
         return cls(**values)
 
     @classmethod
@@ -198,22 +220,53 @@ this mapping, so a field added without an entry raises ``KeyError`` on the first
 read rather than being silently unreadable.
 """
 
-_PATH_FIELDS: Final = frozenset({"data_dir"})
+_PATH_FIELDS: Final = frozenset(f.name for f in msgspec.structs.fields(Settings) if f.type is Path)
+"""Fields to build a ``Path`` from, read off the declared types rather than listed.
+
+Same for :data:`_BOOL_FIELDS`. The annotation is already the statement of what the
+field is; a second hand-maintained list could only ever disagree with it.
+"""
+
+_BOOL_FIELDS: Final = frozenset(f.name for f in msgspec.structs.fields(Settings) if f.type is bool)
 
 _SECRET_FIELDS: Final = frozenset(
     field for field in Settings.__struct_fields__ if field.endswith(_SECRET_SUFFIXES)
 )
 
+_TRUE_TOKENS: Final = frozenset({"1", "true", "yes", "on"})
+_FALSE_TOKENS: Final = frozenset({"0", "false", "no", "off"})
 
-def _lookup(env: Mapping[str, str], name: str) -> str | None:
+
+def _parse_bool(spelling: str, raw: str) -> bool:
+    """Turn an environment string into a ``bool``, or refuse to.
+
+    A typo must not coerce to ``False``: ``trust_forwarded_for`` decides whether a
+    forgeable header is believed, so silently reading ``"ture"`` as off — or a
+    hypothetical truthiness check reading ``"false"`` as on — is a security control
+    landing in a state nobody chose.
+    """
+    token = raw.strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    accepted = ", ".join(sorted(_TRUE_TOKENS | _FALSE_TOKENS))
+    raise ConfigError(f"{spelling} expects a boolean, got {raw!r}. Accepted: {accepted}.")
+
+
+def _lookup(env: Mapping[str, str], name: str) -> tuple[str, str] | None:
     """Resolve one setting across the canonical prefix and the two legacy ones.
 
     A present ``CROCODILE_*`` wins outright and warns about nothing, so migrating is
     a matter of adding the new name rather than removing the old one.
+
+    Returns the spelling that supplied the value alongside it, so a later parse
+    failure can blame the variable the operator actually set rather than the
+    canonical name they may never have heard of.
     """
     canonical = PREFIX + name
     if canonical in env:
-        return env[canonical]
+        return canonical, env[canonical]
 
     legacy = {
         prefix + name: env[prefix + name] for prefix in LEGACY_PREFIXES if prefix + name in env
@@ -236,4 +289,5 @@ def _lookup(env: Mapping[str, str], name: str) -> str | None:
         DeprecationWarning,
         stacklevel=3,
     )
-    return distinct.pop()
+    spelling = sorted(legacy)[0]
+    return spelling, legacy[spelling]
