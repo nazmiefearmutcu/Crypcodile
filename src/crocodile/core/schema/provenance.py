@@ -63,7 +63,16 @@ class Provenance(StrEnum):
     """Modelled from a different data class than the one being reported."""
 
     UNAVAILABLE = "unavailable"
-    """Obtainable from no configured source. A typed hole, not a zero."""
+    """Obtainable from no configured source. A typed hole, not a zero.
+
+    This is a capability-envelope state, never a record state. A record's required fields
+    are the observation itself — a ``Trade`` cannot exist without an id, a price and an
+    amount — so an "unavailable record" could only be built by inventing them. A capability
+    with nothing to return for an asset class returns an empty result set whose envelope
+    carries this level; it never fabricates hole-records. :class:`CapabilityUnavailable` is
+    the raised form of the same fact, and a conformance gate asserts no record type defaults
+    ``prov`` to this value.
+    """
 
 
 ConfidenceFn = Callable[[Mapping[str, Any]], float]

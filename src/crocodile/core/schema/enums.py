@@ -11,6 +11,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 __all__ = [
+    "AssetClass",
     "Channel",
     "CorpActionType",
     "FundPeriod",
@@ -19,6 +20,22 @@ __all__ = [
     "Side",
     "Tape",
 ]
+
+
+class AssetClass(StrEnum):
+    """Which market a record came from.
+
+    One struct serves both asset classes, so a consumer holding a record needs the record
+    itself to say which of its fields are meaningfully absent: an unset ``tape`` is normal
+    on a crypto trade and a defect on an equity one. ``source`` is a free-form venue or
+    provider string and cannot answer that without an out-of-band registry.
+
+    It also makes ``GROUP BY asset_class`` the natural way to ask the symmetry question of
+    the lake. One low-cardinality string column is close to free under dictionary encoding.
+    """
+
+    CRYPTO = "crypto"
+    EQUITY = "equity"
 
 
 class Side(StrEnum):
