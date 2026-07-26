@@ -32,7 +32,11 @@ class ConnectorError(CrocodileError):
 
 
 class FatalConnectorError(ConnectorError):
-    """Unrecoverable — authentication, configuration. Do not reconnect."""
+    """The source rejected us and retrying cannot help.
+
+    Bad credentials, an unsupported channel, a symbol the venue does not list.
+    Do not reconnect.
+    """
 
 
 class TransientConnectorError(ConnectorError):
@@ -52,7 +56,11 @@ class BookGap(StoreError):
 
 
 class ConfigError(CrocodileError):
-    """Configuration is missing, malformed, or contradictory."""
+    """Crocodile's own configuration is missing, malformed, or self-contradictory.
+
+    Detected before any source is contacted. A credential the venue rejects is a
+    :class:`FatalConnectorError`, not this.
+    """
 
 
 class ProvenanceError(CrocodileError):
@@ -69,6 +77,8 @@ class CapabilityUnavailable(CrocodileError):
 
     def __init__(self, capability: str, asset_class: str, *, reason: str) -> None:
         self.capability = capability
+        # str, not the AssetClass enum: importing it here would close a cycle, since
+        # capability.py imports provenance.py, which imports this module.
         self.asset_class = asset_class
         self.reason = reason
         super().__init__(f"capability {capability!r} unavailable for {asset_class}: {reason}")

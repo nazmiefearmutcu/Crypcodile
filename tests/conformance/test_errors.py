@@ -1,25 +1,23 @@
 import pytest
 
+from crocodile.core import errors
 from crocodile.core.errors import (
     BookGap,
     CapabilityUnavailable,
-    ConfigError,
     ConnectorError,
     CrocodileError,
     FatalConnectorError,
     ProvenanceError,
-    SinkError,
     StoreError,
     TransientConnectorError,
 )
 
 
-@pytest.mark.parametrize(
-    "cls",
-    [ConnectorError, SinkError, StoreError, CapabilityUnavailable, ConfigError, ProvenanceError],
-)
-def test_every_error_descends_from_the_root(cls: type[Exception]) -> None:
-    assert issubclass(cls, CrocodileError)
+# Walking __all__ rather than a hand-written list: a whitelist silently stops covering
+# any class added after it was written, which is exactly the drift this test guards.
+@pytest.mark.parametrize("name", [n for n in errors.__all__ if n != "CrocodileError"])
+def test_every_exported_error_descends_from_the_root(name: str) -> None:
+    assert issubclass(getattr(errors, name), CrocodileError)
 
 
 def test_connector_errors_split_fatal_from_transient():
@@ -49,6 +47,9 @@ def test_provenance_errors_are_inside_the_hierarchy():
 
     for cls in (UnregisteredBasisError, ConfidenceInputError, ConfidenceFormulaError):
         assert issubclass(cls, CrocodileError), f"{cls.__name__} escapes the root"
+        # Asserting the root alone would stay green if ProvenanceError were deleted and
+        # these were re-parented straight onto it, losing the grouping this commit adds.
+        assert issubclass(cls, ProvenanceError), f"{cls.__name__} escapes the provenance group"
 
     # the legacy bases callers already catch must survive the re-parenting
     assert issubclass(UnregisteredBasisError, LookupError)
