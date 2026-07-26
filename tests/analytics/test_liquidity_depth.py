@@ -1,10 +1,23 @@
 import pathlib
+import re
 
 import pytest
 from typer.testing import CliRunner
 
 from crypcodile.analytics.liquidity_depth import calculate_block_liquidity_depth
 from crypcodile.cli import app
+
+
+# `--help` is rendered by rich via typer. When rich decides the output stream is
+# a terminal (it does on GitHub Actions, but not on a local TTY-less run), the
+# option highlighter styles each switch, which splits tokens like "--symbol"
+# across SGR escape sequences and breaks a naive substring assertion. Strip the
+# escapes so these assertions hold in any environment.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 from crypcodile.client.client import CrypcodileClient
 from crypcodile.schema.records import BookSnapshot
 from crypcodile.store.catalog import Catalog
@@ -154,5 +167,6 @@ def test_cli_liquidity_depth_requires_symbol(tmp_path: pathlib.Path) -> None:
 def test_cli_liquidity_depth_help() -> None:
     result = _RUNNER.invoke(app, ["liquidity-depth", "--help"])
     assert result.exit_code == 0
-    assert "--symbol" in result.output
-    assert "--data-dir" in result.output
+    output = _plain(result.output)
+    assert "--symbol" in output
+    assert "--data-dir" in output

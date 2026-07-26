@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
@@ -8,14 +9,27 @@ from typer.testing import CliRunner
 from crypcodile.cli import app
 
 
+# `--help` is rendered by rich via typer. When rich decides the output stream is
+# a terminal (it does on GitHub Actions, but not on a local TTY-less run), the
+# option highlighter styles each switch, which splits tokens like "--symbol"
+# across SGR escape sequences and breaks a naive substring assertion. Strip the
+# escapes so these assertions hold in any environment.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
 def test_flowmap_help() -> None:
     """Verify that the flowmap command is registered and shows help."""
     runner = CliRunner()
     result = runner.invoke(app, ["flowmap", "--help"])
     assert result.exit_code == 0
-    assert "--symbol" in result.output
-    assert "--historical-hours" in result.output
-    assert "--data-dir" in result.output
+    output = _plain(result.output)
+    assert "--symbol" in output
+    assert "--historical-hours" in output
+    assert "--data-dir" in output
 
 
 
