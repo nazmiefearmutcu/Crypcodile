@@ -1,9 +1,16 @@
 """Convert canonical Records to flat dicts suitable for Polars/Parquet writing.
 
-Each row gets three extra partition columns:
+Each row gets four extra partition columns:
+    source  : str           — venue or data provider (e.g. "binance", "yahoo")
     channel : str           — discriminator tag (e.g. "trade", "book_snapshot")
     date    : str           — UTC date "YYYY-MM-DD" derived from local_ts
     bucket  : int           — hash(symbol) % 128, avoids per-symbol directory explosion
+
+``source`` is a path component only: it names the top-level ``source=``
+partition and is deliberately kept out of the Parquet schema. A lake migrated
+by :func:`crocodile.core.store.migrate.migrate_lake` is renamed, never
+rewritten, so files written before and after the rename must agree field for
+field; hive partitioning supplies ``source`` on read for both.
 
 ``from_row`` is the inverse: reconstruct a Record from a Parquet-read flat dict.
 """
@@ -73,6 +80,7 @@ def to_row(record: Flattenable) -> dict[str, Any]:
     """Flatten a Record Struct into a dict ready for Polars / Parquet.
 
     Added partition columns:
+        - ``source``  : canonical ``source``, or the legacy ``exchange`` field
         - ``channel`` : the msgspec tag string (e.g. "trade")
         - ``date``    : UTC date from ``local_ts`` (e.g. "2023-11-14")
         - ``bucket``  : hash(symbol) % 128
@@ -80,6 +88,11 @@ def to_row(record: Flattenable) -> dict[str, Any]:
     Enum fields (``side``, ``opt_type``) are converted to their string values.
     List-of-tuple fields (``bids``, ``asks``) are preserved as Python
     ``list[tuple[float, float]]`` — Polars can infer these as list[struct].
+
+    Raises:
+        KeyError: if the record carries neither ``source`` nor ``exchange``.
+            Both families name their origin; a record that names neither cannot
+            be partitioned, and guessing a partition is worse than refusing.
     """
     # Extract channel tag from the struct class metadata
     channel: str = type(record).__struct_config__.tag  # type: ignore[assignment]
@@ -90,7 +103,19 @@ def to_row(record: Flattenable) -> dict[str, Any]:
     # Coerce enum values to primitives
     row: dict[str, Any] = {k: _convert_value(v) for k, v in raw.items()}
 
-    # Add partition columns
+    # Add partition columns. The canonical records call the origin ``source``;
+    # the legacy crypto records still call it ``exchange``. One partition key
+    # spans both, so the two names collapse here rather than at the sink.
+    if "source" in raw:
+        source = raw["source"]
+    elif "exchange" in raw:
+        source = raw["exchange"]
+    else:
+        raise KeyError(
+            f"{type(record).__name__} carries neither 'source' nor 'exchange'; "
+            "it cannot be assigned a source= partition"
+        )
+    row["source"] = source
     row["channel"] = channel
     row["date"] = _date_from_ns(record.local_ts)
     row["bucket"] = _symbol_bucket(record.symbol)
@@ -103,7 +128,10 @@ def to_row(record: Flattenable) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 # Partition-only columns added by to_row / hive layout — not Record fields.
-_PARTITION_COLS = frozenset({"channel", "date", "bucket"})
+# ``source`` is here for the legacy records, whose own field is ``exchange``;
+# the canonical records carry a real ``source`` field, which ``from_row`` does
+# not reconstruct because it still builds the legacy union.
+_PARTITION_COLS = frozenset({"source", "channel", "date", "bucket"})
 
 
 def _coerce_levels_from_row(raw: Any) -> list[tuple[float, float]]:

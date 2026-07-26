@@ -12,7 +12,12 @@ Design (Appendix §4):
       by ``local_ts``.
 
 Partition layout (from ParquetSink):
-    data/exchange={E}/channel={C}/date=YYYY-MM-DD/bucket={0..127}/part-*.parquet
+    data/source={S}/channel={C}/date=YYYY-MM-DD/bucket={0..127}/part-*.parquet
+
+Legacy layouts are still read: crypto lakes written before the merge use
+``exchange={S}`` and equity lakes ``provider={S}``. Every discovery walk and
+every glob covers all three prefixes, and a lake still on a legacy prefix logs
+one warning per prefix pointing at ``crocodile migrate-lake``.
 
 Views registered:
     One DuckDB VIEW per channel found on disk, named by the channel string
@@ -30,10 +35,16 @@ from __future__ import annotations
 
 import datetime
 import glob as _glob
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
 import polars as pl
+
+from crocodile.core.store.migrate import SOURCE_PREFIX, SOURCE_PREFIXES
+
+log = logging.getLogger(__name__)
 
 # Stable schemas for inventory / search (empty-result contract).
 _INVENTORY_SCHEMA: dict[str, type[pl.DataType]] = {
@@ -61,8 +72,20 @@ _SEARCH_SCHEMA: dict[str, type[pl.DataType]] = {
 _UNSAFE_HIVE_SUFFIX_CHARS = frozenset({"/", "\\", "\x00", "*", "?", "[", "]"})
 
 
+def _split_source_prefix(name: str) -> tuple[str, str] | None:
+    """Split a top-level partition directory name into (prefix, source value).
+
+    Returns ``None`` for any name that is not a source partition at all, so
+    unrelated directories in the lake root are skipped rather than guessed at.
+    """
+    for prefix in SOURCE_PREFIXES:
+        if name.startswith(prefix):
+            return prefix, name[len(prefix) :]
+    return None
+
+
 def _is_safe_hive_suffix(value: str) -> bool:
-    """Return True if *value* is a safe hive ``exchange=`` / ``channel=`` suffix.
+    """Return True if *value* is a safe hive ``source=`` / ``channel=`` suffix.
 
     Rejects empty / relative names (``.``, ``..``), leading or trailing
     whitespace (callers such as :meth:`Catalog.list_dates` strip user input,
@@ -126,8 +149,89 @@ class Catalog:
         # In-memory DuckDB connection — lightweight, no persistence needed here.
         self._conn = duckdb.connect()
         self._registered_channels: set[str] = set()
+        # Legacy partition prefixes already warned about, so a repeated walk
+        # (every query() refreshes views) does not repeat the warning.
+        self._warned_prefixes: set[str] = set()
         # Register views for all channels present on disk.
         self._refresh_views()
+
+    def _iter_source_dirs(self) -> Iterator[tuple[Path, str]]:
+        """Yield ``(directory, source value)`` for each top-level partition.
+
+        Covers the current ``source=`` prefix and both legacy ones, and warns
+        once per legacy prefix seen. Directories that resolve outside
+        ``data_dir`` are skipped (symlink-escape defence), as are unreadable
+        ones — discovery degrades to "nothing there", never to a traceback.
+        """
+        if not self._data_dir.is_dir():
+            return
+        try:
+            data_root = self._data_dir.resolve()
+            children = list(self._data_dir.iterdir())
+        except OSError:
+            return
+
+        for child in children:
+            if not child.is_dir():
+                continue
+            split = _split_source_prefix(child.name)
+            if split is None:
+                continue
+            prefix, value = split
+            try:
+                child.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            if prefix != SOURCE_PREFIX and prefix not in self._warned_prefixes:
+                self._warned_prefixes.add(prefix)
+                log.warning(
+                    "lake at %s still uses the legacy %r partition prefix; "
+                    "run `crocodile migrate-lake %s` (a rename, not a rewrite)",
+                    self._data_dir,
+                    prefix,
+                    self._data_dir,
+                )
+            yield child, value
+
+    def _source_globs(self, *tail: str) -> dict[str, str]:
+        """Return ``{prefix: glob}`` covering every source prefix.
+
+        A lake can hold a mix of prefixes — mid-migration, or because the two
+        forks wrote crypto under ``exchange=`` and equities under ``provider=``
+        into the same root — so every read covers all three rather than picking
+        whichever one it happens to see first.
+        """
+        return {
+            prefix: str(self._data_dir.joinpath(prefix + "*", *tail)) for prefix in SOURCE_PREFIXES
+        }
+
+    @staticmethod
+    def _read_expr(patterns_by_prefix: dict[str, list[str]]) -> str:
+        """Return SQL reading every prefix group as one relation.
+
+        DuckDB refuses to read files with differing hive keys in a single
+        ``read_parquet`` call — "Hive partition mismatch … key 'exchange' not
+        found" — so each prefix is read separately and the groups are unioned.
+        Legacy groups project their key as ``source`` so the union is over one
+        vocabulary and callers never learn which prefix a row came from.
+
+        Prefixes come from :data:`SOURCE_PREFIXES`, a module constant, so the
+        interpolated key is never caller-controlled; only the paths are, and
+        those are quote-escaped.
+        """
+        selects: list[str] = []
+        for prefix, patterns in patterns_by_prefix.items():
+            paths_literal = ", ".join(f"'{p.replace(chr(39), chr(39) * 2)}'" for p in patterns)
+            key = prefix.removesuffix("=")
+            projection = "*" if prefix == SOURCE_PREFIX else f"*, {key} AS source"
+            selects.append(
+                f"SELECT {projection} FROM read_parquet(\n"
+                f"    [{paths_literal}],\n"
+                "    hive_partitioning => true,\n"
+                "    union_by_name => true\n"
+                ")"
+            )
+        return "\nUNION ALL BY NAME\n".join(selects)
 
     # ------------------------------------------------------------------
     # Public API
@@ -184,14 +288,11 @@ class Catalog:
             # empty path below (callers must check len == 0 before column access).
             return pl.DataFrame()
 
-        # Deduplicate (different (exchange, date) combos may share same date).
-        unique_globs = list(dict.fromkeys(glob_paths))
-
-        # Build a multi-path read_parquet expression.
+        # Build a multi-path read_parquet expression, one group per prefix.
         # DuckDB accepts a list literal:  ['path1', 'path2', ...]
         # Single quotes in paths must be escaped as '' (SQL string literal rule).
         # DuckDB does not support ? parameters for read_parquet() path arguments.
-        paths_literal = ", ".join(f"'{p.replace(chr(39), chr(39) * 2)}'" for p in unique_globs)
+        read_expr = self._read_expr(glob_paths)
 
         if isinstance(symbol, str):
             symbol_filter = "symbol = ?"
@@ -218,11 +319,7 @@ class Catalog:
         # for consistency and to let DuckDB optimise them as typed literals.
         sql = f"""
             SELECT *
-            FROM read_parquet(
-                [{paths_literal}],
-                hive_partitioning => true,
-                union_by_name => true
-            )
+            FROM ({read_expr})
             WHERE {symbol_filter}
               AND local_ts >= ?
               AND local_ts <= ?
@@ -263,8 +360,9 @@ class Catalog:
     def list_channels(self) -> list[str]:
         """Return sorted channel names present in the lake.
 
-        Walks the hive layout ``exchange=*/channel=*`` on the filesystem
-        (no DuckDB scan).  Useful discovery even when channel directories
+        Walks the hive layout ``source=*/channel=*`` on the filesystem — plus
+        the legacy ``exchange=*`` / ``provider=*`` roots — with no DuckDB scan.
+        Useful discovery even when channel directories
         exist but views cannot be registered yet (empty partitions / no
         parquet parts).
 
@@ -275,30 +373,14 @@ class Catalog:
         unsafe as path segments (separators, null/control bytes, ``.`` /
         ``..``, glob metacharacters, leading/trailing whitespace) are ignored.
         """
-        if not self._data_dir.exists() or not self._data_dir.is_dir():
-            return []
-
-        try:
-            data_root = self._data_dir.resolve()
-        except OSError:
+        data_root = self._data_dir.resolve() if self._data_dir.is_dir() else None
+        if data_root is None:
             return []
 
         channels: set[str] = set()
-        try:
-            exchange_dirs = list(self._data_dir.iterdir())
-        except OSError:
-            return []
-
-        for exchange_dir in exchange_dirs:
-            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
-                continue
-            # Ensure resolved path stays under data_dir (defence in depth).
+        for source_dir, _value in self._iter_source_dirs():
             try:
-                exchange_dir.resolve().relative_to(data_root)
-            except (ValueError, OSError):
-                continue
-            try:
-                children = list(exchange_dir.iterdir())
+                children = list(source_dir.iterdir())
             except OSError:
                 continue
             for chan_dir in children:
@@ -318,9 +400,10 @@ class Catalog:
     def list_dates(self, channel: str) -> list[str]:
         """Return sorted distinct ``date=`` partition values for *channel*.
 
-        Walks the hive layout ``exchange=*/channel={channel}/date=*`` on the
-        filesystem (no DuckDB scan).  Useful discovery before bounded
-        ``scan()`` / analytics calls.
+        Walks the hive layout ``source=*/channel={channel}/date=*`` on the
+        filesystem — plus the legacy ``exchange=*`` / ``provider=*`` roots —
+        with no DuckDB scan. Useful discovery before bounded ``scan()`` /
+        analytics calls.
 
         Empty / whitespace *channel*, unknown channel, empty lake, or a
         channel value that is unsafe as a path segment (separators, null
@@ -335,24 +418,13 @@ class Catalog:
         if not _is_safe_hive_suffix(channel):
             return []
 
-        if not self._data_dir.exists() or not self._data_dir.is_dir():
-            return []
-
-        try:
-            data_root = self._data_dir.resolve()
-        except OSError:
+        data_root = self._data_dir.resolve() if self._data_dir.is_dir() else None
+        if data_root is None:
             return []
 
         dates: set[str] = set()
-        try:
-            exchange_dirs = list(self._data_dir.iterdir())
-        except OSError:
-            return []
-
-        for exchange_dir in exchange_dirs:
-            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
-                continue
-            chan_dir = exchange_dir / f"channel={channel}"
+        for source_dir, _value in self._iter_source_dirs():
+            chan_dir = source_dir / f"channel={channel}"
             if not chan_dir.is_dir():
                 continue
             # Ensure resolved path stays under data_dir (defence in depth).
@@ -391,31 +463,10 @@ class Catalog:
         segments (separators, null/control bytes, ``.`` / ``..``, glob
         metacharacters, leading/trailing whitespace) are ignored.
         """
-        if not self._data_dir.exists() or not self._data_dir.is_dir():
-            return []
-
-        try:
-            data_root = self._data_dir.resolve()
-        except OSError:
-            return []
-
         exchanges: set[str] = set()
-        try:
-            children = list(self._data_dir.iterdir())
-        except OSError:
-            return []
-
-        for exchange_dir in children:
-            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
-                continue
-            # Ensure resolved path stays under data_dir (defence in depth).
-            try:
-                exchange_dir.resolve().relative_to(data_root)
-            except (ValueError, OSError):
-                continue
-            exchange_str = exchange_dir.name[len("exchange=") :]
-            if _is_safe_hive_suffix(exchange_str):
-                exchanges.add(exchange_str)
+        for _source_dir, value in self._iter_source_dirs():
+            if _is_safe_hive_suffix(value):
+                exchanges.add(value)
 
         return sorted(exchanges)
 
@@ -633,15 +684,9 @@ class Catalog:
 
     def _refresh_views(self) -> None:
         """Scan data_dir for channel directories and create/replace views."""
-        channel_dir = self._data_dir
-        if not channel_dir.exists():
-            return
-
         # Discover channels from directory names ``channel=<name>``.
-        for exchange_dir in channel_dir.iterdir():
-            if not exchange_dir.is_dir() or not exchange_dir.name.startswith("exchange="):
-                continue
-            for chan_dir in exchange_dir.iterdir():
+        for source_dir, _value in self._iter_source_dirs():
+            for chan_dir in source_dir.iterdir():
                 if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
                     continue
                 channel = chan_dir.name[len("channel=") :]
@@ -654,8 +699,9 @@ class Catalog:
     def _create_view(self, channel: str) -> None:
         """Register a DuckDB VIEW named after the channel.
 
-        The glob covers all exchanges and all dates for that channel so that
-        ``query("SELECT … FROM trade")`` works without extra parameters.
+        The globs cover every source prefix and all dates for that channel so
+        that ``query("SELECT … FROM trade")`` works without extra parameters,
+        including on a lake that is half-migrated.
 
         Empty partition directories (no ``part-*.parquet`` yet) are skipped
         without raising: DuckDB ``read_parquet`` fails hard when the glob
@@ -663,16 +709,16 @@ class Catalog:
         / ``refresh_views`` when filesystem ``list_channels`` still discovers
         those channels. The channel is not added to ``_registered_channels``.
         """
-        glob_pattern = str(
-            self._data_dir
-            / "exchange=*"
-            / f"channel={channel}"
-            / "date=*"
-            / "bucket=*"
-            / "part-*.parquet"
-        )
-        # Avoid DuckDB "No files found" when only empty hive dirs exist.
-        if not _glob.glob(glob_pattern):
+        # Avoid DuckDB "No files found" when only empty hive dirs exist: keep
+        # only the prefixes that actually match files.
+        patterns_by_prefix = {
+            prefix: [pattern]
+            for prefix, pattern in self._source_globs(
+                f"channel={channel}", "date=*", "bucket=*", "part-*.parquet"
+            ).items()
+            if _glob.glob(pattern)
+        }
+        if not patterns_by_prefix:
             return
 
         # Escape embedded single quotes in the path so the SQL string literal
@@ -680,15 +726,10 @@ class Catalog:
         # DuckDB does not support ? parameters for structural/path arguments
         # like read_parquet() paths, so quote-escaping is the correct fix.
         # View name uses double-quoted identifiers: escape " as "".
-        escaped_glob = glob_pattern.replace("'", "''")
         escaped_channel = channel.replace('"', '""')
         sql = f"""
             CREATE OR REPLACE VIEW "{escaped_channel}" AS
-            SELECT * FROM read_parquet(
-                '{escaped_glob}',
-                hive_partitioning => true,
-                union_by_name => true
-            )
+            {self._read_expr(patterns_by_prefix)}
         """
         try:
             self._conn.execute(
@@ -699,33 +740,43 @@ class Catalog:
             return
         self._registered_channels.add(channel)
 
-    def _build_date_globs(self, channel: str, start_ns: int, end_ns: int) -> list[str]:
-        """Return concrete glob patterns narrowed to dates in [start_ns, end_ns].
+    def _build_date_globs(self, channel: str, start_ns: int, end_ns: int) -> dict[str, list[str]]:
+        """Return glob patterns per prefix, narrowed to dates in [start_ns, end_ns].
 
-        We enumerate all ``exchange=*`` directories, then derive which UTC
-        dates are spanned by the query window.  Only those date partitions are
-        included in the returned glob list.
+        We enumerate all source directories — ``source=*`` and both legacy
+        prefixes — then derive which UTC dates are spanned by the query window.
+        Only those date partitions are included.
 
-        If no relevant files exist on disk, returns an empty list.
+        Patterns stay grouped by prefix because a single ``read_parquet`` call
+        cannot span two hive keys; see :meth:`_read_expr`.
+
+        If no relevant files exist on disk, returns an empty mapping.
         """
-        channel_dirs = list(self._data_dir.glob(f"exchange=*/channel={channel}"))
+        channel_dirs: list[tuple[str, Path]] = []
+        for source_dir, _value in self._iter_source_dirs():
+            chan_dir = source_dir / f"channel={channel}"
+            if not chan_dir.is_dir():
+                continue
+            split = _split_source_prefix(source_dir.name)
+            assert split is not None  # _iter_source_dirs only yields matches
+            channel_dirs.append((split[0], chan_dir))
         if not channel_dirs:
-            return []
+            return {}
 
         # Compute the set of dates covered by [start_ns, end_ns].
         dates = _ns_range_to_dates(start_ns, end_ns)
 
-        globs: list[str] = []
-        for chan_dir in channel_dirs:
+        globs: dict[str, list[str]] = {}
+        for prefix, chan_dir in channel_dirs:
             for date_str in dates:
                 date_dir = chan_dir / f"date={date_str}"
                 if date_dir.exists():
                     pattern = str(date_dir / "bucket=*" / "part-*.parquet")
                     # Only include if there are actual files.
-                    if _glob.glob(pattern):
-                        globs.append(pattern)
+                    if _glob.glob(pattern) and pattern not in globs.setdefault(prefix, []):
+                        globs[prefix].append(pattern)
 
-        return globs
+        return {prefix: patterns for prefix, patterns in globs.items() if patterns}
 
 
 # ---------------------------------------------------------------------------

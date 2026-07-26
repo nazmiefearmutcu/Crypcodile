@@ -133,6 +133,43 @@ def test_cli_catalog_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
     assert "No data found" in result.output
 
 
+def test_cli_migrate_lake_renames_then_reports_already_migrated(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The command the legacy-partition warning names must exist and be re-runnable."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
+    (tmp_path / "provider=yahoo" / "channel=bar").mkdir(parents=True)
+
+    runner = CliRunner()
+    first = runner.invoke(app, ["migrate-lake", "--data-dir", str(tmp_path)])
+    assert first.exit_code == 0, f"stdout:\n{first.output}"
+    assert "Renamed 2" in first.output
+    assert (tmp_path / "source=deribit" / "channel=trade").is_dir()
+    assert (tmp_path / "source=yahoo" / "channel=bar").is_dir()
+
+    second = runner.invoke(app, ["migrate-lake", "--data-dir", str(tmp_path)])
+    assert second.exit_code == 0, f"stdout:\n{second.output}"
+    assert "Already migrated." in second.output
+
+
+def test_cli_migrate_lake_refuses_to_merge_partitions(tmp_path: pathlib.Path) -> None:
+    """A collision exits non-zero rather than combining two sources silently."""
+    from typer.testing import CliRunner
+
+    from crypcodile.cli import app
+
+    (tmp_path / "exchange=deribit").mkdir(parents=True)
+    (tmp_path / "source=deribit").mkdir(parents=True)
+
+    result = CliRunner().invoke(app, ["migrate-lake", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert (tmp_path / "exchange=deribit").is_dir()
+
+
 def test_cli_catalog_lists_empty_partition_dirs(tmp_path: pathlib.Path) -> None:
     """``catalog`` uses filesystem list_channels; empty partitions show 0 rows."""
     from typer.testing import CliRunner

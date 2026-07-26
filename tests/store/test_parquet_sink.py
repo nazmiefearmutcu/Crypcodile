@@ -74,7 +74,7 @@ async def test_parquet_sink_writes_files_by_channel(tmp_path: pathlib.Path) -> N
 
 
 async def test_parquet_sink_path_structure(tmp_path: pathlib.Path) -> None:
-    """Hive path: exchange=.../channel=.../date=.../bucket=.../part-*.parquet."""
+    """Hive path: source=.../channel=.../date=.../bucket=.../part-*.parquet."""
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
     await sink.put(_trade())
     await sink.flush()
@@ -84,7 +84,10 @@ async def test_parquet_sink_path_structure(tmp_path: pathlib.Path) -> None:
     for p in all_parquets:
         parts = p.parts
         # Each path segment should contain hive key=value pairs
-        assert any("exchange=" in part for part in parts)
+        assert any("source=" in part for part in parts)
+        assert not any("exchange=" in part for part in parts), (
+            "the writer must emit only the unified source= key"
+        )
         assert any("channel=" in part for part in parts)
         assert any("date=" in part for part in parts)
         assert any("bucket=" in part for part in parts)
@@ -467,9 +470,9 @@ async def test_parquet_sink_cancelled_flush_re_buffers_rows(
 async def test_parquet_sink_rejects_malicious_exchange_path_traversal(
     tmp_path: pathlib.Path,
 ) -> None:
-    """A malicious exchange name must not write outside data_dir (raises).
+    """A malicious source name must not write outside data_dir (raises).
 
-    exchange values are used as hive path segments. Without sanitization,
+    source values are used as hive path segments. Without sanitization,
     values containing ``/`` or ``..`` could escape the lake root.
     """
     data_dir = tmp_path / "lake"
@@ -479,11 +482,11 @@ async def test_parquet_sink_rejects_malicious_exchange_path_traversal(
 
     sink = ParquetSink(data_dir=data_dir, max_buffer_rows=100, flush_interval_seconds=9999)
 
-    # Inject a path-traversal exchange into the buffered row.
+    # Inject a path-traversal source into the buffered row.
     from crypcodile.store.rows import to_row
 
     row = to_row(_trade(1.0))
-    row["exchange"] = "../../outside"
+    row["source"] = "../../outside"
     sink._buffers["trade"].append(row)
 
     with pytest.raises(ValueError, match="path segment|escapes data_dir"):
@@ -500,14 +503,14 @@ async def test_parquet_sink_rejects_malicious_exchange_path_traversal(
 async def test_parquet_sink_rejects_malicious_channel_and_date_segments(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Channel and date path segments are sanitized the same way as exchange."""
+    """Channel and date path segments are sanitized the same way as source."""
     from crypcodile.store.parquet_sink import _sanitize_path_segment
 
     for bad in ("../x", "a/b", "a\\b", "..", ".", "", "foo/../../../etc"):
         with pytest.raises(ValueError):
             _sanitize_path_segment(bad, field="test")
 
-    assert _sanitize_path_segment("deribit", field="exchange") == "deribit"
+    assert _sanitize_path_segment("deribit", field="source") == "deribit"
     assert _sanitize_path_segment("trade", field="channel") == "trade"
     assert _sanitize_path_segment("2024-01-15", field="date") == "2024-01-15"
 
@@ -515,16 +518,16 @@ async def test_parquet_sink_rejects_malicious_channel_and_date_segments(
     with pytest.raises(ValueError, match="path segment|escapes data_dir"):
         sink._write_parquet_sync(
             channel="trade/../evil",
-            exchange="deribit",
+            source="deribit",
             date="2024-01-01",
             bucket=0,
-            rows=[{"exchange": "deribit", "channel": "trade", "date": "2024-01-01"}],
+            rows=[{"source": "deribit", "channel": "trade", "date": "2024-01-01"}],
         )
     with pytest.raises(ValueError, match="path segment|escapes data_dir"):
         sink._write_parquet_sync(
             channel="trade",
-            exchange="deribit",
+            source="deribit",
             date="2024-01-01/../../escape",
             bucket=0,
-            rows=[{"exchange": "deribit", "channel": "trade", "date": "2024-01-01"}],
+            rows=[{"source": "deribit", "channel": "trade", "date": "2024-01-01"}],
         )

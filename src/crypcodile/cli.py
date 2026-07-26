@@ -1213,6 +1213,39 @@ def catalog_exchanges(
 
 
 # ---------------------------------------------------------------------------
+# migrate-lake (rename legacy partition directories)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="migrate-lake")
+def migrate_lake_cmd(
+    data_dir: _DataDirOpt = Path("data"),
+) -> None:
+    """Rename legacy ``exchange=`` / ``provider=`` partitions to ``source=``.
+
+    Both forks named the top-level partition after their own asset class;
+    ``source=`` is the merged key. Because the key lives in the directory name
+    and not inside the Parquet files, this is a rename — nothing is read,
+    decoded or rewritten, and the lake stays queryable throughout.
+
+    Safe to re-run: an already-migrated lake reports zero. Refuses to merge a
+    legacy directory into an existing ``source=`` one; that case needs a human.
+    """
+    from crocodile.core.store.migrate import migrate_lake
+
+    data_dir = resolve_data_dir(data_dir)
+    try:
+        renamed = migrate_lake(data_dir)
+    except FileExistsError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if renamed:
+        typer.echo(f"Renamed {renamed} partition director{'y' if renamed == 1 else 'ies'}.")
+    else:
+        typer.echo("Already migrated.")
+
+
+# ---------------------------------------------------------------------------
 # list-exchanges (factory registry; no lake)
 # ---------------------------------------------------------------------------
 

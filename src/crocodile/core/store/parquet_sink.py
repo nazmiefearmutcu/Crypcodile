@@ -1,7 +1,11 @@
 """Buffered, hive-partitioned Parquet sink for canonical Records.
 
 Partition layout (Appendix §4):
-    data/exchange={E}/channel={C}/date=YYYY-MM-DD/bucket={0..127}/part-{uuid}.parquet
+    data/source={S}/channel={C}/date=YYYY-MM-DD/bucket={0..127}/part-{uuid}.parquet
+
+``source={S}`` is the unified partition key. Crypto lakes written before the
+merge use ``exchange={S}`` and equity lakes ``provider={S}``; readers still
+accept both, and ``crocodile.core.store.migrate.migrate_lake`` renames them.
 
 Write policy:
   - Buffers rows per channel.
@@ -290,23 +294,23 @@ class ParquetSink(Sink):
         ok = False
         written: set[tuple[str, str, int]] = set()
         try:
-            # Group rows by (exchange, date, bucket) — each group → one file
+            # Group rows by (source, date, bucket) — each group → one file
             groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
             for row in rows:
-                key = (row["exchange"], row["date"], row["bucket"])
+                key = (row["source"], row["date"], row["bucket"])
                 groups[key].append(row)
 
-            for (exchange, date, bucket), group_rows in groups.items():
+            for (source, date, bucket), group_rows in groups.items():
                 await asyncio.get_event_loop().run_in_executor(
                     None,
                     self._write_parquet_sync,
                     channel,
-                    exchange,
+                    source,
                     date,
                     bucket,
                     group_rows,
                 )
-                written.add((exchange, date, bucket))
+                written.add((source, date, bucket))
             ok = True
         finally:
             if not ok:
@@ -314,7 +318,7 @@ class ParquetSink(Sink):
                 # never completed a durable write.  Prepend remaining ahead of
                 # concurrent put() rows so order is remaining + pending.
                 remaining = [
-                    r for r in rows if (r["exchange"], r["date"], r["bucket"]) not in written
+                    r for r in rows if (r["source"], r["date"], r["bucket"]) not in written
                 ]
                 pending = self._buffers.get(channel, [])
                 self._buffers[channel] = remaining + pending
@@ -322,21 +326,21 @@ class ParquetSink(Sink):
     def _write_parquet_sync(
         self,
         channel: str,
-        exchange: str,
+        source: str,
         date: str,
         bucket: int,
         rows: list[dict[str, Any]],
     ) -> None:
         """Synchronous Parquet write (runs in executor to avoid blocking the loop)."""
         # Sanitize path components from record fields before joining under data_dir.
-        exchange = _sanitize_path_segment(exchange, field="exchange")
+        source = _sanitize_path_segment(source, field="source")
         channel = _sanitize_path_segment(channel, field="channel")
         date = _sanitize_path_segment(date, field="date")
 
         data_dir = self._data_dir.resolve()
         part_dir = (
             data_dir
-            / f"exchange={exchange}"
+            / f"source={source}"
             / f"channel={channel}"
             / f"date={date}"
             / f"bucket={bucket}"

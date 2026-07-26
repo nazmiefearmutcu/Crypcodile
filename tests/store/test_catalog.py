@@ -199,8 +199,8 @@ async def test_catalog_scan_multiday_partition_pruning(tmp_path: pathlib.Path) -
     # Use glob.glob (sync stdlib) rather than pathlib.Path.glob to avoid ASYNC240.
     import glob as _glob_mod
 
-    day1_dirs = _glob_mod.glob(str(tmp_path / "exchange=*" / "channel=trade" / "date=2023-11-14"))
-    day2_dirs = _glob_mod.glob(str(tmp_path / "exchange=*" / "channel=trade" / "date=2023-11-15"))
+    day1_dirs = _glob_mod.glob(str(tmp_path / "source=*" / "channel=trade" / "date=2023-11-14"))
+    day2_dirs = _glob_mod.glob(str(tmp_path / "source=*" / "channel=trade" / "date=2023-11-15"))
     assert day1_dirs, "Expected a date=2023-11-14 partition directory"
     assert day2_dirs, "Expected a date=2023-11-15 partition directory"
 

@@ -15,6 +15,8 @@ from typing import Any
 
 import polars as pl
 
+from crocodile.core.store.migrate import SOURCE_PREFIXES
+
 log = logging.getLogger(__name__)
 
 
@@ -116,8 +118,14 @@ class ParquetCompactor:
             return
 
         now = time.time()
-        # Find all leaf directories: exchange=*/channel=*/date=*/bucket=*
-        bucket_dirs = list(self.data_dir.glob("exchange=*/channel=*/date=*/bucket=*"))
+        # Find all leaf directories: {source,exchange,provider}=*/channel=*/date=*/bucket=*
+        # Legacy prefixes are included so a lake that has not run `migrate-lake`
+        # still gets compacted rather than silently accumulating small parts.
+        bucket_dirs = [
+            bucket_dir
+            for prefix in SOURCE_PREFIXES
+            for bucket_dir in self.data_dir.glob(f"{prefix}*/channel=*/date=*/bucket=*")
+        ]
 
         for bucket_dir in bucket_dirs:
             if not bucket_dir.is_dir():
