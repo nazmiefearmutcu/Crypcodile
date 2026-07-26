@@ -59,6 +59,8 @@ dev = [
     "pytest-timeout>=2",
     "ruff>=0.6",
     "mypy>=1.11",
+    # starlette.testclient transport, used by the real-HTTP API tests
+    "httpx2>=2.9",
 ]
 
 [build-system]

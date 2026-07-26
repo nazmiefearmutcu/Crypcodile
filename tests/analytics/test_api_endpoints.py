@@ -1,3 +1,46 @@
+"""Handler-level tests for the API's business logic. **Not HTTP tests.**
+
+Read this before trusting the size of this file. It is ~6,200 lines and ~339
+test functions, and none of them makes an HTTP request.
+
+``MockTestClient`` below is not a client. It scans ``app.routes`` for a matching
+path, takes the endpoint's *first* parameter, validates a dict against that
+parameter's annotation, and runs the endpoint coroutine directly. Every layer
+between a real caller and that function is therefore absent.
+
+**What these tests DO cover**
+
+- The body of each endpoint function: its computation, branching, and the Python
+  object it returns.
+- Pydantic validation of the single payload model on POST endpoints.
+- ``HTTPException`` status codes and details raised *inside* a handler.
+
+**What these tests DO NOT cover — despite appearances**
+
+- *Routing.* Path matching is ``route.path == url``, an exact string compare.
+  Path parameters, trailing slashes, and route precedence are untested, and an
+  unrouted path raises ``ValueError`` in the harness instead of yielding a 404.
+- *Middleware.* The CORS middleware and the x402 payment gate on
+  ``/api/v1/market-data`` are never invoked. A 200 asserted here says nothing
+  about what a real caller receives — that endpoint answers 402 over HTTP.
+- *Dependency injection.* ``Header`` / ``Depends`` / ``Request`` parameters are
+  never resolved; only the first parameter is passed, so any handler that takes
+  a second is exercised in a shape it never sees in production.
+- *Status codes.* They are synthesized by the harness, not produced by
+  Starlette. Note the ``except Exception`` fallback that labels *any* unexpected
+  error a **400** — a handler crashing with ``AttributeError`` looks like a clean
+  client error here. A 405 on a wrong method cannot be observed at all.
+- *Serialization.* ``mock_resp.json.return_value`` is the raw Python object the
+  handler returned. It is never encoded to JSON, so anything FastAPI could not
+  actually serialize passes silently, and ``Content-Type`` is never checked.
+- *GET endpoints entirely.* ``MockTestClient`` only implements ``post``.
+
+The real HTTP surface lives in ``tests/analytics/test_api_http_integration.py``,
+which drives this same app through ``starlette.testclient.TestClient`` over a
+real ASGI transport. It is deliberately small: it covers the layers this file
+cannot reach rather than restating 339 handler tests.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,10 +57,11 @@ from crypcodile.api_server import app
 
 
 class MockTestClient:
-    """A mock TestClient that executes FastAPI routes directly.
+    """Calls FastAPI endpoint functions directly. Not an HTTP client.
 
-    This bypasses the need for starlette's testclient which requires
-    httpx/httpx2.
+    Bypasses routing, middleware, dependency injection, real status-code
+    generation and JSON serialization — see this module's docstring for the
+    full list of what that leaves untested.
     """
 
     def __init__(self, fastapi_app: Any) -> None:
