@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Final, NamedTuple
@@ -127,17 +128,22 @@ def register_basis(
     Raises:
         ValueError: if ``basis`` is already registered, or the formula has no docstring.
             The docstring is the only place a constant like ``native``'s 1.0 can be
-            justified, so an undocumented formula is a rejected formula.
+            justified, so an undocumented formula is a rejected formula. The docstring
+            half of that check is skipped under ``python -OO``, which strips docstrings at
+            compile time and so leaves it nothing to inspect.
     """
 
     def decorate(fn: ConfidenceFn) -> ConfidenceFn:
         if basis in _REGISTRY:
             raise ValueError(f"provenance basis {basis!r} is already registered")
         doc = (fn.__doc__ or "").strip()
-        if not doc:
+        # Under -OO the interpreter strips docstrings at compile time, so this check has
+        # nothing to inspect and would turn every registration into an import-time crash.
+        # The rule is a development and CI discipline; neither runs with -OO.
+        if sys.flags.optimize < 2 and not doc:
             raise ValueError(
-                f"confidence formula for {basis!r} has no docstring; a confidence number "
-                f"must be documented alongside its formula"
+                f"confidence formula for {basis!r} has no docstring; "
+                f"a confidence number must be documented alongside its formula"
             )
         _REGISTRY[basis] = _Registered(fn=fn, level=level, inputs=tuple(inputs), doc=doc)
         return fn

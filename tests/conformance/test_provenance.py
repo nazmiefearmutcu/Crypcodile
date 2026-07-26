@@ -64,9 +64,27 @@ def test_duplicate_registration_is_rejected():
         register_basis("native", level=Provenance.NATIVE, inputs=[])(formula)
 
 
-def test_registration_requires_a_docstring():
+def test_missing_docstring_is_rejected():
     with pytest.raises(ValueError, match="docstring"):
-        register_basis("_test_undocumented", level=Provenance.DERIVED, inputs=[])(lambda _: 1.0)
+        register_basis("_test_no_doc", level=Provenance.DERIVED, inputs=[])(lambda _: 0.5)
+
+
+def test_the_package_imports_under_docstring_stripping():
+    """-OO strips docstrings; the mandatory-docstring rule must not become a crash.
+
+    This is a subprocess test on purpose: the running interpreter's optimize flag
+    cannot be changed, and monkeypatching sys.flags would test the mock, not the
+    behaviour that breaks a container build.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-OO", "-c", "import crocodile.core.schema.provenance"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_every_registered_basis_is_documented():
