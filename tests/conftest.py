@@ -14,6 +14,15 @@ from unittest.mock import patch, MagicMock
 # Force Qt offscreen platform for headless tests run in CI/CLI environments
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+# Deterministic CLI output. Several tests assert on substrings of `--help`
+# (e.g. `assert '--symbol' in result.output`). When rich emits colour, typer's
+# option highlighter splits a switch across style spans, so the literal
+# "--symbol" no longer appears in the captured output and those assertions
+# fail — which is exactly what happened on GitHub Actions, where CI=true makes
+# rich enable colour while a local TTY-less run does not.
+os.environ["NO_COLOR"] = "1"
+os.environ.pop("FORCE_COLOR", None)
+
 # Safeguard against xgboost C-library loading failures on macOS
 sys.modules["xgboost"] = MagicMock()
 
