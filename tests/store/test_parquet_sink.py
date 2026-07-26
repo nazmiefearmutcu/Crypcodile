@@ -7,9 +7,9 @@ import pathlib
 import polars as pl
 import pytest
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -334,7 +334,7 @@ async def test_parquet_sink_write_failure_preserves_concurrent_puts(
     def _fail_then_note(*args, **kwargs):
         # Simulate a concurrent put that lands while write is in progress.
         # Direct buffer append mirrors put()'s post-to_row path for this channel.
-        from crypcodile.store.rows import to_row
+        from crocodile.core.store.rows import to_row
 
         sink._buffers["trade"].append(to_row(_trade(99.0)))
         raise OSError("write failed mid-flush")
@@ -362,7 +362,7 @@ async def test_parquet_sink_partial_multi_partition_failure(
     retain only group B; group A is durable on disk once.  A subsequent
     successful flush must write B without duplicating A.
     """
-    from crypcodile.store.rows import to_row
+    from crocodile.core.store.rows import to_row
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
 
@@ -483,7 +483,7 @@ async def test_parquet_sink_rejects_malicious_exchange_path_traversal(
     sink = ParquetSink(data_dir=data_dir, max_buffer_rows=100, flush_interval_seconds=9999)
 
     # Inject a path-traversal source into the buffered row.
-    from crypcodile.store.rows import to_row
+    from crocodile.core.store.rows import to_row
 
     row = to_row(_trade(1.0))
     row["source"] = "../../outside"
@@ -504,7 +504,7 @@ async def test_parquet_sink_rejects_malicious_channel_and_date_segments(
     tmp_path: pathlib.Path,
 ) -> None:
     """Channel and date path segments are sanitized the same way as source."""
-    from crypcodile.store.parquet_sink import _sanitize_path_segment
+    from crocodile.core.store.parquet_sink import _sanitize_path_segment
 
     for bad in ("../x", "a/b", "a\\b", "..", ".", "", "foo/../../../etc"):
         with pytest.raises(ValueError):

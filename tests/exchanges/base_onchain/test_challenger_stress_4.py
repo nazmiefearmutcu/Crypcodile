@@ -3,9 +3,9 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport, BaseOnchainConnector
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport, BaseOnchainConnector
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.sink.memory import MemorySink
 
 class CustomMockWeb3:
     def __init__(self, fail_reserves=False, fail_slot0=False):

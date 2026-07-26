@@ -4,11 +4,11 @@ import asyncio
 from unittest.mock import MagicMock
 import pytest
 
-from crypcodile.exchanges.gmx_synthetix.connector import GMXSynthetixConnector
-from crypcodile.instruments.registry import InstrumentRegistry, Kind
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade, Funding, Liquidation
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.exchanges.gmx_synthetix.connector import GMXSynthetixConnector
+from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade, Funding, Liquidation
+from crocodile.core.sink.memory import MemorySink
 
 def test_list_instruments() -> None:
     registry = InstrumentRegistry()

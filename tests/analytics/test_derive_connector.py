@@ -4,10 +4,10 @@ import time
 from unittest.mock import MagicMock, patch
 import pytest
 
-from crypcodile.analytics.blackscholes import PureMathGreeksSolverAdapter
-from crypcodile.exchanges.derive.connector import DeriveConnector
-from crypcodile.schema.enums import OptType
-from crypcodile.schema.records import OptionsChain
+from crocodile.crypto.analytics.blackscholes import PureMathGreeksSolverAdapter
+from crocodile.crypto.exchanges.derive.connector import DeriveConnector
+from crocodile.core.schema.legacy.enums import OptType
+from crocodile.core.schema.legacy.records import OptionsChain
 
 
 def test_derive_connector_connection() -> None:
@@ -16,7 +16,7 @@ def test_derive_connector_connection() -> None:
     assert connector.w3 is None
     assert connector.viewer_contract is None
 
-    with patch("crypcodile.exchanges.derive.connector.Web3") as mock_web3:
+    with patch("crocodile.crypto.exchanges.derive.connector.Web3") as mock_web3:
         mock_w3_instance = MagicMock()
         mock_web3.return_value = mock_w3_instance
         connector.connect()

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from web3.exceptions import ContractLogicError
-from crypcodile.exchanges.base_onchain.revert_parser import RevertReasonParser
+from crocodile.crypto.exchanges.base_onchain.revert_parser import RevertReasonParser
 import eth_abi
 import eth_utils
 

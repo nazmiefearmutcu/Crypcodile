@@ -4,15 +4,15 @@ import pytest
 import aiohttp
 from typing import AsyncGenerator
 from web3 import AsyncHTTPProvider, AsyncWeb3
-from crypcodile.exchanges.base_onchain.connector import (
+from crocodile.crypto.exchanges.base_onchain.connector import (
     BaseOnchainTransport,
     BaseOnchainConnector,
     POOL_SPECS,
     TOKENS,
     FACTORIES
 )
-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade
-from crypcodile.schema.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
+from crocodile.core.schema.legacy.enums import Side
 
 # =====================================================================
 # Tier 1 E2E Feature Isolation Tests (F1-F6)
@@ -561,7 +561,7 @@ async def test_f4_uniswap_v3_synthetic_depth_calculation(mock_rpc) -> None:
     try:
         async for msg_bytes in transport:
             msg = json.loads(msg_bytes.decode())
-            from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
+            from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
             records = list(normalize_onchain_update(msg, 123456789))
             snapshots = [r for r in records if isinstance(r, BookSnapshot)]
             assert len(snapshots) > 0
@@ -594,7 +594,7 @@ async def test_f4_orderbook_size_enforcement(mock_rpc) -> None:
     try:
         async for msg_bytes in transport:
             msg = json.loads(msg_bytes.decode())
-            from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
+            from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
             records = list(normalize_onchain_update(msg, 123456789))
             tickers = [r for r in records if isinstance(r, BookTicker)]
             assert len(tickers) > 0
@@ -835,7 +835,7 @@ async def test_f5_x402_failed_transaction_status(mock_rpc, api_server) -> None:
 @pytest.mark.asyncio
 async def test_f6_custom_symbol_registration(mock_rpc) -> None:
     rpc_url, _ = mock_rpc
-    from crypcodile.exchanges.base_onchain import connector
+    from crocodile.crypto.exchanges.base_onchain import connector
     connector.POOL_SPECS["CUSTOM-USDC"] = {
         "type": "uniswap_v3",
         "token0": "CUSTOM",
@@ -874,7 +874,7 @@ async def test_f6_custom_symbol_registration(mock_rpc) -> None:
 @pytest.mark.asyncio
 async def test_f6_custom_symbol_decimals(mock_rpc) -> None:
     rpc_url, _ = mock_rpc
-    from crypcodile.exchanges.base_onchain import connector
+    from crocodile.crypto.exchanges.base_onchain import connector
     connector.POOL_SPECS["CUSTOM_18-WETH"] = {
         "type": "uniswap_v3",
         "token0": "CUSTOM_18",
@@ -913,7 +913,7 @@ async def test_f6_custom_symbol_decimals(mock_rpc) -> None:
 @pytest.mark.asyncio
 async def test_f6_custom_uniswap_fee_tier(mock_rpc) -> None:
     rpc_url, _ = mock_rpc
-    from crypcodile.exchanges.base_onchain import connector
+    from crocodile.crypto.exchanges.base_onchain import connector
     connector.POOL_SPECS["CUSTOM_FEE-USDC"] = {
         "type": "uniswap_v3",
         "token0": "cbBTC",
@@ -961,7 +961,7 @@ async def test_f6_custom_uniswap_fee_tier(mock_rpc) -> None:
 @pytest.mark.asyncio
 async def test_f6_custom_aerodrome_stable(mock_rpc) -> None:
     rpc_url, _ = mock_rpc
-    from crypcodile.exchanges.base_onchain import connector
+    from crocodile.crypto.exchanges.base_onchain import connector
     connector.POOL_SPECS["CUSTOM_STABLE-USDC"] = {
         "type": "aerodrome_v2",
         "token0": "AERO",
@@ -1008,7 +1008,7 @@ async def test_f6_custom_aerodrome_stable(mock_rpc) -> None:
 async def test_f2_mcp_custom_symbol_lookup(mcp_server_client, mock_rpc) -> None:
     rpc_url, _ = mock_rpc
     proc = mcp_server_client
-    from crypcodile.exchanges.base_onchain import connector
+    from crocodile.crypto.exchanges.base_onchain import connector
     connector.POOL_SPECS["CUSTOM_MCP-USDC"] = {
         "type": "uniswap_v3",
         "token0": "cbBTC",

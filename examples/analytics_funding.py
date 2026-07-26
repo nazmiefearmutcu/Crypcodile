@@ -101,8 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    from crypcodile.analytics.funding import funding_apr, funding_summary
-    from crypcodile.store.catalog import Catalog
+    from crocodile.crypto.analytics.funding import funding_apr, funding_summary
+    from crocodile.core.store.catalog import Catalog
 
     catalog = Catalog(data_dir)
 

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from crypcodile.exchanges.base_onchain.por_syncer import ProofOfReserveSyncer
+from crocodile.crypto.exchanges.base_onchain.por_syncer import ProofOfReserveSyncer
 
 @pytest.mark.asyncio
 async def test_por_syncer_backed():

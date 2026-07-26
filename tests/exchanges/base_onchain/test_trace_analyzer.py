@@ -1,5 +1,5 @@
 import pytest
-from crypcodile.exchanges.base_onchain.trace_analyzer import TraceAnalyzer
+from crocodile.crypto.exchanges.base_onchain.trace_analyzer import TraceAnalyzer
 
 def test_trace_analyzer_reentrancy_parity():
     analyzer = TraceAnalyzer()

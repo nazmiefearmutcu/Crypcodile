@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from crypcodile.instruments import universe
-from crypcodile.instruments.registry import Instrument, Kind
+from crocodile.crypto.instruments import universe
+from crocodile.crypto.instruments.registry import Instrument, Kind
 
 
 def _inst(symbol_raw: str, kind: Kind, base: str, quote: str) -> Instrument:
@@ -129,7 +129,7 @@ async def test_top_symbols_any_quote(monkeypatch):
 async def test_exchange_instruments_maps_and_registers(monkeypatch):
     ex = FakeExchange()
     _patch_ccxt(monkeypatch, ex)
-    from crypcodile.instruments.registry import InstrumentRegistry
+    from crocodile.crypto.instruments.registry import InstrumentRegistry
 
     reg = InstrumentRegistry()
     insts = await universe.exchange_instruments("fake", registry=reg)

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-from crypcodile.analytics.funding_prediction import (
+from crocodile.crypto.analytics.funding_prediction import (
     XGBoostFundingPredictor,
     predict_next_funding,
 )
@@ -86,7 +86,7 @@ def test_predictor_fallback_constant_mean_without_target_col() -> None:
     assert pred == 0.03
 
 
-@patch("crypcodile.analytics.funding_prediction.XGBOOST_AVAILABLE", True)
+@patch("crocodile.crypto.analytics.funding_prediction.XGBOOST_AVAILABLE", True)
 def test_predictor_xgboost_path_df() -> None:
     # Mock the xgboost module and regressor
     mock_xgb = MagicMock()
@@ -94,7 +94,7 @@ def test_predictor_xgboost_path_df() -> None:
     mock_xgb.XGBRegressor.return_value = mock_regressor
     mock_regressor.predict.return_value = [0.012, 0.024]
 
-    with patch("crypcodile.analytics.funding_prediction.xgb", mock_xgb):
+    with patch("crocodile.crypto.analytics.funding_prediction.xgb", mock_xgb):
         predictor = XGBoostFundingPredictor(feature_cols=["feature1"])
         
         train_df = pl.DataFrame({
@@ -115,7 +115,7 @@ def test_predictor_xgboost_path_df() -> None:
         mock_regressor.predict.assert_called_once()
 
 
-@patch("crypcodile.analytics.funding_prediction.XGBOOST_AVAILABLE", True)
+@patch("crocodile.crypto.analytics.funding_prediction.XGBOOST_AVAILABLE", True)
 def test_predictor_xgboost_path_dict() -> None:
     # Mock the xgboost module and regressor
     mock_xgb = MagicMock()
@@ -123,7 +123,7 @@ def test_predictor_xgboost_path_dict() -> None:
     mock_xgb.XGBRegressor.return_value = mock_regressor
     mock_regressor.predict.return_value = [0.015]
 
-    with patch("crypcodile.analytics.funding_prediction.xgb", mock_xgb):
+    with patch("crocodile.crypto.analytics.funding_prediction.xgb", mock_xgb):
         predictor = XGBoostFundingPredictor(feature_cols=["feature1"])
         
         train_df = pl.DataFrame({
@@ -140,7 +140,7 @@ def test_predictor_xgboost_path_dict() -> None:
         mock_regressor.predict.assert_called_once()
 
 
-@patch("crypcodile.analytics.funding_prediction.XGBOOST_AVAILABLE", True)
+@patch("crocodile.crypto.analytics.funding_prediction.XGBOOST_AVAILABLE", True)
 def test_predictor_fallback_on_inference_exception() -> None:
     # Mock the xgboost module and regressor, but raise an exception during predict
     mock_xgb = MagicMock()
@@ -148,7 +148,7 @@ def test_predictor_fallback_on_inference_exception() -> None:
     mock_xgb.XGBRegressor.return_value = mock_regressor
     mock_regressor.predict.side_effect = Exception("XGBoost prediction error")
 
-    with patch("crypcodile.analytics.funding_prediction.xgb", mock_xgb):
+    with patch("crocodile.crypto.analytics.funding_prediction.xgb", mock_xgb):
         predictor = XGBoostFundingPredictor(feature_cols=["feature1"], window_size=3)
         
         train_df = pl.DataFrame({
@@ -167,7 +167,7 @@ def test_predictor_fallback_on_inference_exception() -> None:
 
 
 
-@patch("crypcodile.analytics.funding_prediction.XGBOOST_AVAILABLE", False)
+@patch("crocodile.crypto.analytics.funding_prediction.XGBOOST_AVAILABLE", False)
 def test_predictor_fallback_when_xgboost_missing() -> None:
     predictor = XGBoostFundingPredictor(feature_cols=["feature1"], window_size=3)
     

@@ -1,8 +1,8 @@
 import math
 from typing import Any, cast
 import pytest
-from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
-from crypcodile.schema.records import BookSnapshot, BookTicker
+from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker
 
 def test_price_zero_or_negative() -> None:
     # Price is 0 or negative should return empty list of records (no snapshot/ticker)

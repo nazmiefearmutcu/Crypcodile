@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pathlib
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade, Funding
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade, Funding
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -69,7 +69,7 @@ async def test_cli_query_exits_zero_with_output(tmp_path: pathlib.Path) -> None:
     """``query`` against a fixture data dir returns exit code 0 and count=3."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -91,7 +91,7 @@ async def test_cli_catalog_exits_zero_lists_channels(tmp_path: pathlib.Path) -> 
     """``catalog`` lists available channels and their row counts, exit code 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -106,7 +106,7 @@ async def test_cli_catalog_symbols_inventory(tmp_path: pathlib.Path) -> None:
     """``catalog --symbols`` prints inventory summary rows."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -123,7 +123,7 @@ async def test_cli_catalog_symbols_inventory(tmp_path: pathlib.Path) -> None:
 def test_cli_catalog_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -139,7 +139,7 @@ def test_cli_migrate_lake_renames_then_reports_already_migrated(
     """The command the legacy-partition warning names must exist and be re-runnable."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
     (tmp_path / "provider=yahoo" / "channel=bar").mkdir(parents=True)
@@ -160,7 +160,7 @@ def test_cli_migrate_lake_refuses_to_merge_partitions(tmp_path: pathlib.Path) ->
     """A collision exits non-zero rather than combining two sources silently."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     (tmp_path / "exchange=deribit").mkdir(parents=True)
     (tmp_path / "source=deribit").mkdir(parents=True)
@@ -174,7 +174,7 @@ def test_cli_catalog_lists_empty_partition_dirs(tmp_path: pathlib.Path) -> None:
     """``catalog`` uses filesystem list_channels; empty partitions show 0 rows."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
     (tmp_path / "exchange=deribit" / "channel=funding").mkdir(parents=True)
@@ -201,7 +201,7 @@ async def test_cli_catalog_symbols_with_empty_partition_dirs(
     """
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     # Extra empty partition (no parquet) alongside real data.
@@ -224,7 +224,7 @@ def test_cli_catalog_symbols_empty_partitions_only(tmp_path: pathlib.Path) -> No
     """``catalog --symbols`` with only empty partitions → No data found."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     (tmp_path / "exchange=deribit" / "channel=trade").mkdir(parents=True)
 
@@ -243,7 +243,7 @@ def test_cli_catalog_uses_list_channels(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.list_channels.return_value = ["trade", "funding"]
@@ -261,9 +261,9 @@ def test_cli_catalog_uses_list_channels(
             return mock_client.inventory()
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(app, ["catalog", "--data-dir", str(tmp_path)])
@@ -282,7 +282,7 @@ def test_cli_catalog_summary_empty_lake(tmp_path: pathlib.Path) -> None:
     """``catalog-summary`` on empty lake prints zero counts; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -299,7 +299,7 @@ async def test_cli_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
     """``catalog-summary`` lists channels + exchanges_on_disk with counts."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -322,7 +322,7 @@ def test_cli_catalog_summary_uses_client_discovery(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.catalog_summary.return_value = {
@@ -340,11 +340,11 @@ def test_cli_catalog_summary_uses_client_discovery(
             return mock_client.catalog_summary()
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
     # Also patch resolve so empty tmp does not trigger interactive prompts.
     monkeypatch.setattr(
-        "crypcodile.cli.resolve_data_dir", lambda d: d
+        "crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d
     )
 
     runner = CliRunner()
@@ -368,7 +368,7 @@ def test_cli_catalog_stats_empty_lake(tmp_path: pathlib.Path) -> None:
     """``catalog-stats`` on empty lake prints zero counts; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -383,7 +383,7 @@ async def test_cli_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
     """``catalog-stats`` lists per-channel COUNT(*) row counts."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -406,7 +406,7 @@ def test_cli_catalog_stats_uses_client(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.catalog_stats.return_value = {
@@ -422,10 +422,10 @@ def test_cli_catalog_stats_uses_client(
             return mock_client.catalog_stats()
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
     monkeypatch.setattr(
-        "crypcodile.cli.resolve_data_dir", lambda d: d
+        "crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d
     )
 
     runner = CliRunner()
@@ -446,7 +446,7 @@ def test_cli_catalog_stats_query_failure_reports_minus_one(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.catalog_stats.return_value = {
@@ -462,10 +462,10 @@ def test_cli_catalog_stats_query_failure_reports_minus_one(
             return mock_client.catalog_stats()
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
     monkeypatch.setattr(
-        "crypcodile.cli.resolve_data_dir", lambda d: d
+        "crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d
     )
 
     runner = CliRunner()
@@ -486,7 +486,7 @@ def test_cli_catalog_stats_escapes_double_quotes(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.catalog_stats.return_value = {
@@ -502,10 +502,10 @@ def test_cli_catalog_stats_escapes_double_quotes(
             return mock_client.catalog_stats()
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
     monkeypatch.setattr(
-        "crypcodile.cli.resolve_data_dir", lambda d: d
+        "crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d
     )
 
     runner = CliRunner()
@@ -521,8 +521,8 @@ def test_cli_catalog_stats_in_main_help() -> None:
     """``catalog-stats`` appears in top-level ``--help`` Commands listing."""
     from typer.testing import CliRunner
 
-    import crypcodile.cli as cli_mod
-    from crypcodile.cli import app
+    import crocodile.crypto.legacy.cli as cli_mod
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])
@@ -540,7 +540,7 @@ def test_cli_catalog_dates_empty_lake(tmp_path: pathlib.Path) -> None:
     """``catalog-dates`` on empty lake prints No dates.; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -555,7 +555,7 @@ async def test_cli_catalog_dates_with_data(tmp_path: pathlib.Path) -> None:
     """``catalog-dates`` lists hive date= partitions for a channel."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -573,7 +573,7 @@ def test_cli_catalog_dates_unknown_channel(tmp_path: pathlib.Path) -> None:
     """Unknown channel yields No dates. (exit 0)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     (tmp_path / "exchange=deribit" / "channel=trade" / "date=2024-01-01").mkdir(
         parents=True
@@ -600,7 +600,7 @@ def test_cli_catalog_dates_strips_channel(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.list_dates.return_value = ["2024-06-01"]
@@ -613,9 +613,9 @@ def test_cli_catalog_dates_strips_channel(
             return mock_client.list_dates(channel)
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -637,7 +637,7 @@ def test_cli_catalog_dates_missing_channel(tmp_path: pathlib.Path) -> None:
     """``catalog-dates`` without --channel exits non-zero."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -653,7 +653,7 @@ def test_cli_catalog_dates_uses_client(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.list_dates.return_value = ["2023-11-14", "2023-11-15"]
@@ -666,9 +666,9 @@ def test_cli_catalog_dates_uses_client(
             return mock_client.list_dates(channel)
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -690,7 +690,7 @@ def test_cli_catalog_symbols_cmd_empty_lake(tmp_path: pathlib.Path) -> None:
     """``catalog-symbols`` on empty lake prints No symbols.; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -706,7 +706,7 @@ async def test_cli_catalog_symbols_cmd_with_data(
     """``catalog-symbols`` lists distinct inventory symbols (one per line)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -727,7 +727,7 @@ async def test_cli_catalog_symbols_cmd_channel_filter(
     """``catalog-symbols --channel trade`` still finds trade symbols."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -751,7 +751,7 @@ async def test_cli_catalog_symbols_cmd_exchange_filter(
     """``catalog-symbols --exchange deribit`` filters inventory."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -789,7 +789,7 @@ def test_cli_catalog_symbols_cmd_strips_filters(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.list_symbols.return_value = ["deribit:BTC-PERPETUAL"]
@@ -802,9 +802,9 @@ def test_cli_catalog_symbols_cmd_strips_filters(
             return mock_client.list_symbols(channel=channel, exchange=exchange)
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -834,7 +834,7 @@ def test_cli_catalog_symbols_cmd_uses_list_symbols(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.list_symbols.return_value = [
@@ -850,9 +850,9 @@ def test_cli_catalog_symbols_cmd_uses_list_symbols(
             return mock_client.list_symbols(channel=channel, exchange=exchange)
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -884,7 +884,7 @@ def test_cli_catalog_inventory_empty_lake(tmp_path: pathlib.Path) -> None:
     """``catalog-inventory`` on empty lake prints No inventory.; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -900,7 +900,7 @@ async def test_cli_catalog_inventory_with_data(
     """``catalog-inventory`` prints inventory coverage table rows."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -922,7 +922,7 @@ async def test_cli_catalog_inventory_channel_filter(
     """``catalog-inventory --channel trade`` still finds trade rows."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -947,7 +947,7 @@ async def test_cli_catalog_inventory_exchange_filter(
     """``catalog-inventory --exchange deribit`` filters; miss → No inventory."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -986,7 +986,7 @@ def test_cli_catalog_inventory_strips_filters(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     inv = pl.DataFrame(
         {
@@ -1009,9 +1009,9 @@ def test_cli_catalog_inventory_strips_filters(
             return mock_client.inventory(channel=channel, exchange=exchange)
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1039,7 +1039,7 @@ def test_cli_catalog_inventory_uses_inventory(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     inv = pl.DataFrame(
         {
@@ -1062,9 +1062,9 @@ def test_cli_catalog_inventory_uses_inventory(
             return mock_client.inventory(channel=channel, exchange=exchange)
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1091,8 +1091,8 @@ def test_cli_catalog_inventory_in_main_help() -> None:
     """``catalog-inventory`` appears in top-level ``--help`` Commands listing."""
     from typer.testing import CliRunner
 
-    import crypcodile.cli as cli_mod
-    from crypcodile.cli import app
+    import crocodile.crypto.legacy.cli as cli_mod
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])
@@ -1110,7 +1110,7 @@ def test_cli_catalog_exchanges_empty_lake(tmp_path: pathlib.Path) -> None:
     """``catalog-exchanges`` on empty lake prints No exchanges.; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1126,7 +1126,7 @@ async def test_cli_catalog_exchanges_with_data(
     """``catalog-exchanges`` lists on-disk hive exchange= partitions."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1144,7 +1144,7 @@ def test_cli_catalog_exchanges_empty_partition_dirs(
     """Empty hive exchange= dirs still appear (filesystem discovery)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     (tmp_path / "exchange=binance" / "channel=trade").mkdir(parents=True)
     (tmp_path / "exchange=deribit" / "channel=funding").mkdir(parents=True)
@@ -1165,7 +1165,7 @@ def test_cli_catalog_exchanges_uses_client(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.list_exchanges_on_disk.return_value = ["binance", "okx"]
@@ -1178,9 +1178,9 @@ def test_cli_catalog_exchanges_uses_client(
             return mock_client.list_exchanges_on_disk()
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1205,8 +1205,8 @@ def test_cli_list_exchanges_in_main_help() -> None:
     """
     from typer.testing import CliRunner
 
-    import crypcodile.cli as cli_mod
-    from crypcodile.cli import app
+    import crocodile.crypto.legacy.cli as cli_mod
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])
@@ -1224,8 +1224,8 @@ def test_cli_list_exchanges_matches_factory() -> None:
     """``list-exchanges`` prints sorted factory registry names (no lake)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
-    from crypcodile.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.cli import app
+    from crocodile.crypto.exchanges.factory import list_exchanges
 
     runner = CliRunner()
     result = runner.invoke(app, ["list-exchanges"])
@@ -1243,7 +1243,7 @@ def test_cli_list_exchanges_uses_factory(monkeypatch) -> None:
     """CLI delegates to factory.list_exchanges (not lake client)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     calls: list[int] = []
 
@@ -1251,7 +1251,7 @@ def test_cli_list_exchanges_uses_factory(monkeypatch) -> None:
         calls.append(1)
         return ["alpha", "zeta"]
 
-    monkeypatch.setattr("crypcodile.cli.list_exchanges", _fake_list)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.list_exchanges", _fake_list)
 
     runner = CliRunner()
     result = runner.invoke(app, ["list-exchanges"])
@@ -1268,8 +1268,8 @@ def test_cli_list_exchanges_distinct_from_catalog_exchanges(
     """Factory list is independent of on-disk hive partitions."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
-    from crypcodile.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.cli import app
+    from crocodile.crypto.exchanges.factory import list_exchanges
 
     # Empty lake: catalog-exchanges → No exchanges.; list-exchanges still full.
     runner = CliRunner()
@@ -1296,7 +1296,7 @@ async def test_cli_search_finds_symbol(tmp_path: pathlib.Path) -> None:
     """``search BTC`` returns matching rows with score columns."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1314,7 +1314,7 @@ async def test_cli_search_no_matches(tmp_path: pathlib.Path) -> None:
     """Empty / no-match search prints 'No matches.' and exits 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1328,7 +1328,7 @@ async def test_cli_search_no_matches(tmp_path: pathlib.Path) -> None:
 def test_cli_search_empty_lake(tmp_path: pathlib.Path) -> None:
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1341,7 +1341,7 @@ def test_cli_search_empty_lake(tmp_path: pathlib.Path) -> None:
 async def test_cli_search_channel_filter(tmp_path: pathlib.Path) -> None:
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1367,7 +1367,7 @@ async def test_cli_search_exchange_filter(tmp_path: pathlib.Path) -> None:
     """``search BTC --exchange deribit`` filters inventory by exchange."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     # Second venue so a wrong --exchange can miss while BTC still matches.
@@ -1428,7 +1428,7 @@ def test_cli_search_strips_exchange_filter(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     search_df = pl.DataFrame(
         {
@@ -1454,9 +1454,9 @@ def test_cli_search_strips_exchange_filter(
             )
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1489,7 +1489,7 @@ def test_cli_resolve_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
     """``resolve-symbols`` on empty lake yields no-match error (exit 1)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1509,7 +1509,7 @@ async def test_cli_resolve_symbols_with_data(tmp_path: pathlib.Path) -> None:
     """``resolve-symbols BTC-PERPETUAL`` prints canonical symbol."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1533,7 +1533,7 @@ async def test_cli_resolve_symbols_comma_separated(
     """Comma-separated free-form inputs resolve to canonical symbols."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1560,7 +1560,7 @@ async def test_cli_resolve_symbols_channel_filter(
     """``--channel trade`` still resolves trade-backed symbols."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1583,7 +1583,7 @@ def test_cli_resolve_symbols_missing_arg(tmp_path: pathlib.Path) -> None:
     """Missing symbols argument exits non-zero."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1599,7 +1599,7 @@ def test_cli_resolve_symbols_strips_channel_and_default_ambiguous(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
@@ -1614,9 +1614,9 @@ def test_cli_resolve_symbols_strips_channel_and_default_ambiguous(
             )
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1646,7 +1646,7 @@ def test_cli_resolve_symbols_value_error_exits_1(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.resolve_symbols.side_effect = ValueError(
@@ -1663,9 +1663,9 @@ def test_cli_resolve_symbols_value_error_exits_1(
             )
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1683,7 +1683,7 @@ def test_cli_resolve_symbols_uses_client(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     mock_client = MagicMock()
     mock_client.resolve_symbols.return_value = [
@@ -1701,9 +1701,9 @@ def test_cli_resolve_symbols_uses_client(
             )
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1736,7 +1736,7 @@ def test_cli_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
     """``data-coverage`` on empty lake prints No coverage.; exit 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1757,7 +1757,7 @@ async def test_cli_data_coverage_with_data(tmp_path: pathlib.Path) -> None:
     """``data-coverage --symbol`` prints inventory rows for that symbol."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1785,7 +1785,7 @@ async def test_cli_data_coverage_channel_filter(
     """``--channel trade`` restricts coverage to trade inventory rows."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1820,7 +1820,7 @@ async def test_cli_data_coverage_exchange_filter(
     """``--exchange deribit`` keeps hits; wrong exchange → No coverage."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1862,7 +1862,7 @@ async def test_cli_data_coverage_no_symbol_match(
     """Unknown exact symbol yields No coverage. (exit 0)."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -1884,7 +1884,7 @@ def test_cli_data_coverage_missing_symbol(tmp_path: pathlib.Path) -> None:
     """Missing --symbol exits non-zero."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1901,7 +1901,7 @@ def test_cli_data_coverage_strips_empty_channel(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     cov = pl.DataFrame(
         {
@@ -1928,9 +1928,9 @@ def test_cli_data_coverage_strips_empty_channel(
             )
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1962,7 +1962,7 @@ def test_cli_data_coverage_uses_client(
     from unittest.mock import MagicMock
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     cov = pl.DataFrame(
         {
@@ -1989,9 +1989,9 @@ def test_cli_data_coverage_uses_client(
             )
 
     monkeypatch.setattr(
-        "crypcodile.client.client.CrypcodileClient", _FakeClient
+        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
     )
-    monkeypatch.setattr("crypcodile.cli.resolve_data_dir", lambda d: d)
+    monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2025,7 +2025,7 @@ async def test_cli_export_csv_creates_file(tmp_path: pathlib.Path) -> None:
     """``export`` with fmt=csv writes a non-empty file, exit code 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     dest = tmp_path / "out" / "trades.csv"
@@ -2064,7 +2064,7 @@ async def test_cli_replay_exits_zero(tmp_path: pathlib.Path) -> None:
     """``replay`` lists records from the fixture data lake, exit code 0."""
     from typer.testing import CliRunner
 
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()
@@ -2097,7 +2097,7 @@ async def test_cli_replay_exits_zero(tmp_path: pathlib.Path) -> None:
 async def test_cli_shell_exits_zero() -> None:
     """``shell`` runs interactively and exits on 'exit' input."""
     from typer.testing import CliRunner
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["shell"], input="help\nexit\n")
@@ -2111,12 +2111,12 @@ async def test_cli_export_wizard_selects_symbol(tmp_path: pathlib.Path) -> None:
     from typer.testing import CliRunner
     from unittest.mock import patch
     import sys
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     dest = tmp_path / "out" / "trades_wizard.csv"
 
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True):
         runner = CliRunner()
         # Input sequence:
         # 1. Wizard prompts for channel (since channel is not provided).
@@ -2149,11 +2149,11 @@ async def test_cli_replay_wizard(tmp_path: pathlib.Path) -> None:
     from typer.testing import CliRunner
     from unittest.mock import patch
     import sys
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
 
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True):
         runner = CliRunner()
         # Input sequence:
         # 1. Wizard prompts for channel. Choose '3' (trade).
@@ -2179,11 +2179,11 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
     from typer.testing import CliRunner
     from unittest.mock import patch
     import sys
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
 
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True):
         runner = CliRunner()
         # Input sequence:
         # 1. Wizard prompts for symbol search. Search 'BTC'.
@@ -2205,7 +2205,7 @@ async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
 
 
 def test_resolve_input_symbols_different_channels(tmp_path: pathlib.Path) -> None:
-    from crypcodile.cli import resolve_input_symbols
+    from crocodile.crypto.legacy.cli import resolve_input_symbols
 
     # 1. Resolve in derivative context (e.g. perp mode channels: derivative_ticker)
     res_perp = resolve_input_symbols(tmp_path, ["btcusdt"], channels=["derivative_ticker", "ticker"])
@@ -2219,7 +2219,7 @@ def test_resolve_input_symbols_different_channels(tmp_path: pathlib.Path) -> Non
 async def test_cli_indicators_exits_zero(tmp_path: pathlib.Path) -> None:
     """``indicators`` calculates technical analysis indicators, exit code 0."""
     from typer.testing import CliRunner
-    from crypcodile.cli import app
+    from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
     runner = CliRunner()

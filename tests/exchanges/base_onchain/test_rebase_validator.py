@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from crypcodile.exchanges.base_onchain.rebase_validator import RebaseValidator
+from crocodile.crypto.exchanges.base_onchain.rebase_validator import RebaseValidator
 
 @pytest.mark.asyncio
 async def test_rebase_validator_drift():

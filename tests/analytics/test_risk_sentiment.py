@@ -5,9 +5,9 @@ from web3 import AsyncWeb3
 
 import pytest
 
-from crypcodile.analytics.risk import calculate_chaos_score, calculate_dynamic_chaos_score
-from crypcodile.analytics.smart_money import SmartMoneyTracker
-from crypcodile.analytics.whale_transfers import WhaleTransferTracker
+from crocodile.crypto.analytics.risk import calculate_chaos_score, calculate_dynamic_chaos_score
+from crocodile.crypto.analytics.smart_money import SmartMoneyTracker
+from crocodile.crypto.analytics.whale_transfers import WhaleTransferTracker
 
 
 def test_calculate_chaos_score_sentiment() -> None:

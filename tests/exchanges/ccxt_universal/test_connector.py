@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from crypcodile.exchanges.ccxt_universal.connector import CCXTConnector
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.records import BookSnapshot, BookTicker, DerivativeTicker, Trade
+from crocodile.crypto.exchanges.ccxt_universal.connector import CCXTConnector
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, DerivativeTicker, Trade
 
 
 class CaptureSink:

@@ -8,10 +8,10 @@ import time
 import pytest
 import polars as pl
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade
-from crypcodile.store.parquet_sink import ParquetSink
-from crypcodile.store.compactor import ParquetCompactor
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.core.store.compactor import ParquetCompactor
 
 
 def _trade(price: float = 1.0, local_ts: int = 1700000000000000000) -> Trade:

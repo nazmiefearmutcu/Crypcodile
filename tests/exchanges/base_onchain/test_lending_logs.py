@@ -1,8 +1,8 @@
 import polars as pl
-from crypcodile.schema.records import ReserveDataUpdated, LiquidationCall
-from crypcodile.store.rows import to_row, from_row
-from crypcodile.store.parquet_sink import _channel_schema
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
+from crocodile.core.schema.legacy.records import ReserveDataUpdated, LiquidationCall
+from crocodile.core.store.rows import to_row, from_row
+from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
 
 def test_lending_records_row_conversions():
     # 1. Test ReserveDataUpdated

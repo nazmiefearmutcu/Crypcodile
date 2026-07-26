@@ -3,11 +3,11 @@ from __future__ import annotations
 import math
 import pytest
 
-from crypcodile.analytics.blackscholes import (
+from crocodile.crypto.analytics.blackscholes import (
     PureMathGreeksSolverAdapter,
     SciPyGreeksSolverAdapter,
 )
-from crypcodile.schema.enums import OptType
+from crocodile.core.schema.legacy.enums import OptType
 
 
 @pytest.fixture

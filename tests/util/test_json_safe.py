@@ -1,18 +1,18 @@
-"""Unit tests for crypcodile.util.json_safe (shared REST/MCP boundary helpers)."""
+"""Unit tests for crocodile.core.util.json_safe (shared REST/MCP boundary helpers)."""
 
 from __future__ import annotations
 
 import json
 
-from crypcodile.api_server import (
+from crocodile.crypto.legacy.api_server import (
     _json_safe_float as api_json_safe_float,
     _json_safe_records as api_json_safe_records,
 )
-from crypcodile.mcp_server import (
+from crocodile.crypto.legacy.mcp_server import (
     _json_safe_float as mcp_json_safe_float,
     _json_safe_records as mcp_json_safe_records,
 )
-from crypcodile.util.json_safe import json_safe_float, json_safe_records
+from crocodile.core.util.json_safe import json_safe_float, json_safe_records
 
 
 def test_json_safe_float_maps_non_finite_to_none() -> None:

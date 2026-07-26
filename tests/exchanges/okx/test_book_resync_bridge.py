@@ -18,17 +18,17 @@ from typing import Any
 
 import pytest
 
-from crypcodile.exchanges.okx.book import (
+from crocodile.crypto.exchanges.okx.book import (
     OkxOrderBookSync,
     SyncResult,
     parse_rest_books_snapshot,
 )
-from crypcodile.exchanges.okx.connector import OKXConnector
-from crypcodile.ingest.gap_bridge import BookResyncBridge
-from crypcodile.ingest.transport import FakeTransport
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.records import BookDelta, BookSnapshot, Trade
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.exchanges.okx.connector import OKXConnector
+from crocodile.core.ingest.gap_bridge import BookResyncBridge
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Trade
+from crocodile.core.sink.memory import MemorySink
 
 
 def _rest_books(seq_id: int) -> dict[str, Any]:

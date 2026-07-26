@@ -16,17 +16,17 @@ from typing import Any
 
 import pytest
 
-from crypcodile.exchanges.binance.book import (
+from crocodile.crypto.exchanges.binance.book import (
     OrderBookSync,
     SyncResult,
     parse_rest_depth_snapshot,
 )
-from crypcodile.exchanges.binance.connector import BinanceConnector
-from crypcodile.ingest.gap_bridge import BookResyncBridge
-from crypcodile.ingest.transport import FakeTransport
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.records import BookDelta, BookSnapshot, Trade
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.exchanges.binance.connector import BinanceConnector
+from crocodile.core.ingest.gap_bridge import BookResyncBridge
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Trade
+from crocodile.core.sink.memory import MemorySink
 
 
 def _rest_depth(last_update_id: int) -> dict[str, Any]:

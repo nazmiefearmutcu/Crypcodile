@@ -145,8 +145,8 @@ def test_analytics_funding_with_data(tmp_path: Path) -> None:
     """analytics_funding.py exits 0 and prints a table when funding data is present."""
     import asyncio
 
-    from crypcodile.schema.records import Funding
-    from crypcodile.store.parquet_sink import ParquetSink
+    from crocodile.core.schema.legacy.records import Funding
+    from crocodile.core.store.parquet_sink import ParquetSink
 
     _BASE_NS = 1_704_067_200_000_000_000
     _8H_NS = 8 * 3600 * 1_000_000_000
@@ -212,9 +212,9 @@ def test_analytics_iv_surface_with_data(tmp_path: Path) -> None:
     """analytics_iv_surface.py exits 0 and prints a surface table when options data is present."""
     import asyncio
 
-    from crypcodile.schema.enums import OptType
-    from crypcodile.schema.records import OptionsChain
-    from crypcodile.store.parquet_sink import ParquetSink
+    from crocodile.core.schema.legacy.enums import OptType
+    from crocodile.core.schema.legacy.records import OptionsChain
+    from crocodile.core.store.parquet_sink import ParquetSink
 
     _BASE_NS = 1_704_067_200_000_000_000
     _ONE_YEAR_NS = 365 * 24 * 3600 * 1_000_000_000

@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import polars as pl
 
-from crypcodile.analytics.risk import calculate_chaos_score, calculate_dynamic_chaos_score
-from crypcodile.store.catalog import Catalog
+from crocodile.crypto.analytics.risk import calculate_chaos_score, calculate_dynamic_chaos_score
+from crocodile.core.store.catalog import Catalog
 
 
 def test_calculate_chaos_score_bounds() -> None:

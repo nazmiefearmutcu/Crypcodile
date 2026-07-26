@@ -5,10 +5,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crypcodile.analytics.oi_aggregator import aggregate_open_interest
-from crypcodile.schema.records import OpenInterest
-from crypcodile.store.catalog import Catalog
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.oi_aggregator import aggregate_open_interest
+from crocodile.core.schema.legacy.records import OpenInterest
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_NS = 1_704_067_200_000_000_000
 _T1 = _BASE_NS + 1_000

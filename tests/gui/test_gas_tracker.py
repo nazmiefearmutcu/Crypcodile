@@ -13,7 +13,7 @@ def test_gas_tracker_widget_cost_calculation():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
     from PyQt6.QtWidgets import QApplication
-    from crypcodile.gui.widgets.gas_tracker import GasTrackerWidget
+    from crocodile.crypto.gui.widgets.gas_tracker import GasTrackerWidget
     app = QApplication.instance() or QApplication([])
 
     widget = GasTrackerWidget()

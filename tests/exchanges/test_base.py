@@ -1,7 +1,7 @@
 import pytest
 
-from crypcodile.exchanges.base import backoff_delays
-from crypcodile.ingest.deadletter import DeadLetterQueue
+from crocodile.core.connector import backoff_delays
+from crocodile.core.ingest.deadletter import DeadLetterQueue
 
 
 def test_backoff_is_bounded_and_jittered():

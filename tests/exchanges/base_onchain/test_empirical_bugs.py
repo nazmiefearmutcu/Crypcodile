@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import Response
 
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
-from crypcodile.api_server import get_market_data, simulate_payment, PAYMENTS_DB, PRICE_USDC, RECIPIENT_WALLET
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.crypto.legacy.api_server import get_market_data, simulate_payment, PAYMENTS_DB, PRICE_USDC, RECIPIENT_WALLET
 
 class AwaitableValue:
     def __init__(self, val):
@@ -172,8 +172,8 @@ async def test_api_server_double_spend_replay() -> None:
             
     mock_w3 = MockWeb3API()
     
-    with patch("crypcodile.api_server.get_w3", return_value=mock_w3), \
-         patch("crypcodile.api_server.get_onchain_price", AsyncMock(return_value={"price": 40000.0})):
+    with patch("crocodile.crypto.legacy.api_server.get_w3", return_value=mock_w3), \
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", AsyncMock(return_value={"price": 40000.0})):
          
         # Use the same tx_hash for both payment IDs
         tx_hash = "0x" + "a" * 64

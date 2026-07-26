@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
 
 # Setup logger
 logger = logging.getLogger(__name__)

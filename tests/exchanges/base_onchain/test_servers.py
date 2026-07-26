@@ -4,8 +4,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Response, HTTPException
 
-from crypcodile.mcp_server import get_onchain_price, serve_stdio, get_base_market_data
-from crypcodile.api_server import get_market_data, simulate_payment, PaymentSignature, PAYMENTS_DB
+from crocodile.crypto.legacy.mcp_server import get_onchain_price, serve_stdio, get_base_market_data
+from crocodile.crypto.legacy.api_server import get_market_data, simulate_payment, PaymentSignature, PAYMENTS_DB
 
 
 class AwaitableValue:
@@ -22,7 +22,7 @@ class AwaitableValue:
 @pytest.mark.asyncio
 async def test_get_onchain_price_uniswap_v3_success() -> None:
     """Verify get_onchain_price successfully queries Uniswap V3 pools."""
-    with patch("crypcodile.mcp_server.AsyncWeb3") as mock_web3_class:
+    with patch("crocodile.crypto.legacy.mcp_server.AsyncWeb3") as mock_web3_class:
         mock_w3 = MagicMock()
         mock_w3.__aenter__ = AsyncMock(return_value=mock_w3)
         mock_w3.__aexit__ = AsyncMock(return_value=None)
@@ -63,7 +63,7 @@ async def test_get_onchain_price_uniswap_v3_success() -> None:
 @pytest.mark.asyncio
 async def test_get_onchain_price_aerodrome_success() -> None:
     """Verify get_onchain_price successfully queries Aerodrome pools."""
-    with patch("crypcodile.mcp_server.AsyncWeb3") as mock_web3_class:
+    with patch("crocodile.crypto.legacy.mcp_server.AsyncWeb3") as mock_web3_class:
         mock_w3 = MagicMock()
         mock_w3.__aenter__ = AsyncMock(return_value=mock_w3)
         mock_w3.__aexit__ = AsyncMock(return_value=None)
@@ -109,7 +109,7 @@ async def test_get_onchain_price_unsupported_symbol() -> None:
 @pytest.mark.asyncio
 async def test_get_onchain_price_rpc_error_handling() -> None:
     """Verify get_onchain_price handles RPC errors gracefully."""
-    with patch("crypcodile.mcp_server.AsyncWeb3") as mock_web3_class:
+    with patch("crocodile.crypto.legacy.mcp_server.AsyncWeb3") as mock_web3_class:
         mock_w3 = MagicMock()
         mock_w3.__aenter__ = AsyncMock(return_value=mock_w3)
         mock_w3.__aexit__ = AsyncMock(return_value=None)
@@ -127,7 +127,7 @@ async def test_get_onchain_price_rpc_error_handling() -> None:
 @pytest.mark.asyncio
 async def test_get_base_market_data_success() -> None:
     """Verify get_base_market_data successfully queries Uniswap V3 WETH/USDC pool and calculates 1h volume."""
-    with patch("crypcodile.mcp_server.AsyncWeb3") as mock_web3_class:
+    with patch("crocodile.crypto.legacy.mcp_server.AsyncWeb3") as mock_web3_class:
         mock_w3 = MagicMock()
         mock_w3.__aenter__ = AsyncMock(return_value=mock_w3)
         mock_w3.__aexit__ = AsyncMock(return_value=None)
@@ -222,7 +222,7 @@ async def test_api_server_flow_direct() -> None:
     assert PAYMENTS_DB[payment_id]["status"] == "paid"
 
     # 4. Request market data with the signature header -> should return 200 with data
-    with patch("crypcodile.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
+    with patch("crocodile.crypto.legacy.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
         mock_get_price.return_value = {
             "symbol": "cbBTC-USDC",
             "price": 40000.0,
@@ -299,7 +299,7 @@ async def test_mcp_server_serve_stdio(tmp_path) -> None:
     with patch("sys.stdin", mock_stdin), \
          patch("sys.stdout.write", mock_write), \
          patch("sys.stdout.flush", MagicMock()), \
-         patch("crypcodile.mcp_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
+         patch("crocodile.crypto.legacy.mcp_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
 
          mock_get_price.return_value = {
              "symbol": "cbBTC-USDC",
@@ -338,7 +338,7 @@ def generate_signature(payment_id: str, private_key: str = "0x" + "1" * 64) -> t
 
 @pytest.mark.asyncio
 async def test_successful_payment_verification() -> None:
-    from crypcodile.api_server import get_market_data, PAYMENTS_DB
+    from crocodile.crypto.legacy.api_server import get_market_data, PAYMENTS_DB
     from fastapi import Response
     
     PAYMENTS_DB.clear()
@@ -351,8 +351,8 @@ async def test_successful_payment_verification() -> None:
     sig, address = generate_signature(payment_id)
     tx_hash = "0x" + "a" * 64
     
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3, \
-         patch("crypcodile.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3, \
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
          
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
@@ -406,7 +406,7 @@ async def test_successful_payment_verification() -> None:
 
 @pytest.mark.asyncio
 async def test_signature_verification_failures() -> None:
-    from crypcodile.api_server import get_market_data, PAYMENTS_DB
+    from crocodile.crypto.legacy.api_server import get_market_data, PAYMENTS_DB
     from fastapi import Response, HTTPException
     
     PAYMENTS_DB.clear()
@@ -440,7 +440,7 @@ async def test_signature_verification_failures() -> None:
     sig, address = generate_signature(payment_id)
     tx_hash = "0x" + "b" * 64
     
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3:
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3:
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
         mock_w3.eth.get_transaction_receipt = AsyncMock(return_value={"status": 1})
@@ -463,7 +463,7 @@ async def test_signature_verification_failures() -> None:
 
 @pytest.mark.asyncio
 async def test_transaction_not_found_and_retries() -> None:
-    from crypcodile.api_server import get_market_data, PAYMENTS_DB
+    from crocodile.crypto.legacy.api_server import get_market_data, PAYMENTS_DB
     from fastapi import Response
     from web3.exceptions import TransactionNotFound
     
@@ -476,9 +476,9 @@ async def test_transaction_not_found_and_retries() -> None:
     sig, address = generate_signature(payment_id)
     tx_hash = "0x" + "c" * 64
     
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3, \
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3, \
          patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
-         patch("crypcodile.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
          
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
@@ -527,7 +527,7 @@ async def test_transaction_not_found_and_retries() -> None:
 
 @pytest.mark.asyncio
 async def test_rpc_fallback_failover() -> None:
-    from crypcodile.api_server import app, get_market_data, PAYMENTS_DB, get_w3, AsyncHTTPProvider
+    from crocodile.crypto.legacy.api_server import app, get_market_data, PAYMENTS_DB, get_w3, AsyncHTTPProvider
     from fastapi import Response
     import os
     
@@ -634,7 +634,7 @@ async def test_rpc_fallback_failover() -> None:
         return {"jsonrpc": "2.0", "id": 1, "result": None}
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
-         patch("crypcodile.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price, \
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price, \
          patch.object(AsyncHTTPProvider, "make_request", mock_make_request):
          
         w3 = get_w3()
@@ -668,7 +668,7 @@ async def test_rpc_fallback_failover() -> None:
 
 @pytest.mark.asyncio
 async def test_concurrency_lock_validation() -> None:
-    from crypcodile.api_server import get_market_data, PAYMENTS_DB, VERIFYING_TXS
+    from crocodile.crypto.legacy.api_server import get_market_data, PAYMENTS_DB, VERIFYING_TXS
     from fastapi import Response, HTTPException
     
     PAYMENTS_DB.clear()
@@ -686,7 +686,7 @@ async def test_concurrency_lock_validation() -> None:
     sig2, _ = generate_signature(payment_id2)
     tx_hash = "0x" + "e" * 64
     
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3:
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3:
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
         mock_w3.eth.get_transaction = AsyncMock(return_value={"from": address, "chainId": 8453})
@@ -742,7 +742,7 @@ async def test_concurrency_lock_validation() -> None:
         assert exc_info.value.status_code == 400
         assert "Transaction hash is currently being verified" in exc_info.value.detail
         
-        with patch("crypcodile.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
+        with patch("crocodile.crypto.legacy.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
             mock_get_price.return_value = {"symbol": "cbBTC-USDC", "price": 50000.0}
             resp_res = await t1
             assert resp_res["status"] == "success"
@@ -750,7 +750,7 @@ async def test_concurrency_lock_validation() -> None:
 
 async def test_api_server_metrics_endpoint() -> None:
     """Verify that the /metrics endpoint returns standard Prometheus exposition metrics and tracks usage."""
-    from crypcodile.api_server import metrics, METRICS_METRICS_REQUESTS
+    from crocodile.crypto.legacy.api_server import metrics, METRICS_METRICS_REQUESTS
     
     # Track initial metrics requests count
     init_count = METRICS_METRICS_REQUESTS
@@ -765,7 +765,7 @@ async def test_api_server_metrics_endpoint() -> None:
     assert "crypcodile_api_requests_total" in content
     assert "crypcodile_payments_total" in content
     
-    from crypcodile.api_server import METRICS_METRICS_REQUESTS as new_count
+    from crocodile.crypto.legacy.api_server import METRICS_METRICS_REQUESTS as new_count
     assert new_count == init_count + 1
 
 
@@ -774,7 +774,7 @@ async def test_cas_concurrent_double_serve_prevention() -> None:
     """CAS paid→spent under lock: only one concurrent serve may succeed per payment_id."""
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    from crypcodile.api_server import db_lock
+    from crocodile.crypto.legacy.api_server import db_lock
 
     PAYMENTS_DB.clear()
 
@@ -814,7 +814,7 @@ async def test_cas_concurrent_double_serve_prevention() -> None:
         await release_serve.wait()
         return {"symbol": symbol, "price": 42000.0, "block": 1}
 
-    with patch("crypcodile.api_server.get_onchain_price", side_effect=slow_price):
+    with patch("crocodile.crypto.legacy.api_server.get_onchain_price", side_effect=slow_price):
         t1 = asyncio.create_task(
             get_market_data(
                 symbol="cbBTC-USDC",
@@ -849,7 +849,7 @@ async def test_serve_failure_restores_paid_status() -> None:
     """If get_onchain_price fails after CAS paid→spent, restore paid so client can retry."""
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    from crypcodile.api_server import db_lock
+    from crocodile.crypto.legacy.api_server import db_lock
 
     PAYMENTS_DB.clear()
 
@@ -883,7 +883,7 @@ async def test_serve_failure_restores_paid_status() -> None:
 
     # Case 1: get_onchain_price returns error dict — restore paid
     with patch(
-        "crypcodile.api_server.get_onchain_price",
+        "crocodile.crypto.legacy.api_server.get_onchain_price",
         AsyncMock(return_value={"error": "RPC timeout"}),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -900,7 +900,7 @@ async def test_serve_failure_restores_paid_status() -> None:
 
     # Case 2: get_onchain_price raises — restore paid again after re-CAS
     with patch(
-        "crypcodile.api_server.get_onchain_price",
+        "crocodile.crypto.legacy.api_server.get_onchain_price",
         AsyncMock(side_effect=RuntimeError("upstream down")),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -916,7 +916,7 @@ async def test_serve_failure_restores_paid_status() -> None:
 
     # Case 3: retry after restore succeeds and leaves status spent
     with patch(
-        "crypcodile.api_server.get_onchain_price",
+        "crocodile.crypto.legacy.api_server.get_onchain_price",
         AsyncMock(return_value={"symbol": "cbBTC-USDC", "price": 41000.0, "block": 2}),
     ):
         resp = await get_market_data(
@@ -935,7 +935,7 @@ async def test_serve_failure_restores_paid_status() -> None:
 async def test_admin_payments_protection() -> None:
     """Admin payments endpoint: 404 if unset, 401 if wrong key, 200 if correct."""
     import os
-    from crypcodile.api_server import get_all_payments, db_lock
+    from crocodile.crypto.legacy.api_server import get_all_payments, db_lock
 
     PAYMENTS_DB.clear()
     async with db_lock:
@@ -985,7 +985,7 @@ async def test_simulate_payment_disabled_without_env() -> None:
     import os
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    from crypcodile.api_server import PaymentSignature
+    from crocodile.crypto.legacy.api_server import PaymentSignature
 
     prev_sim = os.environ.get("ALLOW_SIMULATION")
     try:
@@ -1023,7 +1023,7 @@ async def test_simulate_payment_rejects_paid_and_spent() -> None:
     """simulate_payment only allows pending → paid; paid/spent return 400."""
     from eth_account import Account
     from eth_account.messages import encode_defunct
-    from crypcodile.api_server import PaymentSignature, db_lock
+    from crocodile.crypto.legacy.api_server import PaymentSignature, db_lock
 
     PAYMENTS_DB.clear()
 
@@ -1085,7 +1085,7 @@ async def test_simulate_payment_rejects_paid_and_spent() -> None:
 @pytest.mark.asyncio
 async def test_spent_cannot_be_repaid_via_verify_path() -> None:
     """Spent records cannot be re-paid: early gate + pending-only write after verify."""
-    from crypcodile.api_server import db_lock, VERIFYING_TXS
+    from crocodile.crypto.legacy.api_server import db_lock, VERIFYING_TXS
 
     PAYMENTS_DB.clear()
     VERIFYING_TXS.clear()
@@ -1157,7 +1157,7 @@ async def test_spent_cannot_be_repaid_via_verify_path() -> None:
             await PAYMENTS_DB.set_async(payment_id2, rec)
         return mock_receipt
 
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3:
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3:
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
         mock_w3.eth.get_transaction = AsyncMock(

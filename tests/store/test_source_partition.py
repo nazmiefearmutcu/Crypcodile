@@ -14,12 +14,12 @@ import os
 import pathlib
 
 import pytest
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.store.parquet_sink import ParquetSink
 
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.migrate import migrate_lake
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade
 
 _TS = 1700000000000000000
 
@@ -60,6 +60,32 @@ async def test_the_writer_emits_only_the_unified_key(tmp_path: pathlib.Path) -> 
     await _write(tmp_path, _trade(1.0))
     # os.listdir, not Path.iterdir: ruff's ASYNC240 bans pathlib in async defs.
     assert os.listdir(tmp_path) == ["source=deribit"]
+
+
+def test_the_data_provider_wins_over_the_listing_venue() -> None:
+    """A record naming both must partition by who served it, not where it lists.
+
+    Equity's ``Instrument`` carries ``provider`` (the data source) *and*
+    ``exchange`` (the listing venue). Reading ``exchange`` first filed an
+    Alpaca-sourced instrument under ``source=NASDAQ`` — the wrong partition, and
+    silently so, because both fields are populated strings.
+    """
+    from crocodile.core.store.rows import to_row
+    from crocodile.equity.schema.records import Instrument
+
+    row = to_row(
+        Instrument(
+            provider="alpaca",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=_TS,
+            source_ts=_TS,
+            name="Apple Inc.",
+            exchange="NASDAQ",
+        )
+    )
+
+    assert row["source"] == "alpaca"
 
 
 @pytest.mark.parametrize("prefix", ["exchange=", "provider="])

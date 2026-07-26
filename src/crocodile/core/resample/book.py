@@ -68,7 +68,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from crocodile.core.replay.orderbook import OrderBook
-from crypcodile.schema.records import BookDelta, BookSnapshot
+from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
 
 __all__ = ["resample_book_snapshots"]
 

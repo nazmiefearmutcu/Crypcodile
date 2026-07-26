@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import polars as pl
 import pytest
 
-from crypcodile.analytics.volsurface_3d import plot_volsurface_3d
+from crocodile.crypto.analytics.volsurface_3d import plot_volsurface_3d
 
 
 @pytest.fixture

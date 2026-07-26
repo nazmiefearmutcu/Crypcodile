@@ -18,13 +18,13 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from crypcodile.exchanges.base_onchain.connector import (  # noqa: E402
+from crocodile.crypto.exchanges.base_onchain.connector import (  # noqa: E402
     DEFAULT_RPC_URL,
     BaseOnchainConnector,
 )
-from crypcodile.instruments.registry import InstrumentRegistry  # noqa: E402
-from crypcodile.schema.records import Record  # noqa: E402
-from crypcodile.sink.base import Sink  # noqa: E402
+from crocodile.crypto.instruments.registry import InstrumentRegistry  # noqa: E402
+from crocodile.core.schema.legacy.records import Record  # noqa: E402
+from crocodile.core.sink.base import Sink  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

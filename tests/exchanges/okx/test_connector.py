@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crypcodile.exchanges.base import Connector
-from crypcodile.exchanges.okx.connector import OKXConnector, build_channels, parse_instruments
-from crypcodile.instruments.registry import InstrumentRegistry, Kind
-from crypcodile.sink.memory import MemorySink
+from crocodile.core.connector import Connector
+from crocodile.crypto.exchanges.okx.connector import OKXConnector, build_channels, parse_instruments
+from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
+from crocodile.core.sink.memory import MemorySink
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -120,7 +120,7 @@ def test_subscribe_channels_is_callable_as_connector() -> None:
 
 def test_parse_instruments_futures_kind() -> None:
     """instType=FUTURES → Kind.FUTURE."""
-    from crypcodile.instruments.registry import Kind as K
+    from crocodile.crypto.instruments.registry import Kind as K
 
     raw = {
         "data": [
@@ -154,7 +154,7 @@ def test_parse_instruments_spot_kind() -> None:
         ]
     }
     insts = parse_instruments(raw)
-    from crypcodile.instruments.registry import Kind as K
+    from crocodile.crypto.instruments.registry import Kind as K
     assert len(insts) == 1
     assert insts[0].kind == K.SPOT
 

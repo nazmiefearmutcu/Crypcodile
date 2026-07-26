@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from crypcodile.exchanges.base_onchain.asset_registry import AssetRegistry
+from crocodile.crypto.exchanges.base_onchain.asset_registry import AssetRegistry
 
 @pytest.mark.asyncio
 async def test_asset_registry_static_resolution():

@@ -19,6 +19,47 @@ Write policy:
 
 Compression: ZSTD level 5 (streaming sweet spot per Appendix §4).
 Row group size: 250 000 rows.
+
+Per-family file schemas
+-----------------------
+One sink now writes both legacy record unions, and each keeps the file schema
+its fork wrote. Two reasons, in order of force:
+
+1. **The lake migration renames, it never rewrites.** ``migrate_lake`` moves
+   ``exchange=`` / ``provider=`` directories to ``source=`` without reading a
+   single Parquet byte, so the files already on disk keep the columns their
+   fork gave them. Anything this sink appends into the same partition has to
+   agree with them field for field. Widening one common set to cover both
+   families would put ``provider``/``source_ts`` into every new crypto file and
+   ``exchange_ts`` into every new equity file — new parts would stop matching
+   the old parts beside them, and a single ``read_parquet`` over the partition
+   would have to reconcile two schemas. Widening is therefore not available;
+   the file schema is frozen per family.
+2. **``channel`` alone cannot pick a schema anyway.** The two unions reuse nine
+   tags for different structs — ``trade``, ``ohlcv``, ``book_snapshot``,
+   ``book_delta``, ``liquidation_call``, ``reserve_data_updated``,
+   ``limit_order_fill``, ``balance_correction``, ``por_update``. Crypto
+   ``trade`` carries ``exchange``/``amount``/``side``; equity ``trade`` carries
+   ``provider``/``size``/``tape``/``venue``. A per-channel table keyed on the
+   tag alone can only ever be right for one of them.
+
+The family is read off the row's own fields, reusing the asymmetry
+``crocodile.core.store.rows.to_row`` already depends on: only equity records
+name their origin ``provider``, only crypto records name it ``exchange``, and
+only the canonical records carry ``asset_class``. That is one discriminator for
+the whole module rather than a second parallel notion of "which fork".
+
+Book levels follow the same freeze: crypto lakes hold
+``list[struct{price, amount}]`` and equity lakes ``list[struct{price, size}]``,
+so the sink writes whichever name the family's existing files use. Coercion is
+driven off the selected schema rather than a hard-coded channel list, so the
+writer cannot disagree with the dtype it is about to declare.
+
+Unknown fields are refused, not dropped. A row carrying a field its channel
+schema does not know used to be silently truncated on the way to Parquet; it
+now raises. Where the field was one the fork genuinely wrote, the schema was
+widened to keep it (see the crypto ``limit_order_fill`` / ``balance_correction``
+/ ``por_update`` entries, whose payloads this sink was discarding wholesale).
 """
 
 from __future__ import annotations
@@ -37,10 +78,36 @@ from crocodile.core.sink.base import Sink
 from crocodile.core.store.rows import to_row
 
 # ---------------------------------------------------------------------------
+# Record families
+# ---------------------------------------------------------------------------
+# Which legacy union a flattened row came from. See the module docstring for
+# why this, and not ``channel``, selects the file schema.
+FAMILY_CRYPTO = "crypto"
+FAMILY_EQUITY = "equity"
+FAMILY_CANONICAL = "canonical"
+
+# Row field → family, most specific first. Order is load-bearing twice over:
+# the canonical ``Instrument`` and the equity ``Instrument`` both carry an
+# ``exchange`` field (the listing venue), so matching ``exchange`` first would
+# file either one as crypto. This mirrors the ``_ORIGIN_FIELDS`` precedence in
+# ``crocodile.core.store.rows`` — same asymmetry, same order, one notion of
+# "which fork wrote this".
+_FAMILY_MARKERS: tuple[tuple[str, str], ...] = (
+    ("asset_class", FAMILY_CANONICAL),
+    ("provider", FAMILY_EQUITY),
+    ("exchange", FAMILY_CRYPTO),
+)
+
+# ``source`` names the top-level partition directory and is deliberately kept
+# out of every file schema (see ``crocodile.core.store.rows``), so it is the one
+# row key that may be absent from the schema without that being data loss.
+_PATH_ONLY_COLUMNS = frozenset({"source"})
+
+# ---------------------------------------------------------------------------
 # Polars schema definitions per channel
 # ---------------------------------------------------------------------------
-# Fields that every record carries.
-_COMMON_FIELDS: dict[str, Any] = {
+# Fields every crypto record carries.
+_CRYPTO_COMMON_FIELDS: dict[str, Any] = {
     "exchange": pl.Utf8,
     "symbol": pl.Utf8,
     "symbol_raw": pl.Utf8,
@@ -53,11 +120,31 @@ _COMMON_FIELDS: dict[str, Any] = {
     "bucket": pl.Int32,
 }
 
-# A named-struct dtype for a single (price, amount) level.
-_LEVEL_STRUCT = pl.Struct({"price": pl.Float64, "amount": pl.Float64})
+# Fields every equity record carries. ``exchange`` is vestigial — equity's own
+# flattener moves ``Instrument.exchange`` to ``exchange_name`` and nothing else
+# populates it — but legacy equity lakes have the column, and the migration
+# renames directories without rewriting files, so dropping it would make new
+# parts disagree with the parts already sitting beside them.
+_EQUITY_COMMON_FIELDS: dict[str, Any] = {
+    "provider": pl.Utf8,
+    "symbol": pl.Utf8,
+    "symbol_raw": pl.Utf8,
+    "source_ts": pl.Int64,
+    "local_ts": pl.Int64,
+    "channel": pl.Utf8,
+    "date": pl.Utf8,
+    "bucket": pl.Int32,
+    "exchange": pl.Utf8,
+}
 
-# Per-channel extra columns.
-_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
+# A named-struct dtype for a single book level. The second field is the size,
+# and the two forks spell it differently on disk: crypto ``amount``, equity
+# ``size``. Both spellings are kept because neither lake gets rewritten.
+_CRYPTO_LEVEL_STRUCT = pl.Struct({"price": pl.Float64, "amount": pl.Float64})
+_EQUITY_LEVEL_STRUCT = pl.Struct({"price": pl.Float64, "size": pl.Float64})
+
+# Per-channel extra columns, crypto union.
+_CRYPTO_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
     "trade": {
         "id": pl.Utf8,
         "price": pl.Float64,
@@ -93,15 +180,15 @@ _CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
         "receive_a_token": pl.Boolean,
     },
     "book_snapshot": {
-        "bids": pl.List(_LEVEL_STRUCT),
-        "asks": pl.List(_LEVEL_STRUCT),
+        "bids": pl.List(_CRYPTO_LEVEL_STRUCT),
+        "asks": pl.List(_CRYPTO_LEVEL_STRUCT),
         "depth": pl.Int64,
         "sequence_id": pl.Int64,
         "is_snapshot": pl.Boolean,
     },
     "book_delta": {
-        "bids": pl.List(_LEVEL_STRUCT),
-        "asks": pl.List(_LEVEL_STRUCT),
+        "bids": pl.List(_CRYPTO_LEVEL_STRUCT),
+        "asks": pl.List(_CRYPTO_LEVEL_STRUCT),
         "seq_id": pl.Int64,
         "prev_seq_id": pl.Int64,
         "is_snapshot": pl.Boolean,
@@ -171,13 +258,324 @@ _CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
         "sell_volume": pl.Float64,
         "num_trades": pl.Int64,
     },
+    # The three below are in the legacy crypto union but were missing from this
+    # table, so every one of their fields was silently filtered out on the way
+    # to Parquet and the parts held nothing but the common header. The equity
+    # fork's sink had all three; the shapes here are the same minus
+    # ``exchange_ts``, which crypto already carries as a common field.
+    "limit_order_fill": {
+        "tx_hash": pl.Utf8,
+        "log_index": pl.Int64,
+        "protocol": pl.Utf8,
+        "maker": pl.Utf8,
+        "taker": pl.Utf8,
+        "maker_token": pl.Utf8,
+        "taker_token": pl.Utf8,
+        "maker_amount": pl.Float64,
+        "taker_amount": pl.Float64,
+        "order_hash": pl.Utf8,
+    },
+    "balance_correction": {
+        "holder_address": pl.Utf8,
+        "token_address": pl.Utf8,
+        "local_balance": pl.Float64,
+        "onchain_balance": pl.Float64,
+        "correction_amount": pl.Float64,
+    },
+    "por_update": {
+        "feed_address": pl.Utf8,
+        "token_address": pl.Utf8,
+        "reserves": pl.Float64,
+        "total_supply": pl.Float64,
+        "backing_ratio": pl.Float64,
+        "is_backed": pl.Boolean,
+    },
+}
+
+# Per-channel extra columns, equity union. Ported from the equity fork's sink;
+# the column names and dtypes are what legacy equity lakes already hold, so they
+# are copied rather than harmonised with their crypto namesakes.
+_EQUITY_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
+    "trade": {
+        "id": pl.Utf8,
+        "price": pl.Float64,
+        "size": pl.Float64,
+        "conditions": pl.List(pl.Utf8),
+        "tape": pl.Utf8,
+        "venue": pl.Utf8,
+    },
+    "quote": {
+        "bid_px": pl.Float64,
+        "bid_sz": pl.Float64,
+        "ask_px": pl.Float64,
+        "ask_sz": pl.Float64,
+        "is_nbbo": pl.Boolean,
+        "is_consolidated": pl.Boolean,
+        "conditions": pl.List(pl.Utf8),
+        "tape": pl.Utf8,
+    },
+    "book_snapshot": {
+        "bids": pl.List(_EQUITY_LEVEL_STRUCT),
+        "asks": pl.List(_EQUITY_LEVEL_STRUCT),
+        "depth": pl.Int64,
+        "sequence_id": pl.Int64,
+        "is_snapshot": pl.Boolean,
+    },
+    "book_delta": {
+        "bids": pl.List(_EQUITY_LEVEL_STRUCT),
+        "asks": pl.List(_EQUITY_LEVEL_STRUCT),
+        "seq_id": pl.Int64,
+        "prev_seq_id": pl.Int64,
+        "is_snapshot": pl.Boolean,
+    },
+    "depth": {
+        "bids": pl.List(_EQUITY_LEVEL_STRUCT),
+        "asks": pl.List(_EQUITY_LEVEL_STRUCT),
+        "reference_price": pl.Float64,
+        "basis": pl.Utf8,
+        "is_synthetic": pl.Boolean,
+        "depth": pl.Int64,
+    },
+    "bar": {
+        "interval": pl.Utf8,
+        "open": pl.Float64,
+        "high": pl.Float64,
+        "low": pl.Float64,
+        "close": pl.Float64,
+        "volume": pl.Float64,
+        "vwap": pl.Float64,
+        "trade_count": pl.Int64,
+    },
+    "corp_action": {
+        "ex_date": pl.Utf8,
+        "type": pl.Utf8,
+        "value": pl.Float64,
+    },
+    "fundamental": {
+        "taxonomy": pl.Utf8,
+        "tag": pl.Utf8,
+        "unit": pl.Utf8,
+        "val": pl.Float64,
+        "end": pl.Utf8,
+        "start": pl.Utf8,
+        "fy": pl.Int64,
+        "fp": pl.Utf8,
+        "form": pl.Utf8,
+        "filed": pl.Utf8,
+        "accn": pl.Utf8,
+        "frame": pl.Utf8,
+    },
+    "filing": {
+        "accession_number": pl.Utf8,
+        "form": pl.Utf8,
+        "filing_date": pl.Utf8,
+        "primary_document": pl.Utf8,
+        "document_url": pl.Utf8,
+        "report_date": pl.Utf8,
+        "is_xbrl": pl.Boolean,
+    },
+    "ohlcv": {
+        "interval": pl.Utf8,
+        "open": pl.Float64,
+        "high": pl.Float64,
+        "low": pl.Float64,
+        "close": pl.Float64,
+        "volume": pl.Float64,
+        "vwap": pl.Float64,
+        "trade_count": pl.Int64,
+    },
+    "index_value": {
+        "value": pl.Float64,
+    },
+    "auction": {
+        "paired_shares": pl.Float64,
+        "imbalance_shares": pl.Float64,
+        "imbalance_side": pl.Utf8,
+        "reference_price": pl.Float64,
+        "indicative_price": pl.Float64,
+        "auction_type": pl.Utf8,
+    },
+    "trading_status": {
+        "status": pl.Utf8,
+        "reason": pl.Utf8,
+        "limit_up_price": pl.Float64,
+        "limit_down_price": pl.Float64,
+        "indicator": pl.Utf8,
+    },
+    "instrument": {
+        "name": pl.Utf8,
+        "cik": pl.Utf8,
+        "figi": pl.Utf8,
+        "composite_figi": pl.Utf8,
+        "share_class_figi": pl.Utf8,
+        "cusip": pl.Utf8,
+        "exchange_name": pl.Utf8,
+        "security_type": pl.Utf8,
+        "sic": pl.Utf8,
+        "shares_outstanding": pl.Int64,
+        "listing_date": pl.Utf8,
+        "status": pl.Utf8,
+    },
+    "insider": {
+        "insider_name": pl.Utf8,
+        "position": pl.Utf8,
+        "transaction_type": pl.Utf8,
+        "transaction_date": pl.Utf8,
+        "shares": pl.Float64,
+        "price": pl.Float64,
+        "value": pl.Float64,
+        "ownership": pl.Utf8,
+    },
+    "holding_13f": {
+        "manager_name": pl.Utf8,
+        "issuer_name": pl.Utf8,
+        "cusip": pl.Utf8,
+        "value": pl.Float64,
+        "shares": pl.Float64,
+        "shares_type": pl.Utf8,
+        "discretion": pl.Utf8,
+        "voting_sole": pl.Float64,
+        "voting_shared": pl.Float64,
+        "voting_none": pl.Float64,
+        "report_date": pl.Utf8,
+        "accession_number": pl.Utf8,
+    },
+    "short_interest": {
+        "settlement_date": pl.Utf8,
+        "short_interest": pl.Float64,
+        "prev_short_interest": pl.Float64,
+        "days_to_cover": pl.Float64,
+        "change_pct": pl.Float64,
+    },
+    "short_volume": {
+        "date_val": pl.Utf8,
+        "short_volume": pl.Float64,
+        "short_exempt_volume": pl.Float64,
+        "total_volume": pl.Float64,
+    },
+    "option_quote": {
+        "underlying": pl.Utf8,
+        "expiry": pl.Utf8,
+        "strike": pl.Float64,
+        "type": pl.Utf8,
+        "bid": pl.Float64,
+        "ask": pl.Float64,
+        "last": pl.Float64,
+        "volume": pl.Float64,
+        "open_interest": pl.Float64,
+        "implied_volatility": pl.Float64,
+        "delta": pl.Float64,
+        "gamma": pl.Float64,
+        "vega": pl.Float64,
+        "theta": pl.Float64,
+        "rho": pl.Float64,
+    },
+    "macro_series": {
+        "date_val": pl.Utf8,
+        "value": pl.Float64,
+        "realtime_start": pl.Utf8,
+        "realtime_end": pl.Utf8,
+    },
+    "reserve_data_updated": {
+        "exchange_ts": pl.Int64,
+        "reserve": pl.Utf8,
+        "liquidity_rate": pl.Float64,
+        "stable_borrow_rate": pl.Float64,
+        "variable_borrow_rate": pl.Float64,
+        "liquidity_index": pl.Int64,
+        "variable_borrow_index": pl.Int64,
+    },
+    "liquidation_call": {
+        "exchange_ts": pl.Int64,
+        "collateral_asset": pl.Utf8,
+        "debt_asset": pl.Utf8,
+        "user": pl.Utf8,
+        "debt_to_cover": pl.Float64,
+        "liquidated_collateral_amount": pl.Float64,
+        "liquidator": pl.Utf8,
+        "receive_a_token": pl.Boolean,
+    },
+    "limit_order_fill": {
+        "exchange_ts": pl.Int64,
+        "tx_hash": pl.Utf8,
+        "log_index": pl.Int64,
+        "protocol": pl.Utf8,
+        "maker": pl.Utf8,
+        "taker": pl.Utf8,
+        "maker_token": pl.Utf8,
+        "taker_token": pl.Utf8,
+        "maker_amount": pl.Float64,
+        "taker_amount": pl.Float64,
+        "order_hash": pl.Utf8,
+    },
+    "balance_correction": {
+        "exchange_ts": pl.Int64,
+        "holder_address": pl.Utf8,
+        "token_address": pl.Utf8,
+        "local_balance": pl.Float64,
+        "onchain_balance": pl.Float64,
+        "correction_amount": pl.Float64,
+    },
+    "por_update": {
+        "exchange_ts": pl.Int64,
+        "feed_address": pl.Utf8,
+        "token_address": pl.Utf8,
+        "reserves": pl.Float64,
+        "total_supply": pl.Float64,
+        "backing_ratio": pl.Float64,
+        "is_backed": pl.Boolean,
+    },
+}
+
+_COMMON_FIELDS_BY_FAMILY: dict[str, dict[str, Any]] = {
+    FAMILY_CRYPTO: _CRYPTO_COMMON_FIELDS,
+    FAMILY_EQUITY: _EQUITY_COMMON_FIELDS,
+}
+
+_CHANNEL_EXTRA_BY_FAMILY: dict[str, dict[str, dict[str, Any]]] = {
+    FAMILY_CRYPTO: _CRYPTO_CHANNEL_EXTRA,
+    FAMILY_EQUITY: _EQUITY_CHANNEL_EXTRA,
 }
 
 
-def _channel_schema(channel: str) -> dict[str, Any]:
-    """Return the full Polars schema for the given channel."""
-    extra = _CHANNEL_EXTRA.get(channel, {})
-    return {**_COMMON_FIELDS, **extra}
+def _row_family(row: dict[str, Any]) -> str:
+    """Return which record union a flattened row came from.
+
+    Raises:
+        ValueError: if the row names its origin under none of the known
+            markers. Picking a family by guessing would write the row against
+            the wrong schema and drop every field the guess did not cover.
+    """
+    for marker, family in _FAMILY_MARKERS:
+        if marker in row:
+            return family
+    raise ValueError(
+        f"row names its family under none of {[m for m, _ in _FAMILY_MARKERS]}; "
+        f"it cannot be matched to a Parquet schema (channel={row.get('channel')!r})"
+    )
+
+
+def _channel_schema(channel: str, family: str = FAMILY_CRYPTO) -> dict[str, Any]:
+    """Return the full Polars schema for the given channel within a family.
+
+    ``family`` defaults to crypto so callers that predate the merge keep
+    resolving the schema they always did.
+
+    Raises:
+        ValueError: if the family has no schema table. The canonical union is
+            the live case: ``Sink.put`` is typed against it, but no canonical
+            channel table exists yet, and writing a canonical record through
+            the crypto table would drop ``asset_class`` and every ``prov*``
+            field without a word.
+    """
+    common = _COMMON_FIELDS_BY_FAMILY.get(family)
+    extras = _CHANNEL_EXTRA_BY_FAMILY.get(family)
+    if common is None or extras is None:
+        raise ValueError(
+            f"no Parquet schema for record family {family!r} (channel={channel!r}); "
+            f"known families are {sorted(_COMMON_FIELDS_BY_FAMILY)}"
+        )
+    return {**common, **extras.get(channel, {})}
 
 
 def _sanitize_path_segment(value: str, *, field: str) -> str:
@@ -196,17 +594,60 @@ def _sanitize_path_segment(value: str, *, field: str) -> str:
     return value
 
 
-def _coerce_levels(rows: list[dict[str, Any]], field: str) -> None:
+def _level_columns(schema: dict[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
+    """Return ``(column, struct field names)`` for every book-level column.
+
+    Read off the schema rather than a hard-coded channel list, so the sink
+    cannot coerce a level to ``{"price", "amount"}`` while declaring
+    ``{"price", "size"}`` (or miss a channel — the equity fork's copy listed
+    ``book_snapshot``/``book_delta``/``depth`` and the crypto copy listed only
+    the first two).
+    """
+    out: list[tuple[str, tuple[str, ...]]] = []
+    for name, dtype in schema.items():
+        inner = getattr(dtype, "inner", None)
+        if isinstance(dtype, pl.List) and isinstance(inner, pl.Struct):
+            out.append((name, tuple(f.name for f in inner.fields)))
+    return out
+
+
+def _coerce_levels(rows: list[dict[str, Any]], field: str, keys: tuple[str, ...]) -> None:
     """Convert list-of-tuples book levels to list-of-dicts in-place.
 
-    Polars ``pl.List(pl.Struct(...))`` requires dicts, not tuples.
+    Polars ``pl.List(pl.Struct(...))`` requires dicts, not tuples. ``keys`` is
+    the struct's field names in order, taken from the schema about to be
+    declared — crypto lakes spell a level ``(price, amount)`` and equity lakes
+    ``(price, size)``.
+
     Idempotent: already-coerced dict levels are left unchanged so a retry
     after a failed write (which may have partially coerced rows) is safe.
+    ``strict=True`` refuses a level whose arity does not match the struct
+    instead of silently truncating or padding it.
     """
     for row in rows:
         levels = row.get(field)
-        if levels is not None and levels and not isinstance(levels[0], dict):
-            row[field] = [{"price": px, "amount": amt} for px, amt in levels]
+        if levels and not isinstance(levels[0], dict):
+            row[field] = [dict(zip(keys, level, strict=True)) for level in levels]
+
+
+def _group_key(row: dict[str, Any]) -> tuple[str, str, int]:
+    """Return the ``(source, date, bucket)`` partition a row belongs to.
+
+    One place owns the partition identity so the flush path and its re-buffer
+    path cannot compute it two different ways.
+
+    Raises:
+        KeyError: naming the missing partition column, rather than a bare
+            ``KeyError('source')`` from a tuple literal buried in the flush.
+    """
+    try:
+        return (row["source"], row["date"], row["bucket"])
+    except KeyError as exc:
+        missing = exc.args[0]
+        raise KeyError(
+            f"row is missing partition column {missing!r}; it cannot be assigned "
+            f"to a partition (channel={row.get('channel')!r})"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -293,11 +734,14 @@ class ParquetSink(Sink):
         # (which ``except Exception`` does not catch).
         ok = False
         written: set[tuple[str, str, int]] = set()
+        # Partition key per row, kept so the re-buffer path never re-derives it.
+        keyed: list[tuple[tuple[str, str, int], dict[str, Any]]] = []
         try:
             # Group rows by (source, date, bucket) — each group → one file
             groups: defaultdict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
             for row in rows:
-                key = (row["source"], row["date"], row["bucket"])
+                key = _group_key(row)
+                keyed.append((key, row))
                 groups[key].append(row)
 
             for (source, date, bucket), group_rows in groups.items():
@@ -317,9 +761,18 @@ class ParquetSink(Sink):
                 # Partial or total failure: re-buffer only partitions that
                 # never completed a durable write.  Prepend remaining ahead of
                 # concurrent put() rows so order is remaining + pending.
-                remaining = [
-                    r for r in rows if (r["source"], r["date"], r["bucket"]) not in written
-                ]
+                #
+                # Re-derive nothing here. Recomputing the key would re-raise the
+                # very KeyError that aborted grouping, from inside ``finally``,
+                # which both replaces the original exception and skips the
+                # assignment below — one malformed row would silently take the
+                # whole channel buffer with it. If keying did not finish, no
+                # group can have been written, so every row is still owed a retry.
+                remaining = (
+                    [r for key, r in keyed if key not in written]
+                    if len(keyed) == len(rows)
+                    else list(rows)
+                )
                 pending = self._buffers.get(channel, [])
                 self._buffers[channel] = remaining + pending
 
@@ -331,7 +784,14 @@ class ParquetSink(Sink):
         bucket: int,
         rows: list[dict[str, Any]],
     ) -> None:
-        """Synchronous Parquet write (runs in executor to avoid blocking the loop)."""
+        """Synchronous Parquet write (runs in executor to avoid blocking the loop).
+
+        Raises:
+            ValueError: if the rows in a group do not agree on a record family,
+                if the family has no schema table, or if any row carries a field
+                the channel schema does not declare. The last one is the point:
+                a field with nowhere to go used to be dropped on the floor here.
+        """
         # Sanitize path components from record fields before joining under data_dir.
         source = _sanitize_path_segment(source, field="source")
         channel = _sanitize_path_segment(channel, field="channel")
@@ -354,15 +814,40 @@ class ParquetSink(Sink):
         temp_path = part_dir / f"temp-part-{part_id}.parquet"
         out_path = part_dir / f"part-{part_id}.parquet"
 
-        # Coerce book levels (list-of-tuples → list-of-dicts)
-        if channel in ("book_snapshot", "book_delta"):
-            _coerce_levels(rows, "bids")
-            _coerce_levels(rows, "asks")
+        # A group shares one channel and one source, so it must share one
+        # family; a mixed group would silently write half its rows against the
+        # other fork's schema.
+        families = {_row_family(row) for row in rows}
+        if len(families) > 1:
+            raise ValueError(
+                f"partition source={source} channel={channel} mixes record families "
+                f"{sorted(families)}; one Parquet file cannot hold both schemas"
+            )
+        schema = _channel_schema(channel, families.pop())
+
+        # Coerce book levels (list-of-tuples → list-of-dicts) using the struct
+        # field names the schema is about to declare.
+        for level_col, level_keys in _level_columns(schema):
+            _coerce_levels(rows, level_col, level_keys)
+
+        # Refuse rows carrying a field the schema does not know rather than
+        # dropping it. Dropping is indistinguishable from the field never
+        # having been collected, which is how equity records lost ``provider``,
+        # ``size``, ``tape``, ``venue`` and ``source_ts`` in silence.
+        known = schema.keys() | _PATH_ONLY_COLUMNS
+        unknown: set[str] = set()
+        filtered_rows: list[dict[str, Any]] = []
+        for row in rows:
+            unknown |= row.keys() - known
+            filtered_rows.append({k: row.get(k) for k in schema})
+        if unknown:
+            raise ValueError(
+                f"channel {channel!r} schema has no column for {sorted(unknown)}; "
+                f"writing would drop {'it' if len(unknown) == 1 else 'them'} silently. "
+                f"Widen the schema for this channel or stop emitting the field."
+            )
 
         # Build DataFrame with explicit schema to ensure type consistency
-        schema = _channel_schema(channel)
-        # Keep only columns that appear in the schema (unknown extras dropped)
-        filtered_rows: list[dict[str, Any]] = [{k: row.get(k) for k in schema} for row in rows]
         df = pl.DataFrame(filtered_rows, schema=schema)
 
         # Crash safety: write temp in the same directory, then rename to the

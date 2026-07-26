@@ -1,9 +1,9 @@
 import json
 import pathlib
 
-from crypcodile.exchanges.binance.normalize import normalize_message
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import DerivativeTicker, Funding, Liquidation
+from crocodile.crypto.exchanges.binance.normalize import normalize_message
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import DerivativeTicker, Funding, Liquidation
 
 P = pathlib.Path(__file__).parent / "fixtures"
 

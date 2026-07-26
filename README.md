@@ -30,7 +30,7 @@ prices instead of inventing them.
 ## Install
 
 ```bash
-uv pip install crypcodile          # or: pip install crypcodile
+uv pip install crocodile          # or: pip install crocodile
 ```
 
 The base install is the whole streaming core: every native connector, the
@@ -38,37 +38,37 @@ Parquet lake, replay, and the 47-command CLI. Heavier surfaces are opt-in extras
 so you never pay for a dependency tree you don't use:
 
 ```bash
-uv pip install 'crypcodile[market]'   # +100 exchanges via the universal ccxt connector
-uv pip install 'crypcodile[gui]'      # FlowMap visualizer + gas tracker (PyQt6)
-uv pip install 'crypcodile[ml]'       # funding prediction + Black-Scholes (xgboost/scipy)
-uv pip install 'crypcodile[web]'      # FastAPI server + Streamlit examples
-uv pip install 'crypcodile[onchain]'  # Base L2 / GMX / Superchain connectors (web3)
-uv pip install 'crypcodile[full]'     # everything
+uv pip install 'crocodile[market]'   # +100 exchanges via the universal ccxt connector
+uv pip install 'crocodile[gui]'      # FlowMap visualizer + gas tracker (PyQt6)
+uv pip install 'crocodile[ml]'       # funding prediction + Black-Scholes (xgboost/scipy)
+uv pip install 'crocodile[web]'      # FastAPI server + Streamlit examples
+uv pip install 'crocodile[onchain]'  # Base L2 / GMX / Superchain connectors (web3)
+uv pip install 'crocodile[full]'     # everything
 ```
 
 Prefer one command? [`install.sh`](install.sh) (macOS/Linux) and
-[`install.ps1`](install.ps1) (Windows) install `crypcodile[full]`.
+[`install.ps1`](install.ps1) (Windows) install `crocodile[full]`.
 
 ## Five minutes
 
 ```bash
 # stream Deribit BTC-perp trades + book deltas into a local lake
-crypcodile collect --exchange deribit --symbols BTC-PERPETUAL \
+crocodile collect --exchange deribit --symbols BTC-PERPETUAL \
     --channels trade --channels book_delta --data-dir data
 
 # the lake is just partitioned Parquet — ask it anything in DuckDB SQL
-crypcodile query "SELECT count(*) FROM records WHERE channel = 'trade'"
+crocodile query "SELECT count(*) FROM records WHERE channel = 'trade'"
 
 # replay that window later — identical bytes, every run
-crypcodile replay --channels trade --symbols deribit:BTC-PERPETUAL
+crocodile replay --channels trade --symbols deribit:BTC-PERPETUAL
 
 # open the order-flow visualizer on live Binance data  ([gui] extra)
-crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
+crocodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
 No lake yet? `replay` and `query` fall back to the bundled sample in
 [`test_data/`](test_data/), so a fresh clone works offline. There's also an
-interactive shell — `crypcodile shell` — with history and tab-completion, and
+interactive shell — `crocodile shell` — with history and tab-completion, and
 every command runs inside it.
 
 ## Reaching the whole market
@@ -88,15 +88,15 @@ resolves the concrete list from the live universe:
 
 ```bash
 # the 200 most-liquid pairs on Binance, streamed over a single WebSocket
-crypcodile collect-market --exchange binance --top 200 --use-ws \
+crocodile collect-market --exchange binance --top 200 --use-ws \
     --channels trade --channels book_ticker
 
 # every USDT perpetual across three venues at once, order books included
-crypcodile collect-market --exchange bybit,okx,mexc --all \
+crocodile collect-market --exchange bybit,okx,mexc --all \
     --quote USDT --kind perpetual --channels book_snapshot --limit 400
 
 # the whole coin universe — 17k+ coins, including the long tail no CEX lists
-crypcodile collect --exchange coingecko --symbols _ --channels ohlcv
+crocodile collect --exchange coingecko --symbols _ --channels ohlcv
 ```
 
 Two design choices make that scale honestly. The ccxt path is **REST-poll-first**
@@ -108,7 +108,7 @@ exchange's book. And `universe` ranks any venue's markets by live 24h volume, so
 
 ### The whole market, on one screen
 
-`crypcodile census` measures the market live and writes a self-contained HTML
+`crocodile census` measures the market live and writes a self-contained HTML
 dashboard — venue market counts (ccxt), the coin universe + market cap +
 dominance (CoinGecko), and total value locked (DeFiLlama). Every figure comes
 from a keyless public feed; a recent run:
@@ -117,7 +117,7 @@ from a keyless public feed; a recent run:
 > **17,657** active coins · **$2.29T** market cap · **$75.8B** DeFi TVL
 
 ```bash
-crypcodile census                  # → census.html + a terminal summary
+crocodile census                  # → census.html + a terminal summary
 ```
 
 ## The 47 commands
@@ -134,8 +134,8 @@ crypcodile census                  # → census.html + a terminal summary
 | **Shell** | `shell` · `update` |
 
 Ingest survives disconnects with sequence-gap bridging and a dead-letter queue
-([`src/crypcodile/ingest/`](src/crypcodile/ingest/)); whatever reaches disk is
-normalized against the [16-record schema](src/crypcodile/schema/records.py) and
+([`src/crocodile/core/ingest/`](src/crocodile/core/ingest/)); whatever reaches disk is
+normalized against the [30-record schema](src/crocodile/core/schema/records.py) and
 replayable.
 
 ## FlowMap
@@ -149,7 +149,7 @@ iceberg / large-lot trackers. Feed it live data, a lake replay, or a built-in
 synthetic market for poking at the UI offline.
 
 ```bash
-crypcodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
+crocodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
 It renders on `QOpenGLWidget` with a pure-NumPy density engine behind it (pin a
@@ -163,9 +163,9 @@ MCP tool, or plain Python over a `Catalog`. Two runnable examples in
 [`examples/`](examples/):
 
 ```python
-from crypcodile.analytics.funding import funding_apr
-from crypcodile.analytics.volsurface import iv_surface
-from crypcodile.store.catalog import Catalog
+from crocodile.crypto.analytics.funding import funding_apr
+from crocodile.crypto.analytics.volsurface import iv_surface
+from crocodile.core.store.catalog import Catalog
 
 catalog = Catalog(data_dir="data")
 apr     = funding_apr(catalog, "binance:BTCUSDT", from_ns, to_ns)  # Polars DataFrame
@@ -181,7 +181,7 @@ can't tell the difference.
 ## For agents (MCP)
 
 ```bash
-crypcodile mcp --data-dir data     # Model Context Protocol server over stdio
+crocodile mcp --data-dir data     # Model Context Protocol server over stdio
 ```
 
 Every tool is read-only and deterministic — answers come from the lake and the
@@ -192,7 +192,7 @@ with Claude, Cursor, or anything that speaks MCP.
 
 ## REST API
 
-`crypcodile api` serves the same lake over FastAPI at `/api/v1/*` — ops and
+`crocodile api` serves the same lake over FastAPI at `/api/v1/*` — ops and
 catalog discovery, a bounded read-only `POST /query`, the derivatives and
 microstructure analytics, and a payment-gated demo route over the x402 protocol.
 

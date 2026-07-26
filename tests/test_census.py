@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from crypcodile import census
+from crocodile.crypto import census
 
 
 def _fixture() -> dict[str, Any]:

@@ -16,8 +16,8 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade
 
 def main():
     rpc_url = os.getenv("BASE_RPC_URL", "https://mainnet.base.org")

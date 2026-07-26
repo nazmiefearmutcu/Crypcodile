@@ -1,0 +1,27 @@
+STOCKODILE E2E PROOF OF INTEGRATION LOG
+======================================
+Execution Timestamp: 2026-07-26 22:37:25 UTC
+Target Stock Symbol: AAPL
+Dates Scraped: 2026-06-01 to 2026-06-05
+Total Mapped Records: 4
+Bar OHLCV Count: 4
+Database Write Path: /private/var/folders/w2/7hhrx1qn5pzff4nb56g3m45c0000gn/T/pytest-of-nazmi/pytest-395/test_live_end_to_end_proof0
+Catalog Query Result: 4 rows found in DuckDB view.
+DataFrame Output Schema & Samples:
+shape: (4, 18)
+┌──────────┬────────┬────────────┬───────────────────┬───┬───────────┬──────┬─────────────┬────────┐
+│ provider ┆ symbol ┆ symbol_raw ┆ source_ts         ┆ … ┆ volume    ┆ vwap ┆ trade_count ┆ source │
+│ ---      ┆ ---    ┆ ---        ┆ ---               ┆   ┆ ---       ┆ ---  ┆ ---         ┆ ---    │
+│ str      ┆ str    ┆ str        ┆ i64               ┆   ┆ f64       ┆ f64  ┆ i64         ┆ str    │
+╞══════════╪════════╪════════════╪═══════════════════╪═══╪═══════════╪══════╪═════════════╪════════╡
+│ yahoo    ┆ AAPL   ┆ AAPL       ┆ 17802864000000000 ┆ … ┆ 4.88499e7 ┆ null ┆ null        ┆ yahoo  │
+│          ┆        ┆            ┆ 00                ┆   ┆           ┆      ┆             ┆        │
+│ yahoo    ┆ AAPL   ┆ AAPL       ┆ 17803728000000000 ┆ … ┆ 4.45347e7 ┆ null ┆ null        ┆ yahoo  │
+│          ┆        ┆            ┆ 00                ┆   ┆           ┆      ┆             ┆        │
+│ yahoo    ┆ AAPL   ┆ AAPL       ┆ 17804592000000000 ┆ … ┆ 5.08367e7 ┆ null ┆ null        ┆ yahoo  │
+│          ┆        ┆            ┆ 00                ┆   ┆           ┆      ┆             ┆        │
+│ yahoo    ┆ AAPL   ┆ AAPL       ┆ 17805456000000000 ┆ … ┆ 4.48691e7 ┆ null ┆ null        ┆ yahoo  │
+│          ┆        ┆            ┆ 00                ┆   ┆           ┆      ┆             ┆        │
+└──────────┴────────┴────────────┴───────────────────┴───┴───────────┴──────┴─────────────┴────────┘
+======================================
+STATUS: SUCCESS

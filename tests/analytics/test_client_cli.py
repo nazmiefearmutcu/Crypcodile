@@ -18,14 +18,14 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from crypcodile.analytics.funding import funding_apr as analytics_funding_apr
-from crypcodile.analytics.volsurface import iv_surface as analytics_iv_surface
-from crypcodile.cli import app
-from crypcodile.client.client import CrypcodileClient
-from crypcodile.schema.enums import OptType
-from crypcodile.schema.records import Funding, OptionsChain
-from crypcodile.store.catalog import Catalog
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.funding import funding_apr as analytics_funding_apr
+from crocodile.crypto.analytics.volsurface import iv_surface as analytics_iv_surface
+from crocodile.crypto.legacy.cli import app
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.core.schema.legacy.enums import OptType
+from crocodile.core.schema.legacy.records import Funding, OptionsChain
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -694,7 +694,7 @@ def test_client_vol_skew_empty_lake(tmp_path: Path) -> None:
 
 def test_client_vol_skew_matches_analytics(options_lake: Path) -> None:
     """Client vol_skew output must match the direct analytics function."""
-    from crypcodile.analytics.volsurface import vol_skew as analytics_vol_skew
+    from crocodile.crypto.analytics.volsurface import vol_skew as analytics_vol_skew
 
     e1_ns = _BASE_NS + _ONE_YEAR_NS
     client = CrypcodileClient(options_lake)

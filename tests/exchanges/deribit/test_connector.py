@@ -4,14 +4,14 @@ import pathlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from crypcodile.exchanges.deribit.connector import (
+from crocodile.crypto.exchanges.deribit.connector import (
     DeribitConnector,
     build_channels,
     parse_instruments,
 )
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.records import Record, Trade
-from crypcodile.sink.base import Sink
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.records import Record, Trade
+from crocodile.core.sink.base import Sink
 
 _FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 
@@ -117,7 +117,7 @@ def test_parse_instruments_unknown_option_type_skipped(caplog):
             }
         ]
     }
-    with caplog.at_level(logging.WARNING, logger="crypcodile.exchanges.deribit.connector"):
+    with caplog.at_level(logging.WARNING, logger="crocodile.crypto.exchanges.deribit.connector"):
         insts = parse_instruments(raw)
     assert len(insts) == 0
     assert "exotic" in caplog.text

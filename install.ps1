@@ -166,7 +166,10 @@ Run-Step "Upgrading pip..." {
 
 # 6. Installs the CLI package
 Run-Step "Installing Crypcodile..." {
-    & $pipExe install "crypcodile[full] @ git+https://github.com/nazmiefearmutcu/Crypcodile.git"
+    # The distribution is `crocodile` as of 0.3.0; pip rejects a requirement whose
+# name does not match the project it resolves to. The repository is renamed
+# separately, so the URL still says Crypcodile.
+& $pipExe install "crocodile[full] @ git+https://github.com/nazmiefearmutcu/Crypcodile.git"
 }
 
 # 7. Adds $env:USERPROFILE\.crypcodile\venv\Scripts to the User PATH environment variable

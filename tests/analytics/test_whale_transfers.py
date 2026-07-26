@@ -8,13 +8,13 @@ import pytest
 from typer.testing import CliRunner
 from web3 import AsyncWeb3
 
-from crypcodile.analytics.whale_transfers import (
+from crocodile.crypto.analytics.whale_transfers import (
     WhaleTransferTracker,
     filter_transfers_by_usd,
     label_known_addresses,
     label_transfer_addresses,
 )
-from crypcodile.cli import app
+from crocodile.crypto.legacy.cli import app
 
 _RUNNER = CliRunner()
 

@@ -100,8 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    from crypcodile.analytics.volsurface import iv_surface, term_structure
-    from crypcodile.store.catalog import Catalog
+    from crocodile.crypto.analytics.volsurface import iv_surface, term_structure
+    from crocodile.core.store.catalog import Catalog
 
     catalog = Catalog(data_dir)
 

@@ -39,10 +39,10 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from crypcodile.client.collect import collect  # noqa: E402
-from crypcodile.exchanges.deribit.connector import DeribitConnector  # noqa: E402
-from crypcodile.instruments.registry import InstrumentRegistry  # noqa: E402
-from crypcodile.store.parquet_sink import ParquetSink  # noqa: E402
+from crocodile.crypto.client.collect import collect  # noqa: E402
+from crocodile.crypto.exchanges.deribit.connector import DeribitConnector  # noqa: E402
+from crocodile.crypto.instruments.registry import InstrumentRegistry  # noqa: E402
+from crocodile.core.store.parquet_sink import ParquetSink  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s  %(message)s")
 log = logging.getLogger("collect_deribit")

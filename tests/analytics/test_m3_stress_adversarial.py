@@ -4,11 +4,11 @@ import math
 import pytest
 import polars as pl
 
-from crypcodile.analytics.risk import calculate_chaos_score
-from crypcodile.analytics.lending_stress import lending_stress_test
-from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
-from crypcodile.exchanges.gmx_synthetix.position_tracker import PerpPositionTracker
-from crypcodile.analytics.funding_prediction import XGBoostFundingPredictor
+from crocodile.crypto.analytics.risk import calculate_chaos_score
+from crocodile.crypto.analytics.lending_stress import lending_stress_test
+from crocodile.crypto.analytics.gas_vol_correlation import gas_to_volatility_correlation
+from crocodile.crypto.exchanges.gmx_synthetix.position_tracker import PerpPositionTracker
+from crocodile.crypto.analytics.funding_prediction import XGBoostFundingPredictor
 
 
 def test_chaos_score_extreme_inputs() -> None:

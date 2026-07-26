@@ -17,8 +17,8 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from crypcodile.cli import app
-from crypcodile.exchanges.binance.backfill import BinanceBackfill
+from crocodile.crypto.legacy.cli import app
+from crocodile.crypto.exchanges.binance.backfill import BinanceBackfill
 
 _RUNNER = CliRunner()
 
@@ -145,13 +145,13 @@ def test_backfill_from_after_to_exits_nonzero(tmp_path: pathlib.Path) -> None:
 
 def test_backfill_binance_trade_writes_parquet(tmp_path: pathlib.Path) -> None:
     """Binance trade backfill with fixture fetch writes Parquet under data_dir."""
-    from crypcodile.client.backfill import run_historical_backfill as real_run
+    from crocodile.crypto.client.backfill import run_historical_backfill as real_run
 
     async def _run_with_factory(*args, **kwargs):
         kwargs["backfill_factory"] = _make_fixture_binance_backfill
         return await real_run(*args, **kwargs)
 
-    with patch("crypcodile.cli.run_historical_backfill", side_effect=_run_with_factory):
+    with patch("crocodile.crypto.legacy.cli.run_historical_backfill", side_effect=_run_with_factory):
         result = _RUNNER.invoke(
             app,
             [
@@ -180,12 +180,12 @@ def test_backfill_binance_trade_start_end_aliases(tmp_path: pathlib.Path) -> Non
         return _make_fixture_binance_backfill()
 
     async def _run_with_factory(*args, **kwargs):
-        from crypcodile.client.backfill import run_historical_backfill as real
+        from crocodile.crypto.client.backfill import run_historical_backfill as real
 
         kwargs["backfill_factory"] = _factory
         return await real(*args, **kwargs)
 
-    with patch("crypcodile.cli.run_historical_backfill", side_effect=_run_with_factory):
+    with patch("crocodile.crypto.legacy.cli.run_historical_backfill", side_effect=_run_with_factory):
         result = _RUNNER.invoke(
             app,
             [
@@ -230,12 +230,12 @@ def test_backfill_binance_symbol_normalize_btc(tmp_path: pathlib.Path) -> None:
         )
 
     async def _run_with_factory(*args, **kwargs):
-        from crypcodile.client.backfill import run_historical_backfill as real
+        from crocodile.crypto.client.backfill import run_historical_backfill as real
 
         kwargs["backfill_factory"] = _factory
         return await real(*args, **kwargs)
 
-    with patch("crypcodile.cli.run_historical_backfill", side_effect=_run_with_factory):
+    with patch("crocodile.crypto.legacy.cli.run_historical_backfill", side_effect=_run_with_factory):
         result = _RUNNER.invoke(
             app,
             [
@@ -258,8 +258,8 @@ def test_backfill_binance_symbol_normalize_btc(tmp_path: pathlib.Path) -> None:
 
 async def test_run_historical_backfill_binance_direct(tmp_path: pathlib.Path) -> None:
     """``run_historical_backfill`` with injected BinanceBackfill writes rows."""
-    from crypcodile.client.backfill import run_historical_backfill
-    from crypcodile.store.parquet_sink import ParquetSink
+    from crocodile.crypto.client.backfill import run_historical_backfill
+    from crocodile.core.store.parquet_sink import ParquetSink
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
     count = await run_historical_backfill(
@@ -276,8 +276,8 @@ async def test_run_historical_backfill_binance_direct(tmp_path: pathlib.Path) ->
 
 
 async def test_run_historical_backfill_unsupported_exchange() -> None:
-    from crypcodile.client.backfill import run_historical_backfill
-    from crypcodile.sink.memory import MemorySink
+    from crocodile.crypto.client.backfill import run_historical_backfill
+    from crocodile.core.sink.memory import MemorySink
 
     sink = MemorySink()
     try:

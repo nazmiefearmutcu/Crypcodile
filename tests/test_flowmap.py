@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from crypcodile.cli import app
+from crocodile.crypto.legacy.cli import app
 
 
 def test_flowmap_help() -> None:
@@ -21,7 +21,7 @@ def test_flowmap_help() -> None:
 
 def test_flowmap_missing_symbol_non_interactive() -> None:
     """Verify that the flowmap command fails if symbol is missing in non-interactive mode."""
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
         runner = CliRunner()
         result = runner.invoke(app, ["flowmap"])
         assert result.exit_code != 0
@@ -30,8 +30,8 @@ def test_flowmap_missing_symbol_non_interactive() -> None:
 
 
 @patch("multiprocessing.Process")
-@patch("crypcodile.cli.resolve_data_dir")
-@patch("crypcodile.cli.is_interactive_stdin")
+@patch("crocodile.crypto.legacy.cli.resolve_data_dir")
+@patch("crocodile.crypto.legacy.cli.is_interactive_stdin")
 def test_flowmap_command_orchestration(
     mock_is_interactive: MagicMock,
     mock_resolve: MagicMock,

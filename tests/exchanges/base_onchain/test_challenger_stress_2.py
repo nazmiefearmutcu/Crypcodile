@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
-from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
 
 
 # Thread-safe thread sleeping mock to simulate slow RPC nodes

@@ -6,13 +6,13 @@ This quickstart guides you through using **Crypcodile** to monitor on-chain swap
 
 Ensure you have installed Crypcodile and synced the data pipeline:
 ```bash
-pip install 'crypcodile[onchain]'
+pip install 'crocodile[onchain]'
 # or with uv
-uv pip install 'crypcodile[onchain]'
+uv pip install 'crocodile[onchain]'
 ```
 
 The Base connector reads L2 RPC logs via `web3`, which ships in the
-`onchain` extra (a bare `pip install crypcodile` gives you the core
+`onchain` extra (a bare `pip install crocodile` gives you the core
 CEX/lake engine only).
 
 ## Python Implementation
@@ -20,7 +20,7 @@ CEX/lake engine only).
 Using Crypcodile's standardized query interface powered by DuckDB, you can load on-chain transaction data directly into a Pandas DataFrame and filter for whale trades:
 
 ```python
-from crypcodile.client.client import CrypcodileClient
+from crocodile.crypto.client.client import CrypcodileClient
 
 # 1. Initialize Crypcodile client pointing to your Parquet data lake
 client = CrypcodileClient(data_dir="data")

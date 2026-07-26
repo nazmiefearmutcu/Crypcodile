@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.sink.memory import MemorySink
 
 
 def _make(exchange: str, **kw):  # type: ignore[no-untyped-def]
-    from crypcodile.exchanges.factory import make_connector
+    from crocodile.crypto.exchanges.factory import make_connector
 
     return make_connector(
         exchange=exchange,
@@ -33,7 +33,7 @@ def _make(exchange: str, **kw):  # type: ignore[no-untyped-def]
 
 
 def test_list_exchanges_sorted() -> None:
-    from crypcodile.exchanges.factory import list_exchanges
+    from crocodile.crypto.exchanges.factory import list_exchanges
 
     names = list_exchanges()
     assert names == sorted(names)
@@ -54,7 +54,7 @@ def test_list_exchanges_sorted() -> None:
 
 def test_list_exchanges_returns_copy() -> None:
     """Callers can mutate the returned list without affecting the registry."""
-    from crypcodile.exchanges.factory import list_exchanges
+    from crocodile.crypto.exchanges.factory import list_exchanges
 
     a = list_exchanges()
     a.append("not-an-exchange")
@@ -65,7 +65,7 @@ def test_list_exchanges_returns_copy() -> None:
 
 def test_list_exchanges_usable_with_make_connector() -> None:
     """Every name from list_exchanges constructs without ValueError."""
-    from crypcodile.exchanges.factory import list_exchanges
+    from crocodile.crypto.exchanges.factory import list_exchanges
 
     for name in list_exchanges():
         conn = _make(name)
@@ -78,42 +78,42 @@ def test_list_exchanges_usable_with_make_connector() -> None:
 
 
 def test_make_connector_binance() -> None:
-    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crocodile.crypto.exchanges.binance.connector import BinanceConnector
 
     conn = _make("binance")
     assert isinstance(conn, BinanceConnector)
 
 
 def test_make_connector_bybit() -> None:
-    from crypcodile.exchanges.bybit.connector import BybitConnector
+    from crocodile.crypto.exchanges.bybit.connector import BybitConnector
 
     conn = _make("bybit")
     assert isinstance(conn, BybitConnector)
 
 
 def test_make_connector_okx() -> None:
-    from crypcodile.exchanges.okx.connector import OKXConnector
+    from crocodile.crypto.exchanges.okx.connector import OKXConnector
 
     conn = _make("okx")
     assert isinstance(conn, OKXConnector)
 
 
 def test_make_connector_coinbase() -> None:
-    from crypcodile.exchanges.coinbase.connector import CoinbaseConnector
+    from crocodile.crypto.exchanges.coinbase.connector import CoinbaseConnector
 
     conn = _make("coinbase")
     assert isinstance(conn, CoinbaseConnector)
 
 
 def test_make_connector_deribit() -> None:
-    from crypcodile.exchanges.deribit.connector import DeribitConnector
+    from crocodile.crypto.exchanges.deribit.connector import DeribitConnector
 
     conn = _make("deribit")
     assert isinstance(conn, DeribitConnector)
 
 
 def test_make_connector_derive() -> None:
-    from crypcodile.exchanges.derive.connector import DerivePollConnector
+    from crocodile.crypto.exchanges.derive.connector import DerivePollConnector
 
     conn = _make(
         "derive",
@@ -127,7 +127,7 @@ def test_make_connector_derive() -> None:
 
 
 def test_make_connector_base_onchain() -> None:
-    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
+    from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
 
     conn = _make("base_onchain")
     assert isinstance(conn, BaseOnchainConnector)
@@ -136,12 +136,12 @@ def test_make_connector_base_onchain() -> None:
 def test_make_connector_superchain() -> None:
     from unittest.mock import MagicMock, patch
 
-    from crypcodile.exchanges.superchain.connector import SuperchainConnector
+    from crocodile.crypto.exchanges.superchain.connector import SuperchainConnector
 
     mock_transport = MagicMock()
     mock_transport.rpc_urls = ["http://localhost:8545"]
     with patch(
-        "crypcodile.exchanges.base_onchain.connector.BaseOnchainTransport",
+        "crocodile.crypto.exchanges.base_onchain.connector.BaseOnchainTransport",
         return_value=mock_transport,
     ) as mock_cls:
         # Default SuperchainConnector.exchange is "superchain"; do not pass
@@ -197,7 +197,7 @@ def test_make_connector_case_sensitive() -> None:
 
 def test_make_connector_binance_market_kwarg() -> None:
     """market='usdm' kwarg is forwarded to BinanceConnector."""
-    from crypcodile.exchanges.binance.connector import BinanceConnector
+    from crocodile.crypto.exchanges.binance.connector import BinanceConnector
 
     conn = _make("binance", market="usdm")
     assert isinstance(conn, BinanceConnector)
@@ -206,7 +206,7 @@ def test_make_connector_binance_market_kwarg() -> None:
 
 def test_make_connector_bybit_category_kwarg() -> None:
     """category='spot' kwarg is forwarded to BybitConnector."""
-    from crypcodile.exchanges.bybit.connector import BybitConnector
+    from crocodile.crypto.exchanges.bybit.connector import BybitConnector
 
     conn = _make("bybit", category="spot")
     assert isinstance(conn, BybitConnector)

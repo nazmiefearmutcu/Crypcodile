@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from web3 import AsyncWeb3
 
-from crypcodile.analytics.lending_stress import (
+from crocodile.crypto.analytics.lending_stress import (
     LendingStressTester,
     lending_stress_test,
     simulate_stress,

@@ -3,9 +3,9 @@
 Strategy
 --------
 - We cannot touch the network in unit tests.
-- We monkeypatch ``crypcodile.cli.make_connector`` to return a pre-configured
+- We monkeypatch ``crocodile.crypto.legacy.cli.make_connector`` to return a pre-configured
   ``DeribitConnector`` with a ``FakeTransport`` carrying one scripted trade frame.
-- We also monkeypatch ``crypcodile.cli.AiohttpWsTransport`` so the CLI doesn't
+- We also monkeypatch ``crocodile.crypto.legacy.cli.AiohttpWsTransport`` so the CLI doesn't
   try to open a real WebSocket (the connector's transport is pre-set by the
   make_connector stub before cli.collect wires it).
 - The CLI's ``collect`` command calls ``asyncio.run()`` internally; Typer's
@@ -34,11 +34,11 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from crypcodile.cli import app
-from crypcodile.exchanges.deribit.connector import DeribitConnector
-from crypcodile.ingest.transport import FakeTransport
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.legacy.cli import app
+from crocodile.crypto.exchanges.deribit.connector import DeribitConnector
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.store.parquet_sink import ParquetSink
 
 # ─── shared fixtures ─────────────────────────────────────────────────────────
 
@@ -101,9 +101,9 @@ def test_collect_cli_constructs_connector_and_sink(tmp_path: pathlib.Path) -> No
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.ParquetSink", _CaptureSink),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),  # never used (transport pre-set)
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.ParquetSink", _CaptureSink),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),  # never used (transport pre-set)
     ):
         result = _RUNNER.invoke(
             app,
@@ -165,9 +165,9 @@ def test_collect_cli_keyboard_interrupt_exits_zero(tmp_path: pathlib.Path) -> No
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.collect_live", _cancelled_collect),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.collect_live", _cancelled_collect),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
     ):
         result = _RUNNER.invoke(
             app,
@@ -198,9 +198,9 @@ def test_collect_cli_wizard(tmp_path: pathlib.Path) -> None:
         return conn
 
     with (
-        patch("crypcodile.cli.is_interactive_stdin", return_value=True),
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
     ):
         result = _RUNNER.invoke(
             app,
@@ -244,10 +244,10 @@ def test_collect_cli_accepts_max_reconnects_and_duration_flags(
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.collect_live", _fake_collect),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
-        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.collect_live", _fake_collect),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False),
     ):
         result = _RUNNER.invoke(
             app,
@@ -287,10 +287,10 @@ def test_collect_cli_duration_seconds_auto_stops(tmp_path: pathlib.Path) -> None
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.collect_live", _hanging_collect),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
-        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.collect_live", _hanging_collect),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False),
     ):
         result = _RUNNER.invoke(
             app,
@@ -334,10 +334,10 @@ def test_collect_cli_multi_exchange_repeated_flags(tmp_path: pathlib.Path) -> No
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.collect_live", _fake_collect),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
-        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.collect_live", _fake_collect),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False),
     ):
         result = _RUNNER.invoke(
             app,
@@ -385,10 +385,10 @@ def test_collect_cli_multi_exchange_comma_separated(tmp_path: pathlib.Path) -> N
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.collect_live", _fake_collect),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
-        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.collect_live", _fake_collect),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False),
     ):
         result = _RUNNER.invoke(
             app,
@@ -428,10 +428,10 @@ def test_collect_cli_multi_exchange_mixed_repeat_and_csv(tmp_path: pathlib.Path)
         return conn
 
     with (
-        patch("crypcodile.cli.make_connector", side_effect=_fake_make_connector),
-        patch("crypcodile.cli.collect_live", _fake_collect),
-        patch("crypcodile.cli.AiohttpWsTransport", MagicMock()),
-        patch("crypcodile.cli.is_interactive_stdin", return_value=False),
+        patch("crocodile.crypto.legacy.cli.make_connector", side_effect=_fake_make_connector),
+        patch("crocodile.crypto.legacy.cli.collect_live", _fake_collect),
+        patch("crocodile.crypto.legacy.cli.AiohttpWsTransport", MagicMock()),
+        patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False),
     ):
         result = _RUNNER.invoke(
             app,
@@ -454,7 +454,7 @@ def test_collect_cli_multi_exchange_mixed_repeat_and_csv(tmp_path: pathlib.Path)
 
 def test_expand_csv_options_helpers() -> None:
     """Unit-test expand_csv_options / unique_preserve without invoking CLI."""
-    from crypcodile.cli import expand_csv_options, unique_preserve
+    from crocodile.crypto.legacy.cli import expand_csv_options, unique_preserve
 
     assert expand_csv_options(None) == []
     assert expand_csv_options([]) == []

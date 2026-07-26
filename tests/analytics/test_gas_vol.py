@@ -4,7 +4,7 @@ import math
 
 import polars as pl
 
-from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
+from crocodile.crypto.analytics.gas_vol_correlation import gas_to_volatility_correlation
 
 
 def test_gas_to_volatility_correlation_perfect() -> None:

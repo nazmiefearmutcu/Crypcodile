@@ -8,12 +8,12 @@ import pathlib
 import pytest
 from typer.testing import CliRunner
 
-from crypcodile.analytics.sequencer_latency import calculate_sequencer_latency
-from crypcodile.cli import app
-from crypcodile.client.client import CrypcodileClient
-from crypcodile.schema.records import BookTicker
-from crypcodile.store.catalog import Catalog
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.sequencer_latency import calculate_sequencer_latency
+from crocodile.crypto.legacy.cli import app
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.core.schema.legacy.records import BookTicker
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000
 _EXCHANGE = "base_onchain"

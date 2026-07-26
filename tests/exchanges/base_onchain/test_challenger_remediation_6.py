@@ -5,8 +5,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Response, HTTPException
 
-from crypcodile.api_server import get_market_data, simulate_payment, PAYMENTS_DB, PRICE_USDC, RECIPIENT_WALLET
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport, POOL_SPECS, TOKENS, _get_ipc_file, IPCDict
+from crocodile.crypto.legacy.api_server import get_market_data, simulate_payment, PAYMENTS_DB, PRICE_USDC, RECIPIENT_WALLET
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport, POOL_SPECS, TOKENS, _get_ipc_file, IPCDict
 
 class AwaitableValue:
     def __init__(self, val):
@@ -36,7 +36,7 @@ async def test_replay_attack_vulnerability() -> None:
     Verify if a malicious client can reuse the same successful transaction hash (tx_hash)
     for multiple independent payment_ids.
     """
-    from crypcodile.api_server import PAYMENTS_FILE
+    from crocodile.crypto.legacy.api_server import PAYMENTS_FILE
     if os.path.exists(PAYMENTS_FILE):
         try:
             os.remove(PAYMENTS_FILE)
@@ -101,8 +101,8 @@ async def test_replay_attack_vulnerability() -> None:
         ]
     }
 
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3, \
-         patch("crypcodile.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3, \
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", new_callable=AsyncMock) as mock_get_price:
          
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
@@ -241,7 +241,7 @@ async def test_api_server_robustness_malformed_receipts() -> None:
     Verify that get_market_data raises appropriate HTTPException and does not crash the server
     if receipt is invalid or contains unexpected logs formats.
     """
-    from crypcodile.api_server import PAYMENTS_FILE
+    from crocodile.crypto.legacy.api_server import PAYMENTS_FILE
     if os.path.exists(PAYMENTS_FILE):
         try:
             os.remove(PAYMENTS_FILE)
@@ -268,7 +268,7 @@ async def test_api_server_robustness_malformed_receipts() -> None:
     
     sig, address = generate_signature(pid)
     
-    with patch("crypcodile.api_server.get_w3") as mock_get_w3:
+    with patch("crocodile.crypto.legacy.api_server.get_w3") as mock_get_w3:
         mock_w3 = MagicMock()
         mock_w3.eth.chain_id = AwaitableValue(8453)
         mock_w3.eth.get_transaction = AsyncMock(return_value={

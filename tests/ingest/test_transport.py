@@ -13,7 +13,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from crypcodile.ingest.transport import AiohttpWsTransport
+from crocodile.core.ingest.transport import AiohttpWsTransport
 
 # ---------------------------------------------------------------------------
 # Helpers

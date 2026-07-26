@@ -2,10 +2,10 @@ import os
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from crypcodile.exchanges.superchain.gas_oracle import SuperchainGasOracle
-from crypcodile.exchanges.superchain.connector import SuperchainConnector
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.sink.base import Sink
+from crocodile.crypto.exchanges.superchain.gas_oracle import SuperchainGasOracle
+from crocodile.crypto.exchanges.superchain.connector import SuperchainConnector
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.sink.base import Sink
 
 @pytest.mark.asyncio
 async def test_superchain_gas_oracle_queries():

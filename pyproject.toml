@@ -1,7 +1,7 @@
 [project]
-name = "crypcodile"
-version = "0.1.047"
-description = "Open-source crypto market-data engine: ingest, normalize, store, retrieve anywhere."
+name = "crocodile"
+version = "0.3.0"
+description = "Deterministic market-data engine for crypto and US equities: ingest, normalize, store, replay."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
@@ -15,8 +15,16 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "mmh3>=5.2.1",
-    "numpy>=1.24",
-    "prompt-toolkit>=3.0",
+    "numpy>=1.26",
+    "prompt-toolkit>=3.0.52",
+    # Equity-side base dependencies. yfinance is not optional: the reference
+    # master and several providers import it at module level.
+    "yfinance>=1.4.1",
+    # Declared explicitly rather than inherited through yfinance, which the
+    # equity code type-hints against — a latent break the day yfinance drops it.
+    "pandas>=2.0",
+    "beautifulsoup4>=4.12",
+    "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]
@@ -33,7 +41,7 @@ web = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "streamlit>=1.58.0",
-    "crypcodile[onchain]",
+    "crocodile[onchain]",
 ]
 onchain = [
     "web3>=6.0.0",
@@ -50,15 +58,26 @@ evasion = [
     # on purpose: the default posture is to respect quotas, not to evade them.
 ]
 full = [
-    "crypcodile[gui,ml,web,onchain,market]",
+    "crocodile[gui,ml,web,onchain,market]",
 ]
 
 
 [project.scripts]
-crypcodile = "crypcodile.cli:main"
+# Phase 1 ships the two legacy CLIs unchanged under one distribution.
+# Phase 2 replaces both with a single projection over the capability registry,
+# at which point `crocodile-equity` disappears and `crocodile` covers both.
+crocodile        = "crocodile.crypto.legacy.cli:main"
+crocodile-equity = "crocodile.equity.legacy.cli:main"
+# The two old names stay callable for one minor version, through wrappers that
+# say so on stderr. Pointing them straight at `main` would have made them silent
+# aliases — the deprecation notice would exist only in this comment.
+crypcodile       = "crocodile._deprecated_cli:crypcodile_main"   # removed in 0.4
+stockodile       = "crocodile._deprecated_cli:stockodile_main"   # removed in 0.4
 
 [dependency-groups]
 dev = [
+    "eth-account>=0.13",  # imported directly by tests/equity/test_api_payment_security.py
+    "httpx>=0.27",  # required by starlette TestClient for API endpoint tests
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
@@ -72,7 +91,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/crypcodile"]
+packages = ["src/crocodile", "src/crypcodile", "src/stockodile"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -90,14 +109,29 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # census.py embeds a self-contained HTML/CSS dashboard template as a string
 # literal; its markup lines legitimately exceed the 100-col limit.
-"src/crypcodile/census.py" = ["E501"]
+"src/crocodile/crypto/census.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"
-packages = ["crypcodile"]
+packages = ["crocodile"]
 strict = true
 ignore_missing_imports = true
+
+# Before the rename, `mypy --strict -p crocodile` covered only what the merge
+# had built — 56 files, clean, and a real gate. After it, `crocodile` IS the
+# whole product: 217 files carrying 334 strict errors inherited from two
+# surfaces that were never strict-clean under their old names, where mypy had
+# never been pointed at them at all.
+#
+# Silently dropping `strict` would have made the gate meaningless everywhere.
+# Instead the debt is named here and nowhere else: `core` and `contrib` — every
+# line the merge actually wrote — stay strict, and the two legacy surfaces are
+# exempt until Phase 2 migrates them. The list only ever shrinks: a module comes
+# off it when it type-checks, never goes on it to silence a new error.
+[[tool.mypy.overrides]]
+module = ["crocodile.crypto.*", "crocodile.equity.*"]
+ignore_errors = true
 
 [tool.hatch.build]
 exclude = [
@@ -121,8 +155,6 @@ exclude = [
 
 [tool.maturin]
 python-source = "src"
-manifest-path = "src/crypcodile/log_decoder/Cargo.toml"
-module-name = "crypcodile.log_decoder._rust_decoder"
+manifest-path = "src/crocodile/crypto/log_decoder/Cargo.toml"
+module-name = "crocodile.crypto.log_decoder._rust_decoder"
 features = ["pyo3/extension-module"]
-
-

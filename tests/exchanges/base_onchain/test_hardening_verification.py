@@ -6,8 +6,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Response, HTTPException
 
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
-from crypcodile.api_server import get_market_data, get_payments_file, load_payments_db
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.crypto.legacy.api_server import get_market_data, get_payments_file, load_payments_db
 
 # Mock exceptions
 from web3.exceptions import ContractLogicError
@@ -97,8 +97,8 @@ async def test_api_server_recent_block_timestamp_validation() -> None:
             
     mock_w3 = MockWeb3API()
     
-    with patch("crypcodile.api_server.get_w3", return_value=mock_w3), \
-         patch("crypcodile.api_server.get_onchain_price", AsyncMock(return_value={"price": 40000.0})):
+    with patch("crocodile.crypto.legacy.api_server.get_w3", return_value=mock_w3), \
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", AsyncMock(return_value={"price": 40000.0})):
          
         sig_payload = json.dumps({
             "payment_id": payment_id,
@@ -141,7 +141,7 @@ async def test_api_server_payments_db_file_persistence() -> None:
 @pytest.mark.asyncio
 async def test_save_db_file_atomic_replace_and_fail_loud() -> None:
     """_save_db_file uses temp+os.replace and re-raises on failure."""
-    from crypcodile.api_server import _save_db_file, PAYMENTS_DB, db_lock
+    from crocodile.crypto.legacy.api_server import _save_db_file, PAYMENTS_DB, db_lock
 
     payments_file = get_payments_file()
     payload = {"pid-atomic": {"status": "pending", "symbol": "cbBTC-USDC"}}
@@ -161,7 +161,7 @@ async def test_save_db_file_atomic_replace_and_fail_loud() -> None:
     # set_async depends on save — must propagate so CAS/serve cannot succeed silently
     async with db_lock:
         with patch(
-            "crypcodile.api_server._save_db_file",
+            "crocodile.crypto.legacy.api_server._save_db_file",
             side_effect=OSError("disk full"),
         ):
             with pytest.raises(OSError, match="disk full"):
@@ -175,14 +175,14 @@ async def test_save_db_file_atomic_replace_and_fail_loud() -> None:
 async def test_sync_logs_load_errors(caplog: pytest.LogCaptureFixture) -> None:
     """_sync must log load failures instead of silently passing."""
     import logging
-    from crypcodile.api_server import PersistentDict
+    from crocodile.crypto.legacy.api_server import PersistentDict
 
     payments_file = get_payments_file()
     with open(payments_file, "w") as f:
         f.write("{not-valid-json")
 
     pdb = PersistentDict()
-    with caplog.at_level(logging.ERROR, logger="crypcodile.api_server"):
+    with caplog.at_level(logging.ERROR, logger="crocodile.crypto.legacy.api_server"):
         pdb._sync()
 
     assert any(
@@ -194,14 +194,14 @@ async def test_sync_logs_load_errors(caplog: pytest.LogCaptureFixture) -> None:
 async def test_non_blocking_ipc() -> None:
     """Verify that _load_ipc is a coroutine function (async/non-blocking) and uses to_thread."""
     import inspect
-    from crypcodile.exchanges.base_onchain.connector import _load_ipc
+    from crocodile.crypto.exchanges.base_onchain.connector import _load_ipc
     
     assert inspect.iscoroutinefunction(_load_ipc)
 
 @pytest.mark.asyncio
 async def test_write_ipc_non_blocking() -> None:
     """Verify that _write_ipc creates an asyncio task with asyncio.to_thread."""
-    from crypcodile.exchanges.base_onchain.connector import IPCDict
+    from crocodile.crypto.exchanges.base_onchain.connector import IPCDict
     import asyncio
     
     ipc_dict = IPCDict("TEST_WRITE_IPC")

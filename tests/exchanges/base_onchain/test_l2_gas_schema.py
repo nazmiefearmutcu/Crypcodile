@@ -1,8 +1,8 @@
 import polars as pl
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade
-from crypcodile.store.rows import to_row, from_row
-from crypcodile.store.parquet_sink import _channel_schema
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.store.rows import to_row, from_row
+from crocodile.core.store.parquet_sink import _channel_schema
 
 def test_l2_gas_schema_fields():
     # Instantiate Trade with gas and smart wallet fields

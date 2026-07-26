@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import pathlib
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000
 
@@ -57,8 +57,8 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
 
 
 def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_data_channels, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_data_channels, TOOLS
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_list_data_channels(client) == []
@@ -77,8 +77,8 @@ def test_list_data_channels_empty(tmp_path: pathlib.Path) -> None:
 
 
 async def test_list_data_channels_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_data_channels
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_data_channels
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -86,8 +86,8 @@ async def test_list_data_channels_with_data(tmp_path: pathlib.Path) -> None:
 
 
 def test_list_exchanges_on_disk_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_exchanges_on_disk, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_exchanges_on_disk, TOOLS
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_list_exchanges_on_disk(client) == []
@@ -98,8 +98,8 @@ def test_list_exchanges_on_disk_empty(tmp_path: pathlib.Path) -> None:
 
 
 async def test_list_exchanges_on_disk_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_exchanges_on_disk
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_exchanges_on_disk
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -110,7 +110,7 @@ def test_list_exchanges_on_disk_delegates_to_client() -> None:
     """Handler is a thin wrapper over client.list_exchanges_on_disk."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_list_exchanges_on_disk
+    from crocodile.crypto.legacy.mcp_server import handle_list_exchanges_on_disk
 
     client = MagicMock()
     client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
@@ -120,8 +120,8 @@ def test_list_exchanges_on_disk_delegates_to_client() -> None:
 
 def test_list_registered_exchanges_matches_factory() -> None:
     """Handler mirrors factory.list_exchanges (no lake)."""
-    from crypcodile.exchanges.factory import list_exchanges
-    from crypcodile.mcp_server import handle_list_registered_exchanges, TOOLS
+    from crocodile.crypto.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.mcp_server import handle_list_registered_exchanges, TOOLS
 
     result = handle_list_registered_exchanges()
     assert result == list_exchanges()
@@ -140,12 +140,12 @@ def test_list_registered_exchanges_matches_factory() -> None:
 
 def test_list_all_exchanges_native_plus_ccxt() -> None:
     """list_all_exchanges reports native + ccxt tiers and their union."""
-    from crypcodile.exchanges.factory import (
+    from crocodile.crypto.exchanges.factory import (
         list_all_exchanges,
         list_ccxt_exchanges,
         list_exchanges,
     )
-    from crypcodile.mcp_server import TOOLS, handle_list_all_exchanges
+    from crocodile.crypto.legacy.mcp_server import TOOLS, handle_list_all_exchanges
 
     result = handle_list_all_exchanges()
     assert set(result.keys()) == {"native", "ccxt", "all", "count"}
@@ -166,7 +166,7 @@ def test_list_all_exchanges_native_plus_ccxt() -> None:
 
 def test_list_registered_exchanges_uses_factory(monkeypatch) -> None:
     """Handler delegates to factory.list_exchanges."""
-    from crypcodile import mcp_server
+    from crocodile.crypto.legacy import mcp_server
 
     calls: list[int] = []
 
@@ -175,7 +175,7 @@ def test_list_registered_exchanges_uses_factory(monkeypatch) -> None:
         return ["alpha", "zeta"]
 
     # Handler imports factory inside the function; patch the module it uses.
-    import crypcodile.exchanges.factory as factory_mod
+    import crocodile.crypto.exchanges.factory as factory_mod
 
     monkeypatch.setattr(factory_mod, "list_exchanges", _fake_list)
     assert mcp_server.handle_list_registered_exchanges() == ["alpha", "zeta"]
@@ -186,9 +186,9 @@ def test_list_registered_exchanges_distinct_from_on_disk(
     tmp_path: pathlib.Path,
 ) -> None:
     """Factory registry is independent of lake hive partitions."""
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.exchanges.factory import list_exchanges
-    from crypcodile.mcp_server import (
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.mcp_server import (
         handle_list_exchanges_on_disk,
         handle_list_registered_exchanges,
     )
@@ -201,8 +201,8 @@ def test_list_registered_exchanges_distinct_from_on_disk(
 
 
 def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_catalog_summary, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_summary, TOOLS
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_catalog_summary(client) == {
@@ -218,8 +218,8 @@ def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:
 
 
 async def test_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_catalog_summary
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_summary
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -236,7 +236,7 @@ def test_catalog_summary_delegates_to_client() -> None:
     """Handler delegates to client.catalog_summary (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_catalog_summary
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_summary
 
     client = MagicMock()
     client.catalog_summary.return_value = {
@@ -257,8 +257,8 @@ def test_catalog_summary_delegates_to_client() -> None:
 
 
 def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_catalog_stats, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_stats, TOOLS
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_catalog_stats(client) == {
@@ -273,8 +273,8 @@ def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:
 
 
 async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_catalog_stats
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_stats
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -290,7 +290,7 @@ def test_catalog_stats_delegates_to_client() -> None:
     """Handler delegates to client.catalog_stats (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_catalog_stats
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_stats
 
     client = MagicMock()
     client.catalog_stats.return_value = {
@@ -310,7 +310,7 @@ def test_catalog_stats_query_failure_reports_minus_one() -> None:
     """MCP surface forwards client.catalog_stats -1 contract."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_catalog_stats
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_stats
 
     client = MagicMock()
     client.catalog_stats.return_value = {
@@ -328,7 +328,7 @@ def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
     """MCP surface forwards client.catalog_stats for odd channel keys."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_catalog_stats
+    from crocodile.crypto.legacy.mcp_server import handle_catalog_stats
 
     client = MagicMock()
     client.catalog_stats.return_value = {
@@ -342,8 +342,8 @@ def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
 
 
 def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_dates, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_dates, TOOLS
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_list_dates(client, "trade") == []
@@ -357,8 +357,8 @@ def test_list_dates_empty_lake(tmp_path: pathlib.Path) -> None:
 
 
 async def test_list_dates_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_dates
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_dates
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -375,7 +375,7 @@ def test_list_dates_strips_channel_before_client() -> None:
     """Handler strips channel; empty after strip never calls the client."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_list_dates
+    from crocodile.crypto.legacy.mcp_server import handle_list_dates
 
     client = MagicMock()
     client.list_dates.return_value = ["2024-01-01"]
@@ -389,16 +389,16 @@ def test_list_dates_strips_channel_before_client() -> None:
 
 
 def test_search_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_search_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_search_symbols
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_search_symbols(client, "BTC") == []
 
 
 async def test_search_symbols_finds_match(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_search_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_search_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -410,8 +410,8 @@ async def test_search_symbols_finds_match(tmp_path: pathlib.Path) -> None:
 
 
 async def test_search_symbols_channel_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_search_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_search_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -421,8 +421,8 @@ async def test_search_symbols_channel_filter(tmp_path: pathlib.Path) -> None:
 
 
 async def test_search_symbols_exchange_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_search_symbols, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_search_symbols, TOOLS
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -437,16 +437,16 @@ async def test_search_symbols_exchange_filter(tmp_path: pathlib.Path) -> None:
 
 
 def test_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_data_coverage
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_data_coverage
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_data_coverage(client, "deribit:BTC-PERPETUAL") == []
 
 
 async def test_data_coverage_returns_rows(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_data_coverage
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_data_coverage
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -463,8 +463,8 @@ async def test_data_coverage_returns_rows(tmp_path: pathlib.Path) -> None:
 
 
 async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_data_coverage
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_data_coverage
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -477,8 +477,8 @@ async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
 
 
 async def test_data_coverage_exchange_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import TOOLS, handle_data_coverage
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import TOOLS, handle_data_coverage
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -505,7 +505,7 @@ def test_data_coverage_delegates_to_client() -> None:
 
     import polars as pl
 
-    from crypcodile.mcp_server import handle_data_coverage
+    from crocodile.crypto.legacy.mcp_server import handle_data_coverage
 
     client = MagicMock()
     client.data_coverage.return_value = pl.DataFrame(
@@ -534,16 +534,16 @@ def test_data_coverage_delegates_to_client() -> None:
 
 
 def test_inventory_snapshot_empty_lake(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_inventory_snapshot
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_inventory_snapshot
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_inventory_snapshot(client) == []
 
 
 async def test_inventory_snapshot_returns_rows(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_inventory_snapshot
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_inventory_snapshot
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -561,8 +561,8 @@ async def test_inventory_snapshot_returns_rows(tmp_path: pathlib.Path) -> None:
 
 
 async def test_inventory_snapshot_channel_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_inventory_snapshot
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_inventory_snapshot
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -573,8 +573,8 @@ async def test_inventory_snapshot_channel_filter(tmp_path: pathlib.Path) -> None
 
 
 async def test_inventory_snapshot_exchange_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_inventory_snapshot
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_inventory_snapshot
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -585,8 +585,8 @@ async def test_inventory_snapshot_exchange_filter(tmp_path: pathlib.Path) -> Non
 
 
 def test_list_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_symbols, TOOLS
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols, TOOLS
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert handle_list_symbols(client) == []
@@ -599,8 +599,8 @@ def test_list_symbols_empty_lake(tmp_path: pathlib.Path) -> None:
 
 
 async def test_list_symbols_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -609,8 +609,8 @@ async def test_list_symbols_with_data(tmp_path: pathlib.Path) -> None:
 
 
 async def test_list_symbols_channel_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -621,8 +621,8 @@ async def test_list_symbols_channel_filter(tmp_path: pathlib.Path) -> None:
 
 
 async def test_list_symbols_exchange_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_list_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -636,7 +636,7 @@ def test_list_symbols_strips_empty_filters() -> None:
     """Empty/whitespace filters forwarded; client.list_symbols strips."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_list_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols
 
     client = MagicMock()
     client.list_symbols.return_value = [
@@ -653,7 +653,7 @@ def test_list_symbols_strips_padded_filters() -> None:
     """Padded filters forwarded to client.list_symbols (strip lives there)."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_list_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols
 
     client = MagicMock()
     client.list_symbols.return_value = ["deribit:BTC-PERPETUAL"]
@@ -671,7 +671,7 @@ def test_list_symbols_delegates_to_client() -> None:
     """Handler delegates to client.list_symbols (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_list_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_list_symbols
 
     client = MagicMock()
     client.list_symbols.return_value = []
@@ -689,7 +689,7 @@ def test_resolve_symbols_empty_input() -> None:
     """Empty / missing / blank symbols → [] without calling client."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_resolve_symbols, TOOLS
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols, TOOLS
 
     client = MagicMock()
     assert handle_resolve_symbols(client) == []
@@ -712,8 +712,8 @@ def test_resolve_symbols_empty_input() -> None:
 
 async def test_resolve_symbols_with_data(tmp_path: pathlib.Path) -> None:
     """Resolve raw unique match against lake inventory."""
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -727,8 +727,8 @@ async def test_resolve_symbols_with_data(tmp_path: pathlib.Path) -> None:
 
 async def test_resolve_symbols_comma_string(tmp_path: pathlib.Path) -> None:
     """Comma-separated string input is split like REST query param."""
-    from crypcodile.client.client import CrypcodileClient
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.client.client import CrypcodileClient
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -741,7 +741,7 @@ def test_resolve_symbols_strips_channel_and_default_ambiguous() -> None:
     """Empty channel → None; blank ambiguous → 'error'."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     client = MagicMock()
     client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
@@ -761,7 +761,7 @@ def test_resolve_symbols_strips_padded_channel_and_parts() -> None:
     """Padded channel and list items are stripped before client call."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     client = MagicMock()
     client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
@@ -781,7 +781,7 @@ def test_resolve_symbols_value_error_to_error_dict() -> None:
     """Client ValueError (no match / ambiguous / bad mode) → {error: ...}."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     client = MagicMock()
     client.resolve_symbols.side_effect = ValueError("no matches for 'ZZZ'")
@@ -793,7 +793,7 @@ def test_resolve_symbols_invalid_ambiguous_mode() -> None:
     """Invalid ambiguous mode surfaces as structured error dict."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     client = MagicMock()
     client.resolve_symbols.side_effect = ValueError(
@@ -811,7 +811,7 @@ def test_resolve_symbols_delegates_to_client() -> None:
     """Handler is a thin normalize + client.resolve_symbols wrapper."""
     from unittest.mock import MagicMock
 
-    from crypcodile.mcp_server import handle_resolve_symbols
+    from crocodile.crypto.legacy.mcp_server import handle_resolve_symbols
 
     client = MagicMock()
     client.resolve_symbols.return_value = ["a", "b"]

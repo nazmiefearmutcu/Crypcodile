@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pathlib
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookDelta, Trade
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookDelta, Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -64,7 +64,7 @@ async def _write_two_symbol_fixtures(data_dir: pathlib.Path) -> None:
 
 async def test_replay_returns_iterator_of_records(tmp_path: pathlib.Path) -> None:
     """replay() returns an Iterator[Record]."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -81,7 +81,7 @@ async def test_replay_returns_iterator_of_records(tmp_path: pathlib.Path) -> Non
 
 async def test_replay_records_are_time_ordered(tmp_path: pathlib.Path) -> None:
     """Records yielded by replay() are non-decreasing in local_ts."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -99,7 +99,7 @@ async def test_replay_records_are_time_ordered(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_across_two_symbols(tmp_path: pathlib.Path) -> None:
     """Records from two symbols are interleaved in time order."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -122,7 +122,7 @@ async def test_replay_across_two_symbols(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_single_symbol(tmp_path: pathlib.Path) -> None:
     """replay() on a single symbol returns only that symbol's records."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -142,7 +142,7 @@ async def test_replay_single_symbol(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_empty_range_returns_empty(tmp_path: pathlib.Path) -> None:
     """replay() with out-of-range time yields nothing."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -159,7 +159,7 @@ async def test_replay_empty_range_returns_empty(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_empty_symbols_returns_empty(tmp_path: pathlib.Path) -> None:
     """replay() with empty symbols list yields nothing."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -176,7 +176,7 @@ async def test_replay_empty_symbols_returns_empty(tmp_path: pathlib.Path) -> Non
 
 async def test_replay_record_types_are_correct(tmp_path: pathlib.Path) -> None:
     """replay() yields actual Record objects (Trade, not dicts)."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -195,7 +195,7 @@ async def test_replay_record_types_are_correct(tmp_path: pathlib.Path) -> None:
 
 async def test_replay_empty_channels_returns_empty(tmp_path: pathlib.Path) -> None:
     """replay() with empty channels list yields nothing (early-return guard)."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -212,7 +212,7 @@ async def test_replay_empty_channels_returns_empty(tmp_path: pathlib.Path) -> No
 
 async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
     """replay() across trade + book_delta channels yields all records globally sorted."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     # Write Trade records at even offsets and BookDelta records at odd offsets
     # so they interleave strictly when merged by local_ts.
@@ -287,7 +287,7 @@ async def test_replay_limit_bounds_global_merge_output(tmp_path: pathlib.Path) -
     alone would over-fetch (up to limit * num_channels).  The public API
     documents a global maximum on the merged stream.
     """
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
     symbol = "deribit:BTC-PERPETUAL"
@@ -353,7 +353,7 @@ async def test_replay_limit_bounds_global_merge_output(tmp_path: pathlib.Path) -
 
 async def test_replay_limit_single_channel(tmp_path: pathlib.Path) -> None:
     """limit still caps a single-channel replay."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_two_symbol_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)

@@ -1,4 +1,4 @@
-from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 
 def test_register_and_resolve():

@@ -20,15 +20,15 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crypcodile.analytics.funding import (
+from crocodile.crypto.analytics.funding import (
     apr_from_rate,
     funding_apr,
     funding_summary,
     periods_per_year,
 )
-from crypcodile.schema.records import Funding
-from crypcodile.store.catalog import Catalog
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.records import Funding
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants

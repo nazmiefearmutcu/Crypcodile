@@ -1,9 +1,9 @@
 import os
 
 import pytest
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
-from crypcodile.ingest.sync_recovery import SyncRecovery
-from crypcodile.ingest.rollback_manager import RollbackManager
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.core.ingest.sync_recovery import SyncRecovery
+from crocodile.core.ingest.rollback_manager import RollbackManager
 
 def test_sync_recovery(tmp_path):
     state_path = str(tmp_path / "sync.json")

@@ -4,15 +4,15 @@ import pytest
 import aiohttp
 from typing import AsyncGenerator
 from web3 import AsyncHTTPProvider, AsyncWeb3
-from crypcodile.exchanges.base_onchain.connector import (
+from crocodile.crypto.exchanges.base_onchain.connector import (
     BaseOnchainTransport,
     BaseOnchainConnector,
     POOL_SPECS,
     TOKENS,
     FACTORIES
 )
-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade
-from crypcodile.schema.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
+from crocodile.core.schema.legacy.enums import Side
 
 # =====================================================================
 # Tier 3 E2E Cross-Feature Combination Tests (>=6 tests)
@@ -58,7 +58,7 @@ async def test_t3_pagination_plus_rate_limiting(mock_rpc) -> None:
 @pytest.mark.asyncio
 async def test_t3_custom_symbol_plus_retries(mock_rpc) -> None:
     rpc_url, _ = mock_rpc
-    from crypcodile.exchanges.base_onchain import connector
+    from crocodile.crypto.exchanges.base_onchain import connector
     connector.POOL_SPECS["CUSTOM_RETRY-USDC"] = {
         "type": "uniswap_v3",
         "token0": "cbBTC",
@@ -204,7 +204,7 @@ async def test_t3_mcp_price_fetching_plus_rate_limiting(mcp_server_client, mock_
 # 5. Synthetic Depth + Custom Decimal Pool
 @pytest.mark.asyncio
 async def test_t3_synthetic_depth_plus_custom_decimal_pool() -> None:
-    from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
+    from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
     msg = {
         "type": "onchain_update",
         "block": 1000,

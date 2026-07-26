@@ -8,16 +8,16 @@ import numpy as np
 import polars as pl
 import pytest
 
-from crypcodile.analytics.indicators import (
+from crocodile.core.analytics.indicators import (
     calculate_bollinger_bands,
     calculate_ema,
     calculate_macd,
     calculate_rsi,
     calculate_sma,
 )
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000
 
@@ -183,7 +183,7 @@ async def _write_trade_bars(data_dir: pathlib.Path) -> None:
 
 
 async def test_client_get_indicators_sma(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_trade_bars(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -204,7 +204,7 @@ async def test_client_get_indicators_sma(tmp_path: pathlib.Path) -> None:
 async def test_client_get_indicators_all_and_empty(
     tmp_path: pathlib.Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_trade_bars(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)

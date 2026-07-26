@@ -41,13 +41,13 @@ import duckdb
 import polars as pl
 import pyarrow
 
-from crypcodile.client.client import CrypcodileClient
-from crypcodile.exchanges.deribit.normalize import normalize_message
-from crypcodile.resample.ohlcv import resample_ohlcv
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import Trade
-from crypcodile.store.catalog import Catalog
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.crypto.exchanges.deribit.normalize import normalize_message
+from crocodile.core.resample.ohlcv import resample_ohlcv
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Configuration (scale these down if a stage is slow; the actual N used is

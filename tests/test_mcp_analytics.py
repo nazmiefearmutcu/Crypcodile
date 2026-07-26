@@ -12,7 +12,7 @@ import polars as pl
 
 import pytest
 
-from crypcodile.mcp_server import (
+from crocodile.crypto.legacy.mcp_server import (
     TOOLS,
     _json_safe_records,
     handle_calculate_ofi,
@@ -740,7 +740,7 @@ def test_handle_get_chaos_score_zeros() -> None:
 
 
 def test_handle_get_chaos_score_matches_analytics() -> None:
-    from crypcodile.analytics.risk import calculate_chaos_score
+    from crocodile.crypto.analytics.risk import calculate_chaos_score
 
     vol, dev, imb, delay = 0.02, 0.001, -0.2, 2.0
     result = handle_get_chaos_score(vol, dev, imb, delay)
@@ -764,7 +764,7 @@ def test_handle_get_chaos_score_inf_input_json_safe_null() -> None:
     import json
     import math
 
-    from crypcodile.analytics.risk import calculate_chaos_score
+    from crocodile.crypto.analytics.risk import calculate_chaos_score
 
     pure = calculate_chaos_score(float("inf"), 0.0, 0.0, 0.0)
     assert math.isnan(pure)
@@ -805,7 +805,7 @@ def test_handle_get_peg_deviation_custom_target() -> None:
 
 
 def test_handle_get_peg_deviation_matches_analytics() -> None:
-    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
+    from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
 
     expected = peg_deviation_from_price(0.975, threshold=0.01, target=1.0)
     result = handle_get_peg_deviation(0.975, threshold=0.01, target=1.0)
@@ -860,7 +860,7 @@ def test_handle_get_lending_stress_zero_debt_json_safe_null() -> None:
     """Zero debt → pure analytics inf; MCP tool returns null for JSON-RPC safety."""
     import json
 
-    from crypcodile.analytics.lending_stress import lending_stress_test
+    from crocodile.crypto.analytics.lending_stress import lending_stress_test
 
     pure = lending_stress_test(5_000.0, 0.0, 0.8, 0.20)
     assert pure["current_health_factor"] == float("inf")
@@ -882,7 +882,7 @@ def test_handle_get_lending_stress_zero_debt_json_safe_null() -> None:
 
 
 def test_handle_get_lending_stress_matches_analytics() -> None:
-    from crypcodile.analytics.lending_stress import lending_stress_test
+    from crocodile.crypto.analytics.lending_stress import lending_stress_test
 
     kwargs = {
         "collateral_usd": 12_500.0,
@@ -961,7 +961,7 @@ def test_handle_detect_mev_sandwiches_not_list_raises() -> None:
 
 
 def test_handle_detect_mev_sandwiches_matches_analytics() -> None:
-    from crypcodile.analytics.mev_sandwich import detect_sandwiches
+    from crocodile.crypto.analytics.mev_sandwich import detect_sandwiches
 
     rows = handle_detect_mev_sandwiches(_MEV_SANDWICH_TRADES)
     expected = detect_sandwiches(pl.DataFrame(_MEV_SANDWICH_TRADES)).to_dicts()
@@ -1123,7 +1123,7 @@ def test_handle_label_transfers_aliases() -> None:
 
 
 def test_handle_label_transfers_matches_analytics() -> None:
-    from crypcodile.analytics.whale_transfers import label_transfer_addresses
+    from crocodile.crypto.analytics.whale_transfers import label_transfer_addresses
 
     watch = {_SMART_ADDR.lower(): "vitalik"}
     expected = label_transfer_addresses(_SMART_TRANSFERS, watch)
@@ -1166,7 +1166,7 @@ def test_handle_smart_money_summary_bad_watchlist_raises() -> None:
 
 
 def test_handle_smart_money_summary_matches_analytics() -> None:
-    from crypcodile.analytics.smart_money import summarize_smart_money
+    from crocodile.crypto.analytics.smart_money import summarize_smart_money
 
     watchlist = {_SMART_ADDR: "vitalik"}
     rows = handle_smart_money_summary(_SMART_TRANSFERS, watchlist)

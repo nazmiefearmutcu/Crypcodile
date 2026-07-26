@@ -6,17 +6,17 @@ import os
 import subprocess
 from typing import AsyncGenerator
 from web3 import AsyncHTTPProvider, AsyncWeb3
-from crypcodile.exchanges.base_onchain.connector import (
+from crocodile.crypto.exchanges.base_onchain.connector import (
     BaseOnchainTransport,
     BaseOnchainConnector,
     POOL_SPECS,
     TOKENS,
     FACTORIES
 )
-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade, Record
-from crypcodile.schema.enums import Side
-from crypcodile.sink.base import Sink
-from crypcodile.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade, Record
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.sink.base import Sink
+from crocodile.crypto.instruments.registry import InstrumentRegistry
 
 # A simple recording Sink for testing the pipeline
 class ListSink(Sink):

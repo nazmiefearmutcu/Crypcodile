@@ -6,16 +6,16 @@ import polars as pl
 from unittest.mock import MagicMock, AsyncMock
 from web3 import AsyncWeb3
 
-from crypcodile.exchanges.gmx_synthetix.position_tracker import PerpPositionTracker
-from crypcodile.analytics.oi_aggregator import aggregate_open_interest
-from crypcodile.analytics.basis import perp_basis, spot_future_basis, spot_perp_basis
-from crypcodile.analytics.funding_prediction import XGBoostFundingPredictor
-from crypcodile.analytics.risk import calculate_chaos_score
-from crypcodile.analytics.whale_transfers import WhaleTransferTracker
-from crypcodile.analytics.smart_money import SmartMoneyTracker
-from crypcodile.analytics.lending_stress import lending_stress_test
-from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
-from crypcodile.store.catalog import Catalog
+from crocodile.crypto.exchanges.gmx_synthetix.position_tracker import PerpPositionTracker
+from crocodile.crypto.analytics.oi_aggregator import aggregate_open_interest
+from crocodile.crypto.analytics.basis import perp_basis, spot_future_basis, spot_perp_basis
+from crocodile.crypto.analytics.funding_prediction import XGBoostFundingPredictor
+from crocodile.crypto.analytics.risk import calculate_chaos_score
+from crocodile.crypto.analytics.whale_transfers import WhaleTransferTracker
+from crocodile.crypto.analytics.smart_money import SmartMoneyTracker
+from crocodile.crypto.analytics.lending_stress import lending_stress_test
+from crocodile.crypto.analytics.gas_vol_correlation import gas_to_volatility_correlation
+from crocodile.core.store.catalog import Catalog
 
 
 # ---------------------------------------------------------------------------

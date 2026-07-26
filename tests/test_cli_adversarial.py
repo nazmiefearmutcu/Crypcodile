@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch
 from typer.testing import CliRunner
 import datetime
-from crypcodile.cli import app, prompt_time_range_helper, select_collect_params_interactively
+from crocodile.crypto.legacy.cli import app, prompt_time_range_helper, select_collect_params_interactively
 
 def test_timestamp_overflow_handling(tmp_path):
     """Test how the parser handles extremely large timestamps that exceed Python/C limit."""
@@ -12,7 +12,7 @@ def test_timestamp_overflow_handling(tmp_path):
     # If the user provides a timestamp like 999999999999999999999999999999 (which is digit-only)
     # it gets parsed as integer. The standard datetime module will fail with ValueError/OverflowError
     # when formatting or during partition pruning check.
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=True), \
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True), \
          patch("typer.prompt", side_effect=["999999999999999999999999999999", "999999999999999999999999999999"]):
         start_ts, end_ts = prompt_time_range_helper(tmp_path, "trade", ["deribit:BTC-PERPETUAL"])
         # Expecting the parser to return the default fallbacks when date formatting fails,

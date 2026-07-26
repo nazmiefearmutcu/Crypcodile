@@ -2,7 +2,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock
-from crypcodile.exchanges.base_onchain.smart_wallet import CoinbaseSmartWalletDetector
+from crocodile.crypto.exchanges.base_onchain.smart_wallet import CoinbaseSmartWalletDetector
 
 @pytest.mark.asyncio
 async def test_smart_wallet_detector_cache():

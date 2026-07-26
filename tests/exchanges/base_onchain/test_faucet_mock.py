@@ -1,7 +1,7 @@
 import asyncio
 import json
 import pytest
-from crypcodile.exchanges.base_onchain.faucet_mock import BaseSepoliaFaucetMockStream
+from crocodile.crypto.exchanges.base_onchain.faucet_mock import BaseSepoliaFaucetMockStream
 
 @pytest.mark.asyncio
 async def test_faucet_mock_stream_generation():

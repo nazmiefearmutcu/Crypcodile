@@ -1,5 +1,5 @@
 import polars as pl
-from crypcodile.analytics.mev_sandwich import MEVSandwichFilter
+from crocodile.crypto.analytics.mev_sandwich import MEVSandwichFilter
 
 def test_mev_sandwich_filter_positive():
     trades = [

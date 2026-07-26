@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from crypcodile.feeds.farcaster import FarcasterSocialClient
-from crypcodile.schema.records import FarcasterCorrelation
-from crypcodile.store.rows import to_row, from_row
-from crypcodile.store.parquet_sink import _channel_schema
+from crocodile.crypto.feeds.farcaster import FarcasterSocialClient
+from crocodile.core.schema.legacy.records import FarcasterCorrelation
+from crocodile.core.store.rows import to_row, from_row
+from crocodile.core.store.parquet_sink import _channel_schema
 
 @pytest.mark.asyncio
 async def test_farcaster_social_client_offline():

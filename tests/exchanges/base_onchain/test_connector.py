@@ -5,15 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
+from crocodile.core.sink.memory import MemorySink
 
 @pytest.fixture(autouse=True)
 def mock_load_ipc_sync():
-    with patch("crypcodile.exchanges.base_onchain.connector._load_ipc_sync", return_value=None):
+    with patch("crocodile.crypto.exchanges.base_onchain.connector._load_ipc_sync", return_value=None):
         yield
 
 class AwaitableValue:
@@ -79,8 +79,8 @@ async def test_uniswap_v3_standard_pool() -> None:
     mocked_tokens["cbBTC"] = "0x1111111111111111111111111111111111111111"
     mocked_tokens["USDC"] = "0x2222222222222222222222222222222222222222"
 
-    with patch.dict("crypcodile.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
-         patch.dict("crypcodile.exchanges.base_onchain.connector.TOKENS", mocked_tokens), \
+    with patch.dict("crocodile.crypto.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
+         patch.dict("crocodile.crypto.exchanges.base_onchain.connector.TOKENS", mocked_tokens), \
          patch("web3.AsyncWeb3") as mock_web3_class:
 
         mock_w3 = MagicMock()
@@ -164,8 +164,8 @@ async def test_uniswap_v3_standard_pool() -> None:
 @pytest.mark.asyncio
 async def test_uniswap_v3_flipped_pool() -> None:
     # cbBTC-USDC is flipped: USDC (0x8335...) < cbBTC (0xcbb7...).
-    with patch.dict("crypcodile.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
-         patch.dict("crypcodile.exchanges.base_onchain.connector.TOKENS", TEST_TOKENS), \
+    with patch.dict("crocodile.crypto.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
+         patch.dict("crocodile.crypto.exchanges.base_onchain.connector.TOKENS", TEST_TOKENS), \
          patch("web3.AsyncWeb3") as mock_web3_class:
 
         mock_w3 = MagicMock()
@@ -239,8 +239,8 @@ async def test_uniswap_v3_flipped_pool() -> None:
 @pytest.mark.asyncio
 async def test_aerodrome_v2_standard_pool() -> None:
     # AERO-USDC is standard: AERO (0x9401...) < USDbC (0xd9aA...).
-    with patch.dict("crypcodile.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
-         patch.dict("crypcodile.exchanges.base_onchain.connector.TOKENS", TEST_TOKENS), \
+    with patch.dict("crocodile.crypto.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
+         patch.dict("crocodile.crypto.exchanges.base_onchain.connector.TOKENS", TEST_TOKENS), \
          patch("web3.AsyncWeb3") as mock_web3_class:
 
         mock_w3 = MagicMock()
@@ -312,8 +312,8 @@ async def test_aerodrome_v2_standard_pool() -> None:
 @pytest.mark.asyncio
 async def test_aerodrome_v2_flipped_pool() -> None:
     # WELL-WETH is flipped: WETH (0x4200...) < WELL (0xA885...).
-    with patch.dict("crypcodile.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
-         patch.dict("crypcodile.exchanges.base_onchain.connector.TOKENS", TEST_TOKENS), \
+    with patch.dict("crocodile.crypto.exchanges.base_onchain.connector.POOL_SPECS", TEST_POOL_SPECS), \
+         patch.dict("crocodile.crypto.exchanges.base_onchain.connector.TOKENS", TEST_TOKENS), \
          patch("web3.AsyncWeb3") as mock_web3_class:
 
         mock_w3 = MagicMock()
@@ -540,7 +540,7 @@ async def test_log_pagination_chunking() -> None:
 
 
 def test_realistic_multilevel_orderbook_normalization() -> None:
-    from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
+    from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
     
     # 1. Uniswap V3 Pool with Liquidity (not flipped)
     v3_msg = {
@@ -639,7 +639,7 @@ def test_realistic_multilevel_orderbook_normalization() -> None:
 
 @pytest.mark.asyncio
 async def test_custom_pool_configuration_and_dynamic_listing() -> None:
-    from crypcodile.exchanges.base_onchain.connector import POOL_SPECS, TOKENS
+    from crocodile.crypto.exchanges.base_onchain.connector import POOL_SPECS, TOKENS
     
     custom_pools = {
         "TESTCUSTOM-WETH": {
@@ -683,7 +683,7 @@ async def test_custom_pool_configuration_and_dynamic_listing() -> None:
 
 
 def test_custom_pool_parameter_validation() -> None:
-    from crypcodile.exchanges.base_onchain.connector import _register_custom_pools
+    from crocodile.crypto.exchanges.base_onchain.connector import _register_custom_pools
     
     # 1. Unsupported type
     with pytest.raises(ValueError, match="Unsupported pool type"):
@@ -780,7 +780,7 @@ def test_custom_pool_parameter_validation() -> None:
 def test_ipc_dict_reload_on_modification(tmp_path) -> None:
     import time
 
-    from crypcodile.exchanges.base_onchain.connector import IPCDict
+    from crocodile.crypto.exchanges.base_onchain.connector import IPCDict
     
     ipc_file = tmp_path / "test_ipc.json"
     
@@ -793,7 +793,7 @@ def test_ipc_dict_reload_on_modification(tmp_path) -> None:
     with open(ipc_file, "w") as f:
         json.dump(initial_data, f)
         
-    ipc_file_patch = "crypcodile.exchanges.base_onchain.connector._get_ipc_file"
+    ipc_file_patch = "crocodile.crypto.exchanges.base_onchain.connector._get_ipc_file"
     with patch(ipc_file_patch, return_value=str(ipc_file)):
         my_dict = IPCDict("MY_DICT", {"default_key": "default_val"})
         
@@ -821,15 +821,15 @@ def test_ipc_dict_reload_on_modification(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_flipped_pool_tick_size_and_custom_tick_size() -> None:
-    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
-    from crypcodile.instruments.registry import InstrumentRegistry
-    from crypcodile.sink.memory import MemorySink
+    from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
+    from crocodile.crypto.instruments.registry import InstrumentRegistry
+    from crocodile.core.sink.memory import MemorySink
 
     sink = MemorySink()
     registry = InstrumentRegistry()
 
     # Clear POOL_SPECS to avoid conflicts in this test
-    with patch.dict("crypcodile.exchanges.base_onchain.connector.POOL_SPECS", {}, clear=True):
+    with patch.dict("crocodile.crypto.exchanges.base_onchain.connector.POOL_SPECS", {}, clear=True):
         custom_pools = {
             # Standard pool: token0_address (0x1111...) < token1_address (0x2222...)
             "STANDARD-POOL": {
@@ -889,7 +889,7 @@ async def test_flipped_pool_tick_size_and_custom_tick_size() -> None:
 
 @pytest.mark.asyncio
 async def test_dynamic_listing_and_polling_validation() -> None:
-    from crypcodile.exchanges.base_onchain.connector import POOL_SPECS, BaseOnchainTransport
+    from crocodile.crypto.exchanges.base_onchain.connector import POOL_SPECS, BaseOnchainTransport
     
     transport = BaseOnchainTransport("mock_rpc", ["cbBTC-USDC"], poll_interval=0.1)
     
@@ -928,7 +928,7 @@ async def test_dynamic_listing_and_polling_validation() -> None:
         async def mock_sleep(delay: Any) -> None:
             nonlocal first_run
             if first_run:
-                from crypcodile.exchanges.base_onchain.connector import _register_custom_pools
+                from crocodile.crypto.exchanges.base_onchain.connector import _register_custom_pools
                 _register_custom_pools({
                     "DYN-POOL": {
                         "type": "uniswap_v3",
@@ -958,9 +958,9 @@ async def test_dynamic_listing_and_polling_validation() -> None:
 async def test_aerodrome_real_fixture_normalization() -> None:
     import os
     import json
-    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
-    from crypcodile.sink.memory import MemorySink
-    from crypcodile.instruments.registry import InstrumentRegistry
+    from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
+    from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.instruments.registry import InstrumentRegistry
 
     fixture_path = os.path.join(
         os.path.dirname(__file__), "fixtures", "aerodrome_swap.json"

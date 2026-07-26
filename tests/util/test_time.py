@@ -1,4 +1,4 @@
-from crypcodile.util.time import ms_to_ns, now_ns, us_to_ns
+from crocodile.core.util.time import ms_to_ns, now_ns, us_to_ns
 
 
 def test_ms_to_ns():

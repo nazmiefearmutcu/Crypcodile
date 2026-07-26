@@ -10,7 +10,7 @@ from pydantic import ValidationError
 import polars as pl
 import pytest
 
-from crypcodile.api_server import app
+from crocodile.crypto.legacy.api_server import app
 
 
 class MockTestClient:
@@ -84,7 +84,7 @@ def test_simulate_price_impact_route_success() -> None:
     })
 
     with patch(
-        "crypcodile.analytics.slippage.estimate_slippage",
+        "crocodile.crypto.analytics.slippage.estimate_slippage",
         return_value=mock_df,
     ):
         resp = client.post(
@@ -150,7 +150,7 @@ def test_simulate_price_impact_invalid_amount() -> None:
 
 def test_simulate_price_impact_estimation_error() -> None:
     with patch(
-        "crypcodile.analytics.slippage.estimate_slippage",
+        "crocodile.crypto.analytics.slippage.estimate_slippage",
         side_effect=ValueError("No book snapshots found"),
     ):
         resp = client.post(
@@ -179,7 +179,7 @@ def test_simulate_price_impact_non_finite_floats_json_safe_null() -> None:
         }
     )
     with patch(
-        "crypcodile.analytics.slippage.estimate_slippage",
+        "crocodile.crypto.analytics.slippage.estimate_slippage",
         return_value=mock_df,
     ):
         resp = client.post(
@@ -207,7 +207,7 @@ def test_simulate_price_impact_non_finite_floats_json_safe_null() -> None:
 
 def test_catalog_list_channels_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_list_channels
+    from crocodile.crypto.legacy.api_server import catalog_list_channels
 
     result = asyncio.run(catalog_list_channels())
     assert result == []
@@ -216,8 +216,8 @@ def test_catalog_list_channels_empty_lake(tmp_path, monkeypatch) -> None:
 def test_catalog_list_channels_returns_channels() -> None:
     mock_client = MagicMock()
     mock_client.list_channels.return_value = ["book_snapshot", "trade"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_channels
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_channels
 
         result = asyncio.run(catalog_list_channels())
     assert result == ["book_snapshot", "trade"]
@@ -225,7 +225,7 @@ def test_catalog_list_channels_returns_channels() -> None:
 
 
 def test_catalog_list_dates_empty_channel() -> None:
-    from crypcodile.api_server import catalog_list_dates
+    from crocodile.crypto.legacy.api_server import catalog_list_dates
 
     assert asyncio.run(catalog_list_dates()) == []
     assert asyncio.run(catalog_list_dates(channel="")) == []
@@ -234,7 +234,7 @@ def test_catalog_list_dates_empty_channel() -> None:
 
 def test_catalog_list_dates_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_list_dates
+    from crocodile.crypto.legacy.api_server import catalog_list_dates
 
     result = asyncio.run(catalog_list_dates(channel="trade"))
     assert result == []
@@ -243,8 +243,8 @@ def test_catalog_list_dates_empty_lake(tmp_path, monkeypatch) -> None:
 def test_catalog_list_dates_returns_dates() -> None:
     mock_client = MagicMock()
     mock_client.list_dates.return_value = ["2023-11-14", "2023-11-15"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_dates
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_dates
 
         result = asyncio.run(catalog_list_dates(channel="trade"))
     assert result == ["2023-11-14", "2023-11-15"]
@@ -254,8 +254,8 @@ def test_catalog_list_dates_returns_dates() -> None:
 def test_catalog_list_dates_strips_channel() -> None:
     mock_client = MagicMock()
     mock_client.list_dates.return_value = ["2024-01-01"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_dates
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_dates
 
         result = asyncio.run(catalog_list_dates(channel="  book_snapshot  "))
     assert result == ["2024-01-01"]
@@ -264,7 +264,7 @@ def test_catalog_list_dates_strips_channel() -> None:
 
 def test_catalog_list_exchanges_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_list_exchanges
+    from crocodile.crypto.legacy.api_server import catalog_list_exchanges
 
     result = asyncio.run(catalog_list_exchanges())
     assert result == []
@@ -273,8 +273,8 @@ def test_catalog_list_exchanges_empty_lake(tmp_path, monkeypatch) -> None:
 def test_catalog_list_exchanges_returns_exchanges() -> None:
     mock_client = MagicMock()
     mock_client.list_exchanges_on_disk.return_value = ["binance", "deribit"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_exchanges
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_exchanges
 
         result = asyncio.run(catalog_list_exchanges())
     assert result == ["binance", "deribit"]
@@ -283,7 +283,7 @@ def test_catalog_list_exchanges_returns_exchanges() -> None:
 
 def test_catalog_summary_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_summary
+    from crocodile.crypto.legacy.api_server import catalog_summary
 
     result = asyncio.run(catalog_summary())
     assert result == {
@@ -302,8 +302,8 @@ def test_catalog_summary_returns_lists_and_counts() -> None:
         "exchange_count": 2,
         "channel_count": 2,
     }
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_summary
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_summary
 
         result = asyncio.run(catalog_summary())
     assert result == {
@@ -319,7 +319,7 @@ def test_catalog_summary_returns_lists_and_counts() -> None:
 
 def test_catalog_stats_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_stats
+    from crocodile.crypto.legacy.api_server import catalog_stats
 
     result = asyncio.run(catalog_stats())
     assert result == {"row_counts": {}, "channel_count": 0}
@@ -332,8 +332,8 @@ def test_catalog_stats_returns_row_counts() -> None:
         "row_counts": {"book_snapshot": 42, "trade": 7},
         "channel_count": 2,
     }
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_stats
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_stats
 
         result = asyncio.run(catalog_stats())
     assert result == {
@@ -352,8 +352,8 @@ def test_catalog_stats_query_failure_reports_minus_one() -> None:
         "row_counts": {"trade": 10, "funding": -1},
         "channel_count": 2,
     }
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_stats
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_stats
 
         result = asyncio.run(catalog_stats())
     assert result == {
@@ -370,8 +370,8 @@ def test_catalog_stats_escapes_double_quotes_in_channel() -> None:
         "row_counts": {'odd"chan': 1},
         "channel_count": 1,
     }
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_stats
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_stats
 
         result = asyncio.run(catalog_stats())
     assert result["row_counts"] == {'odd"chan': 1}
@@ -400,8 +400,8 @@ def test_catalog_search_symbols_empty() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_search_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_search_symbols
 
         result = asyncio.run(catalog_search_symbols(q="BTC", limit=20))
     assert result == []
@@ -423,8 +423,8 @@ def test_catalog_search_symbols_returns_rows() -> None:
             "row_count": [10],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_search_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_search_symbols
 
         result = asyncio.run(catalog_search_symbols(q="BTC", limit=5))
     assert len(result) == 1
@@ -448,8 +448,8 @@ def test_catalog_search_clamps_limit_minimum() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_search_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_search_symbols
 
         asyncio.run(catalog_search_symbols(q="x", limit=0))
     mock_client.search_symbols.assert_called_once_with(
@@ -471,8 +471,8 @@ def test_catalog_search_forwards_channel_and_exchange_filters() -> None:
             "row_count": [5],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_search_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_search_symbols
 
         result = asyncio.run(
             catalog_search_symbols(
@@ -503,8 +503,8 @@ def test_catalog_search_strips_empty_channel_exchange_filters() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_search_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_search_symbols
 
         asyncio.run(
             catalog_search_symbols(q="ETH", channel="  ", exchange="", limit=5)
@@ -528,8 +528,8 @@ def test_catalog_search_strips_padded_channel_exchange() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_search_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_search_symbols
 
         asyncio.run(
             catalog_search_symbols(
@@ -546,7 +546,7 @@ def test_catalog_search_strips_padded_channel_exchange() -> None:
 
 def test_catalog_list_symbols_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_list_symbols
+    from crocodile.crypto.legacy.api_server import catalog_list_symbols
 
     result = asyncio.run(catalog_list_symbols())
     assert result == []
@@ -556,8 +556,8 @@ def test_catalog_list_symbols_empty_dataframe() -> None:
     """REST delegates to client.list_symbols (shared REST/MCP/CLI contract)."""
     mock_client = MagicMock()
     mock_client.list_symbols.return_value = []
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_symbols
 
         result = asyncio.run(catalog_list_symbols())
     assert result == []
@@ -572,8 +572,8 @@ def test_catalog_list_symbols_returns_distinct_sorted() -> None:
         "binance:BTCUSDT",
         "deribit:BTC-PERPETUAL",
     ]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_symbols
 
         result = asyncio.run(catalog_list_symbols())
     assert result == ["binance:BTCUSDT", "deribit:BTC-PERPETUAL"]
@@ -584,8 +584,8 @@ def test_catalog_list_symbols_returns_distinct_sorted() -> None:
 def test_catalog_list_symbols_forwards_filters() -> None:
     mock_client = MagicMock()
     mock_client.list_symbols.return_value = ["deribit:BTC-PERPETUAL"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_symbols
 
         result = asyncio.run(
             catalog_list_symbols(channel="trade", exchange="deribit")
@@ -601,8 +601,8 @@ def test_catalog_list_symbols_strips_empty_filters() -> None:
     """Empty/whitespace filters forwarded; client.list_symbols strips."""
     mock_client = MagicMock()
     mock_client.list_symbols.return_value = []
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_symbols
 
         asyncio.run(catalog_list_symbols(channel="  ", exchange=""))
     mock_client.list_symbols.assert_called_once_with(channel="  ", exchange="")
@@ -613,8 +613,8 @@ def test_catalog_list_symbols_strips_padded_filters() -> None:
     """Padded filters forwarded to client.list_symbols (strip lives there)."""
     mock_client = MagicMock()
     mock_client.list_symbols.return_value = ["binance:ETHUSDT"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_list_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_list_symbols
 
         result = asyncio.run(
             catalog_list_symbols(
@@ -632,7 +632,7 @@ def test_catalog_list_symbols_strips_padded_filters() -> None:
 
 def test_catalog_inventory_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_inventory
+    from crocodile.crypto.legacy.api_server import catalog_inventory
 
     result = asyncio.run(catalog_inventory())
     assert result == []
@@ -650,8 +650,8 @@ def test_catalog_inventory_empty_dataframe() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_inventory
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_inventory
 
         result = asyncio.run(catalog_inventory())
     assert result == []
@@ -670,8 +670,8 @@ def test_catalog_inventory_returns_rows() -> None:
             "row_count": [10],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_inventory
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_inventory
 
         result = asyncio.run(
             catalog_inventory(channel="trade", exchange="deribit")
@@ -698,8 +698,8 @@ def test_catalog_inventory_strips_empty_filters() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_inventory
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_inventory
 
         asyncio.run(catalog_inventory(channel="  ", exchange=""))
     mock_client.inventory.assert_called_once_with(channel=None, exchange=None)
@@ -707,7 +707,7 @@ def test_catalog_inventory_strips_empty_filters() -> None:
 
 def test_get_lake_client_uses_env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import _get_lake_client
+    from crocodile.crypto.legacy.api_server import _get_lake_client
 
     client = _get_lake_client()
     assert client._catalog._data_dir == tmp_path
@@ -715,7 +715,7 @@ def test_get_lake_client_uses_env(tmp_path, monkeypatch) -> None:
 
 
 def test_catalog_scan_empty_params() -> None:
-    from crypcodile.api_server import catalog_scan
+    from crocodile.crypto.legacy.api_server import catalog_scan
 
     assert asyncio.run(catalog_scan()) == []
     assert asyncio.run(catalog_scan(channel="", symbol="x")) == []
@@ -725,7 +725,7 @@ def test_catalog_scan_empty_params() -> None:
 
 def test_catalog_scan_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import catalog_scan
+    from crocodile.crypto.legacy.api_server import catalog_scan
 
     result = asyncio.run(
         catalog_scan(
@@ -747,8 +747,8 @@ def test_catalog_scan_returns_rows() -> None:
             "price": [1.0, 2.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_scan
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_scan
 
         result = asyncio.run(
             catalog_scan(
@@ -775,8 +775,8 @@ def test_catalog_scan_applies_limit() -> None:
             "price": [10.0, 20.0, 30.0, 40.0, 50.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_scan
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_scan
 
         result = asyncio.run(
             catalog_scan(
@@ -797,8 +797,8 @@ def test_catalog_scan_clamps_limit_max() -> None:
     mock_client.scan.return_value = pl.DataFrame(
         {"local_ts": list(range(20)), "price": [1.0] * 20}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _CATALOG_SCAN_MAX_LIMIT, catalog_scan
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _CATALOG_SCAN_MAX_LIMIT, catalog_scan
 
         result = asyncio.run(
             catalog_scan(
@@ -819,8 +819,8 @@ def test_catalog_scan_clamps_limit_minimum() -> None:
     mock_client.scan.return_value = pl.DataFrame(
         {"local_ts": [1, 2, 3], "price": [1.0, 2.0, 3.0]}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_scan
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_scan
 
         result = asyncio.run(
             catalog_scan(
@@ -838,8 +838,8 @@ def test_catalog_scan_clamps_limit_minimum() -> None:
 def test_catalog_scan_empty_dataframe_from_client() -> None:
     mock_client = MagicMock()
     mock_client.scan.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import catalog_scan
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import catalog_scan
 
         result = asyncio.run(
             catalog_scan(channel="trade", symbol="x:Y", start=0, end=1)
@@ -853,7 +853,7 @@ def test_catalog_scan_empty_dataframe_from_client() -> None:
 
 
 def test_is_mutating_sql_detects_keywords() -> None:
-    from crypcodile.api_server import _MUTATING_SQL_KEYWORDS, _is_mutating_sql
+    from crocodile.crypto.legacy.api_server import _MUTATING_SQL_KEYWORDS, _is_mutating_sql
 
     for kw in _MUTATING_SQL_KEYWORDS:
         assert _is_mutating_sql(f"{kw} INTO trade VALUES (1)") is True
@@ -868,7 +868,7 @@ def test_is_mutating_sql_detects_keywords() -> None:
 
 
 def test_is_single_select_and_wrap() -> None:
-    from crypcodile.api_server import _is_single_select, _wrap_select_limit
+    from crocodile.crypto.legacy.api_server import _is_single_select, _wrap_select_limit
 
     assert _is_single_select("SELECT * FROM trade") is True
     assert _is_single_select("  select 1 as x;  ") is True
@@ -892,8 +892,8 @@ def test_query_lake_returns_rows() -> None:
             "n": [42],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
 
         result = asyncio.run(
             query_lake(QueryPayload(sql="SELECT symbol, count(*) AS n FROM trade"))
@@ -910,8 +910,8 @@ def test_query_lake_returns_rows() -> None:
 def test_query_lake_empty_result() -> None:
     mock_client = MagicMock()
     mock_client.query.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
         result = asyncio.run(query_lake(QueryPayload(sql="SELECT 1 WHERE false")))
     assert result == []
@@ -919,7 +919,7 @@ def test_query_lake_empty_result() -> None:
 
 def test_query_lake_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import QueryPayload, query_lake
+    from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
     # Empty lake: unknown relation should surface as 400 SQL failure, or
     # a trivial select that returns empty after a real client may raise.
@@ -931,7 +931,7 @@ def test_query_lake_empty_lake(tmp_path, monkeypatch) -> None:
 
 
 def test_query_lake_rejects_mutating_sql() -> None:
-    from crypcodile.api_server import QueryPayload, query_lake
+    from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
     for sql in (
         "INSERT INTO trade VALUES (1)",
@@ -961,7 +961,7 @@ def test_query_lake_rejects_mutating_sql() -> None:
 
 
 def test_query_lake_rejects_empty_sql() -> None:
-    from crypcodile.api_server import QueryPayload, query_lake
+    from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(query_lake(QueryPayload(sql="   ")))
@@ -978,8 +978,8 @@ def test_query_lake_applies_limit() -> None:
             "price": [10.0, 20.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
         result = asyncio.run(
             query_lake(QueryPayload(sql="SELECT * FROM trade", limit=2))
@@ -1004,8 +1004,8 @@ def test_query_lake_wrap_fallback_uses_head() -> None:
             }
         ),
     ]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
         result = asyncio.run(
             query_lake(QueryPayload(sql="SELECT * FROM trade", limit=2))
@@ -1025,8 +1025,8 @@ def test_query_lake_non_select_uses_head_not_wrap() -> None:
     mock_client.query.return_value = pl.DataFrame(
         {"local_ts": [1, 2, 3], "price": [1.0, 2.0, 3.0]}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
         result = asyncio.run(
             query_lake(QueryPayload(sql="EXPLAIN SELECT * FROM trade", limit=2))
@@ -1042,8 +1042,8 @@ def test_query_lake_clamps_limit_max() -> None:
     mock_client.query.return_value = pl.DataFrame(
         {"local_ts": list(range(n)), "price": [1.0] * n}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
 
         result = asyncio.run(
             query_lake(
@@ -1065,8 +1065,8 @@ def test_query_lake_clamps_limit_minimum() -> None:
     mock_client.query.return_value = pl.DataFrame(
         {"local_ts": [1], "price": [1.0]}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
         result = asyncio.run(
             query_lake(QueryPayload(sql="SELECT * FROM trade", limit=0))
@@ -1083,8 +1083,8 @@ def test_query_lake_default_limit_is_max() -> None:
     mock_client.query.return_value = pl.DataFrame(
         {"local_ts": list(range(5)), "price": [1.0] * 5}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, _QUERY_MAX_LIMIT, query_lake
 
         result = asyncio.run(query_lake(QueryPayload(sql="SELECT * FROM trade")))
     assert len(result) == 5
@@ -1096,8 +1096,8 @@ def test_query_lake_default_limit_is_max() -> None:
 def test_query_lake_sql_error() -> None:
     mock_client = MagicMock()
     mock_client.query.side_effect = RuntimeError("syntax error at or near X")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import QueryPayload, query_lake
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import QueryPayload, query_lake
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(query_lake(QueryPayload(sql="SELEC bogus")))
@@ -1111,7 +1111,7 @@ def test_query_lake_sql_error() -> None:
 def test_query_lake_route_via_mock_client() -> None:
     mock_client = MagicMock()
     mock_client.query.return_value = pl.DataFrame({"x": [1]})
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
         resp = client.post("/api/v1/query", json={"sql": "SELECT 1 AS x", "limit": 10})
     assert resp.status_code == 200
     assert resp.json() == [{"x": 1}]
@@ -1132,7 +1132,7 @@ def test_query_lake_route_rejects_mutating() -> None:
 def test_query_lake_route_sanitizes_sql_error() -> None:
     mock_client = MagicMock()
     mock_client.query.side_effect = RuntimeError("internal path /secret/data leaked")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
         resp = client.post(
             "/api/v1/query",
             json={"sql": "SELECT * FROM missing_table"},
@@ -1151,7 +1151,7 @@ def test_query_lake_route_sanitizes_sql_error() -> None:
 
 def test_open_interest_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import open_interest
+    from crocodile.crypto.legacy.api_server import open_interest
 
     result = asyncio.run(open_interest(symbols="BTC", start=0, end=10**18))
     assert result == []
@@ -1160,8 +1160,8 @@ def test_open_interest_empty_lake(tmp_path, monkeypatch) -> None:
 def test_open_interest_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.aggregate_open_interest.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         result = asyncio.run(open_interest(symbols="BTC", start=0, end=100))
     assert result == []
@@ -1178,8 +1178,8 @@ def test_open_interest_returns_rows() -> None:
             "total_oi": [1500.0, 1650.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         result = asyncio.run(
             open_interest(symbols="BTC", start=0, end=1000, limit=100)
@@ -1198,8 +1198,8 @@ def test_open_interest_all_symbols_when_empty_filter() -> None:
     mock_client.aggregate_open_interest.return_value = pl.DataFrame(
         {"local_ts": [1], "total_oi": [42.0]}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         result = asyncio.run(open_interest(symbols="", start=0, end=99))
     assert len(result) == 1
@@ -1210,8 +1210,8 @@ def test_open_interest_all_symbols_when_empty_filter() -> None:
 def test_open_interest_strips_whitespace_symbols() -> None:
     mock_client = MagicMock()
     mock_client.aggregate_open_interest.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         asyncio.run(open_interest(symbols="  ", start=1, end=2))
         asyncio.run(open_interest(symbols="  ETH  ", start=1, end=2))
@@ -1235,8 +1235,8 @@ def test_open_interest_applies_limit() -> None:
             "total_oi": [10.0, 20.0, 30.0, 40.0, 50.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         result = asyncio.run(
             open_interest(symbols="BTC", start=0, end=99, limit=2)
@@ -1251,8 +1251,8 @@ def test_open_interest_clamps_limit_max() -> None:
     mock_client.aggregate_open_interest.return_value = pl.DataFrame(
         {"local_ts": list(range(20)), "total_oi": [1.0] * 20}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _OPEN_INTEREST_MAX_LIMIT, open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _OPEN_INTEREST_MAX_LIMIT, open_interest
 
         result = asyncio.run(
             open_interest(
@@ -1271,8 +1271,8 @@ def test_open_interest_clamps_limit_minimum() -> None:
     mock_client.aggregate_open_interest.return_value = pl.DataFrame(
         {"local_ts": [1, 2, 3], "total_oi": [1.0, 2.0, 3.0]}
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         result = asyncio.run(
             open_interest(symbols="x", start=0, end=1, limit=0)
@@ -1286,8 +1286,8 @@ def test_open_interest_aggregation_error() -> None:
     mock_client.aggregate_open_interest.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(open_interest(symbols="BTC", start=0, end=1))
@@ -1312,8 +1312,8 @@ def test_open_interest_route_registered() -> None:
 
 def test_funding_apr_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         result = asyncio.run(funding_apr(symbol="", start=0, end=100))
         result_ws = asyncio.run(funding_apr(symbol="  ", start=0, end=100))
@@ -1324,7 +1324,7 @@ def test_funding_apr_empty_symbol_skips_client() -> None:
 
 def test_funding_apr_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import funding_apr
+    from crocodile.crypto.legacy.api_server import funding_apr
 
     result = asyncio.run(
         funding_apr(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18)
@@ -1335,8 +1335,8 @@ def test_funding_apr_empty_lake(tmp_path, monkeypatch) -> None:
 def test_funding_apr_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.funding_apr.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         result = asyncio.run(
             funding_apr(symbol="deribit:BTC-PERPETUAL", start=0, end=100)
@@ -1356,8 +1356,8 @@ def test_funding_apr_returns_rows() -> None:
             "cumulative_funding": [0.0001, 0.0003],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         result = asyncio.run(
             funding_apr(
@@ -1378,8 +1378,8 @@ def test_funding_apr_returns_rows() -> None:
 def test_funding_apr_strips_whitespace_symbol() -> None:
     mock_client = MagicMock()
     mock_client.funding_apr.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         asyncio.run(funding_apr(symbol="  binance:BTCUSDT  ", start=1, end=2))
     mock_client.funding_apr.assert_called_once_with("binance:BTCUSDT", 1, 2)
@@ -1396,8 +1396,8 @@ def test_funding_apr_applies_limit() -> None:
             "cumulative_funding": [0.0001 * i for i in range(1, 6)],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         result = asyncio.run(
             funding_apr(symbol="x", start=0, end=99, limit=2)
@@ -1418,8 +1418,8 @@ def test_funding_apr_clamps_limit_max() -> None:
             "cumulative_funding": [0.0001] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _FUNDING_APR_MAX_LIMIT, funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _FUNDING_APR_MAX_LIMIT, funding_apr
 
         result = asyncio.run(
             funding_apr(
@@ -1444,8 +1444,8 @@ def test_funding_apr_clamps_limit_minimum() -> None:
             "cumulative_funding": [0.0001, 0.0003, 0.0006],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         result = asyncio.run(funding_apr(symbol="x", start=0, end=1, limit=0))
     assert len(result) == 1
@@ -1455,8 +1455,8 @@ def test_funding_apr_clamps_limit_minimum() -> None:
 def test_funding_apr_query_error() -> None:
     mock_client = MagicMock()
     mock_client.funding_apr.side_effect = RuntimeError("internal path /secret/lake")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(funding_apr(symbol="deribit:BTC-PERPETUAL", start=0, end=1))
@@ -1481,8 +1481,8 @@ def test_funding_apr_route_registered() -> None:
 
 def test_basis_missing_params_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         assert asyncio.run(basis(spot="", perp="deribit:BTC-PERPETUAL")) == []
         assert asyncio.run(basis(spot="deribit:BTC-SPOT", perp="")) == []
@@ -1493,7 +1493,7 @@ def test_basis_missing_params_skips_client() -> None:
 
 def test_basis_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import basis
+    from crocodile.crypto.legacy.api_server import basis
 
     result = asyncio.run(
         basis(
@@ -1509,8 +1509,8 @@ def test_basis_empty_lake(tmp_path, monkeypatch) -> None:
 def test_basis_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.spot_perp_basis.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         result = asyncio.run(
             basis(
@@ -1537,8 +1537,8 @@ def test_basis_returns_rows() -> None:
             "basis_pct": [0.002, 0.001996],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         result = asyncio.run(
             basis(
@@ -1563,8 +1563,8 @@ def test_basis_returns_rows() -> None:
 def test_basis_strips_whitespace_symbols() -> None:
     mock_client = MagicMock()
     mock_client.spot_perp_basis.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         asyncio.run(
             basis(
@@ -1590,8 +1590,8 @@ def test_basis_applies_limit() -> None:
             "basis_pct": [0.01] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         result = asyncio.run(
             basis(spot="s", perp="p", start=0, end=99, limit=2)
@@ -1612,8 +1612,8 @@ def test_basis_clamps_limit_max() -> None:
             "basis_pct": [0.01] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _BASIS_MAX_LIMIT, basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _BASIS_MAX_LIMIT, basis
 
         result = asyncio.run(
             basis(
@@ -1639,8 +1639,8 @@ def test_basis_clamps_limit_minimum() -> None:
             "basis_pct": [0.01, 0.01, 0.01],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         result = asyncio.run(basis(spot="s", perp="p", start=0, end=1, limit=0))
     assert len(result) == 1
@@ -1652,8 +1652,8 @@ def test_basis_query_error() -> None:
     mock_client.spot_perp_basis.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -1685,8 +1685,8 @@ def test_basis_route_registered() -> None:
 
 def test_perp_basis_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         assert asyncio.run(perp_basis(symbol="")) == []
         assert asyncio.run(perp_basis(symbol="  ")) == []
@@ -1695,7 +1695,7 @@ def test_perp_basis_empty_symbol_skips_client() -> None:
 
 def test_perp_basis_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import perp_basis
+    from crocodile.crypto.legacy.api_server import perp_basis
 
     result = asyncio.run(
         perp_basis(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18)
@@ -1706,8 +1706,8 @@ def test_perp_basis_empty_lake(tmp_path, monkeypatch) -> None:
 def test_perp_basis_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.perp_basis.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         result = asyncio.run(
             perp_basis(symbol="deribit:BTC-PERPETUAL", start=0, end=100)
@@ -1729,8 +1729,8 @@ def test_perp_basis_returns_rows() -> None:
             "basis_pct": [0.002, 0.001996],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         result = asyncio.run(
             perp_basis(
@@ -1754,8 +1754,8 @@ def test_perp_basis_returns_rows() -> None:
 def test_perp_basis_strips_whitespace_symbol() -> None:
     mock_client = MagicMock()
     mock_client.perp_basis.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         asyncio.run(
             perp_basis(symbol="  deribit:BTC-PERPETUAL  ", start=1, end=2)
@@ -1776,8 +1776,8 @@ def test_perp_basis_applies_limit() -> None:
             "basis_pct": [0.01] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         result = asyncio.run(
             perp_basis(symbol="p", start=0, end=99, limit=2)
@@ -1798,8 +1798,8 @@ def test_perp_basis_clamps_limit_max() -> None:
             "basis_pct": [0.01] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _PERP_BASIS_MAX_LIMIT, perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _PERP_BASIS_MAX_LIMIT, perp_basis
 
         result = asyncio.run(
             perp_basis(
@@ -1824,8 +1824,8 @@ def test_perp_basis_clamps_limit_minimum() -> None:
             "basis_pct": [0.01, 0.01, 0.01],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         result = asyncio.run(perp_basis(symbol="p", start=0, end=1, limit=0))
     assert len(result) == 1
@@ -1837,8 +1837,8 @@ def test_perp_basis_query_error() -> None:
     mock_client.perp_basis.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import perp_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import perp_basis
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -1869,8 +1869,8 @@ def test_perp_basis_route_registered() -> None:
 
 def test_spot_future_basis_missing_params_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         assert asyncio.run(spot_future_basis(future="", spot="deribit:BTC-SPOT")) == []
         assert asyncio.run(spot_future_basis(future="deribit:BTC-FUTURE", spot="")) == []
@@ -1881,7 +1881,7 @@ def test_spot_future_basis_missing_params_skips_client() -> None:
 
 def test_spot_future_basis_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import spot_future_basis
+    from crocodile.crypto.legacy.api_server import spot_future_basis
 
     result = asyncio.run(
         spot_future_basis(
@@ -1897,8 +1897,8 @@ def test_spot_future_basis_empty_lake(tmp_path, monkeypatch) -> None:
 def test_spot_future_basis_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.spot_future_basis.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         result = asyncio.run(
             spot_future_basis(
@@ -1925,8 +1925,8 @@ def test_spot_future_basis_returns_rows() -> None:
             "basis_pct": [0.002, 0.001996],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         result = asyncio.run(
             spot_future_basis(
@@ -1951,8 +1951,8 @@ def test_spot_future_basis_returns_rows() -> None:
 def test_spot_future_basis_strips_whitespace_symbols() -> None:
     mock_client = MagicMock()
     mock_client.spot_future_basis.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         asyncio.run(
             spot_future_basis(
@@ -1978,8 +1978,8 @@ def test_spot_future_basis_applies_limit() -> None:
             "basis_pct": [0.01] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         result = asyncio.run(
             spot_future_basis(future="f", spot="s", start=0, end=99, limit=2)
@@ -2000,8 +2000,8 @@ def test_spot_future_basis_clamps_limit_max() -> None:
             "basis_pct": [0.01] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import (
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import (
             _SPOT_FUTURE_BASIS_MAX_LIMIT,
             spot_future_basis,
         )
@@ -2030,8 +2030,8 @@ def test_spot_future_basis_clamps_limit_minimum() -> None:
             "basis_pct": [0.01, 0.01, 0.01],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         result = asyncio.run(
             spot_future_basis(future="f", spot="s", start=0, end=1, limit=0)
@@ -2045,8 +2045,8 @@ def test_spot_future_basis_query_error() -> None:
     mock_client.spot_future_basis.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import spot_future_basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import spot_future_basis
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2078,8 +2078,8 @@ def test_spot_future_basis_route_registered() -> None:
 
 def test_indicators_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         result = asyncio.run(indicators(symbol="", start=0, end=100))
         result_ws = asyncio.run(indicators(symbol="  ", start=0, end=100))
@@ -2090,7 +2090,7 @@ def test_indicators_empty_symbol_skips_client() -> None:
 
 def test_indicators_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import indicators
+    from crocodile.crypto.legacy.api_server import indicators
 
     result = asyncio.run(
         indicators(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18)
@@ -2101,8 +2101,8 @@ def test_indicators_empty_lake(tmp_path, monkeypatch) -> None:
 def test_indicators_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.get_indicators.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         result = asyncio.run(
             indicators(symbol="deribit:BTC-PERPETUAL", start=0, end=100)
@@ -2131,8 +2131,8 @@ def test_indicators_returns_rows() -> None:
             "sma": [100.5, 101.5],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         result = asyncio.run(
             indicators(
@@ -2162,8 +2162,8 @@ def test_indicators_returns_rows() -> None:
 def test_indicators_strips_whitespace_symbol() -> None:
     mock_client = MagicMock()
     mock_client.get_indicators.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         asyncio.run(
             indicators(
@@ -2188,8 +2188,8 @@ def test_indicators_strips_whitespace_symbol() -> None:
 def test_indicators_empty_indicator_means_all() -> None:
     mock_client = MagicMock()
     mock_client.get_indicators.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         asyncio.run(
             indicators(symbol="x", start=0, end=1, indicator="", interval="")
@@ -2213,8 +2213,8 @@ def test_indicators_applies_limit() -> None:
             "sma": [100.0] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         result = asyncio.run(
             indicators(symbol="x", start=0, end=99, limit=2)
@@ -2233,8 +2233,8 @@ def test_indicators_clamps_limit_max() -> None:
             "sma": [100.0] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _INDICATORS_MAX_LIMIT, indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _INDICATORS_MAX_LIMIT, indicators
 
         result = asyncio.run(
             indicators(
@@ -2257,8 +2257,8 @@ def test_indicators_clamps_limit_minimum() -> None:
             "sma": [100.0, 100.5, 101.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         result = asyncio.run(indicators(symbol="x", start=0, end=1, limit=0))
     assert len(result) == 1
@@ -2268,8 +2268,8 @@ def test_indicators_clamps_limit_minimum() -> None:
 def test_indicators_clamps_period_minimum() -> None:
     mock_client = MagicMock()
     mock_client.get_indicators.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         asyncio.run(indicators(symbol="x", start=0, end=1, period=0))
     mock_client.get_indicators.assert_called_once_with(
@@ -2287,8 +2287,8 @@ def test_indicators_unknown_indicator_400() -> None:
     mock_client.get_indicators.side_effect = ValueError(
         "Unknown indicator 'nope'"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2308,8 +2308,8 @@ def test_indicators_query_error() -> None:
     mock_client.get_indicators.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2336,8 +2336,8 @@ def test_indicators_route_registered() -> None:
 
 def test_ofi_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         result = asyncio.run(ofi(symbol="", start=0, end=100))
         result_ws = asyncio.run(ofi(symbol="  ", start=0, end=100))
@@ -2348,7 +2348,7 @@ def test_ofi_empty_symbol_skips_client() -> None:
 
 def test_ofi_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import ofi
+    from crocodile.crypto.legacy.api_server import ofi
 
     result = asyncio.run(
         ofi(symbol="deribit:BTC-PERPETUAL", start=0, end=10**18, interval="1m")
@@ -2359,8 +2359,8 @@ def test_ofi_empty_lake(tmp_path, monkeypatch) -> None:
 def test_ofi_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.calculate_ofi.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         result = asyncio.run(
             ofi(symbol="deribit:BTC-PERPETUAL", start=0, end=100, interval="1m")
@@ -2381,8 +2381,8 @@ def test_ofi_returns_rows() -> None:
             "ofi": [1.5, -0.5],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         result = asyncio.run(
             ofi(
@@ -2407,8 +2407,8 @@ def test_ofi_returns_rows() -> None:
 def test_ofi_strips_whitespace_symbol_and_interval() -> None:
     mock_client = MagicMock()
     mock_client.calculate_ofi.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         asyncio.run(
             ofi(
@@ -2426,8 +2426,8 @@ def test_ofi_strips_whitespace_symbol_and_interval() -> None:
 def test_ofi_default_interval_is_1m() -> None:
     mock_client = MagicMock()
     mock_client.calculate_ofi.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         asyncio.run(ofi(symbol="x", start=0, end=1, interval=""))
     mock_client.calculate_ofi.assert_called_once_with("x", 0, 1, "1m")
@@ -2443,8 +2443,8 @@ def test_ofi_applies_limit() -> None:
             "ofi": [0.1, 0.2, 0.3, 0.4, 0.5],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         result = asyncio.run(ofi(symbol="x", start=0, end=99, limit=2))
     assert len(result) == 2
@@ -2462,8 +2462,8 @@ def test_ofi_clamps_limit_max() -> None:
             "ofi": [0.1] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _OFI_MAX_LIMIT, ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _OFI_MAX_LIMIT, ofi
 
         result = asyncio.run(
             ofi(
@@ -2487,8 +2487,8 @@ def test_ofi_clamps_limit_minimum() -> None:
             "ofi": [0.1, 0.2, 0.3],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         result = asyncio.run(ofi(symbol="x", start=0, end=1, limit=0))
     assert len(result) == 1
@@ -2500,8 +2500,8 @@ def test_ofi_invalid_interval_400() -> None:
     mock_client.calculate_ofi.side_effect = ValueError(
         "Unknown interval unit 'x' in '1x'. Supported units are s, m, h, d."
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2521,8 +2521,8 @@ def test_ofi_query_error() -> None:
     mock_client.calculate_ofi.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2549,8 +2549,8 @@ def test_ofi_route_registered() -> None:
 
 def test_whale_alerts_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         result = asyncio.run(whale_alerts(symbol="", start=0, end=100, min_usd=1000.0))
         result_ws = asyncio.run(
@@ -2563,7 +2563,7 @@ def test_whale_alerts_empty_symbol_skips_client() -> None:
 
 def test_whale_alerts_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import whale_alerts
+    from crocodile.crypto.legacy.api_server import whale_alerts
 
     result = asyncio.run(
         whale_alerts(
@@ -2579,8 +2579,8 @@ def test_whale_alerts_empty_lake(tmp_path, monkeypatch) -> None:
 def test_whale_alerts_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.track_whale_alerts.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         result = asyncio.run(
             whale_alerts(
@@ -2608,8 +2608,8 @@ def test_whale_alerts_returns_rows() -> None:
             "side": ["buy", "sell"],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         result = asyncio.run(
             whale_alerts(
@@ -2633,8 +2633,8 @@ def test_whale_alerts_returns_rows() -> None:
 def test_whale_alerts_strips_whitespace_symbol() -> None:
     mock_client = MagicMock()
     mock_client.track_whale_alerts.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         asyncio.run(
             whale_alerts(
@@ -2661,8 +2661,8 @@ def test_whale_alerts_applies_limit() -> None:
             "side": ["buy"] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         result = asyncio.run(
             whale_alerts(symbol="x", start=0, end=99, min_usd=0.0, limit=2)
@@ -2684,8 +2684,8 @@ def test_whale_alerts_clamps_limit_max() -> None:
             "side": ["buy"] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _WHALE_ALERTS_MAX_LIMIT, whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _WHALE_ALERTS_MAX_LIMIT, whale_alerts
 
         result = asyncio.run(
             whale_alerts(
@@ -2712,8 +2712,8 @@ def test_whale_alerts_clamps_limit_minimum() -> None:
             "side": ["buy", "sell", "buy"],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         result = asyncio.run(
             whale_alerts(symbol="x", start=0, end=1, min_usd=0.0, limit=0)
@@ -2727,8 +2727,8 @@ def test_whale_alerts_negative_min_usd_400() -> None:
     mock_client.track_whale_alerts.side_effect = ValueError(
         "min_usd must be non-negative."
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2748,8 +2748,8 @@ def test_whale_alerts_query_error() -> None:
     mock_client.track_whale_alerts.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -2781,8 +2781,8 @@ def test_whale_alerts_route_registered() -> None:
 
 def test_slippage_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         result = asyncio.run(slippage(symbol="", side="buy", size=1.0))
         result_ws = asyncio.run(slippage(symbol="  ", side="buy", size=1.0))
@@ -2793,7 +2793,7 @@ def test_slippage_empty_symbol_skips_client() -> None:
 
 def test_slippage_empty_lake_no_book(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import slippage
+    from crocodile.crypto.legacy.api_server import slippage
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -2816,8 +2816,8 @@ def test_slippage_returns_row() -> None:
             "slippage_pct": [0.02],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         result = asyncio.run(
             slippage(symbol="deribit:BTC-PERPETUAL", side="buy", size=1.5)
@@ -2848,8 +2848,8 @@ def test_slippage_strips_whitespace_symbol_and_side() -> None:
             "slippage_pct": [0.5],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         asyncio.run(
             slippage(symbol="  binance:BTCUSDT  ", side="  sell  ", size=2.0)
@@ -2862,8 +2862,8 @@ def test_slippage_strips_whitespace_symbol_and_side() -> None:
 def test_slippage_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.estimate_slippage.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         result = asyncio.run(slippage(symbol="x", side="buy", size=1.0))
     assert result == []
@@ -2874,8 +2874,8 @@ def test_slippage_invalid_side_400() -> None:
     mock_client.estimate_slippage.side_effect = ValueError(
         "Invalid side 'hold'. Must be 'buy' or 'sell'."
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(slippage(symbol="x", side="hold", size=1.0))
@@ -2888,8 +2888,8 @@ def test_slippage_invalid_size_400() -> None:
     mock_client.estimate_slippage.side_effect = ValueError(
         "Size must be greater than zero."
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(slippage(symbol="x", side="buy", size=0.0))
@@ -2905,8 +2905,8 @@ def test_slippage_exceeds_depth_400() -> None:
         "Requested size 100 exceeds total order book depth (5.000000) "
         "for symbol 'x' on the buy side."
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(slippage(symbol="x", side="buy", size=100.0))
@@ -2919,8 +2919,8 @@ def test_slippage_query_error() -> None:
     mock_client.estimate_slippage.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import slippage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import slippage
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(slippage(symbol="x", side="buy", size=1.0))
@@ -2945,8 +2945,8 @@ def test_slippage_route_registered() -> None:
 
 def test_iv_surface_empty_underlying_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         assert asyncio.run(iv_surface(underlying="", at=1)) == []
         assert asyncio.run(iv_surface(underlying="  ", at=1)) == []
@@ -2955,7 +2955,7 @@ def test_iv_surface_empty_underlying_skips_client() -> None:
 
 def test_iv_surface_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import iv_surface
+    from crocodile.crypto.legacy.api_server import iv_surface
 
     result = asyncio.run(
         iv_surface(underlying="BTC", at=1_700_000_000_000_000_000, rate=0.0)
@@ -2966,8 +2966,8 @@ def test_iv_surface_empty_lake(tmp_path, monkeypatch) -> None:
 def test_iv_surface_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.iv_surface.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         result = asyncio.run(
             iv_surface(underlying="BTC", at=1_700_000_000_000_000_000, rate=0.01)
@@ -2990,8 +2990,8 @@ def test_iv_surface_returns_rows() -> None:
             "source": ["mark", "mark"],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         result = asyncio.run(
             iv_surface(
@@ -3013,8 +3013,8 @@ def test_iv_surface_returns_rows() -> None:
 def test_iv_surface_strips_whitespace_underlying() -> None:
     mock_client = MagicMock()
     mock_client.iv_surface.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         asyncio.run(iv_surface(underlying="  BTC  ", at=42, rate=0.02))
     mock_client.iv_surface.assert_called_once_with("BTC", 42, rate=0.02)
@@ -3032,8 +3032,8 @@ def test_iv_surface_applies_limit() -> None:
             "source": ["mark"] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         result = asyncio.run(
             iv_surface(underlying="BTC", at=1, rate=0.0, limit=2)
@@ -3055,8 +3055,8 @@ def test_iv_surface_clamps_limit_max() -> None:
             "source": ["mark"] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _IV_SURFACE_MAX_LIMIT, iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _IV_SURFACE_MAX_LIMIT, iv_surface
 
         result = asyncio.run(
             iv_surface(
@@ -3082,8 +3082,8 @@ def test_iv_surface_clamps_limit_minimum() -> None:
             "source": ["mark", "mark", "mark"],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         result = asyncio.run(
             iv_surface(underlying="BTC", at=1, rate=0.0, limit=0)
@@ -3097,8 +3097,8 @@ def test_iv_surface_query_error() -> None:
     mock_client.iv_surface.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(iv_surface(underlying="BTC", at=1, rate=0.0))
@@ -3123,8 +3123,8 @@ def test_iv_surface_route_registered() -> None:
 
 def test_term_structure_empty_underlying_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         assert asyncio.run(term_structure(underlying="", at=1)) == []
         assert asyncio.run(term_structure(underlying="  ", at=1)) == []
@@ -3133,7 +3133,7 @@ def test_term_structure_empty_underlying_skips_client() -> None:
 
 def test_term_structure_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import term_structure
+    from crocodile.crypto.legacy.api_server import term_structure
 
     result = asyncio.run(
         term_structure(underlying="ETH", at=1_700_000_000_000_000_000, rate=0.0)
@@ -3144,8 +3144,8 @@ def test_term_structure_empty_lake(tmp_path, monkeypatch) -> None:
 def test_term_structure_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.term_structure.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         result = asyncio.run(
             term_structure(underlying="ETH", at=1_700_000_000_000_000_000, rate=0.01)
@@ -3166,8 +3166,8 @@ def test_term_structure_returns_rows() -> None:
             "atm_iv": [0.45, 0.50],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         result = asyncio.run(
             term_structure(
@@ -3189,8 +3189,8 @@ def test_term_structure_returns_rows() -> None:
 def test_term_structure_strips_whitespace_underlying() -> None:
     mock_client = MagicMock()
     mock_client.term_structure.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         asyncio.run(term_structure(underlying="  ETH  ", at=99, rate=0.03))
     mock_client.term_structure.assert_called_once_with("ETH", 99, rate=0.03)
@@ -3206,8 +3206,8 @@ def test_term_structure_applies_limit() -> None:
             "atm_iv": [0.4] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         result = asyncio.run(
             term_structure(underlying="ETH", at=1, rate=0.0, limit=2)
@@ -3227,8 +3227,8 @@ def test_term_structure_clamps_limit_max() -> None:
             "atm_iv": [0.4] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _TERM_STRUCTURE_MAX_LIMIT, term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _TERM_STRUCTURE_MAX_LIMIT, term_structure
 
         result = asyncio.run(
             term_structure(
@@ -3252,8 +3252,8 @@ def test_term_structure_clamps_limit_minimum() -> None:
             "atm_iv": [0.4, 0.41, 0.42],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         result = asyncio.run(
             term_structure(underlying="ETH", at=1, rate=0.0, limit=0)
@@ -3267,8 +3267,8 @@ def test_term_structure_query_error() -> None:
     mock_client.term_structure.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import term_structure
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import term_structure
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(term_structure(underlying="ETH", at=1, rate=0.0))
@@ -3293,8 +3293,8 @@ def test_term_structure_route_registered() -> None:
 
 def test_vol_skew_empty_underlying_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         assert asyncio.run(vol_skew(underlying="", expiry_ns=1, at=1)) == []
         assert asyncio.run(vol_skew(underlying="  ", expiry_ns=1, at=1)) == []
@@ -3303,7 +3303,7 @@ def test_vol_skew_empty_underlying_skips_client() -> None:
 
 def test_vol_skew_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import vol_skew
+    from crocodile.crypto.legacy.api_server import vol_skew
 
     result = asyncio.run(
         vol_skew(
@@ -3319,8 +3319,8 @@ def test_vol_skew_empty_lake(tmp_path, monkeypatch) -> None:
 def test_vol_skew_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.vol_skew.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         result = asyncio.run(
             vol_skew(
@@ -3347,8 +3347,8 @@ def test_vol_skew_returns_rows() -> None:
             "delta": [0.5, -0.45],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         result = asyncio.run(
             vol_skew(
@@ -3372,8 +3372,8 @@ def test_vol_skew_returns_rows() -> None:
 def test_vol_skew_strips_whitespace_underlying() -> None:
     mock_client = MagicMock()
     mock_client.vol_skew.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         asyncio.run(vol_skew(underlying="  BTC  ", expiry_ns=42, at=99, rate=0.02))
     mock_client.vol_skew.assert_called_once_with("BTC", 42, 99, rate=0.02)
@@ -3390,8 +3390,8 @@ def test_vol_skew_applies_limit() -> None:
             "delta": [0.5] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         result = asyncio.run(
             vol_skew(underlying="BTC", expiry_ns=1, at=1, rate=0.0, limit=2)
@@ -3412,8 +3412,8 @@ def test_vol_skew_clamps_limit_max() -> None:
             "delta": [0.5] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _VOL_SKEW_MAX_LIMIT, vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _VOL_SKEW_MAX_LIMIT, vol_skew
 
         result = asyncio.run(
             vol_skew(
@@ -3439,8 +3439,8 @@ def test_vol_skew_clamps_limit_minimum() -> None:
             "delta": [0.5, 0.5, 0.5],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         result = asyncio.run(
             vol_skew(underlying="BTC", expiry_ns=1, at=1, rate=0.0, limit=0)
@@ -3452,8 +3452,8 @@ def test_vol_skew_clamps_limit_minimum() -> None:
 def test_vol_skew_query_error() -> None:
     mock_client = MagicMock()
     mock_client.vol_skew.side_effect = RuntimeError("internal path /secret/lake")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import vol_skew
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import vol_skew
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(vol_skew(underlying="BTC", expiry_ns=1, at=1, rate=0.0))
@@ -3478,8 +3478,8 @@ def test_vol_skew_route_registered() -> None:
 
 def test_risk_reversal_empty_underlying_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         result = asyncio.run(risk_reversal(underlying="", expiry_ns=1, at=1))
         result_ws = asyncio.run(risk_reversal(underlying="  ", expiry_ns=1, at=1))
@@ -3494,7 +3494,7 @@ def test_risk_reversal_empty_underlying_skips_client() -> None:
 
 def test_risk_reversal_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import risk_reversal
+    from crocodile.crypto.legacy.api_server import risk_reversal
 
     result = asyncio.run(
         risk_reversal(
@@ -3514,8 +3514,8 @@ def test_risk_reversal_empty_lake(tmp_path, monkeypatch) -> None:
 def test_risk_reversal_empty_skew_skips_butterfly() -> None:
     mock_client = MagicMock()
     mock_client.vol_skew.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         result = asyncio.run(
             risk_reversal(
@@ -3548,8 +3548,8 @@ def test_risk_reversal_returns_metrics() -> None:
     )
     mock_client.vol_skew.return_value = skew
     mock_client.risk_reversal_butterfly.return_value = (0.05, -0.01)
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         result = asyncio.run(
             risk_reversal(
@@ -3581,8 +3581,8 @@ def test_risk_reversal_returns_metrics() -> None:
 def test_risk_reversal_strips_whitespace_underlying() -> None:
     mock_client = MagicMock()
     mock_client.vol_skew.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         result = asyncio.run(
             risk_reversal(
@@ -3610,8 +3610,8 @@ def test_risk_reversal_custom_target_delta() -> None:
     )
     mock_client.vol_skew.return_value = skew
     mock_client.risk_reversal_butterfly.return_value = (None, None)
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         result = asyncio.run(
             risk_reversal(
@@ -3633,8 +3633,8 @@ def test_risk_reversal_custom_target_delta() -> None:
 def test_risk_reversal_query_error() -> None:
     mock_client = MagicMock()
     mock_client.vol_skew.side_effect = RuntimeError("internal path /secret/lake")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -3659,8 +3659,8 @@ def test_risk_reversal_butterfly_error() -> None:
     mock_client.risk_reversal_butterfly.side_effect = RuntimeError(
         "internal path /secret/skew"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import risk_reversal
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import risk_reversal
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -3687,8 +3687,8 @@ def test_risk_reversal_route_registered() -> None:
 
 def test_liquidity_depth_empty_symbol_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         result = asyncio.run(liquidity_depth(symbol=""))
         result_ws = asyncio.run(liquidity_depth(symbol="  "))
@@ -3699,7 +3699,7 @@ def test_liquidity_depth_empty_symbol_skips_client() -> None:
 
 def test_liquidity_depth_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import liquidity_depth
+    from crocodile.crypto.legacy.api_server import liquidity_depth
 
     result = asyncio.run(liquidity_depth(symbol="base_onchain:DEGEN-WETH"))
     assert result == []
@@ -3708,8 +3708,8 @@ def test_liquidity_depth_empty_lake(tmp_path, monkeypatch) -> None:
 def test_liquidity_depth_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         result = asyncio.run(liquidity_depth(symbol="base_onchain:DEGEN-WETH"))
     assert result == []
@@ -3731,8 +3731,8 @@ def test_liquidity_depth_returns_rows() -> None:
             "ask_depth_5pct": [52.0, 53.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         result = asyncio.run(
             liquidity_depth(symbol="base_onchain:DEGEN-WETH", limit=100)
@@ -3750,8 +3750,8 @@ def test_liquidity_depth_returns_rows() -> None:
 def test_liquidity_depth_strips_whitespace_symbol() -> None:
     mock_client = MagicMock()
     mock_client.calculate_block_liquidity_depth.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         asyncio.run(liquidity_depth(symbol="  base_onchain:WETH-USDC  "))
     mock_client.calculate_block_liquidity_depth.assert_called_once_with(
@@ -3772,8 +3772,8 @@ def test_liquidity_depth_applies_limit() -> None:
             "ask_depth_5pct": [5.0] * 5,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         result = asyncio.run(liquidity_depth(symbol="x", limit=2))
     assert len(result) == 2
@@ -3794,8 +3794,8 @@ def test_liquidity_depth_clamps_limit_max() -> None:
             "ask_depth_5pct": [5.0] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import _LIQUIDITY_DEPTH_MAX_LIMIT, liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import _LIQUIDITY_DEPTH_MAX_LIMIT, liquidity_depth
 
         result = asyncio.run(
             liquidity_depth(
@@ -3820,8 +3820,8 @@ def test_liquidity_depth_clamps_limit_minimum() -> None:
             "ask_depth_5pct": [1.0, 2.0, 3.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         result = asyncio.run(liquidity_depth(symbol="x", limit=0))
     assert len(result) == 1
@@ -3833,8 +3833,8 @@ def test_liquidity_depth_query_error() -> None:
     mock_client.calculate_block_liquidity_depth.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import liquidity_depth
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import liquidity_depth
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(liquidity_depth(symbol="base_onchain:DEGEN-WETH"))
@@ -3859,7 +3859,7 @@ def test_liquidity_depth_route_registered() -> None:
 
 def test_sequencer_latency_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import sequencer_latency
+    from crocodile.crypto.legacy.api_server import sequencer_latency
 
     result = asyncio.run(sequencer_latency(exchange="base_onchain"))
     assert result == []
@@ -3868,8 +3868,8 @@ def test_sequencer_latency_empty_lake(tmp_path, monkeypatch) -> None:
 def test_sequencer_latency_empty_dataframe() -> None:
     mock_client = MagicMock()
     mock_client.calculate_sequencer_latency.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         result = asyncio.run(sequencer_latency(exchange="base_onchain"))
     assert result == []
@@ -3886,8 +3886,8 @@ def test_sequencer_latency_returns_rows() -> None:
             "std_seconds": [0.5, 0.05],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         result = asyncio.run(sequencer_latency(exchange="base_onchain", limit=100))
     assert len(result) == 2
@@ -3901,8 +3901,8 @@ def test_sequencer_latency_returns_rows() -> None:
 def test_sequencer_latency_default_exchange_is_base_onchain() -> None:
     mock_client = MagicMock()
     mock_client.calculate_sequencer_latency.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         asyncio.run(sequencer_latency(exchange=""))
         asyncio.run(sequencer_latency(exchange="  "))
@@ -3915,8 +3915,8 @@ def test_sequencer_latency_default_exchange_is_base_onchain() -> None:
 def test_sequencer_latency_strips_whitespace_exchange() -> None:
     mock_client = MagicMock()
     mock_client.calculate_sequencer_latency.return_value = pl.DataFrame()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         asyncio.run(sequencer_latency(exchange="  optimism  "))
     mock_client.calculate_sequencer_latency.assert_called_once_with("optimism")
@@ -3932,8 +3932,8 @@ def test_sequencer_latency_applies_limit() -> None:
             "std_seconds": [0.0, 0.0, 0.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         result = asyncio.run(sequencer_latency(exchange="base_onchain", limit=1))
     assert len(result) == 1
@@ -3950,8 +3950,8 @@ def test_sequencer_latency_clamps_limit_max() -> None:
             "std_seconds": [0.1] * 20,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import (
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import (
             _SEQUENCER_LATENCY_MAX_LIMIT,
             sequencer_latency,
         )
@@ -3976,8 +3976,8 @@ def test_sequencer_latency_clamps_limit_minimum() -> None:
             "std_seconds": [0.0, 0.0, 0.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         result = asyncio.run(sequencer_latency(exchange="base_onchain", limit=0))
     assert len(result) == 1
@@ -3989,8 +3989,8 @@ def test_sequencer_latency_query_error() -> None:
     mock_client.calculate_sequencer_latency.side_effect = RuntimeError(
         "internal path /secret/lake"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import sequencer_latency
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import sequencer_latency
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(sequencer_latency(exchange="base_onchain"))
@@ -4014,7 +4014,7 @@ def test_sequencer_latency_route_registered() -> None:
 
 
 def test_chaos_score_zeros() -> None:
-    from crypcodile.api_server import chaos_score
+    from crocodile.crypto.legacy.api_server import chaos_score
 
     result = asyncio.run(
         chaos_score(
@@ -4032,8 +4032,8 @@ def test_chaos_score_zeros() -> None:
 
 
 def test_chaos_score_matches_analytics() -> None:
-    from crypcodile.analytics.risk import calculate_chaos_score
-    from crypcodile.api_server import chaos_score
+    from crocodile.crypto.analytics.risk import calculate_chaos_score
+    from crocodile.crypto.legacy.api_server import chaos_score
 
     vol, dev, imb, delay = 0.05, 0.02, 0.5, 3.0
     expected = calculate_chaos_score(vol, dev, imb, delay)
@@ -4054,7 +4054,7 @@ def test_chaos_score_matches_analytics() -> None:
 
 
 def test_chaos_score_high_risk_bounded() -> None:
-    from crypcodile.api_server import chaos_score
+    from crocodile.crypto.legacy.api_server import chaos_score
 
     result = asyncio.run(
         chaos_score(
@@ -4068,7 +4068,7 @@ def test_chaos_score_high_risk_bounded() -> None:
 
 
 def test_chaos_score_defaults() -> None:
-    from crypcodile.api_server import chaos_score
+    from crocodile.crypto.legacy.api_server import chaos_score
 
     result = asyncio.run(chaos_score())
     assert result["chaos_score"] == 0.0
@@ -4089,8 +4089,8 @@ def test_chaos_score_inf_input_json_safe_null() -> None:
 
     from starlette.responses import JSONResponse
 
-    from crypcodile.analytics.risk import calculate_chaos_score
-    from crypcodile.api_server import chaos_score
+    from crocodile.crypto.analytics.risk import calculate_chaos_score
+    from crocodile.crypto.legacy.api_server import chaos_score
 
     pure = calculate_chaos_score(float("inf"), 0.0, 0.0, 0.0)
     assert math.isnan(pure)
@@ -4117,7 +4117,7 @@ def test_chaos_score_inf_input_json_safe_null() -> None:
 
 
 def test_peg_deviation_alert() -> None:
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     result = asyncio.run(peg_deviation(price=0.98, threshold=0.01))
     assert result["price"] == 0.98
@@ -4127,7 +4127,7 @@ def test_peg_deviation_alert() -> None:
 
 
 def test_peg_deviation_ok() -> None:
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     result = asyncio.run(peg_deviation(price=1.0))
     assert result["price"] == 1.0
@@ -4137,7 +4137,7 @@ def test_peg_deviation_ok() -> None:
 
 
 def test_peg_deviation_custom_target() -> None:
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     result = asyncio.run(peg_deviation(price=1.05, threshold=0.02, target=1.0))
     assert result["is_alert_triggered"] is True
@@ -4147,8 +4147,8 @@ def test_peg_deviation_custom_target() -> None:
 
 
 def test_peg_deviation_matches_analytics() -> None:
-    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     expected = peg_deviation_from_price(0.975, threshold=0.01, target=1.0)
     result = asyncio.run(peg_deviation(price=0.975, threshold=0.01, target=1.0))
@@ -4156,7 +4156,7 @@ def test_peg_deviation_matches_analytics() -> None:
 
 
 def test_peg_deviation_default_threshold() -> None:
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     result = asyncio.run(peg_deviation(price=0.995))
     assert result["threshold"] == 0.01
@@ -4176,8 +4176,8 @@ def test_peg_deviation_inf_price_json_safe_null() -> None:
     """Inf price yields Inf deviation in pure analytics; REST returns null."""
     from starlette.responses import JSONResponse
 
-    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     pure = peg_deviation_from_price(float("inf"))
     assert pure["price"] == float("inf")
@@ -4196,8 +4196,8 @@ def test_peg_deviation_nan_price_json_safe_null() -> None:
     """NaN price yields NaN deviation; REST returns null."""
     import math
 
-    from crypcodile.analytics.peg_deviation import peg_deviation_from_price
-    from crypcodile.api_server import peg_deviation
+    from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
+    from crocodile.crypto.legacy.api_server import peg_deviation
 
     pure = peg_deviation_from_price(float("nan"))
     assert math.isnan(pure["price"])
@@ -4213,7 +4213,7 @@ def test_peg_deviation_nan_price_json_safe_null() -> None:
 
 
 def test_lending_stress_healthy() -> None:
-    from crypcodile.api_server import lending_stress
+    from crocodile.crypto.legacy.api_server import lending_stress
 
     result = asyncio.run(
         lending_stress(
@@ -4234,7 +4234,7 @@ def test_lending_stress_healthy() -> None:
 
 
 def test_lending_stress_liquidation() -> None:
-    from crypcodile.api_server import lending_stress
+    from crocodile.crypto.legacy.api_server import lending_stress
 
     # Current HF = (10000 * 0.8) / 9000 ≈ 0.889 → liquidatable now
     result = asyncio.run(
@@ -4254,8 +4254,8 @@ def test_lending_stress_zero_debt_json_safe_null() -> None:
     """Zero debt yields inf in pure analytics; REST returns null (JSON-safe)."""
     from starlette.responses import JSONResponse
 
-    from crypcodile.analytics.lending_stress import lending_stress_test
-    from crypcodile.api_server import lending_stress
+    from crocodile.crypto.analytics.lending_stress import lending_stress_test
+    from crocodile.crypto.legacy.api_server import lending_stress
 
     pure = lending_stress_test(
         collateral_usd=5_000.0,
@@ -4287,8 +4287,8 @@ def test_lending_stress_zero_debt_json_safe_null() -> None:
 
 
 def test_lending_stress_matches_analytics() -> None:
-    from crypcodile.analytics.lending_stress import lending_stress_test
-    from crypcodile.api_server import lending_stress
+    from crocodile.crypto.analytics.lending_stress import lending_stress_test
+    from crocodile.crypto.legacy.api_server import lending_stress
 
     kwargs = {
         "collateral_usd": 12_500.0,
@@ -4310,7 +4310,7 @@ def test_lending_stress_matches_analytics() -> None:
 
 def test_lending_stress_percent_vs_fraction_haircut() -> None:
     """Haircut 20 and 0.20 must yield the same stress metrics (CLI parity)."""
-    from crypcodile.api_server import lending_stress
+    from crocodile.crypto.legacy.api_server import lending_stress
 
     a = asyncio.run(
         lending_stress(
@@ -4333,7 +4333,7 @@ def test_lending_stress_percent_vs_fraction_haircut() -> None:
 
 
 def test_lending_stress_defaults() -> None:
-    from crypcodile.api_server import lending_stress
+    from crocodile.crypto.legacy.api_server import lending_stress
 
     result = asyncio.run(lending_stress())
     assert result["collateral_usd"] == 0.0
@@ -4358,7 +4358,7 @@ def test_lending_stress_route_registered() -> None:
 
 def test_json_safe_float_maps_non_finite_to_none() -> None:
     """Helper used by pure REST float fields for JSON encoding."""
-    from crypcodile.api_server import _json_safe_float
+    from crocodile.crypto.legacy.api_server import _json_safe_float
 
     assert _json_safe_float(1.5) == 1.5
     assert _json_safe_float(0.0) == 0.0
@@ -4370,7 +4370,7 @@ def test_json_safe_float_maps_non_finite_to_none() -> None:
 
 def test_json_safe_records_sanitizes_float_fields() -> None:
     """Lake DF rows: NaN/±Inf floats → None; ints/str/None unchanged."""
-    from crypcodile.api_server import _json_safe_records
+    from crocodile.crypto.legacy.api_server import _json_safe_records
 
     rows = [
         {
@@ -4420,8 +4420,8 @@ def test_open_interest_non_finite_floats_json_safe_null() -> None:
             "total_oi": [float("-inf")],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import open_interest
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import open_interest
 
         result = asyncio.run(
             open_interest(symbols="BTC", start=0, end=1000, limit=100)
@@ -4445,8 +4445,8 @@ def test_funding_apr_non_finite_floats_json_safe_null() -> None:
             "cumulative_funding": [float("nan")],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import funding_apr
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import funding_apr
 
         result = asyncio.run(
             funding_apr(
@@ -4475,8 +4475,8 @@ def test_basis_non_finite_floats_json_safe_null() -> None:
             "basis_pct": [float("inf")],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import basis
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import basis
 
         result = asyncio.run(
             basis(
@@ -4504,8 +4504,8 @@ def test_ofi_non_finite_floats_json_safe_null() -> None:
             "ask_size": [1.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import ofi
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import ofi
 
         result = asyncio.run(
             ofi(
@@ -4535,8 +4535,8 @@ def test_iv_surface_non_finite_floats_json_safe_null() -> None:
             "mark_price": [0.01],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import iv_surface
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import iv_surface
 
         result = asyncio.run(
             iv_surface(underlying="BTC", at=1_700_000_000_000_000_000, limit=100)
@@ -4561,8 +4561,8 @@ def test_whale_alerts_non_finite_floats_json_safe_null() -> None:
             "side": ["buy"],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import whale_alerts
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import whale_alerts
 
         result = asyncio.run(
             whale_alerts(
@@ -4591,8 +4591,8 @@ def test_indicators_non_finite_floats_json_safe_null() -> None:
             "close": [42000.0],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import indicators
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import indicators
 
         result = asyncio.run(
             indicators(
@@ -4616,7 +4616,7 @@ def test_indicators_non_finite_floats_json_safe_null() -> None:
 
 
 def test_funding_predict_basic() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     result = asyncio.run(funding_predict(rates="0.1,0.2,0.3", window_size=5))
     assert result["n_history"] == 3
@@ -4630,7 +4630,7 @@ def test_funding_predict_basic() -> None:
 
 
 def test_funding_predict_custom_window() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     result = asyncio.run(funding_predict(rates="0.1,0.2,0.3", window_size=2))
     assert result["window_size"] == 2
@@ -4641,8 +4641,8 @@ def test_funding_predict_custom_window() -> None:
 
 
 def test_funding_predict_matches_analytics() -> None:
-    from crypcodile.analytics.funding_prediction import predict_next_funding
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.analytics.funding_prediction import predict_next_funding
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     rates = [0.01, 0.02, 0.03, 0.04]
     expected = predict_next_funding(rates, window_size=3)
@@ -4659,7 +4659,7 @@ def test_funding_predict_matches_analytics() -> None:
 
 
 def test_funding_predict_whitespace_and_trailing_commas() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     result = asyncio.run(funding_predict(rates=" 0.1 , 0.2 , 0.3 ,", window_size=3))
     assert result["n_history"] == 3
@@ -4668,7 +4668,7 @@ def test_funding_predict_whitespace_and_trailing_commas() -> None:
 
 
 def test_funding_predict_empty_rates_400() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     with pytest.raises(HTTPException) as ei:
         asyncio.run(funding_predict(rates=""))
@@ -4681,7 +4681,7 @@ def test_funding_predict_empty_rates_400() -> None:
 
 
 def test_funding_predict_invalid_token_400() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     with pytest.raises(HTTPException) as ei:
         asyncio.run(funding_predict(rates="0.1,abc,0.3"))
@@ -4690,7 +4690,7 @@ def test_funding_predict_invalid_token_400() -> None:
 
 
 def test_funding_predict_invalid_window_400() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     with pytest.raises(HTTPException) as ei:
         asyncio.run(funding_predict(rates="0.1,0.2", window_size=0))
@@ -4699,7 +4699,7 @@ def test_funding_predict_invalid_window_400() -> None:
 
 
 def test_funding_predict_default_window() -> None:
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     result = asyncio.run(funding_predict(rates="0.01,0.02,0.03"))
     assert result["window_size"] == 5
@@ -4718,8 +4718,8 @@ def test_funding_predict_inf_rates_json_safe_null() -> None:
     """Inf rates can yield Inf prediction; REST returns null (JSON-safe)."""
     from starlette.responses import JSONResponse
 
-    from crypcodile.analytics.funding_prediction import predict_next_funding
-    from crypcodile.api_server import funding_predict
+    from crocodile.crypto.analytics.funding_prediction import predict_next_funding
+    from crocodile.crypto.legacy.api_server import funding_predict
 
     pure = predict_next_funding([float("inf"), 0.1, 0.2], window_size=3)
     assert pure["predicted_funding_rate"] == float("inf") or pure[
@@ -4743,7 +4743,7 @@ def test_funding_predict_inf_rates_json_safe_null() -> None:
 
 
 def test_gas_vol_perfect_correlation() -> None:
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     payload = GasVolPayload(
         gas=[
@@ -4770,7 +4770,7 @@ def test_gas_vol_perfect_correlation() -> None:
 
 def test_gas_vol_column_aliases() -> None:
     """gas_price / volatility column names are accepted (analytics parity)."""
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     payload = GasVolPayload(
         gas=[{"local_ts": i, "gas_price": float(i * 10)} for i in range(1, 6)],
@@ -4782,7 +4782,7 @@ def test_gas_vol_column_aliases() -> None:
 
 
 def test_gas_vol_empty_series_null_corr() -> None:
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     result = asyncio.run(gas_vol(GasVolPayload(gas=[], vol=[])))
     assert result["pearson"] is None
@@ -4797,8 +4797,8 @@ def test_gas_vol_constant_series_null_corr_json_safe() -> None:
 
     from starlette.responses import JSONResponse
 
-    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.analytics.gas_vol_correlation import gas_to_volatility_correlation
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     gas_rows = [{"local_ts": i, "gas": 1.0} for i in range(1, 4)]
     vol_rows = [{"local_ts": i, "vol": float(i) * 0.1} for i in range(1, 4)]
@@ -4818,7 +4818,7 @@ def test_gas_vol_constant_series_null_corr_json_safe() -> None:
 
 
 def test_gas_vol_insufficient_data_null_corr() -> None:
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     payload = GasVolPayload(
         gas=[{"local_ts": 1, "gas": 10.0}],
@@ -4832,8 +4832,8 @@ def test_gas_vol_insufficient_data_null_corr() -> None:
 
 
 def test_gas_vol_matches_analytics() -> None:
-    from crypcodile.analytics.gas_vol_correlation import gas_to_volatility_correlation
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.analytics.gas_vol_correlation import gas_to_volatility_correlation
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     gas_rows = [
         {"local_ts": 100, "gas": 10.0},
@@ -4861,7 +4861,7 @@ def test_gas_vol_matches_analytics() -> None:
 
 
 def test_gas_vol_missing_local_ts_400() -> None:
-    from crypcodile.api_server import GasVolPayload, gas_vol
+    from crocodile.crypto.legacy.api_server import GasVolPayload, gas_vol
 
     payload = GasVolPayload(
         gas=[{"gas": 10.0}, {"local_ts": 2, "gas": 20.0}],
@@ -4948,7 +4948,7 @@ _MEV_SANDWICH_TRADES = [
 
 
 def test_mev_sandwich_detects_positive() -> None:
-    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+    from crocodile.crypto.legacy.api_server import MevSandwichPayload, mev_sandwich
 
     rows = asyncio.run(mev_sandwich(MevSandwichPayload(trades=_MEV_SANDWICH_TRADES)))
     assert len(rows) == 4
@@ -4956,13 +4956,13 @@ def test_mev_sandwich_detects_positive() -> None:
 
 
 def test_mev_sandwich_empty_trades() -> None:
-    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+    from crocodile.crypto.legacy.api_server import MevSandwichPayload, mev_sandwich
 
     assert asyncio.run(mev_sandwich(MevSandwichPayload(trades=[]))) == []
 
 
 def test_mev_sandwich_no_pattern_across_blocks() -> None:
-    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+    from crocodile.crypto.legacy.api_server import MevSandwichPayload, mev_sandwich
 
     trades = [
         {
@@ -4993,8 +4993,8 @@ def test_mev_sandwich_no_pattern_across_blocks() -> None:
 
 
 def test_mev_sandwich_matches_analytics() -> None:
-    from crypcodile.analytics.mev_sandwich import detect_sandwiches
-    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+    from crocodile.crypto.analytics.mev_sandwich import detect_sandwiches
+    from crocodile.crypto.legacy.api_server import MevSandwichPayload, mev_sandwich
 
     expected = detect_sandwiches(pl.DataFrame(_MEV_SANDWICH_TRADES)).to_dicts()
     rows = asyncio.run(mev_sandwich(MevSandwichPayload(trades=_MEV_SANDWICH_TRADES)))
@@ -5002,7 +5002,7 @@ def test_mev_sandwich_matches_analytics() -> None:
 
 
 def test_mev_sandwich_missing_cols_400() -> None:
-    from crypcodile.api_server import MevSandwichPayload, mev_sandwich
+    from crocodile.crypto.legacy.api_server import MevSandwichPayload, mev_sandwich
 
     with pytest.raises(HTTPException) as ei:
         asyncio.run(mev_sandwich(MevSandwichPayload(trades=[{"block": 1}])))
@@ -5055,7 +5055,7 @@ _SMART_TRANSFERS = [
 
 
 def test_smart_money_with_labels() -> None:
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     rows = asyncio.run(
         smart_money(
@@ -5074,7 +5074,7 @@ def test_smart_money_with_labels() -> None:
 
 
 def test_smart_money_list_watchlist() -> None:
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     rows = asyncio.run(
         smart_money(
@@ -5087,7 +5087,7 @@ def test_smart_money_list_watchlist() -> None:
 
 
 def test_smart_money_nested_watchlist() -> None:
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     rows = asyncio.run(
         smart_money(
@@ -5102,7 +5102,7 @@ def test_smart_money_nested_watchlist() -> None:
 
 
 def test_smart_money_empty_watchlist() -> None:
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     assert (
         asyncio.run(
@@ -5119,7 +5119,7 @@ def test_smart_money_empty_watchlist() -> None:
 
 
 def test_smart_money_empty_transfers() -> None:
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     assert (
         asyncio.run(
@@ -5135,8 +5135,8 @@ def test_smart_money_empty_transfers() -> None:
 
 
 def test_smart_money_matches_analytics() -> None:
-    from crypcodile.analytics.smart_money import summarize_smart_money
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.analytics.smart_money import summarize_smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     watchlist = {_SMART_ADDR: "vitalik"}
     expected = summarize_smart_money(_SMART_TRANSFERS, watchlist)
@@ -5187,7 +5187,7 @@ def test_smart_money_route_registered() -> None:
 
 def test_smart_money_non_finite_floats_json_safe_null() -> None:
     """Non-finite flow metrics (e.g. Inf usd_value) → JSON null on REST."""
-    from crypcodile.api_server import SmartMoneyPayload, smart_money
+    from crocodile.crypto.legacy.api_server import SmartMoneyPayload, smart_money
 
     # Single Inf outflow: net_flow_usd = -inf, total_volume_usd = +inf.
     transfers = [
@@ -5232,7 +5232,7 @@ def test_smart_money_non_finite_floats_json_safe_null() -> None:
 
 
 def test_label_transfers_basic() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     rows = asyncio.run(
         label_transfers(
@@ -5252,7 +5252,7 @@ def test_label_transfers_basic() -> None:
 
 
 def test_label_transfers_known_only() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     rows = asyncio.run(
         label_transfers(
@@ -5272,7 +5272,7 @@ def test_label_transfers_known_only() -> None:
 
 
 def test_label_transfers_min_usd() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     rows = asyncio.run(
         label_transfers(
@@ -5289,7 +5289,7 @@ def test_label_transfers_min_usd() -> None:
 
 
 def test_label_transfers_list_watchlist() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     rows = asyncio.run(
         label_transfers(
@@ -5305,7 +5305,7 @@ def test_label_transfers_list_watchlist() -> None:
 
 
 def test_label_transfers_nested_watchlist() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     rows = asyncio.run(
         label_transfers(
@@ -5319,7 +5319,7 @@ def test_label_transfers_nested_watchlist() -> None:
 
 
 def test_label_transfers_empty_transfers() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     assert (
         asyncio.run(
@@ -5335,7 +5335,7 @@ def test_label_transfers_empty_transfers() -> None:
 
 
 def test_label_transfers_empty_watchlist_still_labels() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     rows = asyncio.run(
         label_transfers(
@@ -5349,7 +5349,7 @@ def test_label_transfers_empty_watchlist_still_labels() -> None:
 
 
 def test_label_transfers_aliases() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     transfers = [
         {
@@ -5372,9 +5372,9 @@ def test_label_transfers_aliases() -> None:
 
 
 def test_label_transfers_matches_analytics() -> None:
-    from crypcodile.analytics.smart_money import normalize_watchlist
-    from crypcodile.analytics.whale_transfers import label_transfer_addresses
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.analytics.smart_money import normalize_watchlist
+    from crocodile.crypto.analytics.whale_transfers import label_transfer_addresses
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     watch = {_SMART_ADDR: "vitalik"}
     expected = label_transfer_addresses(
@@ -5389,7 +5389,7 @@ def test_label_transfers_matches_analytics() -> None:
 
 
 def test_label_transfers_negative_min_usd_400() -> None:
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     with pytest.raises(HTTPException) as ei:
         asyncio.run(
@@ -5447,7 +5447,7 @@ def test_label_transfers_route_registered() -> None:
 
 def test_label_transfers_non_finite_floats_json_safe_null() -> None:
     """Pass-through float fields with nan/inf → JSON null on REST."""
-    from crypcodile.api_server import LabelTransfersPayload, label_transfers
+    from crocodile.crypto.legacy.api_server import LabelTransfersPayload, label_transfers
 
     transfers = [
         {
@@ -5507,8 +5507,8 @@ def test_data_coverage_empty_symbol() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         assert asyncio.run(data_coverage()) == []
         assert asyncio.run(data_coverage(symbol="")) == []
@@ -5519,7 +5519,7 @@ def test_data_coverage_empty_symbol() -> None:
 
 def test_data_coverage_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import data_coverage
+    from crocodile.crypto.legacy.api_server import data_coverage
 
     result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
     assert result == []
@@ -5538,8 +5538,8 @@ def test_data_coverage_empty_dataframe() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
     assert result == []
@@ -5564,8 +5564,8 @@ def test_data_coverage_filters_by_symbol() -> None:
             "row_count": [5, 8],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
     assert len(result) == 2
@@ -5591,8 +5591,8 @@ def test_data_coverage_channel_filter() -> None:
             "row_count": [10],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         result = asyncio.run(
             data_coverage(symbol="deribit:BTC-PERPETUAL", channel="trade")
@@ -5618,8 +5618,8 @@ def test_data_coverage_exchange_filter() -> None:
             "row_count": [10],
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         result = asyncio.run(
             data_coverage(
@@ -5649,8 +5649,8 @@ def test_data_coverage_strips_empty_channel() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         asyncio.run(data_coverage(symbol="x:Y", channel="  ", exchange="  "))
     mock_client.data_coverage.assert_called_once_with(
@@ -5671,8 +5671,8 @@ def test_data_coverage_no_symbol_match() -> None:
             "row_count": pl.Int64,
         }
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import data_coverage
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import data_coverage
 
         result = asyncio.run(data_coverage(symbol="deribit:BTC-PERPETUAL"))
     assert result == []
@@ -5715,8 +5715,8 @@ def test_catalog_symbols_route_registered() -> None:
 
 def test_resolve_symbols_empty_input_skips_client() -> None:
     mock_client = MagicMock()
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         assert asyncio.run(resolve_symbols()) == []
         assert asyncio.run(resolve_symbols(symbols="")) == []
@@ -5731,8 +5731,8 @@ def test_resolve_symbols_success_list() -> None:
         "deribit:BTC-PERPETUAL",
         "deribit:ETH-PERPETUAL",
     ]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         result = asyncio.run(
             resolve_symbols(symbols="BTC-PERPETUAL,ETH-PERPETUAL", ambiguous="first")
@@ -5748,8 +5748,8 @@ def test_resolve_symbols_success_list() -> None:
 def test_resolve_symbols_strips_parts_and_channel() -> None:
     mock_client = MagicMock()
     mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         result = asyncio.run(
             resolve_symbols(
@@ -5769,8 +5769,8 @@ def test_resolve_symbols_strips_parts_and_channel() -> None:
 def test_resolve_symbols_default_ambiguous_error() -> None:
     mock_client = MagicMock()
     mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         asyncio.run(resolve_symbols(symbols="BTC-PERPETUAL"))
     mock_client.resolve_symbols.assert_called_once_with(
@@ -5787,8 +5787,8 @@ def test_resolve_symbols_ambiguous_error_structure() -> None:
         "Ambiguous symbol 'PERPETUAL': 2 matches: "
         "deribit:BTC-PERPETUAL (score=40), deribit:ETH-PERPETUAL (score=40)"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(resolve_symbols(symbols="PERPETUAL", ambiguous="error"))
@@ -5802,8 +5802,8 @@ def test_resolve_symbols_no_match_error_structure() -> None:
     mock_client.resolve_symbols.side_effect = ValueError(
         "No symbols matched 'ZZZZ-NO-MATCH'"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(resolve_symbols(symbols="ZZZZ-NO-MATCH"))
@@ -5816,8 +5816,8 @@ def test_resolve_symbols_invalid_ambiguous_mode() -> None:
     mock_client.resolve_symbols.side_effect = ValueError(
         "ambiguous must be 'error', 'first', or 'all'; got 'maybe'"
     )
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(resolve_symbols(symbols="BTC", ambiguous="maybe"))
@@ -5827,7 +5827,7 @@ def test_resolve_symbols_invalid_ambiguous_mode() -> None:
 
 def test_resolve_symbols_empty_lake(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile.api_server import resolve_symbols
+    from crocodile.crypto.legacy.api_server import resolve_symbols
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(resolve_symbols(symbols="BTC-PERPETUAL"))
@@ -5838,8 +5838,8 @@ def test_resolve_symbols_empty_lake(tmp_path, monkeypatch) -> None:
 def test_resolve_symbols_unexpected_error_is_500() -> None:
     mock_client = MagicMock()
     mock_client.resolve_symbols.side_effect = RuntimeError("disk failed")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import resolve_symbols
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import resolve_symbols
 
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(resolve_symbols(symbols="BTC"))
@@ -5864,8 +5864,8 @@ def test_resolve_symbols_route_registered() -> None:
 def test_health_empty_lake(tmp_path, monkeypatch) -> None:
     """Empty / missing lake still reports ok with lake_channels=0."""
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile import __version__
-    from crypcodile.api_server import health
+    from crocodile import __version__
+    from crocodile.crypto.legacy.api_server import health
 
     result = asyncio.run(health())
     assert result == {
@@ -5878,9 +5878,9 @@ def test_health_empty_lake(tmp_path, monkeypatch) -> None:
 def test_health_returns_channel_count() -> None:
     mock_client = MagicMock()
     mock_client.list_channels.return_value = ["book_snapshot", "trade"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile import __version__
-        from crypcodile.api_server import health
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile import __version__
+        from crocodile.crypto.legacy.api_server import health
 
         result = asyncio.run(health())
     assert result["ok"] is True
@@ -5893,8 +5893,8 @@ def test_status_alias_matches_health() -> None:
     """GET /api/v1/status is the same payload as /api/v1/health."""
     mock_client = MagicMock()
     mock_client.list_channels.return_value = ["trade"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile.api_server import health, status
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile.crypto.legacy.api_server import health, status
 
         h = asyncio.run(health())
         s = asyncio.run(status())
@@ -5906,9 +5906,9 @@ def test_status_alias_matches_health() -> None:
 def test_health_lake_failure_reports_not_ok() -> None:
     mock_client = MagicMock()
     mock_client.list_channels.side_effect = RuntimeError("disk failed")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile import __version__
-        from crypcodile.api_server import health
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile import __version__
+        from crocodile.crypto.legacy.api_server import health
 
         result = asyncio.run(health())
     assert result["ok"] is False
@@ -5937,9 +5937,9 @@ def test_ready_returns_200_when_ok() -> None:
 
     mock_client = MagicMock()
     mock_client.list_channels.return_value = ["trade"]
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile import __version__
-        from crypcodile.api_server import health, ready
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile import __version__
+        from crocodile.crypto.legacy.api_server import health, ready
 
         response = Response()
         result = asyncio.run(ready(response))
@@ -5958,9 +5958,9 @@ def test_ready_returns_503_when_not_ok() -> None:
 
     mock_client = MagicMock()
     mock_client.list_channels.side_effect = RuntimeError("disk failed")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_client):
-        from crypcodile import __version__
-        from crypcodile.api_server import health, ready
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_client):
+        from crocodile import __version__
+        from crocodile.crypto.legacy.api_server import health, ready
 
         response = Response()
         result = asyncio.run(ready(response))
@@ -5977,8 +5977,8 @@ def test_ready_empty_lake_is_ready(tmp_path, monkeypatch) -> None:
     from fastapi import Response
 
     monkeypatch.setenv("CRYPCODILE_DATA_DIR", str(tmp_path))
-    from crypcodile import __version__
-    from crypcodile.api_server import ready
+    from crocodile import __version__
+    from crocodile.crypto.legacy.api_server import ready
 
     response = Response()
     result = asyncio.run(ready(response))
@@ -6009,8 +6009,8 @@ def test_ready_separate_from_health_status_semantics() -> None:
 
     mock_fail = MagicMock()
     mock_fail.list_channels.side_effect = RuntimeError("disk failed")
-    with patch("crypcodile.api_server._get_lake_client", return_value=mock_fail):
-        from crypcodile.api_server import health, ready, status
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client", return_value=mock_fail):
+        from crocodile.crypto.legacy.api_server import health, ready, status
 
         ready_resp = Response()
         ready_body = asyncio.run(ready(ready_resp))
@@ -6029,13 +6029,13 @@ def test_ready_separate_from_health_status_semantics() -> None:
 
 def test_capabilities_shape_and_contents() -> None:
     """Returns {rest, mcp_tools_hint} with major free endpoints and tool names."""
-    from crypcodile.api_server import (
+    from crocodile.crypto.legacy.api_server import (
         _CAPABILITIES_MCP_TOOLS_HINT,
         _CAPABILITIES_REST,
         capabilities,
     )
 
-    with patch("crypcodile.api_server._get_lake_client") as mock_lake:
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client") as mock_lake:
         result = asyncio.run(capabilities())
         mock_lake.assert_not_called()
 
@@ -6108,7 +6108,7 @@ def test_capabilities_shape_and_contents() -> None:
 
 def test_capabilities_returns_defensive_copies() -> None:
     """Mutating the response lists must not corrupt subsequent calls."""
-    from crypcodile.api_server import capabilities
+    from crocodile.crypto.legacy.api_server import capabilities
 
     a = asyncio.run(capabilities())
     a["rest"].append("GET /api/v1/not-real")
@@ -6133,10 +6133,10 @@ def test_capabilities_route_registered() -> None:
 
 def test_version_returns_package_version_only() -> None:
     """Endpoint returns exactly {\"version\": __version__}; no lake touch."""
-    from crypcodile import __version__
-    from crypcodile.api_server import version
+    from crocodile import __version__
+    from crocodile.crypto.legacy.api_server import version
 
-    with patch("crypcodile.api_server._get_lake_client") as mock_lake:
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client") as mock_lake:
         result = asyncio.run(version())
         mock_lake.assert_not_called()
 
@@ -6161,10 +6161,10 @@ def test_version_route_registered() -> None:
 
 def test_exchanges_returns_factory_list() -> None:
     """Endpoint mirrors list_exchanges() without touching the lake."""
-    from crypcodile.api_server import exchanges
-    from crypcodile.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.api_server import exchanges
+    from crocodile.crypto.exchanges.factory import list_exchanges
 
-    with patch("crypcodile.api_server._get_lake_client") as mock_lake:
+    with patch("crocodile.crypto.legacy.api_server._get_lake_client") as mock_lake:
         result = asyncio.run(exchanges())
         mock_lake.assert_not_called()
 
@@ -6177,7 +6177,7 @@ def test_exchanges_returns_factory_list() -> None:
 
 def test_exchanges_returns_copy_semantics() -> None:
     """Mutating the response list must not corrupt subsequent calls."""
-    from crypcodile.api_server import exchanges
+    from crocodile.crypto.legacy.api_server import exchanges
 
     a = asyncio.run(exchanges())
     a.append("not-an-exchange")

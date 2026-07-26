@@ -7,12 +7,12 @@ from pathlib import Path
 import polars as pl
 from typer.testing import CliRunner
 
-from crypcodile.analytics.mev_sandwich import (
+from crocodile.crypto.analytics.mev_sandwich import (
     MEVSandwichFilter,
     detect_sandwiches,
     prepare_trade_frame,
 )
-from crypcodile.cli import app
+from crocodile.crypto.legacy.cli import app
 
 _RUNNER = CliRunner()
 

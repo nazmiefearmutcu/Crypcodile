@@ -5,14 +5,14 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from crypcodile.analytics.smart_money import (
+from crocodile.crypto.analytics.smart_money import (
     SmartMoneyTracker,
     load_watchlist,
     normalize_watchlist,
     summarize_smart_money,
     transfers_from_rows,
 )
-from crypcodile.cli import app
+from crocodile.crypto.legacy.cli import app
 
 _RUNNER = CliRunner()
 

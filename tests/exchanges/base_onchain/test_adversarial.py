@@ -4,7 +4,7 @@ import random
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
 
 class AwaitableValue:
     def __init__(self, val):

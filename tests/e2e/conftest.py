@@ -8,8 +8,11 @@ from typing import AsyncGenerator, Generator
 import aiohttp
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.resolve()))
-from mock_rpc_server import start_mock_server
+# Fully qualified, not a sys.path insert plus a bare name: the equity e2e tier
+# has its own, DIFFERENT mock_rpc_server.py. Under a bare import the first one
+# into sys.modules wins and the other tier silently runs against the wrong
+# mock — green, and testing something else.
+from tests.e2e.mock_rpc_server import start_mock_server
 
 def get_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -45,7 +48,7 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
         env["ALLOW_SIMULATION"] = "true"
         
         proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "crypcodile.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
+            [sys.executable, "-m", "uvicorn", "crocodile.crypto.legacy.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -96,7 +99,7 @@ def mcp_server_client(mock_rpc) -> Generator[subprocess.Popen, None, None]:
     
     # Run MCP server subprocess (over stdin/stdout) using the cli entrypoint
     proc = subprocess.Popen(
-        [sys.executable, "-m", "crypcodile.cli", "mcp"],
+        [sys.executable, "-m", "crocodile.crypto.legacy.cli", "mcp"],
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -129,7 +132,7 @@ async def clear_mock_rpc_state(mock_rpc):
 
     # Reset BaseOnchainTransport POOL_SPECS and TOKENS to defaults
     try:
-        from crypcodile.exchanges.base_onchain.connector import reset_to_defaults
+        from crocodile.crypto.exchanges.base_onchain.connector import reset_to_defaults
         reset_to_defaults()
     except Exception:
         pass

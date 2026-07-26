@@ -38,9 +38,9 @@ Primary production wiring:
 
 - ``BinanceConnector._handle_message`` (when ``book_delta`` /
   ``book_snapshot`` are subscribed) — see
-  ``crypcodile.exchanges.binance.connector``.
+  ``crocodile.crypto.exchanges.binance.connector``.
 - ``OKXConnector._handle_message`` for the ``books`` channel — see
-  ``crypcodile.exchanges.okx.connector`` (``OkxOrderBookSync`` + REST
+  ``crocodile.crypto.exchanges.okx.connector`` (``OkxOrderBookSync`` + REST
   ``GET /market/books``).
 
 Bybit is deferred: REST ``u`` aligns only with ``orderbook.1000`` while the
@@ -53,6 +53,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Literal
 
 from crocodile.core.ingest.book_sync import (
     BookSyncMachine,
@@ -60,7 +62,15 @@ from crocodile.core.ingest.book_sync import (
     filter_buffered_book_deltas,
     keep_delta_after_snapshot,
 )
-from crypcodile.schema.records import BookDelta, BookSnapshot
+from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
+
+__all__ = [
+    "BookRecord",
+    "BookResyncBridge",
+    "FetchSnapshotFn",
+    "TradeGapResult",
+    "TradeSeqGap",
+]
 
 log = logging.getLogger(__name__)
 
@@ -268,6 +278,30 @@ class BookResyncBridge:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class TradeGapResult:
+    """Everything :class:`TradeSeqGap` knows about one sequence number.
+
+    ``bool(result)`` is ``result.is_gap``, so this is a drop-in for the plain
+    ``bool`` that :meth:`TradeSeqGap.feed` returns at ``if gap.feed(seq):``
+    call sites.  The extra fields are what a REST backfill needs: the range
+    ``expected .. got`` is exactly the run of trades that went missing.
+
+    ``kind`` is ``"forward"`` for a skip, ``"backward"`` when the venue's
+    sequence went *down* (a reconnect or a venue-side counter reset rather than
+    lost data), and ``None`` when there was no gap.
+    """
+
+    is_gap: bool
+    expected: int | None = None
+    got: int | None = None
+    skipped: int | None = None
+    kind: Literal["forward", "backward"] | None = None
+
+    def __bool__(self) -> bool:
+        return self.is_gap
+
+
 class TradeSeqGap:
     """Detect gaps in a monotonic trade sequence (e.g. Deribit ``trade_seq``).
 
@@ -282,6 +316,10 @@ class TradeSeqGap:
             if gap.feed(trade.seq):
                 # gap detected — trigger backfill
                 await backfill(...)
+
+    :meth:`feed` answers only *whether* a gap happened.  Callers that need the
+    missing range in order to backfill it call :meth:`feed_result` instead and
+    read :class:`TradeGapResult`.
     """
 
     def __init__(self) -> None:
@@ -298,35 +336,61 @@ class TradeSeqGap:
         Returns
         -------
         ``True`` if a gap was detected (previous seq is not None and
-        ``trade_seq != last_seq + 1``), ``False`` otherwise.
+        ``trade_seq != last_seq + 1``), ``False`` otherwise.  Use
+        :meth:`feed_result` when the missing range matters.
+        """
+        return self.feed_result(trade_seq).is_gap
+
+    def feed_result(self, trade_seq: int) -> TradeGapResult:
+        """Process one trade sequence number and describe what happened.
+
+        Same state machine as :meth:`feed` — this is where it actually lives —
+        but the answer carries ``expected``/``got``/``skipped`` so the caller
+        can backfill the missing range rather than only know that one exists.
+
+        Note the backward branch: a sequence that goes *down* advances the
+        baseline to the new (lower) value, so the stream is treated as having
+        restarted there and the next sequential id is clean.  The equity fork
+        deliberately did the opposite — it kept the old, higher baseline, which
+        makes every subsequent trade after a venue counter reset report a gap.
         """
         if self._last_seq is None:
             # First trade: establish baseline, no gap.
             self._last_seq = trade_seq
-            return False
+            return TradeGapResult(is_gap=False, got=trade_seq)
 
-        is_gap = trade_seq != self._last_seq + 1
-        if is_gap:
-            skipped = trade_seq - self._last_seq - 1
-            if skipped < 0:
-                # Backward / reset: sequence went backwards (e.g. exchange
-                # restarted seq numbering after a reconnect).  Log clearly
-                # instead of reporting a negative "skipped" count.
-                log.warning(
-                    "TradeSeqGap: backward seq — expected seq=%d, got seq=%d "
-                    "(reset or reconnect without TradeSeqGap.reset() call?).",
-                    self._last_seq + 1,
-                    trade_seq,
-                )
-            else:
-                log.warning(
-                    "TradeSeqGap: gap detected — expected seq=%d, got seq=%d (skipped %d).",
-                    self._last_seq + 1,
-                    trade_seq,
-                    skipped,
-                )
+        expected = self._last_seq + 1
+        if trade_seq == expected:
+            self._last_seq = trade_seq
+            return TradeGapResult(is_gap=False, expected=expected, got=trade_seq)
+
+        skipped = trade_seq - self._last_seq - 1
+        kind: Literal["forward", "backward"] = "forward" if skipped >= 0 else "backward"
+        if kind == "backward":
+            # Backward / reset: sequence went backwards (e.g. exchange
+            # restarted seq numbering after a reconnect).  Log clearly
+            # instead of reporting a negative "skipped" count.
+            log.warning(
+                "TradeSeqGap: backward seq — expected seq=%d, got seq=%d "
+                "(reset or reconnect without TradeSeqGap.reset() call?).",
+                expected,
+                trade_seq,
+            )
+        else:
+            log.warning(
+                "TradeSeqGap: gap detected — expected seq=%d, got seq=%d (skipped %d).",
+                expected,
+                trade_seq,
+                skipped,
+            )
         self._last_seq = trade_seq
-        return is_gap
+        return TradeGapResult(
+            is_gap=True,
+            expected=expected,
+            got=trade_seq,
+            skipped=skipped,
+            kind=kind,
+        )
 
     def reset(self) -> None:
         """Reset the gap detector (e.g. after a reconnect)."""

@@ -1,8 +1,38 @@
 # Changelog
 
-All notable changes to the **Crypcodile** project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
+All notable changes to the **Crocodile** project — published as **Crypcodile** through 0.1.x — will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
 ---
+
+## [0.3.0] - 2026-07-27
+### Changed
+- **One package.** `crypcodile` and `stockodile` are now `crocodile`, laid out as `crocodile.core` (everything both asset classes share), `crocodile.crypto`, `crocodile.equity` and `crocodile.contrib.evasion`. Both old import paths keep working for one minor version through deprecation shims, and both old commands (`crypcodile`, `stockodile`) still run — now printing a deprecation notice naming their replacement. Everything old is removed in 0.4.
+- **Stockodile was a drifted fork of Crypcodile, not an independent sibling**, so this release is deduplication rather than integration. The proof was in its own source: a Binance depth-diff state machine in an equities library, a 1 630-line Base L2 connector for Uniswap and Aerodrome, five on-chain record types, and an MCP tool calling `funding_apr` — perpetual funding, in equities — against a method that did not exist.
+- **One partition key.** Crypto lakes wrote `exchange={venue}/`, equity lakes `provider={name}/`; both are now `source={name}/`. Readers accept all three for one minor version and warn once per legacy prefix; `crocodile migrate-lake` renames the directories without reading a single Parquet byte. Because the key lives in the directory name, migration cannot lose data — and because it cannot rewrite files, the sink now keeps each family's file schema frozen rather than widening one schema over both.
+- **One order book, one replay, one sink, one rate limiter.** The shared pipeline is promoted into `core` and reconciled where the two forks had diverged, with each decision settled on which side a test actually pinned rather than on which fork was older.
+
+### Fixed
+- **`replay` had no total order.** Records tying on `(local_ts, source_ts, seq)` came back in whatever order the streams were passed in. The tie-break is now origin and symbol, appended so nothing already decided can change. For an engine whose claim is determinism, this was a bug rather than a preference.
+- **`OrderBook` dispatched on Python class**, so an equity snapshot fell through to the delta branch and was dropped in silence. It now dispatches on the channel tag both families share, and raises on a record that is neither.
+- **`OrderBook.apply_batch` gap-checked only the first delta**, accepting a jump from 103 to 105 inside one batch and rebuilding a book that had silently lost 104. Every delta is checked now.
+- **Book levels were keyed on the raw float**, so `100.1` arriving as `100.10000000000001` opened a second level at the same price and a later removal at the clean value left the ghost behind. Prices are rounded to 8 decimals.
+- **A redelivered sequence is no longer treated as a gap** when the delta is byte-identical to the one already applied — venues replay their last message on reconnect, and a resync recovered nothing. Content differing under the same sequence number still raises.
+- **The sink discarded the whole payload of three channels** — `limit_order_fill`, `balance_correction` and `por_update` had no schema entry, so their parts held nothing but the common header. Unknown fields now raise instead of being dropped.
+- **A `finally` clause destroyed the buffer it was written to protect**: a row missing a partition column raised during grouping and raised the same error again from the `finally`, replacing the original exception and skipping the restore. One malformed row took the whole channel with it.
+- **`to_row` overwrote business dates with the partition date** — `ShortVolume.date` and `MacroSeries.date` are settlement days, not capture days. Any record field colliding with a computed partition column is moved aside first.
+- **`ms_to_ns` and `us_to_ns` disagreed between the forks**: one truncated to whole milliseconds before scaling, the other kept the fraction. `ms_to_ns(2.5)` was 2 000 000 on one side and 2 500 000 on the other. The precision-keeping form wins; no crypto expectation covered the difference.
+- **`update` never took the `uv` path.** It called `os.getenv("VIRTUAL_ENV")` with `os` unimported, inside a bare `except Exception: pass` — the `NameError` was swallowed on every run, in every environment.
+- **`TokenBucketLimiter` no longer talks itself out of its own backoff.** The old limiter counted spare API keys and shortened its wait when one was free; key rotation now lives behind the opt-in `crocodile.contrib.evasion` and the bucket paces requests and nothing else.
+- **`DeadLetterQueue` lost every record it was handed** from the equity providers, which called an `async put` without awaiting it. One queue now serves both call styles and keeps equity's `max_size` cap and SQLite mirror.
+
+### Added
+- `crocodile migrate-lake` — idempotent, refuses to merge two partitions into one, and reports what it renamed.
+- A populated public API: `import crocodile` now exports `Catalog`, `Record`, `Settings`, `Provenance`, `Capability`, `AssetClass` and the error hierarchy. Both source repos shipped an empty `__init__`.
+- A Phase 1 exit gate (`tests/conformance/test_phase1_exit.py`) that checks the merge actually happened — no module still imports the old packages, the old distributions carry nothing but a deprecation notice, every name in `__all__` resolves, no exception escapes the root, and the inherited lint debt of the two legacy surfaces is capped by a ratchet that only ever moves down.
+
+### Notes
+- `mypy --strict` covers the whole package and is clean; the two legacy surfaces are exempted by an explicit override that names them, carries the count it inherited, and is documented to shrink module by module rather than grow.
+- On-disk state paths (`~/.crypcodile/`, `STOCKODILE_HOME`) are deliberately **not** renamed. Moving them is a migration, not a rename, and doing it silently would orphan a running deployment's cache and sync state.
 
 ## [0.1.047] - 2026-07-19
 ### Added

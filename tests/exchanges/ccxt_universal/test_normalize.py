@@ -8,10 +8,10 @@ missing ``bid``/``ask``, and contract vs spot markets.
 
 from __future__ import annotations
 
-from crypcodile.exchanges.ccxt_universal import normalize as norm
-from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import (
+from crocodile.crypto.exchanges.ccxt_universal import normalize as norm
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import (
     OHLCV,
     BookSnapshot,
     BookTicker,

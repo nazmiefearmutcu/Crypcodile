@@ -2,8 +2,8 @@ import asyncio
 import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from crypcodile.exchanges.base_onchain.connector import BaseOnchainTransport
-from crypcodile.ingest.sync_recovery import SyncRecovery
+from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainTransport
+from crocodile.core.ingest.sync_recovery import SyncRecovery
 
 
 def test_sync_recovery_seen_logs(tmp_path):

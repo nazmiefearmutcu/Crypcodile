@@ -1,13 +1,13 @@
 import eth_abi
 from eth_utils import to_checksum_address
 import pytest
-from crypcodile.log_decoder.fallback import (
+from crocodile.crypto.log_decoder.fallback import (
     decode_uniswap_v3_swap as fallback_v3,
     decode_aerodrome_v2_swap as fallback_v2,
 )
 
 try:
-    from crypcodile.log_decoder._rust_decoder import (
+    from crocodile.crypto.log_decoder._rust_decoder import (
         decode_uniswap_v3_swap as rust_v3,
         decode_aerodrome_v2_swap as rust_v2,
     )

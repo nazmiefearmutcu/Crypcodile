@@ -21,10 +21,10 @@ from crocodile.core.ingest.deadletter import DeadLetterQueue
 from crocodile.core.ingest.transport import Transport
 from crocodile.core.schema.records import Record
 from crocodile.core.sink.base import Sink
+from crocodile.core.util.time import now_ns
 
 # Still under crypcodile until Task 15 relocates the remaining packages.
-from crypcodile.instruments.registry import Instrument, InstrumentRegistry
-from crypcodile.util.time import now_ns
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
 
 __all__ = [
     "Connector",

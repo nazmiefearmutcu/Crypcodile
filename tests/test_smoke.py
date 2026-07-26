@@ -1,5 +1,5 @@
-import crypcodile
+import crocodile
 
 
 def test_version():
-    assert crypcodile.__version__
+    assert crocodile.__version__

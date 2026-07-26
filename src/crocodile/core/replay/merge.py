@@ -26,19 +26,33 @@ import heapq
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from crypcodile.schema.records import (
-    BookDelta,
-    BookSnapshot,
-    BookTicker,
-    Record,
-)
+from crocodile.core.schema.legacy.records import Record
 
 # Sentinel for NULL exchange_ts — must be less than any real ns value.
 # Real timestamps start around 1_000_000_000_000_000_000 ns (2001), so -1 is safely less.
 _NEG_INF: int = -1
 
+# The venue's own timestamp, under each record family's name for it: the
+# canonical header and the equity records say ``source_ts``, the legacy crypto
+# records ``exchange_ts``. Ordering is the one thing a replay engine must get
+# right for every record it is handed, so it reads whichever name is there
+# rather than assuming the fork it was written in.
+_SOURCE_TS_FIELDS = ("exchange_ts", "source_ts")
 
-def _sort_key(record: Record) -> tuple[int, int, int]:
+# Sequence field per channel tag. Both families tag their records identically,
+# so the tag is a safer discriminator here than the Python class.
+_SEQ_FIELD_BY_TAG = {
+    "book_delta": "seq_id",
+    "book_snapshot": "sequence_id",
+    "book_ticker": "update_id",
+}
+
+# Where the record came from, under each family's name for it. Same list as the
+# store's partition key derivation, for the same reason.
+_ORIGIN_FIELDS = ("source", "exchange", "provider")
+
+
+def _sort_key(record: Record) -> tuple[int, int, int, str, str]:
     """Return the (local_ts, exchange_ts_or_neg_inf, seq_or_0) tuple for ordering.
 
     NULL exchange_ts → -1 (sorts BEFORE any real nanosecond timestamp).
@@ -49,19 +63,37 @@ def _sort_key(record: Record) -> tuple[int, int, int]:
         all others  → 0 (no sequence concept)
     """
     local_ts: int = record.local_ts
-    exchange_ts: int = record.exchange_ts if record.exchange_ts is not None else _NEG_INF
+
+    exchange_ts: int = _NEG_INF
+    for field in _SOURCE_TS_FIELDS:
+        value = getattr(record, field, None)
+        if value is not None:
+            exchange_ts = value
+            break
 
     seq: int
-    if isinstance(record, BookDelta):
-        seq = record.seq_id or 0
-    elif isinstance(record, BookSnapshot):
-        seq = record.sequence_id or 0
-    elif isinstance(record, BookTicker):
-        seq = record.update_id or 0
+    tag = getattr(getattr(type(record), "__struct_config__", None), "tag", None)
+    seq_field = _SEQ_FIELD_BY_TAG.get(tag) if isinstance(tag, str) else None
+    if seq_field is not None:
+        seq = getattr(record, seq_field, None) or 0
     else:
         seq = 0
 
-    return (local_ts, exchange_ts, seq)
+    # Two records from different sources at the same instant with no sequence
+    # number tie on all three leading fields, and heapq then returns them in
+    # whatever order the streams happened to be passed in. The equity fork broke
+    # that tie by origin and symbol; the crypto fork left it to the heap. For an
+    # engine whose whole claim is determinism, leaving it to the heap is a bug,
+    # so the tie-break is restored — appended, never inserted, so no ordering
+    # that was already decided by the first three fields can change.
+    origin = ""
+    for field in _ORIGIN_FIELDS:
+        value = getattr(record, field, None)
+        if value is not None:
+            origin = value
+            break
+
+    return (local_ts, exchange_ts, seq, origin, record.symbol)
 
 
 class _Keyed:
@@ -70,7 +102,7 @@ class _Keyed:
     __slots__ = ("key", "record")
 
     def __init__(self, record: Record) -> None:
-        self.key: tuple[int, int, int] = _sort_key(record)
+        self.key: tuple[int, int, int, str, str] = _sort_key(record)
         self.record: Record = record
 
     def __lt__(self, other: Any) -> bool:

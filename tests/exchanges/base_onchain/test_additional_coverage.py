@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Response, HTTPException
 
 import typer
-from crypcodile.cli import (
+from crocodile.crypto.legacy.cli import (
     resolve_input_symbols,
     basis_cmd,
     select_collect_params_interactively
 )
-from crypcodile.api_server import get_market_data, PAYMENTS_DB, db_lock
-from crypcodile.mcp_server import execute_with_retry_and_failover
-from crypcodile.exchanges.base import http_get_helper
+from crocodile.crypto.legacy.api_server import get_market_data, PAYMENTS_DB, db_lock
+from crocodile.crypto.legacy.mcp_server import execute_with_retry_and_failover
+from crocodile.core.connector import http_get_helper
 
 
 class AwaitableValue:
@@ -36,8 +36,8 @@ def test_deterministic_symbol_resolution(tmp_path: Path) -> None:
     Client path is forced to fail so the legacy Catalog walk is exercised.
     Sorted candidates → first prefix-less match is bybit:...
     """
-    with patch("crypcodile.client.client.CrypcodileClient", side_effect=RuntimeError("no client")), \
-         patch("crypcodile.store.catalog.Catalog") as mock_catalog_class:
+    with patch("crocodile.crypto.client.client.CrypcodileClient", side_effect=RuntimeError("no client")), \
+         patch("crocodile.core.store.catalog.Catalog") as mock_catalog_class:
         mock_catalog = MagicMock()
         mock_catalog._registered_channels = ["trade"]
         import polars as pl
@@ -59,7 +59,7 @@ def test_resolve_input_symbols_delegates_to_client(tmp_path: Path) -> None:
     mock_client.list_channels.return_value = ["trade"]
     mock_client.resolve_symbols.return_value = ["deribit:BTC-PERPETUAL"]
 
-    with patch("crypcodile.client.client.CrypcodileClient", return_value=mock_client):
+    with patch("crocodile.crypto.client.client.CrypcodileClient", return_value=mock_client):
         resolved = resolve_input_symbols(tmp_path, ["btc-perpetual"], "trade")
 
     assert resolved == ["deribit:BTC-PERPETUAL"]
@@ -75,7 +75,7 @@ def test_resolve_input_symbols_falls_back_when_client_empty(tmp_path: Path) -> N
     mock_client = MagicMock()
     mock_client.list_channels.return_value = []
 
-    with patch("crypcodile.client.client.CrypcodileClient", return_value=mock_client):
+    with patch("crocodile.crypto.client.client.CrypcodileClient", return_value=mock_client):
         resolved = resolve_input_symbols(tmp_path, ["deribit:BTC-PERPETUAL"], None)
 
     assert resolved == ["deribit:BTC-PERPETUAL"]
@@ -86,7 +86,7 @@ def test_resolve_input_symbols_falls_back_when_client_empty(tmp_path: Path) -> N
 def test_basis_cmd_empty_strings(tmp_path: Path) -> None:
     """Verify empty/whitespace strings passed to basis_cmd raiseExit code 1."""
     # We patch is_interactive_stdin to return False to simulate non-interactive CLI run
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
         with pytest.raises(typer.Exit) as exc_info:
             basis_cmd(perp="  ", future="", spot="", data_dir=tmp_path)
         assert exc_info.value.exit_code == 1
@@ -108,7 +108,7 @@ def test_custom_channel_interactive_selection() -> None:
     inputs = ["2", "C", "custom_channel_1, custom_channel_2", "1"]
 
     with patch("typer.prompt", side_effect=inputs), \
-         patch("crypcodile.cli.prompt_with_autocomplete", return_value="BTCUSDT"):
+         patch("crocodile.crypto.legacy.cli.prompt_with_autocomplete", return_value="BTCUSDT"):
         exchange, symbols, channels = select_collect_params_interactively(None, None, None)
         assert exchange == "binance"
         assert channels == ["custom_channel_1", "custom_channel_2"]
@@ -200,9 +200,9 @@ async def test_api_server_usdc_configured_price() -> None:
 
     mock_w3 = MockWeb3API()
 
-    with patch("crypcodile.api_server.get_w3", return_value=mock_w3), \
-         patch("crypcodile.api_server.PRICE_USDC", "2.5"), \
-         patch("crypcodile.api_server.get_onchain_price", AsyncMock(return_value={"price": 40000.0})):
+    with patch("crocodile.crypto.legacy.api_server.get_w3", return_value=mock_w3), \
+         patch("crocodile.crypto.legacy.api_server.PRICE_USDC", "2.5"), \
+         patch("crocodile.crypto.legacy.api_server.get_onchain_price", AsyncMock(return_value={"price": 40000.0})):
          
         sig_payload = json.dumps({
             "payment_id": pid,
@@ -249,7 +249,7 @@ async def test_mcp_execute_with_retry_and_failover() -> None:
         return {"success": True, "provider": w3_instance.provider.endpoint_uri}
 
     # Patch RPC URLs to provide three mock URLs
-    with patch("crypcodile.mcp_server._get_rpc_urls", return_value=["http://rpc1", "http://rpc2", "http://rpc3"]), \
+    with patch("crocodile.crypto.legacy.mcp_server._get_rpc_urls", return_value=["http://rpc1", "http://rpc2", "http://rpc3"]), \
          patch("asyncio.sleep", AsyncMock()): # no delay in tests
          
         # Execute
@@ -301,7 +301,7 @@ async def test_http_get_helper_429_retry() -> None:
 # --- 9. Symbol Resolution with Empty Catalog/Fallback/Guesser ---
 def test_empty_catalog_symbol_resolution(tmp_path: Path) -> None:
     """Verify resolve_input_symbols falls back to default symbols and guesses format when database is empty."""
-    with patch("crypcodile.store.catalog.Catalog") as mock_catalog_class:
+    with patch("crocodile.core.store.catalog.Catalog") as mock_catalog_class:
         mock_catalog = MagicMock()
         mock_catalog._registered_channels = ["book_snapshot"]
         import polars as pl

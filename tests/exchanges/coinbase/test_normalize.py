@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crypcodile.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookDelta, BookSnapshot, BookTicker, Trade
+from crocodile.crypto.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, BookTicker, Trade
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -137,14 +137,14 @@ def test_ticker_emits_book_ticker() -> None:
 
 
 def test_build_channels() -> None:
-    from crypcodile.exchanges.coinbase.connector import build_channels
+    from crocodile.crypto.exchanges.coinbase.connector import build_channels
 
     chans = build_channels(["BTC-USD", "ETH-USD"], ["trade", "book_delta"])
     assert set(chans) == {"matches", "level2", "ticker"}
 
 
 def test_build_channels_ticker_only() -> None:
-    from crypcodile.exchanges.coinbase.connector import build_channels
+    from crocodile.crypto.exchanges.coinbase.connector import build_channels
 
     chans = build_channels(["BTC-USD"], ["book_ticker"])
     assert "ticker" in chans
@@ -176,8 +176,8 @@ def test_parse_iso_ns_exact_microsecond_precision() -> None:
 def test_parse_products() -> None:
     import json
 
-    from crypcodile.exchanges.coinbase.connector import parse_products
-    from crypcodile.instruments.registry import Kind
+    from crocodile.crypto.exchanges.coinbase.connector import parse_products
+    from crocodile.crypto.instruments.registry import Kind
 
     raw = json.loads((FIXTURES / "products.json").read_text())
     insts = parse_products(raw)

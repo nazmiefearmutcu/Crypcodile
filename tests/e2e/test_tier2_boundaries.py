@@ -5,16 +5,16 @@ import aiohttp
 import math
 from typing import AsyncGenerator
 from web3 import AsyncHTTPProvider, AsyncWeb3
-from crypcodile.exchanges.base_onchain.connector import (
+from crocodile.crypto.exchanges.base_onchain.connector import (
     BaseOnchainTransport,
     BaseOnchainConnector,
     POOL_SPECS,
     TOKENS,
     FACTORIES
 )
-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade
-from crypcodile.schema.enums import Side
-from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
 
 # =====================================================================
 # Tier 2 E2E Boundary & Corner Case Tests (>=30 tests)
@@ -236,7 +236,7 @@ async def test_t2_consistent_rate_limit_exhausted(mock_rpc) -> None:
     async def get_bn():
         return await w3.eth.block_number
     with pytest.raises(Exception):
-        from crypcodile.exchanges.base_onchain.connector import retry_rpc
+        from crocodile.crypto.exchanges.base_onchain.connector import retry_rpc
         await retry_rpc(get_bn, max_attempts=2, base_delay=0.001)
     await w3.provider.disconnect()
 

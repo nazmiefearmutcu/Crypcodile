@@ -1,10 +1,10 @@
 import pathlib
 
-from crypcodile.exchanges.deribit.connector import DeribitConnector
-from crypcodile.ingest.transport import FakeTransport
-from crypcodile.instruments.registry import InstrumentRegistry
-from crypcodile.schema.records import Trade
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.exchanges.deribit.connector import DeribitConnector
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.sink.memory import MemorySink
 
 _FIXTURE = (
     pathlib.Path(__file__).parent.parent / "exchanges" / "deribit" / "fixtures" / "trades.json"

@@ -15,9 +15,9 @@ import polars as pl
 import pyarrow.ipc as pa_ipc
 import pytest
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 _SYMBOL = "deribit:BTC-PERPETUAL"
@@ -73,7 +73,7 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
 
 async def test_export_parquet(tmp_path: pathlib.Path) -> None:
     """Parquet export writes a non-empty .parquet file that re-reads to same row count."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -95,7 +95,7 @@ async def test_export_parquet(tmp_path: pathlib.Path) -> None:
 
 async def test_export_csv(tmp_path: pathlib.Path) -> None:
     """CSV export writes a non-empty .csv file that re-reads to same row count."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -117,7 +117,7 @@ async def test_export_csv(tmp_path: pathlib.Path) -> None:
 
 async def test_export_arrow(tmp_path: pathlib.Path) -> None:
     """Arrow IPC export writes a non-empty .arrow file that re-reads to same row count."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -141,7 +141,7 @@ async def test_export_arrow(tmp_path: pathlib.Path) -> None:
 
 async def test_export_json(tmp_path: pathlib.Path) -> None:
     """JSON export writes a non-empty JSON array that parses to the same row count."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -164,7 +164,7 @@ async def test_export_json(tmp_path: pathlib.Path) -> None:
 
 async def test_export_jsonl(tmp_path: pathlib.Path) -> None:
     """JSONL export writes one record per line; line count matches row count."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -191,7 +191,7 @@ async def test_export_jsonl(tmp_path: pathlib.Path) -> None:
 
 async def test_export_creates_parent_dirs(tmp_path: pathlib.Path) -> None:
     """export() creates intermediate directories if they don't exist."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -221,7 +221,7 @@ async def test_export_empty_result_creates_empty_file(
     are zero matching rows (regression guard against the empty-file bug fixed in
     the 3.3 commit).  CSV and JSON formats are also verified for completeness.
     """
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -261,7 +261,7 @@ async def test_export_empty_result_creates_empty_file(
 
 async def test_export_invalid_fmt_raises(tmp_path: pathlib.Path) -> None:
     """export() raises ValueError for an unsupported format string."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -288,7 +288,7 @@ async def test_export_multi_symbol_sorted_and_no_null_leakage(
     concat must NOT introduce null columns.  The output must be globally non-decreasing
     in ``local_ts``.
     """
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     # Write trades for _SYMBOL and _SYMBOL_B with interleaved timestamps.
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)

@@ -3,29 +3,29 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from typer.testing import CliRunner
 import polars as pl
-from crypcodile.cli import app, make_sparkline, select_collect_params_interactively
-from crypcodile.client.export import export as client_export
-from crypcodile.store.catalog import Catalog
+from crocodile.crypto.legacy.cli import app, make_sparkline, select_collect_params_interactively
+from crocodile.crypto.client.export import export as client_export
+from crocodile.core.store.catalog import Catalog
 
 _BASE_TS = 1_700_000_000_000_000_000
 
 def test_piped_query_command(tmp_path):
     runner = CliRunner()
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
         result = runner.invoke(app, ["query", "--data-dir", str(tmp_path)], input="SELECT 42 AS val")
         assert result.exit_code == 0
         assert "42" in result.output
 
 def test_piped_query_command_empty(tmp_path):
     runner = CliRunner()
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
         result = runner.invoke(app, ["query", "--data-dir", str(tmp_path)], input="   ")
         assert result.exit_code == 1
         assert "Error: SQL query is required and stdin is empty." in result.stderr or "Error: SQL query is required and stdin is empty." in result.output
 
 def test_non_interactive_validation_failures(tmp_path):
     runner = CliRunner()
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
         result = runner.invoke(app, ["export", "--data-dir", str(tmp_path)])
         assert result.exit_code == 1
         assert "Error:" in result.stderr or "Error:" in result.output
@@ -51,18 +51,18 @@ def test_basis_mutually_exclusive_and_non_interactive(tmp_path):
     assert result.exit_code == 1
     assert "mutually exclusive" in result.output or "mutually exclusive" in result.stderr
 
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
         result = runner.invoke(app, ["basis", "--data-dir", str(tmp_path)])
         assert result.exit_code == 1
         assert "Error:" in result.output or "Error:" in result.stderr
 
 def test_basis_implicit_mode_interactive(tmp_path):
     runner = CliRunner()
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=True), \
-         patch("crypcodile.cli.select_symbols_interactively", return_value=(None, ["binance-spot:BTCUSDT"])), \
-         patch("crypcodile.cli.prompt_symbol", return_value="binance-spot:BTCUSDT"), \
-         patch("crypcodile.cli.prompt_time_range_helper", return_value=(0, 9999999999999999999)), \
-         patch("crypcodile.client.client.CrypcodileClient.spot_future_basis", return_value=pl.DataFrame()):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True), \
+         patch("crocodile.crypto.legacy.cli.select_symbols_interactively", return_value=(None, ["binance-spot:BTCUSDT"])), \
+         patch("crocodile.crypto.legacy.cli.prompt_symbol", return_value="binance-spot:BTCUSDT"), \
+         patch("crocodile.crypto.legacy.cli.prompt_time_range_helper", return_value=(0, 9999999999999999999)), \
+         patch("crocodile.crypto.client.client.CrypcodileClient.spot_future_basis", return_value=pl.DataFrame()):
         result = runner.invoke(
             app,
             ["basis", "--future", "deribit:BTC-FUTURE", "--data-dir", str(tmp_path)]
@@ -100,7 +100,7 @@ def test_empty_dataframe_export_schema(tmp_path):
 
 def test_adversarial_timestamp_overflow(tmp_path):
     # Testing extremely large timestamp overflow
-    from crypcodile.store.parquet_sink import _channel_schema
+    from crocodile.core.store.parquet_sink import _channel_schema
     schema = _channel_schema("trade")
     df = pl.DataFrame([{
         "exchange": "deribit",
@@ -121,7 +121,7 @@ def test_adversarial_timestamp_overflow(tmp_path):
     part_dir.mkdir(parents=True, exist_ok=True)
     df.write_parquet(part_dir / "part-0.parquet")
 
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
     client = CrypcodileClient(data_dir=tmp_path)
     
     # 21-digit timestamp or larger should cause datetime/OverflowError when scanned
@@ -157,10 +157,10 @@ def test_adversarial_selection_wizard_non_digit():
 
 def test_collect_is_interactive_nameerror_fix(tmp_path):
     runner = CliRunner()
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=False), \
-         patch("crypcodile.cli.collect_live", new_callable=AsyncMock) as mock_collect_live, \
-         patch("crypcodile.cli.AiohttpWsTransport") as mock_transport, \
-         patch("crypcodile.cli.make_connector") as mock_connector:
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False), \
+         patch("crocodile.crypto.legacy.cli.collect_live", new_callable=AsyncMock) as mock_collect_live, \
+         patch("crocodile.crypto.legacy.cli.AiohttpWsTransport") as mock_transport, \
+         patch("crocodile.crypto.legacy.cli.make_connector") as mock_connector:
         
         mock_conn = MagicMock()
         mock_conn.transport = MagicMock()
@@ -175,9 +175,9 @@ def test_collect_is_interactive_nameerror_fix(tmp_path):
 
 
 def test_prompt_time_range_helper_overflow_fallback(tmp_path):
-    from crypcodile.cli import prompt_time_range_helper
+    from crocodile.crypto.legacy.cli import prompt_time_range_helper
     
-    with patch("crypcodile.store.catalog.Catalog") as mock_catalog_class, \
+    with patch("crocodile.core.store.catalog.Catalog") as mock_catalog_class, \
          patch("typer.prompt") as mock_prompt, \
          patch("typer.echo") as mock_echo:
         

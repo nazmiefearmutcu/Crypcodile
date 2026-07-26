@@ -9,15 +9,15 @@ import pytest
 import polars as pl
 from typer.testing import CliRunner
 
-from crypcodile.analytics.slippage import estimate_slippage
-from crypcodile.analytics.ofi import calculate_ofi, parse_interval_to_ns
-from crypcodile.analytics.whale import track_whale_alerts
-from crypcodile.cli import app
-from crypcodile.client.client import CrypcodileClient
-from crypcodile.schema.records import BookSnapshot, Trade, Liquidation
-from crypcodile.schema.enums import Side
-from crypcodile.store.catalog import Catalog
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.slippage import estimate_slippage
+from crocodile.crypto.analytics.ofi import calculate_ofi, parse_interval_to_ns
+from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.crypto.legacy.cli import app
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade, Liquidation
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
 _SYMBOL = "deribit:BTC-PERPETUAL"
@@ -419,7 +419,7 @@ def test_cli_commands_interactive_fallback(slippage_lake: Path) -> None:
     # 1. Symbol (defaults to deribit:BTC-PERPETUAL)
     # 2. Side (defaults to buy)
     # 3. Size (e.g. 3.0)
-    with patch("crypcodile.cli.is_interactive_stdin", return_value=True):
+    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True):
         result = runner.invoke(
             app,
             ["slippage", "--data-dir", str(slippage_lake)],

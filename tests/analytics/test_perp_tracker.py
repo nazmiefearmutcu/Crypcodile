@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from crypcodile.exchanges.gmx_synthetix.position_tracker import (
+from crocodile.crypto.exchanges.gmx_synthetix.position_tracker import (
     GMXPositionTracker,
     SynthetixPositionTracker,
 )

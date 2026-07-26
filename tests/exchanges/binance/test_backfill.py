@@ -14,15 +14,15 @@ from typing import Any
 
 import pytest
 
-from crypcodile.exchanges.binance.backfill import (
+from crocodile.crypto.exchanges.binance.backfill import (
     BinanceBackfill,
     parse_aggtrades_page,
     parse_klines_page,
     parse_open_interest,
     parse_open_interest_hist,
 )
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import OHLCV, OpenInterest, Trade
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import OHLCV, OpenInterest, Trade
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -411,8 +411,8 @@ async def test_backfill_open_interest_snapshot_none_callback() -> None:
 @pytest.mark.asyncio
 async def test_backfill_open_interest_snapshot_with_callback() -> None:
     """BinanceBackfill.backfill_open_interest returns an OpenInterest record."""
-    from crypcodile.exchanges.binance.backfill import BinanceBackfill
-    from crypcodile.schema.records import OpenInterest
+    from crocodile.crypto.exchanges.binance.backfill import BinanceBackfill
+    from crocodile.core.schema.legacy.records import OpenInterest
 
     async def fake_fetch(symbol: str) -> dict[str, Any]:
         return {"symbol": symbol, "openInterest": "999.0", "time": "1700000000000"}

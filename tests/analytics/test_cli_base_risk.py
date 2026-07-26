@@ -10,11 +10,11 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from crypcodile.analytics.peg_deviation import peg_deviation_from_price
-from crypcodile.cli import app
-from crypcodile.client.client import CrypcodileClient
-from crypcodile.schema.records import BookTicker, OpenInterest
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
+from crocodile.crypto.legacy.cli import app
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.core.schema.legacy.records import BookTicker, OpenInterest
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000
 _RUNNER = CliRunner()
@@ -225,7 +225,7 @@ def test_cli_chaos_score_zeros() -> None:
 
 
 def test_cli_chaos_score_metrics() -> None:
-    from crypcodile.analytics.risk import calculate_chaos_score
+    from crocodile.crypto.analytics.risk import calculate_chaos_score
 
     vol, dev, imb, delay = 0.05, 0.002, 0.1, 1.0
     expected = calculate_chaos_score(vol, dev, imb, delay)
@@ -282,7 +282,7 @@ def test_cli_chaos_score_high_risk_near_100() -> None:
 
 
 def test_cli_lending_stress_healthy() -> None:
-    from crypcodile.analytics.lending_stress import lending_stress_test
+    from crocodile.crypto.analytics.lending_stress import lending_stress_test
 
     expected = lending_stress_test(
         collateral_usd=10000.0,

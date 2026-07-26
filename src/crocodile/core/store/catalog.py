@@ -4,7 +4,8 @@ Design (Appendix §4):
     - ``Catalog(data_dir)`` builds per-channel DuckDB views over
       ``read_parquet(glob, hive_partitioning=true, union_by_name=true)``.
     - ``query(sql)`` executes arbitrary SQL against registered views,
-      returns a Polars DataFrame.
+      returns a Polars DataFrame. ``query(sql, readonly=True)`` vets it with
+      ``assert_readonly_sql`` first, for network-facing callers.
     - ``scan(channel, symbol, start_ns, end_ns)`` narrows the glob path by
       exchange/channel/date **before** the WHERE clause for partition pruning
       (avoids full directory discovery on large lakes), then filters by
@@ -36,8 +37,10 @@ from __future__ import annotations
 import datetime
 import glob as _glob
 import logging
+import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Final
 
 import duckdb
 import polars as pl
@@ -67,9 +70,86 @@ _SEARCH_SCHEMA: dict[str, type[pl.DataType]] = {
 }
 
 
+# Statements and table functions that are never acceptable on a network-facing
+# query surface: everything that mutates the database, loads an extension, or
+# reads a file the caller names rather than one the lake owns.
+_UNSAFE_SQL_RE = re.compile(
+    r"\b(COPY|ATTACH|INSTALL|LOAD|PRAGMA|CALL|EXPORT|IMPORT|CREATE\s+OR\s+REPLACE\s+TABLE|"
+    r"DROP|ALTER|INSERT|UPDATE|DELETE|TRUNCATE|GRANT|REVOKE)\b"
+    r"|read_csv|read_csv_auto|read_json|read_json_auto|read_parquet\s*\(\s*['\"]/"
+    r"|read_blob|read_text",
+    re.IGNORECASE,
+)
+
+
+def assert_readonly_sql(sql: str) -> None:
+    """Reject multi-statement and mutating / external-access SQL.
+
+    Used by MCP and other network-facing query entry points. Local CLI may
+    still call :meth:`Catalog.query` without this guard for power users.
+
+    Enforcement is deliberately keyword-level rather than a real parse, which
+    makes it conservative in both directions and is why it is opt-in:
+
+    - It over-rejects. The pattern has no lexer, so a banned word inside a
+      string literal or a double-quoted identifier still trips it —
+      ``SELECT 'delete me'`` and ``SELECT "delete" FROM t`` are refused. Word
+      boundaries do spare ordinary columns like ``deleted_at``.
+    - It under-inspects. ``read_parquet`` is only blocked when its first
+      argument is an absolute path, because the catalog's own views are built
+      from ``read_parquet`` over the lake.
+
+    Wiring this into :meth:`Catalog.query` unconditionally is a follow-up
+    decision, not a default: the crypto fork reaches ``query()`` with SQL this
+    guard rejects. ``crocodile.crypto.legacy.cli.get_available_option_underlyings``
+    builds ``SELECT DISTINCT underlying FROM read_parquet('<absolute glob>', …)``
+    to read one date partition directly, which trips the absolute-path branch.
+    Callers that want the guard pass ``readonly=True``, matching how the equity
+    fork shipped it.
+
+    Args:
+        sql: The statement to vet before it reaches DuckDB.
+
+    Raises:
+        ValueError: The SQL is empty, holds more than one statement, does not
+            start with a read-only verb, or names a disallowed keyword or
+            external reader.
+    """
+    stripped = sql.strip().rstrip(";").strip()
+    if not stripped:
+        raise ValueError("Empty SQL")
+    # A single trailing ';' was stripped above, so anything left is a second
+    # statement smuggled in behind an innocent-looking SELECT.
+    if ";" in stripped:
+        raise ValueError("Multi-statement SQL is not allowed")
+    upper = stripped.lstrip().upper()
+    if not (
+        upper.startswith("SELECT")
+        or upper.startswith("WITH")
+        or upper.startswith("DESCRIBE")
+        or upper.startswith("SHOW")
+        or upper.startswith("EXPLAIN")
+    ):
+        raise ValueError("Only SELECT/WITH/DESCRIBE/SHOW/EXPLAIN queries are allowed")
+    if _UNSAFE_SQL_RE.search(stripped):
+        raise ValueError("SQL contains disallowed keywords or external readers")
+
+
 # Path / glob characters that must never appear in hive partition suffixes
 # used for discovery walks or interpolated into Path.glob / DuckDB patterns.
 _UNSAFE_HIVE_SUFFIX_CHARS = frozenset({"/", "\\", "\x00", "*", "?", "[", "]"})
+
+
+# The two on-disk layouts, deepest first. Crypto always wrote a ``bucket=``
+# level under the date; equity wrote parts directly under it and its Catalog
+# read both. That second reader was lost when the crypto Catalog was promoted,
+# so an equity lake resolved to no views at all and every query raised. Each
+# layout is globbed separately because they differ in hive keys, and DuckDB
+# refuses to read two key sets in one call.
+_PART_TAILS: Final = (
+    ("date=*", "bucket=*", "part-*.parquet"),
+    ("date=*", "part-*.parquet"),
+)
 
 
 def _split_source_prefix(name: str) -> tuple[str, str] | None:
@@ -152,8 +232,32 @@ class Catalog:
         # Legacy partition prefixes already warned about, so a repeated walk
         # (every query() refreshes views) does not repeat the warning.
         self._warned_prefixes: set[str] = set()
+        self._closed = False
         # Register views for all channels present on disk.
         self._refresh_views()
+
+    def close(self) -> None:
+        """Close the DuckDB connection. Idempotent.
+
+        The equity fork's Catalog owned its connection's lifetime and this one
+        did not, so a long-lived process opened one in-memory database per
+        Catalog and never gave any of them back. Restored as the plain form:
+        equity also carried a lock and thread-local cursors, which belong with
+        the concurrency model Phase 2 decides, not with the file handle.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._conn.close()
+        except Exception:  # pragma: no cover - close() on a dead handle
+            pass
+
+    def __enter__(self) -> Catalog:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def _iter_source_dirs(self) -> Iterator[tuple[Path, str]]:
         """Yield ``(directory, source value)`` for each top-level partition.
@@ -206,21 +310,24 @@ class Catalog:
         }
 
     @staticmethod
-    def _read_expr(patterns_by_prefix: dict[str, list[str]]) -> str:
-        """Return SQL reading every prefix group as one relation.
+    def _read_expr(groups: list[tuple[str, list[str]]]) -> str:
+        """Return SQL reading every group as one relation.
 
         DuckDB refuses to read files with differing hive keys in a single
         ``read_parquet`` call — "Hive partition mismatch … key 'exchange' not
-        found" — so each prefix is read separately and the groups are unioned.
-        Legacy groups project their key as ``source`` so the union is over one
-        vocabulary and callers never learn which prefix a row came from.
+        found" — so anything that changes the key set has to be its own group
+        and the groups are unioned. Two things change it: the source prefix
+        (``source=`` / ``exchange=`` / ``provider=``) and whether the lake has a
+        ``bucket=`` level at all. Legacy groups project their key as ``source``
+        so the union is over one vocabulary and callers never learn which
+        prefix a row came from.
 
         Prefixes come from :data:`SOURCE_PREFIXES`, a module constant, so the
         interpolated key is never caller-controlled; only the paths are, and
         those are quote-escaped.
         """
         selects: list[str] = []
-        for prefix, patterns in patterns_by_prefix.items():
+        for prefix, patterns in groups:
             paths_literal = ", ".join(f"'{p.replace(chr(39), chr(39) * 2)}'" for p in patterns)
             key = prefix.removesuffix("=")
             projection = "*" if prefix == SOURCE_PREFIX else f"*, {key} AS source"
@@ -237,7 +344,7 @@ class Catalog:
     # Public API
     # ------------------------------------------------------------------
 
-    def query(self, sql: str) -> pl.DataFrame:
+    def query(self, sql: str, *, readonly: bool = False) -> pl.DataFrame:
         """Execute arbitrary SQL against registered channel views.
 
         Views available mirror the channel names (e.g. ``trade``,
@@ -245,10 +352,19 @@ class Catalog:
 
         Args:
             sql: Any DuckDB-compatible SQL query.
+            readonly: When True, vet *sql* with :func:`assert_readonly_sql`
+                first. Off by default so local callers — the CLI, the GUI,
+                analytics — keep the unrestricted access both forks gave them;
+                network-facing surfaces such as the MCP server opt in.
 
         Returns:
             A Polars DataFrame with the query result.
+
+        Raises:
+            ValueError: *readonly* is True and *sql* is not read-only.
         """
+        if readonly:
+            assert_readonly_sql(sql)
         # Refresh views so newly written files are picked up.
         self._refresh_views()
         result = self._conn.execute(sql)
@@ -452,7 +568,7 @@ class Catalog:
         filesystem (no DuckDB scan).  Useful discovery before channel/date
         scoping or ``inventory(exchange=...)`` filters.
 
-        Distinct from :func:`crypcodile.exchanges.factory.list_exchanges`,
+        Distinct from :func:`crocodile.crypto.exchanges.factory.list_exchanges`,
         which returns **registered connector** names (code registry), not
         partitions present in the lake.
 
@@ -711,14 +827,12 @@ class Catalog:
         """
         # Avoid DuckDB "No files found" when only empty hive dirs exist: keep
         # only the prefixes that actually match files.
-        patterns_by_prefix = {
-            prefix: [pattern]
-            for prefix, pattern in self._source_globs(
-                f"channel={channel}", "date=*", "bucket=*", "part-*.parquet"
-            ).items()
-            if _glob.glob(pattern)
-        }
-        if not patterns_by_prefix:
+        groups: list[tuple[str, list[str]]] = []
+        for tail in _PART_TAILS:
+            for prefix, pattern in self._source_globs(f"channel={channel}", *tail).items():
+                if _glob.glob(pattern):
+                    groups.append((prefix, [pattern]))
+        if not groups:
             return
 
         # Escape embedded single quotes in the path so the SQL string literal
@@ -729,7 +843,7 @@ class Catalog:
         escaped_channel = channel.replace('"', '""')
         sql = f"""
             CREATE OR REPLACE VIEW "{escaped_channel}" AS
-            {self._read_expr(patterns_by_prefix)}
+            {self._read_expr(groups)}
         """
         try:
             self._conn.execute(
@@ -740,17 +854,20 @@ class Catalog:
             return
         self._registered_channels.add(channel)
 
-    def _build_date_globs(self, channel: str, start_ns: int, end_ns: int) -> dict[str, list[str]]:
-        """Return glob patterns per prefix, narrowed to dates in [start_ns, end_ns].
+    def _build_date_globs(
+        self, channel: str, start_ns: int, end_ns: int
+    ) -> list[tuple[str, list[str]]]:
+        """Return glob groups narrowed to dates in [start_ns, end_ns].
 
         We enumerate all source directories — ``source=*`` and both legacy
         prefixes — then derive which UTC dates are spanned by the query window.
         Only those date partitions are included.
 
-        Patterns stay grouped by prefix because a single ``read_parquet`` call
-        cannot span two hive keys; see :meth:`_read_expr`.
+        Patterns are grouped by (source prefix, on-disk layout) because a single
+        ``read_parquet`` call cannot span two hive key sets; see
+        :meth:`_read_expr`.
 
-        If no relevant files exist on disk, returns an empty mapping.
+        If no relevant files exist on disk, returns an empty list.
         """
         channel_dirs: list[tuple[str, Path]] = []
         for source_dir, _value in self._iter_source_dirs():
@@ -761,22 +878,27 @@ class Catalog:
             assert split is not None  # _iter_source_dirs only yields matches
             channel_dirs.append((split[0], chan_dir))
         if not channel_dirs:
-            return {}
+            return []
 
         # Compute the set of dates covered by [start_ns, end_ns].
         dates = _ns_range_to_dates(start_ns, end_ns)
 
-        globs: dict[str, list[str]] = {}
+        grouped: dict[tuple[str, tuple[str, ...]], list[str]] = {}
         for prefix, chan_dir in channel_dirs:
             for date_str in dates:
                 date_dir = chan_dir / f"date={date_str}"
-                if date_dir.exists():
-                    pattern = str(date_dir / "bucket=*" / "part-*.parquet")
+                if not date_dir.is_dir():
+                    continue
+                for tail in _PART_TAILS:
+                    pattern = str(date_dir.joinpath(*tail[1:]))
                     # Only include if there are actual files.
-                    if _glob.glob(pattern) and pattern not in globs.setdefault(prefix, []):
-                        globs[prefix].append(pattern)
+                    if not _glob.glob(pattern):
+                        continue
+                    patterns = grouped.setdefault((prefix, tail), [])
+                    if pattern not in patterns:
+                        patterns.append(pattern)
 
-        return {prefix: patterns for prefix, patterns in globs.items() if patterns}
+        return [(prefix, patterns) for (prefix, _tail), patterns in grouped.items() if patterns]
 
 
 # ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ with "cannot parse option symbol". These pin the corrected behavior.
 import calendar
 import time
 
-from crypcodile.exchanges.deribit.normalize import _parse_option_symbol
-from crypcodile.schema.enums import OptType
+from crocodile.crypto.exchanges.deribit.normalize import _parse_option_symbol
+from crocodile.core.schema.legacy.enums import OptType
 
 
 def _expected_ns(day: int, month: int, year: int) -> int:

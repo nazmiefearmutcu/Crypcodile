@@ -1,7 +1,7 @@
 import os
 import pytest
 from unittest.mock import AsyncMock, patch
-from crypcodile.exchanges.base_onchain.abi_registry import ABIRegistry
+from crocodile.crypto.exchanges.base_onchain.abi_registry import ABIRegistry
 
 @pytest.mark.asyncio
 async def test_abi_registry_cache_and_fetch(tmp_path):

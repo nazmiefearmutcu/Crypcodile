@@ -1,3 +1,16 @@
-"""Crypcodile — open-source crypto market-data engine."""
+"""Deprecated. Crypcodile is now `crocodile.crypto`; install `crocodile`.
 
-__version__ = "0.1.047"
+This shim exists for one minor version so pinned imports keep working.
+"""
+
+import warnings as _warnings
+
+from crocodile import *  # noqa: F401,F403
+from crocodile import __version__  # noqa: F401
+
+_warnings.warn(
+    "crypcodile is deprecated and will be removed in 0.4; "
+    "import from crocodile (crypto connectors live under crocodile.crypto)",
+    DeprecationWarning,
+    stacklevel=2,
+)

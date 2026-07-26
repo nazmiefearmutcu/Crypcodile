@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crypcodile.exchanges.okx.normalize import normalize_message
-from crypcodile.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crypcodile.schema.enums import OptType, Side
-from crypcodile.schema.records import (
+from crocodile.crypto.exchanges.okx.normalize import normalize_message
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
+from crocodile.core.schema.legacy.enums import OptType, Side
+from crocodile.core.schema.legacy.records import (
     BookDelta,
     BookSnapshot,
     DerivativeTicker,
@@ -401,8 +401,8 @@ def test_side_helper_not_duplicated() -> None:
     After deduplication, backfill.py must import _side from normalize.py
     (or a shared location) rather than defining its own copy.
     """
-    from crypcodile.exchanges.okx import backfill as bf_mod
-    from crypcodile.exchanges.okx import normalize as norm_mod
+    from crocodile.crypto.exchanges.okx import backfill as bf_mod
+    from crocodile.crypto.exchanges.okx import normalize as norm_mod
 
     # After deduplication, backfill._side must be the same object as normalize._side
     # OR backfill must not define _side at all (it imports from normalize or shared util).

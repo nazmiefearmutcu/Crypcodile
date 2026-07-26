@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 
-from crypcodile.analytics.blackscholes import (
+from crocodile.crypto.analytics.blackscholes import (
     Greeks,
     bs_greeks,
     bs_price,
@@ -25,7 +25,7 @@ from crypcodile.analytics.blackscholes import (
     norm_cdf,
     norm_pdf,
 )
-from crypcodile.schema.enums import OptType
+from crocodile.core.schema.legacy.enums import OptType
 
 # ---------------------------------------------------------------------------
 # Helpers used in assertions (mirrors the implementation helpers)

@@ -4,10 +4,10 @@ from typing import cast
 
 import pytest
 
-from crypcodile.exchanges.base_onchain.normalize import normalize_onchain_update
-from crypcodile.ingest.transport import Transport
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, BookTicker, Trade
+from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
+from crocodile.core.ingest.transport import Transport
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
 
 
 def test_normalize_standard_case() -> None:
@@ -315,9 +315,9 @@ async def test_connector_dlq_on_corrupted_message() -> None:
     """Verify that a corrupted or invalid message in the connector run
     loop is caught and placed in DLQ.
     """
-    from crypcodile.exchanges.base_onchain.connector import BaseOnchainConnector
-    from crypcodile.instruments.registry import InstrumentRegistry
-    from crypcodile.sink.memory import MemorySink
+    from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
+    from crocodile.crypto.instruments.registry import InstrumentRegistry
+    from crocodile.core.sink.memory import MemorySink
 
     class MockTransport(Transport):
         def __init__(self, messages: list[bytes]) -> None:

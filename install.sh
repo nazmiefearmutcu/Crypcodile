@@ -139,7 +139,10 @@ run_step "Creating virtual environment..." "create_venv"
 run_step "Upgrading pip..." "\"\$HOME/.crypcodile/venv/bin/pip\" install --upgrade pip"
 
 # 6. Installs the CLI package
-run_step "Installing Crypcodile..." "\"\$HOME/.crypcodile/venv/bin/pip\" install \"crypcodile[full] @ git+https://github.com/nazmiefearmutcu/Crypcodile.git\""
+# The distribution is `crocodile` as of 0.3.0; pip rejects a requirement whose
+# name does not match the project it resolves to. The repository is renamed
+# separately, so the URL still says Crypcodile.
+run_step "Installing Crocodile..." "\"\$HOME/.crypcodile/venv/bin/pip\" install \"crocodile[full] @ git+https://github.com/nazmiefearmutcu/Crypcodile.git\""
 
 # 7. Configures a wrapper script at ~/.local/bin/crypcodile
 configure_wrapper() {

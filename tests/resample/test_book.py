@@ -23,9 +23,9 @@ import pathlib
 
 import pytest
 
-from crypcodile.exchanges.deribit.normalize import normalize_message
-from crypcodile.resample.book import resample_book_snapshots
-from crypcodile.schema.records import BookDelta, BookSnapshot
+from crocodile.crypto.exchanges.deribit.normalize import normalize_message
+from crocodile.core.resample.book import resample_book_snapshots
+from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
 
 # Path to the existing Deribit book fixture (snapshot + delta-with-delete)
 BOOK_FIX = (

@@ -10,14 +10,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from crypcodile.exchanges.derive.connector import (
+from crocodile.crypto.exchanges.derive.connector import (
     DerivePollConnector,
     _underlying_from_symbol,
 )
-from crypcodile.instruments.registry import InstrumentRegistry, Kind
-from crypcodile.schema.enums import OptType
-from crypcodile.schema.records import OptionsChain
-from crypcodile.sink.memory import MemorySink
+from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
+from crocodile.core.schema.legacy.enums import OptType
+from crocodile.core.schema.legacy.records import OptionsChain
+from crocodile.core.sink.memory import MemorySink
 
 
 def _sample_chain(underlying: str = "BTC") -> OptionsChain:

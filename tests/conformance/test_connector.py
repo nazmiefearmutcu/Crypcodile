@@ -16,9 +16,9 @@ from crocodile.core.connector import Connector, backoff_delays
 from crocodile.core.errors import ConnectorError, FatalConnectorError, SinkError
 
 # Still under crypcodile until Task 9 relocates the pipeline packages.
-from crypcodile.ingest.transport import FakeTransport
-from crypcodile.instruments.registry import Instrument, InstrumentRegistry
-from crypcodile.sink.base import Sink
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
+from crocodile.core.sink.base import Sink
 
 
 def test_backoff_is_capped_after_jitter():

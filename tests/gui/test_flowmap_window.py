@@ -29,7 +29,7 @@ except ImportError:
     sys.modules['PyQt6.QtGui'] = MagicMock()
     sys.modules['PyQt6.QtWidgets'] = MagicMock()
 
-from crypcodile.gui.flowmap_window import (
+from crocodile.crypto.gui.flowmap_window import (
     FlowmapWindow,
     compute_hist_target_bw,
     compute_hist_vis_rows,

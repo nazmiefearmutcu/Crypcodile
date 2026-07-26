@@ -2,7 +2,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import AsyncMock
-from crypcodile.exchanges.base_onchain.bns_resolver import BNSResolver
+from crocodile.crypto.exchanges.base_onchain.bns_resolver import BNSResolver
 
 @pytest.mark.asyncio
 async def test_bns_resolver_seed_mocks():

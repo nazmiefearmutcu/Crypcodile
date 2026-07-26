@@ -7,9 +7,9 @@ import pathlib
 import polars as pl
 import pytest
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -94,14 +94,14 @@ async def _write_multi(data_dir: pathlib.Path) -> None:
 
 
 def test_list_channels_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert client.list_channels() == []
 
 
 async def test_list_channels_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -109,14 +109,14 @@ async def test_list_channels_with_data(tmp_path: pathlib.Path) -> None:
 
 
 def test_list_exchanges_on_disk_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert client.list_exchanges_on_disk() == []
 
 
 async def test_list_exchanges_on_disk_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -124,7 +124,7 @@ async def test_list_exchanges_on_disk_with_data(tmp_path: pathlib.Path) -> None:
 
 
 def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert client.catalog_summary() == {
@@ -136,7 +136,7 @@ def test_catalog_summary_empty(tmp_path: pathlib.Path) -> None:
 
 
 async def test_catalog_summary_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -152,7 +152,7 @@ def test_catalog_summary_composes_list_methods(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """catalog_summary builds counts from list_channels + list_exchanges_on_disk."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     monkeypatch.setattr(client, "list_channels", lambda: ["trade", "funding"])
@@ -168,7 +168,7 @@ def test_catalog_summary_composes_list_methods(
 
 
 def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert client.catalog_stats() == {
@@ -178,7 +178,7 @@ def test_catalog_stats_empty(tmp_path: pathlib.Path) -> None:
 
 
 async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -194,7 +194,7 @@ def test_catalog_stats_count_query(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """catalog_stats runs COUNT(*) per channel via query; escapes quotes."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     monkeypatch.setattr(client, "list_channels", lambda: ["book_snapshot", "trade"])
@@ -222,7 +222,7 @@ def test_catalog_stats_count_query(
 def test_catalog_stats_query_failure_reports_minus_one(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     monkeypatch.setattr(client, "list_channels", lambda: ["trade", "funding"])
@@ -242,7 +242,7 @@ def test_catalog_stats_query_failure_reports_minus_one(
 def test_catalog_stats_escapes_double_quotes_in_channel(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     monkeypatch.setattr(client, "list_channels", lambda: ['odd"chan'])
@@ -260,14 +260,14 @@ def test_catalog_stats_escapes_double_quotes_in_channel(
 
 
 def test_list_symbols_empty(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert client.list_symbols() == []
 
 
 async def test_list_symbols_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -277,7 +277,7 @@ async def test_list_symbols_with_data(tmp_path: pathlib.Path) -> None:
 async def test_list_symbols_channel_and_exchange_filters(
     tmp_path: pathlib.Path,
 ) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_multi(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -298,7 +298,7 @@ def test_list_symbols_strips_empty_filters(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Empty/whitespace channel/exchange treated as no filter."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     inv = pl.DataFrame(
@@ -330,7 +330,7 @@ def test_list_symbols_strips_empty_filters(
 def test_list_symbols_strips_padded_filters(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     inv = pl.DataFrame(
@@ -359,7 +359,7 @@ def test_list_symbols_strips_padded_filters(
 
 
 def test_data_coverage_empty_symbol(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     for blank in ("", "   ", None):  # type: ignore[arg-type]
@@ -370,7 +370,7 @@ def test_data_coverage_empty_symbol(tmp_path: pathlib.Path) -> None:
 
 
 def test_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     df = client.data_coverage("deribit:BTC-PERPETUAL")
@@ -380,7 +380,7 @@ def test_data_coverage_empty_lake(tmp_path: pathlib.Path) -> None:
 
 
 async def test_data_coverage_with_data(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -391,7 +391,7 @@ async def test_data_coverage_with_data(tmp_path: pathlib.Path) -> None:
 
 
 async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -402,7 +402,7 @@ async def test_data_coverage_channel_filter(tmp_path: pathlib.Path) -> None:
 
 
 async def test_data_coverage_exchange_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -419,7 +419,7 @@ def test_data_coverage_strips_and_filters(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Strips symbol/channel/exchange; exact symbol filter over inventory."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     inv = pl.DataFrame(
@@ -466,7 +466,7 @@ def test_data_coverage_strips_and_filters(
 def test_data_coverage_no_symbol_match(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     monkeypatch.setattr(
@@ -489,7 +489,7 @@ def test_data_coverage_no_symbol_match(
 
 
 def test_inventory_empty_schema(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     df = client.inventory()
@@ -499,7 +499,7 @@ def test_inventory_empty_schema(tmp_path: pathlib.Path) -> None:
 
 
 async def test_inventory_and_search_delegate(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -519,7 +519,7 @@ async def test_inventory_and_search_delegate(tmp_path: pathlib.Path) -> None:
 
 
 def test_search_symbols_empty_q(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     df = client.search_symbols("")
@@ -533,7 +533,7 @@ def test_search_symbols_empty_q(tmp_path: pathlib.Path) -> None:
 
 
 def test_resolve_empty_input(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     assert client.resolve_symbols([]) == []
@@ -541,7 +541,7 @@ def test_resolve_empty_input(tmp_path: pathlib.Path) -> None:
 
 async def test_resolve_exact_passthrough(tmp_path: pathlib.Path) -> None:
     """Canonical symbol with ':' present in inventory is returned as-is."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -550,7 +550,7 @@ async def test_resolve_exact_passthrough(tmp_path: pathlib.Path) -> None:
 
 
 async def test_resolve_raw_unique_match(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -559,7 +559,7 @@ async def test_resolve_raw_unique_match(tmp_path: pathlib.Path) -> None:
 
 
 async def test_resolve_ambiguous_error(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_multi(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -568,7 +568,7 @@ async def test_resolve_ambiguous_error(tmp_path: pathlib.Path) -> None:
 
 
 async def test_resolve_ambiguous_first(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_multi(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -578,7 +578,7 @@ async def test_resolve_ambiguous_first(tmp_path: pathlib.Path) -> None:
 
 
 async def test_resolve_ambiguous_all(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_multi(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -587,7 +587,7 @@ async def test_resolve_ambiguous_all(tmp_path: pathlib.Path) -> None:
 
 
 async def test_resolve_no_match_raises(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -599,7 +599,7 @@ async def test_resolve_canonical_not_in_lake_falls_to_search(
     tmp_path: pathlib.Path,
 ) -> None:
     """':' present but not exact in inventory → search path."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -612,7 +612,7 @@ async def test_resolve_canonical_not_in_lake_falls_to_search(
 
 
 def test_resolve_invalid_ambiguous_mode(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
     with pytest.raises(ValueError, match="ambiguous must be"):
@@ -620,7 +620,7 @@ def test_resolve_invalid_ambiguous_mode(tmp_path: pathlib.Path) -> None:
 
 
 async def test_resolve_channel_filter(tmp_path: pathlib.Path) -> None:
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)
@@ -630,7 +630,7 @@ async def test_resolve_channel_filter(tmp_path: pathlib.Path) -> None:
 
 async def test_resolve_empty_channel_treated_as_none(tmp_path: pathlib.Path) -> None:
     """Empty / whitespace channel must not filter inventory to nothing."""
-    from crypcodile.client.client import CrypcodileClient
+    from crocodile.crypto.client.client import CrypcodileClient
 
     await _write_fixtures(tmp_path)
     client = CrypcodileClient(data_dir=tmp_path)

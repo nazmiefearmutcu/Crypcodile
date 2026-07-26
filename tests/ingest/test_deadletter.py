@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from crypcodile.ingest.deadletter import (
+from crocodile.core.ingest.deadletter import (
     DEFAULT_DLQ_REPORT_NAME,
     DeadLetter,
     DeadLetterQueue,

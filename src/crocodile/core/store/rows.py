@@ -24,9 +24,8 @@ from typing import Any
 import mmh3
 import msgspec.structs
 
-from crocodile.core.schema.records import Record as CanonicalRecord
-from crypcodile.schema.enums import OptType, Side
-from crypcodile.schema.records import (
+from crocodile.core.schema.legacy.enums import OptType, Side
+from crocodile.core.schema.legacy.records import (
     OHLCV,
     BookDelta,
     BookSnapshot,
@@ -42,6 +41,7 @@ from crypcodile.schema.records import (
     ReserveDataUpdated,
     Trade,
 )
+from crocodile.core.schema.records import Record as CanonicalRecord
 
 Flattenable = Record | CanonicalRecord
 """What :func:`to_row` accepts.
@@ -51,6 +51,24 @@ which both record families carry, so it flattens either. ``from_row`` is not
 symmetric: it constructs concrete legacy classes off the ``channel`` string and
 so still returns the legacy union.
 """
+
+
+# What each record family calls the place the data came from, most canonical
+# first. The canonical header says ``source``; the two legacy families kept the
+# word their own asset class used.
+#
+# ``provider`` is checked before ``exchange`` and the order is load-bearing.
+# Equity's ``Instrument`` carries BOTH: ``provider`` is who served the data,
+# ``exchange`` is where the security is *listed*. Matching ``exchange`` first
+# filed an Alpaca-sourced instrument under ``source=NASDAQ`` — no error, just
+# the wrong directory. Only the equity records have ``provider``, so checking it
+# first is unambiguous for crypto, whose ``exchange`` really is its source.
+_ORIGIN_FIELDS = ("source", "provider", "exchange")
+
+# Partition columns computed from the record rather than read off it. A record
+# field sharing one of these names loses to it, so it is moved to ``<name>_val``
+# before they are written.
+_DERIVED_PARTITION_COLS = ("channel", "date", "bucket")
 
 
 def _symbol_bucket(symbol: str) -> int:
@@ -90,9 +108,10 @@ def to_row(record: Flattenable) -> dict[str, Any]:
     ``list[tuple[float, float]]`` — Polars can infer these as list[struct].
 
     Raises:
-        KeyError: if the record carries neither ``source`` nor ``exchange``.
-            Both families name their origin; a record that names neither cannot
-            be partitioned, and guessing a partition is worse than refusing.
+        KeyError: if the record names its origin under none of the three known
+            field names. Every record family names its origin; one that names
+            none cannot be partitioned, and guessing a partition is worse than
+            refusing.
     """
     # Extract channel tag from the struct class metadata
     channel: str = type(record).__struct_config__.tag  # type: ignore[assignment]
@@ -104,18 +123,34 @@ def to_row(record: Flattenable) -> dict[str, Any]:
     row: dict[str, Any] = {k: _convert_value(v) for k, v in raw.items()}
 
     # Add partition columns. The canonical records call the origin ``source``;
-    # the legacy crypto records still call it ``exchange``. One partition key
-    # spans both, so the two names collapse here rather than at the sink.
-    if "source" in raw:
-        source = raw["source"]
-    elif "exchange" in raw:
-        source = raw["exchange"]
+    # the legacy crypto records call it ``exchange`` and the legacy equity
+    # records ``provider``. One partition key spans all three, so the names
+    # collapse here rather than at the sink — this is the single place where
+    # "which fork wrote this record" stops mattering.
+    for field in _ORIGIN_FIELDS:
+        if field in raw:
+            row["source"] = raw[field]
+            break
     else:
         raise KeyError(
-            f"{type(record).__name__} carries neither 'source' nor 'exchange'; "
-            "it cannot be assigned a source= partition"
+            f"{type(record).__name__} names its origin under none of "
+            f"{_ORIGIN_FIELDS}; it cannot be assigned a source= partition"
         )
-    row["source"] = source
+    # A record field named like a partition column would be overwritten by it.
+    # ``ShortVolume.date`` and ``MacroSeries.date`` are business dates — the
+    # settlement day the figure belongs to — and the partition ``date`` is the
+    # capture day; writing the second over the first destroyed the first, with
+    # no error and nothing in the file to recover it from. The equity fork moved
+    # its own ``date`` aside; the rule is stated here once and applies to any
+    # record from any family. No crypto or canonical record collides today, so
+    # crypto output is byte-identical.
+    # ``source`` is deliberately not in this list: a canonical record's own
+    # ``source`` field *is* the partition value, so moving it aside would empty
+    # the column it was just derived from.
+    for column in _DERIVED_PARTITION_COLS:
+        if column in raw:
+            row[f"{column}_val"] = row.pop(column)
+
     row["channel"] = channel
     row["date"] = _date_from_ns(record.local_ts)
     row["bucket"] = _symbol_bucket(record.symbol)

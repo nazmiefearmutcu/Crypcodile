@@ -7,10 +7,10 @@ import pathlib
 import duckdb
 import polars as pl
 
-from crypcodile.schema.enums import Side
-from crypcodile.schema.records import BookSnapshot, Trade
-from crypcodile.store.catalog import Catalog, _ns_range_to_dates, _ns_to_date
-from crypcodile.store.parquet_sink import ParquetSink
+from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.store.catalog import Catalog, _ns_range_to_dates, _ns_to_date
+from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Helpers

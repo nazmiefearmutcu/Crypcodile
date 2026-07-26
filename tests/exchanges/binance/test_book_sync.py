@@ -3,8 +3,8 @@ import pathlib
 
 import pytest
 
-from crypcodile.exchanges.binance.book import OrderBookSync, SyncResult, normalize_depth
-from crypcodile.schema.records import BookDelta
+from crocodile.crypto.exchanges.binance.book import OrderBookSync, SyncResult, normalize_depth
+from crocodile.core.schema.legacy.records import BookDelta
 
 P = pathlib.Path(__file__).parent / "fixtures"
 

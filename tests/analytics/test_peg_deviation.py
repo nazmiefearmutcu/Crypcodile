@@ -1,10 +1,10 @@
 import pytest
 import pathlib
 import polars as pl
-from crypcodile.schema.records import BookTicker, BookSnapshot
-from crypcodile.store.parquet_sink import ParquetSink
-from crypcodile.store.catalog import Catalog
-from crypcodile.analytics.peg_deviation import calculate_peg_deviation, check_live_peg_deviation
+from crocodile.core.schema.legacy.records import BookTicker, BookSnapshot
+from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.core.store.catalog import Catalog
+from crocodile.crypto.analytics.peg_deviation import calculate_peg_deviation, check_live_peg_deviation
 
 _BASE_TS = 1_700_000_000_000_000_000
 
