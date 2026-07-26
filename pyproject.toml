@@ -43,6 +43,12 @@ market = [
     # (ccxt bundles ccxt.pro for WebSocket streaming, so no separate dep).
     "ccxt>=4.5",
 ]
+evasion = [
+    # Deliberately empty. crocodile.contrib.evasion is stdlib-only, so this extra
+    # buys no packages — it exists to make routing around a source's access
+    # controls something a deployment has to ask for by name. Left out of `full`
+    # on purpose: the default posture is to respect quotas, not to evade them.
+]
 full = [
     "crypcodile[gui,ml,web,onchain,market]",
 ]

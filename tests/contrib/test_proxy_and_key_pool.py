@@ -4,7 +4,9 @@ from typing import Any
 
 import pytest
 
-from stockodile.ratelimit import ApiKeyPool, ProxyRotator, TokenBucket
+from crocodile.contrib.evasion import ApiKeyPool, ProxyRotator
+from crocodile.contrib.evasion.limiter import EvasiveLimiter
+from crocodile.core.ratelimit import TokenBucket
 
 
 def test_proxy_rotator_empty() -> None:
@@ -182,38 +184,70 @@ def test_api_key_pool_failures_exponential_backoff() -> None:
 
 
 @pytest.mark.asyncio
-async def test_token_bucket_integration() -> None:
+async def test_evasive_limiter_integration() -> None:
     # Setup proxy rotator and api key pool
     rotator = ProxyRotator()
     rotator.proxies = ["http://p1", "http://p2"]
 
     pool = ApiKeyPool(keys={"tiingo": ["k1", "k2"]})
 
-    bucket = TokenBucket(
-        capacity=10.0, refill_rate=2.0, proxy_rotator=rotator, api_key_pool=pool, provider="tiingo"
-    )
+    # The composition lives here now: TokenBucket no longer takes pools or a
+    # provider, so the contrib side supplies them.
+    bucket = TokenBucket(capacity=10.0, refill_rate=2.0)
+    limiter = EvasiveLimiter(bucket, proxy_rotator=rotator, api_key_pool=pool, provider="tiingo")
 
-    assert bucket.proxy_rotator is rotator
-    assert bucket.api_key_pool is pool
-    assert bucket.provider == "tiingo"
+    assert limiter.bucket is bucket
+    assert limiter.proxy_rotator is rotator
+    assert limiter.api_key_pool is pool
+    assert limiter.provider == "tiingo"
 
     # Check proxy retrieval
-    assert bucket.get_proxy() == "http://p1"
-    assert bucket.rotate_proxy() == "http://p2"
-    assert bucket.get_proxy() == "http://p2"
+    assert limiter.get_proxy() == "http://p1"
+    assert limiter.rotate_proxy() == "http://p2"
+    assert limiter.get_proxy() == "http://p2"
 
     # Check API key retrieval
-    assert bucket.get_api_key() == "k1"
-    assert bucket.get_api_key() == "k2"
+    assert limiter.get_api_key() == "k1"
+    assert limiter.get_api_key() == "k2"
 
     # Test update_backoff with key and proxy
-    bucket.update_backoff(delay=100.0, key="k1", proxy="http://p2")
+    limiter.update_backoff(delay=100.0, key="k1", proxy="http://p2")
 
     # Proxy rotator should rotate because p2 failed
-    assert bucket.get_proxy() == "http://p1"
+    assert limiter.get_proxy() == "http://p1"
 
     # k1 should be throttled, so only k2 is returned
-    assert bucket.get_api_key() == "k2"
+    assert limiter.get_api_key() == "k2"
+
+
+@pytest.mark.asyncio
+async def test_rotating_an_identity_does_not_excuse_the_backoff() -> None:
+    """A spare key is not a reason to keep hammering a source that said 429.
+
+    The version of this that lived on the bucket counted spare identities and
+    suppressed its own backoff when it found one. Rotation and pacing are
+    separate answers to a 429, and the wrapper owes the source both.
+    """
+    rotator = ProxyRotator()
+    rotator.proxies = ["http://p1", "http://p2"]
+    pool = ApiKeyPool(keys={"tiingo": ["k1", "k2"]})
+
+    bucket = TokenBucket(capacity=10.0, refill_rate=2.0)
+    limiter = EvasiveLimiter(bucket, proxy_rotator=rotator, api_key_pool=pool, provider="tiingo")
+
+    assert not limiter.is_backed_off
+
+    limiter.update_backoff(delay=100.0, key="k1", proxy="http://p1")
+
+    # A spare key and a spare proxy are both available...
+    assert limiter.get_api_key() == "k2"
+    assert limiter.get_proxy() == "http://p2"
+
+    # ...and the bucket is backed off anyway.
+    assert limiter.is_backed_off
+    assert limiter.backoff_remaining == pytest.approx(100.0, abs=1.0)
+    assert limiter.tokens == 0.0
+    assert bucket.is_backed_off
 
 
 def test_proxy_rotator_format_validation() -> None:
