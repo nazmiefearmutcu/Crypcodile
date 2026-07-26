@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from stockodile.ratelimit import TokenBucket
+from crocodile.core.ratelimit import TokenBucket
 
 
 @pytest.mark.asyncio
