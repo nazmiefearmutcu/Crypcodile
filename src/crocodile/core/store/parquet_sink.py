@@ -77,6 +77,8 @@ from typing import Any
 import msgspec.structs
 import polars as pl
 
+from crocodile.core.schema.enums import Channel
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import Record, _Header
 from crocodile.core.sink.base import Sink
 from crocodile.core.store.rows import (
@@ -604,6 +606,45 @@ def _polars_dtype(annotation: Any) -> Any:
     raise TypeError(f"no Parquet dtype for canonical record field annotation {annotation!r}")
 
 
+# Columns the canonical ``depth`` file carries that are not record fields.
+#
+# ``DepthProfile.is_synthetic`` is a Python property, and ``basis`` is spelled
+# ``prov_basis`` on the canonical header — so ``msgspec.structs.asdict`` emits
+# neither name and ``to_row`` writes no such key. Legacy equity ``channel=depth``
+# files have both columns, and ``migrate_lake`` renames directories rather than
+# rewriting files, so those columns are on disk forever. A canonical file without
+# them does not make ``WHERE is_synthetic`` fail — it makes it match nothing, so
+# the query answers with the pre-merge half of the lake as if it were all of it.
+#
+# Deriving them from the provenance tail at write time is what the design said
+# and what nothing implemented; ``_derive_depth_columns`` is that derivation.
+_DEPTH_DERIVED_COLUMNS: dict[str, Any] = {"basis": pl.Utf8, "is_synthetic": pl.Boolean}
+
+
+def _derive_depth_columns(row: dict[str, Any]) -> None:
+    """Write ``basis`` and ``is_synthetic`` onto one canonical ``depth`` row, in place.
+
+    The predicate is :meth:`DepthProfile.is_synthetic`'s, restated against the flattened
+    row: ``prov`` reaches here as its string value, since ``to_row`` converts enums. It is
+    rebuilt through :class:`Provenance` rather than string-compared so an unrecognised
+    level stops the write instead of quietly persisting ``is_synthetic = False``.
+
+    Raises:
+        ValueError: if the row carries no provenance tail. Every canonical record has one
+            by construction; a depth row without it cannot say what the column means, and
+            defaulting the column is how a synthetic profile passes for a real book.
+    """
+    try:
+        prov, basis = row["prov"], row["prov_basis"]
+    except KeyError as exc:
+        raise ValueError(
+            f"canonical depth row carries no {exc.args[0]!r}; the persisted "
+            f"'basis'/'is_synthetic' columns are derived from the provenance tail"
+        ) from exc
+    row["basis"] = basis
+    row["is_synthetic"] = Provenance(prov) is Provenance.SYNTHETIC
+
+
 def _build_canonical_schema() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Return ``(common fields, per-channel extras)`` for the canonical union."""
     header = msgspec.structs.fields(_Header)
@@ -625,6 +666,7 @@ def _build_canonical_schema() -> tuple[dict[str, Any], dict[str, dict[str, Any]]
             for f in msgspec.structs.fields(struct)
             if f.name not in header_names
         }
+    extra[Channel.DEPTH.value] |= _DEPTH_DERIVED_COLUMNS
     return common, extra
 
 
@@ -928,7 +970,15 @@ class ParquetSink(Sink):
                 f"partition source={source} channel={channel} mixes record families "
                 f"{sorted(families)}; one Parquet file cannot hold both schemas"
             )
-        schema = _channel_schema(channel, families.pop())
+        family = families.pop()
+        schema = _channel_schema(channel, family)
+
+        # Only the canonical family needs this: a legacy equity depth row already
+        # carries both columns as record fields, and no crypto record is a depth
+        # profile at all.
+        if family == FAMILY_CANONICAL and channel == Channel.DEPTH.value:
+            for row in rows:
+                _derive_depth_columns(row)
 
         # Coerce book levels (list-of-tuples → list-of-dicts) using the struct
         # field names the schema is about to declare.

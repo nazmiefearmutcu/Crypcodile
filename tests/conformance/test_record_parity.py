@@ -69,8 +69,12 @@ _FIELD_RENAMES: dict[tuple[str, str, str], tuple[str, str]] = {
     ),
     ("equity", "DepthProfile", "is_synthetic"): (
         "prov",
-        "same: the claim now lives in `prov`, and `is_synthetic` is retained as a computed "
-        "property so existing `WHERE is_synthetic` DuckDB queries keep working",
+        "same: the claim now lives in `prov`. `is_synthetic` is retained as a computed "
+        "property for Python readers, and — because a property is not a struct field and so "
+        "not a column — the sink derives the persisted `is_synthetic` column from `prov` at "
+        "write time. The property alone would have kept `WHERE is_synthetic` working only "
+        "for rows already on disk; against a canonical file it matches nothing rather than "
+        "erroring, which answers with the pre-merge half of the lake",
     ),
     ("equity", "OptionQuote", "type"): ("opt_type", "`type` shadows the builtin"),
     ("equity", "OptionQuote", "bid"): ("bid_px", "a price, named as one"),

@@ -277,19 +277,20 @@ class DepthProfile(
 
     @property
     def is_synthetic(self) -> bool:
-        """The old spelling of the claim that now lives in ``prov``, in Python only.
+        """The old spelling of the claim that now lives in ``prov``.
 
         Python attribute access keeps working: ``record.is_synthetic`` reads what it
-        always read. SQL does not. A property is not a struct field, so it is not in the
-        row ``to_row`` flattens and not a column in the canonical ``channel=depth`` file
-        — and ``WHERE is_synthetic`` against one does not error, it matches nothing. Only
-        legacy equity ``depth`` files have the column, so a query written before the
-        merge silently drops every canonical row and returns the pre-merge half of the
-        lake as if it were all of it.
+        always read. SQL needed more than this property. A property is not a struct
+        field, so it is not in the row ``to_row`` flattens — and ``WHERE is_synthetic``
+        against a file without the column does not error, it matches nothing, which would
+        have returned the pre-merge half of the lake as if it were all of it.
 
-        Deriving the persisted column from ``prov`` at write time is what would make the
-        SQL half true again; that belongs to the equity side's own migration and is not
-        done here.
+        So the persisted column is derived from ``prov`` at write time, by
+        ``crocodile.core.store.parquet_sink._derive_depth_columns``, together with
+        ``basis`` from ``prov_basis``. That function restates the predicate below against
+        the flattened row; a test writes one profile per provenance level through the
+        real sink and compares the column with this property, because two spellings of
+        one predicate is a place for them to disagree.
         """
         return self.prov is Provenance.SYNTHETIC
 
