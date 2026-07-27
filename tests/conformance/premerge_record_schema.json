@@ -1,0 +1,766 @@
+{
+ "_comment": "Every field of every record struct the two forks defined, at commit 4f7843c \u2014 the last state in which both legacy unions were intact. Generated once, checked forever. Phase 1 lost seven capabilities to an unmeasured 'the crypto copy is the superset' assumption; Track A deletes 42 record structs on the same kind of assumption, so this is the inventory that assumption gets measured against. Deleting an entry from this file to make the gate pass is the one thing that defeats it.",
+ "crypto": {
+  "BalanceCorrection": {
+   "tag": "balance_correction",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "holder_address": "<class 'str'>",
+    "token_address": "<class 'str'>",
+    "local_balance": "<class 'float'>",
+    "onchain_balance": "<class 'float'>",
+    "correction_amount": "<class 'float'>"
+   },
+   "properties": []
+  },
+  "BookDelta": {
+   "tag": "book_delta",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "bids": "list[tuple[float, float]]",
+    "asks": "list[tuple[float, float]]",
+    "seq_id": "int | None",
+    "prev_seq_id": "int | None",
+    "is_snapshot": "<class 'bool'>"
+   },
+   "properties": []
+  },
+  "BookSnapshot": {
+   "tag": "book_snapshot",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "bids": "list[tuple[float, float]]",
+    "asks": "list[tuple[float, float]]",
+    "depth": "<class 'int'>",
+    "sequence_id": "int | None",
+    "is_snapshot": "<class 'bool'>"
+   },
+   "properties": []
+  },
+  "BookTicker": {
+   "tag": "book_ticker",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "bid_px": "<class 'float'>",
+    "bid_sz": "<class 'float'>",
+    "ask_px": "<class 'float'>",
+    "ask_sz": "<class 'float'>",
+    "update_id": "int | None"
+   },
+   "properties": [
+    "price"
+   ]
+  },
+  "DerivativeTicker": {
+   "tag": "derivative_ticker",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "last_price": "float | None",
+    "mark_price": "float | None",
+    "index_price": "float | None",
+    "funding_rate": "float | None",
+    "predicted_funding_rate": "float | None",
+    "funding_timestamp": "int | None",
+    "open_interest": "float | None"
+   },
+   "properties": []
+  },
+  "FarcasterCorrelation": {
+   "tag": "farcaster_correlation",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "mentions_24h": "<class 'int'>",
+    "dev_activity_score": "<class 'float'>",
+    "trending_rank": "<class 'int'>"
+   },
+   "properties": []
+  },
+  "Funding": {
+   "tag": "funding",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "funding_rate": "<class 'float'>",
+    "funding_timestamp": "int | None",
+    "predicted_funding_rate": "float | None",
+    "interval_hours": "int | None"
+   },
+   "properties": []
+  },
+  "LimitOrderFill": {
+   "tag": "limit_order_fill",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "tx_hash": "<class 'str'>",
+    "log_index": "<class 'int'>",
+    "protocol": "<class 'str'>",
+    "maker": "<class 'str'>",
+    "taker": "<class 'str'>",
+    "maker_token": "<class 'str'>",
+    "taker_token": "<class 'str'>",
+    "maker_amount": "<class 'float'>",
+    "taker_amount": "<class 'float'>",
+    "order_hash": "<class 'str'>"
+   },
+   "properties": []
+  },
+  "Liquidation": {
+   "tag": "liquidation",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "price": "<class 'float'>",
+    "amount": "<class 'float'>",
+    "side": "<enum 'Side'>",
+    "id": "str | None"
+   },
+   "properties": []
+  },
+  "LiquidationCall": {
+   "tag": "liquidation_call",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "collateral_asset": "<class 'str'>",
+    "debt_asset": "<class 'str'>",
+    "user": "<class 'str'>",
+    "debt_to_cover": "<class 'float'>",
+    "liquidated_collateral_amount": "<class 'float'>",
+    "liquidator": "<class 'str'>",
+    "receive_a_token": "<class 'bool'>"
+   },
+   "properties": []
+  },
+  "OHLCV": {
+   "tag": "ohlcv",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "interval": "<class 'str'>",
+    "open": "<class 'float'>",
+    "high": "<class 'float'>",
+    "low": "<class 'float'>",
+    "close": "<class 'float'>",
+    "volume": "<class 'float'>",
+    "buy_volume": "<class 'float'>",
+    "sell_volume": "<class 'float'>",
+    "num_trades": "int | None"
+   },
+   "properties": []
+  },
+  "OpenInterest": {
+   "tag": "open_interest",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "open_interest": "<class 'float'>",
+    "open_interest_value": "float | None"
+   },
+   "properties": []
+  },
+  "OptionsChain": {
+   "tag": "options_chain",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "underlying": "<class 'str'>",
+    "underlying_price": "float | None",
+    "strike": "<class 'float'>",
+    "expiry": "<class 'int'>",
+    "opt_type": "<enum 'OptType'>",
+    "mark_price": "float | None",
+    "mark_iv": "float | None",
+    "bid_px": "float | None",
+    "bid_sz": "float | None",
+    "bid_iv": "float | None",
+    "ask_px": "float | None",
+    "ask_sz": "float | None",
+    "ask_iv": "float | None",
+    "last_price": "float | None",
+    "open_interest": "float | None",
+    "delta": "float | None",
+    "gamma": "float | None",
+    "vega": "float | None",
+    "theta": "float | None",
+    "rho": "float | None"
+   },
+   "properties": []
+  },
+  "PoRUpdate": {
+   "tag": "por_update",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "feed_address": "<class 'str'>",
+    "token_address": "<class 'str'>",
+    "reserves": "<class 'float'>",
+    "total_supply": "<class 'float'>",
+    "backing_ratio": "<class 'float'>",
+    "is_backed": "<class 'bool'>"
+   },
+   "properties": []
+  },
+  "ReserveDataUpdated": {
+   "tag": "reserve_data_updated",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "reserve": "<class 'str'>",
+    "liquidity_rate": "<class 'float'>",
+    "stable_borrow_rate": "<class 'float'>",
+    "variable_borrow_rate": "<class 'float'>",
+    "liquidity_index": "<class 'int'>",
+    "variable_borrow_index": "<class 'int'>"
+   },
+   "properties": []
+  },
+  "Trade": {
+   "tag": "trade",
+   "fields": {
+    "exchange": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "id": "<class 'str'>",
+    "price": "<class 'float'>",
+    "amount": "<class 'float'>",
+    "side": "<enum 'Side'>",
+    "liquidation": "str | None",
+    "l1_gas_fee": "float | None",
+    "l2_gas_fee": "float | None",
+    "gas_price": "float | None",
+    "sender": "str | None",
+    "is_smart_wallet": "bool | None"
+   },
+   "properties": []
+  }
+ },
+ "equity": {
+  "Auction": {
+   "tag": "auction",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "source_ts": "int | None",
+    "paired_shares": "float | None",
+    "imbalance_shares": "float | None",
+    "imbalance_side": "crocodile.equity.schema.enums.Side | None",
+    "reference_price": "float | None",
+    "indicative_price": "float | None",
+    "auction_type": "str | None"
+   },
+   "properties": []
+  },
+  "BalanceCorrection": {
+   "tag": "balance_correction",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "int | None",
+    "local_ts": "<class 'int'>",
+    "holder_address": "<class 'str'>",
+    "token_address": "<class 'str'>",
+    "local_balance": "<class 'float'>",
+    "onchain_balance": "<class 'float'>",
+    "correction_amount": "<class 'float'>",
+    "source_ts": "int | None"
+   },
+   "properties": []
+  },
+  "Bar": {
+   "tag": "bar",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "interval": "<class 'str'>",
+    "open": "<class 'float'>",
+    "high": "<class 'float'>",
+    "low": "<class 'float'>",
+    "close": "<class 'float'>",
+    "volume": "<class 'float'>",
+    "source_ts": "int | None",
+    "vwap": "float | None",
+    "trade_count": "int | None"
+   },
+   "properties": []
+  },
+  "BookDelta": {
+   "tag": "book_delta",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "bids": "list[tuple[float, float]]",
+    "asks": "list[tuple[float, float]]",
+    "source_ts": "int | None",
+    "seq_id": "int | None",
+    "prev_seq_id": "int | None",
+    "is_snapshot": "<class 'bool'>"
+   },
+   "properties": []
+  },
+  "BookSnapshot": {
+   "tag": "book_snapshot",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "bids": "list[tuple[float, float]]",
+    "asks": "list[tuple[float, float]]",
+    "depth": "<class 'int'>",
+    "source_ts": "int | None",
+    "sequence_id": "int | None",
+    "is_snapshot": "<class 'bool'>"
+   },
+   "properties": []
+  },
+  "BookTicker": {
+   "tag": "quote",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "bid_px": "<class 'float'>",
+    "bid_sz": "<class 'float'>",
+    "ask_px": "<class 'float'>",
+    "ask_sz": "<class 'float'>",
+    "source_ts": "int | None",
+    "is_nbbo": "<class 'bool'>",
+    "is_consolidated": "<class 'bool'>",
+    "conditions": "list[str] | None",
+    "tape": "crocodile.equity.schema.enums.Tape | None"
+   },
+   "properties": []
+  },
+  "CorporateAction": {
+   "tag": "corp_action",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "ex_date": "<class 'str'>",
+    "type": "<enum 'CorpActionType'>",
+    "value": "<class 'float'>",
+    "source_ts": "int | None"
+   },
+   "properties": []
+  },
+  "DepthProfile": {
+   "tag": "depth",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "bids": "list[tuple[float, float]]",
+    "asks": "list[tuple[float, float]]",
+    "reference_price": "<class 'float'>",
+    "basis": "<class 'str'>",
+    "is_synthetic": "<class 'bool'>",
+    "depth": "<class 'int'>",
+    "source_ts": "int | None"
+   },
+   "properties": []
+  },
+  "Filing": {
+   "tag": "filing",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "accession_number": "<class 'str'>",
+    "form": "<class 'str'>",
+    "filing_date": "<class 'str'>",
+    "primary_document": "<class 'str'>",
+    "document_url": "<class 'str'>",
+    "source_ts": "int | None",
+    "report_date": "str | None",
+    "is_xbrl": "bool | None"
+   },
+   "properties": []
+  },
+  "Fundamental": {
+   "tag": "fundamental",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "taxonomy": "<class 'str'>",
+    "tag": "<class 'str'>",
+    "unit": "<class 'str'>",
+    "val": "<class 'float'>",
+    "end": "<class 'str'>",
+    "source_ts": "int | None",
+    "start": "str | None",
+    "fy": "int | None",
+    "fp": "crocodile.equity.schema.enums.FundPeriod | None",
+    "form": "str | None",
+    "filed": "str | None",
+    "accn": "str | None",
+    "frame": "str | None"
+   },
+   "properties": []
+  },
+  "Holding13F": {
+   "tag": "holding_13f",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "manager_name": "<class 'str'>",
+    "issuer_name": "<class 'str'>",
+    "cusip": "<class 'str'>",
+    "value": "<class 'float'>",
+    "shares": "<class 'float'>",
+    "shares_type": "<class 'str'>",
+    "source_ts": "int | None",
+    "discretion": "str | None",
+    "voting_sole": "float | None",
+    "voting_shared": "float | None",
+    "voting_none": "float | None",
+    "report_date": "str | None",
+    "accession_number": "str | None"
+   },
+   "properties": []
+  },
+  "IndexValue": {
+   "tag": "index_value",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "value": "<class 'float'>",
+    "source_ts": "int | None"
+   },
+   "properties": []
+  },
+  "InsiderTransaction": {
+   "tag": "insider",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "insider_name": "<class 'str'>",
+    "position": "<class 'str'>",
+    "transaction_type": "<class 'str'>",
+    "transaction_date": "<class 'str'>",
+    "source_ts": "int | None",
+    "shares": "float | None",
+    "price": "float | None",
+    "value": "float | None",
+    "ownership": "str | None"
+   },
+   "properties": []
+  },
+  "Instrument": {
+   "tag": "instrument",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "source_ts": "int | None",
+    "name": "str | None",
+    "cik": "str | None",
+    "figi": "str | None",
+    "composite_figi": "str | None",
+    "share_class_figi": "str | None",
+    "cusip": "str | None",
+    "exchange": "str | None",
+    "security_type": "crocodile.equity.schema.enums.SecurityType | None",
+    "sic": "str | None",
+    "shares_outstanding": "int | None",
+    "listing_date": "str | None",
+    "status": "str | None"
+   },
+   "properties": []
+  },
+  "LimitOrderFill": {
+   "tag": "limit_order_fill",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "source_ts": "int | None",
+    "exchange_ts": "int | None",
+    "tx_hash": "str | None",
+    "log_index": "int | None",
+    "protocol": "str | None",
+    "maker": "str | None",
+    "taker": "str | None",
+    "maker_token": "str | None",
+    "taker_token": "str | None",
+    "maker_amount": "float | None",
+    "taker_amount": "float | None",
+    "order_hash": "str | None"
+   },
+   "properties": []
+  },
+  "LiquidationCall": {
+   "tag": "liquidation_call",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "source_ts": "int | None",
+    "exchange_ts": "int | None",
+    "collateral_asset": "str | None",
+    "debt_asset": "str | None",
+    "user": "str | None",
+    "debt_to_cover": "float | None",
+    "liquidated_collateral_amount": "float | None",
+    "liquidator": "str | None",
+    "receive_a_token": "bool | None"
+   },
+   "properties": []
+  },
+  "MacroSeries": {
+   "tag": "macro_series",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "date": "<class 'str'>",
+    "source_ts": "int | None",
+    "value": "float | None",
+    "realtime_start": "str | None",
+    "realtime_end": "str | None"
+   },
+   "properties": []
+  },
+  "OHLCV": {
+   "tag": "ohlcv",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "interval": "<class 'str'>",
+    "open": "<class 'float'>",
+    "high": "<class 'float'>",
+    "low": "<class 'float'>",
+    "close": "<class 'float'>",
+    "volume": "<class 'float'>",
+    "source_ts": "int | None",
+    "vwap": "float | None",
+    "trade_count": "int | None"
+   },
+   "properties": []
+  },
+  "OptionQuote": {
+   "tag": "option_quote",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "underlying": "<class 'str'>",
+    "expiry": "<class 'str'>",
+    "strike": "<class 'float'>",
+    "type": "<enum 'OptType'>",
+    "source_ts": "int | None",
+    "bid": "float | None",
+    "ask": "float | None",
+    "last": "float | None",
+    "volume": "float | None",
+    "open_interest": "float | None",
+    "implied_volatility": "float | None",
+    "delta": "float | None",
+    "gamma": "float | None",
+    "vega": "float | None",
+    "theta": "float | None",
+    "rho": "float | None"
+   },
+   "properties": []
+  },
+  "PoRUpdate": {
+   "tag": "por_update",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "exchange_ts": "<class 'int'>",
+    "local_ts": "<class 'int'>",
+    "feed_address": "<class 'str'>",
+    "token_address": "<class 'str'>",
+    "reserves": "<class 'float'>",
+    "total_supply": "<class 'float'>",
+    "backing_ratio": "<class 'float'>",
+    "is_backed": "<class 'bool'>",
+    "source_ts": "int | None"
+   },
+   "properties": []
+  },
+  "Quote": {
+   "tag": "quote",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "bid_px": "<class 'float'>",
+    "bid_sz": "<class 'float'>",
+    "ask_px": "<class 'float'>",
+    "ask_sz": "<class 'float'>",
+    "source_ts": "int | None",
+    "is_nbbo": "<class 'bool'>",
+    "is_consolidated": "<class 'bool'>",
+    "conditions": "list[str] | None",
+    "tape": "crocodile.equity.schema.enums.Tape | None"
+   },
+   "properties": []
+  },
+  "ReserveDataUpdated": {
+   "tag": "reserve_data_updated",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "source_ts": "int | None",
+    "exchange_ts": "int | None",
+    "reserve": "str | None",
+    "liquidity_rate": "float | None",
+    "stable_borrow_rate": "float | None",
+    "variable_borrow_rate": "float | None",
+    "liquidity_index": "int | None",
+    "variable_borrow_index": "int | None"
+   },
+   "properties": []
+  },
+  "ShortInterest": {
+   "tag": "short_interest",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "settlement_date": "<class 'str'>",
+    "short_interest": "<class 'float'>",
+    "source_ts": "int | None",
+    "prev_short_interest": "float | None",
+    "days_to_cover": "float | None",
+    "change_pct": "float | None"
+   },
+   "properties": []
+  },
+  "ShortVolume": {
+   "tag": "short_volume",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "date": "<class 'str'>",
+    "short_volume": "<class 'float'>",
+    "total_volume": "<class 'float'>",
+    "source_ts": "int | None",
+    "short_exempt_volume": "float | None"
+   },
+   "properties": []
+  },
+  "Trade": {
+   "tag": "trade",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "id": "<class 'str'>",
+    "price": "<class 'float'>",
+    "size": "<class 'float'>",
+    "source_ts": "int | None",
+    "conditions": "list[str] | None",
+    "tape": "crocodile.equity.schema.enums.Tape | None",
+    "venue": "str | None"
+   },
+   "properties": []
+  },
+  "TradingStatus": {
+   "tag": "trading_status",
+   "fields": {
+    "provider": "<class 'str'>",
+    "symbol": "<class 'str'>",
+    "symbol_raw": "<class 'str'>",
+    "local_ts": "<class 'int'>",
+    "status": "<class 'str'>",
+    "source_ts": "int | None",
+    "reason": "str | None",
+    "limit_up_price": "float | None",
+    "limit_down_price": "float | None",
+    "indicator": "str | None"
+   },
+   "properties": []
+  }
+ }
+}
