@@ -586,7 +586,18 @@ def _polars_dtype(annotation: Any) -> Any:
         (inner,) = typing.get_args(annotation)
         # ``Level`` is ``tuple[float, float]``; the struct field names are the
         # crypto lake's spelling, which is what every reader in the tree expects.
+        # The arity and element types are checked rather than assumed: this
+        # branch is the one place the function names columns the annotation does
+        # not, so an unchecked ``tuple[...]`` would quietly file a three-element
+        # or a ``tuple[str, float]`` field as a price/amount pair. Everything
+        # else here raises for an annotation it does not recognise; so does this.
         if typing.get_origin(inner) is tuple:
+            if typing.get_args(inner) != (float, float):
+                raise TypeError(
+                    f"only tuple[float, float] is stored as a "
+                    f"{{price, amount}} book level; {annotation!r} declares "
+                    f"{typing.get_args(inner)!r}"
+                )
             return pl.List(_CANONICAL_LEVEL_STRUCT)
         return pl.List(_polars_dtype(inner))
 

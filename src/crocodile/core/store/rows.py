@@ -358,7 +358,16 @@ def _coerce_field(annotation: Any, value: Any) -> Any:
     if typing.get_origin(annotation) is list:
         (inner,) = typing.get_args(annotation)
         # ``Level`` is ``tuple[float, float]``, which Parquet holds as a struct.
+        # Checked, not assumed, for the reason the writer checks it: this is the
+        # one branch that reads two named struct fields the annotation never
+        # mentioned, so a three-element tuple would come back silently truncated.
         if typing.get_origin(inner) is tuple:
+            if typing.get_args(inner) != (float, float):
+                raise TypeError(
+                    f"only tuple[float, float] is read back as a "
+                    f"(price, amount) book level; {annotation!r} declares "
+                    f"{typing.get_args(inner)!r}"
+                )
             return _coerce_levels_from_row(value)
         return [_coerce_field(inner, item) for item in value]
 

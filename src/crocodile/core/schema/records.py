@@ -277,9 +277,19 @@ class DepthProfile(
 
     @property
     def is_synthetic(self) -> bool:
-        """Retained so existing `WHERE is_synthetic` queries keep working.
+        """The old spelling of the claim that now lives in ``prov``, in Python only.
 
-        The claim now lives in `prov`; this is the old spelling of it.
+        Python attribute access keeps working: ``record.is_synthetic`` reads what it
+        always read. SQL does not. A property is not a struct field, so it is not in the
+        row ``to_row`` flattens and not a column in the canonical ``channel=depth`` file
+        — and ``WHERE is_synthetic`` against one does not error, it matches nothing. Only
+        legacy equity ``depth`` files have the column, so a query written before the
+        merge silently drops every canonical row and returns the pre-merge half of the
+        lake as if it were all of it.
+
+        Deriving the persisted column from ``prov`` at write time is what would make the
+        SQL half true again; that belongs to the equity side's own migration and is not
+        done here.
         """
         return self.prov is Provenance.SYNTHETIC
 
