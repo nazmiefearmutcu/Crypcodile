@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -21,11 +22,14 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from web3 import Web3
 
-from crocodile.crypto.legacy.mcp_server import AsyncHTTPProvider, AsyncWeb3, get_onchain_price
+from crocodile.core.config import Settings
 from crocodile.core.util.json_safe import (
     json_safe_float as _json_safe_float,
+)
+from crocodile.core.util.json_safe import (
     json_safe_records as _json_safe_records,
 )
+from crocodile.crypto.legacy.mcp_server import AsyncHTTPProvider, AsyncWeb3, get_onchain_price
 
 log = logging.getLogger(__name__)
 
@@ -1344,35 +1348,49 @@ class PriceImpactPayload(BaseModel):
     size_unit: str | None = None
 
 
-def _get_api_catalog() -> Catalog:
-    from pathlib import Path
+def _lake_dir(settings: Settings | None = None) -> Path:
+    """The one place this server decides where the lake is.
 
-    from crocodile.core.store.catalog import Catalog
-    data_dir_env = os.getenv("DATA_DIR")
-    if data_dir_env:
-        return Catalog(Path(data_dir_env))
-    for candidate in [Path("test_data"), Path("data"), Path.home() / "Crypcodile" / "test_data"]:
-        if candidate.exists() and candidate.is_dir():
-            try:
-                cat = Catalog(candidate)
-                if len(cat._registered_channels) > 0:
-                    return cat
-            except Exception:
-                pass
-    return Catalog(Path("test_data"))
+    There were two. ``_get_lake_client`` read ``CRYPCODILE_DATA_DIR`` defaulting to
+    ``data``; ``_get_api_catalog`` read a bare ``DATA_DIR`` and, absent that, probed
+    ``test_data`` then ``data`` then ``~/Crypcodile/test_data``, returning the first that
+    held a registered channel. ``/api/v1/simulate-price-impact`` used the second and every
+    other lake route used the first, so two routes over the same capability — that one and
+    ``GET /api/v1/slippage``, which end in the same estimator — answered from different
+    directories, and with nothing set at all from ``./data`` and ``./test_data``
+    respectively. Nothing raised; the answers were merely about different lakes.
 
+    ``Settings`` was written to be the single source for exactly this and was imported by
+    nothing but ``crocodile/__init__.py``. A contract that is written and never wired is
+    worse than one never written, because a reader takes it for a guarantee.
 
-def _get_lake_client() -> Any:
-    """Build a CrypcodileClient for local lake discovery (read-only).
+    Two behaviour changes, both deliberate. The bare ``DATA_DIR`` is no longer read:
+    ``Settings`` accepts ``CROCODILE_DATA_DIR`` and honours ``CRYPCODILE_DATA_DIR`` and
+    ``STOCKODILE_DATA_DIR`` with a deprecation warning, and an unprefixed name that
+    generic collides with every other tool on the box was never part of that policy. And
+    the probe is gone: a server that silently reads a lake outside its working directory
+    because the configured one looked empty is a server whose answers cannot be traced to
+    a configuration.
 
-    Data root from ``CRYPCODILE_DATA_DIR`` (default ``\"data\"``).
+    The optional argument is the shape ``CapabilityContext`` needs — it will carry a
+    ``Settings`` and hand it down, so the resolution a request ran under is a value it was
+    given rather than the environment at the moment it happened to look.
     """
-    from pathlib import Path
+    return (settings if settings is not None else Settings.from_env()).data_dir
 
+
+def _get_api_catalog(settings: Settings | None = None) -> Catalog:
+    """A Catalog over the lake root. See :func:`_lake_dir`."""
+    from crocodile.core.store.catalog import Catalog
+
+    return Catalog(_lake_dir(settings))
+
+
+def _get_lake_client(settings: Settings | None = None) -> Any:
+    """Build a CrypcodileClient for local lake discovery (read-only). See :func:`_lake_dir`."""
     from crocodile.crypto.client.client import CrypcodileClient
 
-    data_dir = os.getenv("CRYPCODILE_DATA_DIR", "data")
-    return CrypcodileClient(data_dir=Path(data_dir))
+    return CrypcodileClient(data_dir=_lake_dir(settings))
 
 
 async def _health_payload() -> dict[str, Any]:

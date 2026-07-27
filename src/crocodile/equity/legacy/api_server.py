@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, cast
 
 try:
@@ -31,6 +32,7 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 from crocodile import __version__
+from crocodile.core.config import Settings
 from crocodile.core.store.catalog import Catalog
 from crocodile.equity.legacy.mcp_server import AsyncWeb3, get_onchain_price
 
@@ -1451,21 +1453,23 @@ class PriceImpactPayload(BaseModel):
     size: float | None = None
 
 
-def _get_api_catalog() -> Catalog:
-    from pathlib import Path
+def _lake_dir(settings: Settings | None = None) -> Path:
+    """The one place this server decides where the lake is.
 
-    data_dir_env = os.getenv("DATA_DIR")
-    if data_dir_env:
-        return Catalog(Path(data_dir_env))
-    for candidate in [Path("test_data"), Path("data"), Path.home() / "Stockodile" / "test_data"]:
-        if candidate.exists() and candidate.is_dir():
-            try:
-                cat = Catalog(candidate)
-                if len(cat._registered_channels) > 0:
-                    return cat
-            except Exception:
-                pass
-    return Catalog(Path("test_data"))
+    This read a bare ``DATA_DIR`` and, absent that, probed ``test_data`` then ``data``
+    then ``~/Stockodile/test_data``, returning the first that held a registered channel —
+    the twin of the crypto server's second resolver, differing only in the home directory
+    it reached into. See ``crocodile.crypto.legacy.api_server._lake_dir`` for what the two
+    resolvers cost there and why ``Settings`` is now the single source.
+
+    The optional argument is the shape ``CapabilityContext`` needs.
+    """
+    return (settings if settings is not None else Settings.from_env()).data_dir
+
+
+def _get_api_catalog(settings: Settings | None = None) -> Catalog:
+    """A Catalog over the lake root. See :func:`_lake_dir`."""
+    return Catalog(_lake_dir(settings))
 
 
 @app.post("/api/v1/simulate-price-impact")

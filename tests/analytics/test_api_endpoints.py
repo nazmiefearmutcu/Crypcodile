@@ -714,6 +714,49 @@ def test_get_lake_client_uses_env(tmp_path, monkeypatch) -> None:
     assert client.list_channels() == []
 
 
+def test_both_resolvers_read_the_same_lake(tmp_path, monkeypatch) -> None:
+    """The two-resolver bug, pinned so it cannot come back.
+
+    ``_get_lake_client`` read ``CRYPCODILE_DATA_DIR`` defaulting to ``data``;
+    ``_get_api_catalog`` read a bare ``DATA_DIR`` and otherwise probed ``test_data``,
+    ``data``, ``~/Crypcodile/test_data``. ``POST /api/v1/simulate-price-impact`` used the
+    second and every other lake route used the first, so it and ``GET /api/v1/slippage`` —
+    the same capability under two wire names — could answer from different directories.
+    Nothing raised, because both are perfectly good lakes.
+    """
+    monkeypatch.setenv("CROCODILE_DATA_DIR", str(tmp_path))
+    from crocodile.crypto.legacy.api_server import _get_api_catalog, _get_lake_client
+
+    assert _get_lake_client()._catalog._data_dir == _get_api_catalog()._data_dir == tmp_path
+
+
+def test_both_resolvers_agree_when_nothing_is_configured(monkeypatch) -> None:
+    """With no environment at all the two used to differ: ./data against ./test_data.
+
+    A default that disagrees is the case no deployment sets out to be in and every
+    developer runs in.
+    """
+    for name in ("CROCODILE_DATA_DIR", "CRYPCODILE_DATA_DIR", "STOCKODILE_DATA_DIR", "DATA_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    from crocodile.crypto.legacy.api_server import _get_api_catalog, _get_lake_client
+
+    assert _get_lake_client()._catalog._data_dir == _get_api_catalog()._data_dir
+
+
+def test_the_resolver_takes_a_settings_so_a_context_can_hand_one_down(tmp_path) -> None:
+    """``CapabilityContext`` will carry a ``Settings``; the resolver has to accept it.
+
+    Without this the resolution a request ran under is whatever the environment said at
+    the moment it happened to look, which is not a value anything can pass or record.
+    """
+    from crocodile.core.config import Settings
+    from crocodile.crypto.legacy.api_server import _get_api_catalog, _get_lake_client
+
+    settings = Settings(data_dir=tmp_path)
+    assert _get_lake_client(settings)._catalog._data_dir == tmp_path
+    assert _get_api_catalog(settings)._data_dir == tmp_path
+
+
 def test_catalog_scan_empty_params() -> None:
     from crocodile.crypto.legacy.api_server import catalog_scan
 

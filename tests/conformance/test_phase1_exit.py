@@ -240,7 +240,9 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # 430 → 429: the two forked `analytics/slippage.py` modules merged into one under
 # `core`, which is held to zero, so their inherited findings left the legacy tree
 # with them.
-_LEGACY_RUFF_BUDGET = 429
+# 429 → 428: the two data-dir resolvers in the crypto REST server became one, and
+# its import block was reformatted on the way past.
+_LEGACY_RUFF_BUDGET = 428
 
 
 def _ruff(*paths: str) -> list[str]:
