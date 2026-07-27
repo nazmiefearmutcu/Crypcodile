@@ -8,10 +8,11 @@ Gate 4 — every capability appears in all three surfaces (Phase 2).
 
 import ast
 import inspect
+import operator
 import pathlib
 from collections import Counter
-from collections.abc import Iterator, Mapping
-from typing import get_args
+from collections.abc import Callable, Iterator, Mapping
+from typing import NamedTuple, get_args
 
 import msgspec
 import pytest
@@ -639,15 +640,50 @@ def test_gate3b_every_resampler_that_builds_a_record_is_declared():
 # ``Quote.bid_sz``, ``OHLCV.volume``, ``DepthProfile.reference_price``. An adapter
 # reading one off a payload writes an expression; only a fabricated one writes ``1.0``.
 
-FABRICATES_MEASUREMENTS: dict[str, str] = {}
-"""Modules that write a literal number into a required measurement field, and why.
+FABRICATES_MEASUREMENTS: dict[str, tuple[tuple[float, ...], str]] = {
+    "equity/providers/google_finance/connector.py": (
+        (0.0,),
+        "Trade.amount = _UNPUBLISHED_SIZE, a structural 0.0. The quote page publishes a "
+        "last price and no per-print size, for any symbol at any time, and Trade.amount "
+        "is required — a trade cannot exist without a quantity. 0.0 sums to nothing, "
+        "which is the truth about how much volume a scrape contributes; the 1.0 it "
+        "replaced made SELECT sum(amount) return the poll count as share volume, growing "
+        "with the scrape interval rather than with trading. prov_basis names the method "
+        "and scraped_last_price scores it 0.0, so nothing here reads as measured."
+    ),
+    "equity/resample/ohlcv.py": (
+        (0.0,),
+        "OHLCV.volume = 0.0 on every bar resample_quotes_to_bars emits. A quote carries "
+        "no size that belongs in a bar — nothing in one of these bars was transacted — so "
+        "the zero is structural rather than a measurement of nothing traded, and the "
+        "ohlcv_from_quotes registration argues exactly that as the reason the basis is "
+        "SYNTHETIC rather than DERIVED. The sample size that *is* observable is on the "
+        "record as num_trades, the quote count."
+    ),
+}
+"""Modules that write a constant number into a required measurement field: which, and why.
 
-Empty, and that is the point: every entry is a record asserting a quantity nobody
-measured. Adding one is allowed — a structural zero can be the honest encoding, as
-``ohlcv_from_quotes`` argues for a quote bar's ``volume`` — but it is allowed *out
-loud*, with the argument next to it, on the same discipline as
-:data:`crocodile.core.capability.IRREDUCIBLE`. A silent one is what shipped a
-zero-width NBBO at ``prov_confidence=1.0``.
+The value is declared beside the argument and asserted against the tree, on the same
+discipline :data:`CONSTANT_BY_DEFINITION` carries — an exemption is a licence for a
+*number*, not for a file. ``_UNPUBLISHED_SIZE = 0.0`` and ``_ASSUMED_SIZE = 1.0`` are
+the same syntax and opposite claims: the first says a scrape contributes no volume, the
+second reported the poll count as share volume. A file-keyed licence carries over from
+one to the other in silence.
+
+
+Every entry is a record asserting a quantity nobody measured. Adding one is allowed
+— a structural zero can be the honest encoding, as ``ohlcv_from_quotes`` argues for
+a quote bar's ``volume`` — but it is allowed *out loud*, with the argument next to
+it, on the same discipline as :data:`crocodile.core.capability.IRREDUCIBLE`. A
+silent one is what shipped a zero-width NBBO at ``prov_confidence=1.0``.
+
+Both entries below were invisible to the scanner that shipped with this list, and
+that is why it was empty rather than because the tree was clean. It compared
+``kw.value`` against ``ast.Constant``, so ``_UNPUBLISHED_SIZE = 0.0`` beside
+``amount=_UNPUBLISHED_SIZE`` — which is what the fix for the ``google_finance``
+fabrication actually wrote — produced no hit at all. Restoring ``_ASSUMED_SIZE =
+1.0`` would have kept the gate green. A gate that only sees the literal spelling
+is a gate that teaches people to rename.
 
 Key is the path relative to ``src/crocodile``; value is the argument.
 """
@@ -689,23 +725,278 @@ def _canonical_record_calls_by_class(
     return calls
 
 
-def _fabricated_measurements() -> dict[str, list[str]]:
-    """Return ``{module: offences}`` for every literal number in a measurement position."""
+# ---------------------------------------------------------------------------
+# Seeing through the spellings a fabrication can wear
+# ---------------------------------------------------------------------------
+# The first version of this scanner compared ``kw.value`` against ``ast.Constant``
+# and stopped. That catches ``Trade(amount=1.0)`` and nothing else — not the name
+# bound to 1.0 one line above it, not ``1.0 * 1``, not ``float(1)``, not
+# ``**{"amount": 1.0}``, not ``msgspec.structs.replace(t, amount=1.0)``. The fix
+# for the ``google_finance`` fabrication wrote ``_UNPUBLISHED_SIZE = 0.0`` and
+# ``amount=_UNPUBLISHED_SIZE``, so it left the gate green and the list empty by
+# hiding from the gate rather than by having nothing to declare.
+#
+# So the scanner folds constants instead of recognising them. A name counts as a
+# constant only when *every* assignment to it in its own scope is one, which is
+# what separates ``resample_quotes_to_bars``'s ``volume``, assigned 0.0 and
+# nothing else, from ``resample_trades_to_bars``'s, assigned ``trade.amount``.
+
+_NUMERIC_COERCIONS = frozenset({"float", "int"})
+"""Calls that turn a constant into a constant of another type, and nothing else."""
+
+
+def _scope_bindings(scope: ast.AST) -> dict[str, list[ast.expr | None]]:
+    """Return ``{name: values assigned to it}`` for one scope's own body.
+
+    Nested functions and classes are not descended into: they are separate scopes,
+    and merging them is what would poison ``volume`` in ``resample_quotes_to_bars``
+    with the ``volume = trade.amount`` two functions above it.
+
+    A binding whose value cannot be an expression — a loop variable, a ``with``
+    target, an ``except`` name, a parameter, an import, an augmented assignment —
+    is recorded as ``None``, which is what makes it *fail* the constant test rather
+    than be absent from it. Absent would mean "look in the enclosing scope".
+    """
+    bound: dict[str, list[ast.expr | None]] = {}
+
+    def note(target: ast.AST, value: ast.expr | None) -> None:
+        if isinstance(target, ast.Name):
+            bound.setdefault(target.id, []).append(value)
+            return
+        for sub in ast.walk(target):
+            if isinstance(sub, ast.Name):
+                bound.setdefault(sub.id, []).append(None)
+
+    def visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                bound.setdefault(child.name, []).append(None)
+                continue
+            if isinstance(child, ast.Lambda):
+                continue
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    note(target, child.value)
+            elif isinstance(child, ast.AnnAssign):
+                note(child.target, child.value)
+            elif isinstance(child, ast.NamedExpr):
+                note(child.target, child.value)
+            elif isinstance(child, ast.AugAssign | ast.For | ast.AsyncFor):
+                note(child.target, None)
+            elif isinstance(child, ast.comprehension):
+                note(child.target, None)
+            elif isinstance(child, ast.withitem) and child.optional_vars is not None:
+                note(child.optional_vars, None)
+            elif isinstance(child, ast.ExceptHandler) and child.name:
+                bound.setdefault(child.name, []).append(None)
+            elif isinstance(child, ast.Import | ast.ImportFrom):
+                for alias in child.names:
+                    bound.setdefault((alias.asname or alias.name).split(".")[0], []).append(None)
+            visit(child)
+
+    if isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef):
+        spec = scope.args
+        for arg in (*spec.posonlyargs, *spec.args, *spec.kwonlyargs, spec.vararg, spec.kwarg):
+            if arg is not None:
+                bound.setdefault(arg.arg, []).append(None)
+    visit(scope)
+    return bound
+
+
+_BINARY_FOLDS: dict[type[ast.operator], Callable[[float, float], float]] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+
+def _fold_constant(
+    node: ast.expr | None,
+    bindings: dict[str, list[ast.expr | None]],
+    seen: frozenset[str] = frozenset(),
+) -> tuple[bool, float | None]:
+    """Return ``(is a constant number, its value)`` for ``node``.
+
+    Constant-ness is the property that separates a fabrication from a reading: an
+    adapter that read the value off a payload writes an expression over something it
+    was given, and only an invented one can be folded to a number by reading the
+    source.
+
+    The value is folded as well as detected so the offence line reports the number
+    rather than the name it is hiding behind, and so an exemption cannot be
+    inherited by a differently-valued constant that merely reuses the spelling. It
+    is ``None`` when the expression is constant but its value cannot be computed
+    here — a name bound to two different constants on two branches, say.
+    """
+    if node is None:
+        return False, None
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, int | float) and not isinstance(node.value, bool):
+            return True, float(node.value)
+        return False, None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub | ast.UAdd):
+        ok, value = _fold_constant(node.operand, bindings, seen)
+        if not ok:
+            return False, None
+        if value is None:
+            return True, None
+        return True, -value if isinstance(node.op, ast.USub) else value
+    if isinstance(node, ast.BinOp):
+        left_ok, left = _fold_constant(node.left, bindings, seen)
+        right_ok, right = _fold_constant(node.right, bindings, seen)
+        if not (left_ok and right_ok):
+            return False, None
+        fold = _BINARY_FOLDS.get(type(node.op))
+        if fold is None or left is None or right is None:
+            return True, None
+        try:
+            return True, float(fold(left, right))
+        except (ArithmeticError, ValueError, OverflowError):
+            return True, None
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id not in _NUMERIC_COERCIONS or node.keywords:
+            return False, None
+        if not node.args:
+            return True, 0.0
+        ok, value = _fold_constant(node.args[0], bindings, seen)
+        if not ok or value is None:
+            return ok, None
+        return True, float(int(value)) if node.func.id == "int" else value
+    if isinstance(node, ast.Name):
+        values = bindings.get(node.id)
+        if not values or node.id in seen:
+            return False, None
+        nested = seen | {node.id}
+        folded = [_fold_constant(value, bindings, nested) for value in values]
+        if not all(ok for ok, _ in folded):
+            return False, None
+        distinct = {value for _, value in folded}
+        return True, distinct.pop() if len(distinct) == 1 else None
+    return False, None
+
+
+def _replace_calls(tree: ast.AST) -> list[ast.Call]:
+    """Every ``msgspec.structs.replace(...)`` call, however it was imported.
+
+    A record's fields are frozen, so ``replace`` is the *only* way to change one
+    after construction — and it takes the same keywords the constructor does, which
+    makes it the same fabrication surface. The class being replaced is not knowable
+    from the call, so the caller checks these against the union of every
+    measurement field rather than one record's.
+    """
+    aliases = {"replace"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "msgspec.structs":
+            aliases.update(alias.asname or alias.name for alias in node.names)
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "replace":
+            root = func.value
+            names = {n.id for n in ast.walk(root) if isinstance(n, ast.Name)} | {
+                a.attr for a in ast.walk(root) if isinstance(a, ast.Attribute)
+            }
+            if "structs" in names or "msgspec" in names:
+                calls.append(node)
+        elif isinstance(func, ast.Name) and func.id in aliases and func.id != "replace":
+            calls.append(node)
+    return calls
+
+
+def _keyword_values(call: ast.Call) -> list[tuple[str, ast.expr]]:
+    """Return ``(field, value)`` for every keyword the call sets, ``**{...}`` included.
+
+    ``Trade(**{"amount": 1.0})`` is the same construction as ``Trade(amount=1.0)``
+    with the keyword one layer of syntax away, and a scanner reading only
+    ``kw.arg`` sees no field name at all.
+    """
+    pairs: list[tuple[str, ast.expr]] = []
+    for kw in call.keywords:
+        if kw.arg is not None:
+            pairs.append((kw.arg, kw.value))
+        elif isinstance(kw.value, ast.Dict):
+            for key, value in zip(kw.value.keys, kw.value.values, strict=True):
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    pairs.append((key.value, value))
+    return pairs
+
+
+class _Fabrication(NamedTuple):
+    """One constant number found standing where a measurement belongs."""
+
+    module: str
+    lineno: int
+    built: str
+    field: str
+    source: str
+    value: float | None
+
+    def __str__(self) -> str:
+        shown = self.source if self.value is None else f"{self.source} == {self.value!r}"
+        return f"{self.module}:{self.lineno} {self.built}.{self.field} = {shown}"
+
+
+def _fabrications_in(
+    tree: ast.AST, fields: dict[str, frozenset[str]], relative: str
+) -> list[_Fabrication]:
+    """Return one offence per constant number standing in a measurement position."""
+    parents = {
+        child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+    }
+    cache: dict[int, dict[str, list[ast.expr | None]]] = {}
+
+    def bindings_for(node: ast.AST) -> dict[str, list[ast.expr | None]]:
+        chain: list[ast.AST] = []
+        current: ast.AST | None = node
+        while current is not None:
+            if isinstance(current, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef):
+                chain.append(current)
+            current = parents.get(current)
+        merged: dict[str, list[ast.expr | None]] = {}
+        for scope in reversed(chain):  # outermost first; the innermost binding wins
+            if id(scope) not in cache:
+                cache[id(scope)] = _scope_bindings(scope)
+            merged.update(cache[id(scope)])
+        return merged
+
+    every_field = frozenset().union(*fields.values()) if fields else frozenset()
+    subjects: list[tuple[str, frozenset[str], ast.Call]] = [
+        (cls, fields[cls], call)
+        for cls, call in _canonical_record_calls_by_class(tree, frozenset(fields))
+    ]
+    subjects += [("replace", every_field, call) for call in _replace_calls(tree)]
+
+    offences: list[_Fabrication] = []
+    for label, measurements, call in subjects:
+        bindings = bindings_for(call)
+        for field, value in _keyword_values(call):
+            if field not in measurements:
+                continue
+            constant, folded = _fold_constant(value, bindings)
+            if not constant:
+                continue
+            offences.append(
+                _Fabrication(relative, value.lineno, label, field, ast.unparse(value), folded)
+            )
+    return offences
+
+
+def _fabricated_measurements() -> dict[str, list[_Fabrication]]:
+    """Return ``{module: offences}`` for every constant number in a measurement position."""
     fields = _measurement_fields()
-    names = frozenset(fields)
     root = _source_root()
-    found: dict[str, list[str]] = {}
+    found: dict[str, list[_Fabrication]] = {}
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root).as_posix()
-        for cls, call in _canonical_record_calls_by_class(ast.parse(path.read_text()), names):
-            for kw in call.keywords:
-                if kw.arg not in fields[cls] or not isinstance(kw.value, ast.Constant):
-                    continue
-                if not isinstance(kw.value.value, int | float) or isinstance(kw.value.value, bool):
-                    continue
-                found.setdefault(relative, []).append(
-                    f"{relative}:{kw.value.lineno} {cls}.{kw.arg} = {kw.value.value!r}"
-                )
+        offences = _fabrications_in(ast.parse(path.read_text()), fields, relative)
+        if offences:
+            found[relative] = offences
     return found
 
 
@@ -716,27 +1007,96 @@ def test_gate3b_no_module_fabricates_a_measurement_without_declaring_it():
     ``SELECT sum(amount) … WHERE source='google_finance'`` return the poll count as share
     volume, and it lived in ``providers/``, where no rule looked.
     """
-    offenders = {
-        module: offences
+    offenders = [
+        str(offence)
         for module, offences in _fabricated_measurements().items()
-        if module not in FABRICATES_MEASUREMENTS
-    }
+        for offence in offences
+        if offence.value not in FABRICATES_MEASUREMENTS.get(module, ((), ""))[0]
+    ]
     assert not offenders, (
-        f"literal numbers in required measurement fields: "
-        f"{sorted(o for offences in offenders.values() for o in offences)}. "
-        f"Read the value from the source, or add the module to FABRICATES_MEASUREMENTS "
-        f"with the argument for why a constant is the honest encoding."
+        f"constant numbers in required measurement fields: {sorted(offenders)}. "
+        f"Read the value from the source, or declare it in FABRICATES_MEASUREMENTS "
+        f"with the argument for why that constant is the honest encoding."
     )
+
+
+_FABRICATION_HEADER = "import msgspec.structs\nfrom crocodile.core.schema.records import Trade\n"
+
+_EVASIONS: dict[str, str] = {
+    "literal": "Trade(amount=1.0)",
+    "module-level constant": "_SIZE = 1.0\nTrade(amount=_SIZE)",
+    "constant renamed twice": "_A = 1.0\n_B = _A\nTrade(amount=_B)",
+    "local variable": "def f():\n    size = 1.0\n    return Trade(amount=size)",
+    "folded arithmetic": "Trade(amount=1.0 * 1)",
+    "negated constant": "Trade(amount=-0.0)",
+    "coercion call": "Trade(amount=float(1))",
+    "coercion of a bound constant": "_SIZE = 1\ndef f():\n    return Trade(amount=float(_SIZE))",
+    "dict unpacking": 'Trade(**{"amount": 1.0})',
+    "aliased import": "from crocodile.core.schema.records import Trade as T\nT(amount=1.0)",
+    "msgspec replace": "msgspec.structs.replace(t, amount=1.0)",
+    "msgspec replace, imported": (
+        "from msgspec.structs import replace as swap\nswap(t, amount=1.0)"
+    ),
+}
+"""Every spelling of one fabrication the scanner has to read as the same thing.
+
+The list is the review's, verbatim, plus the two chained forms it implies. The
+scanner that shipped caught the first row and missed every other one — which is
+exactly how ``_UNPUBLISHED_SIZE = 0.0`` came to satisfy a gate whose whole subject
+it is, and why restoring ``_ASSUMED_SIZE = 1.0`` would also have satisfied it.
+"""
+
+_HONEST_READINGS: dict[str, str] = {
+    "read off a payload": "Trade(amount=float(payload['size']))",
+    "read off an attribute": "Trade(amount=msg.size)",
+    "computed from an input": "def f(n):\n    return Trade(amount=n * 2)",
+    "a name that is not always constant": (
+        "def f(msg):\n    size = 0.0\n    if msg:\n        size = msg.size\n    "
+        "return Trade(amount=size)"
+    ),
+    "a loop variable": "def f(sizes):\n    for size in sizes:\n        yield Trade(amount=size)",
+}
+"""Readings the scanner must *not* flag, so the gate is a filter and not a ban.
+
+The last one is the discrimination that matters: a name assigned ``0.0`` on one
+branch and a payload value on another is not a constant, and treating it as one
+would flag ``resample_trades_to_bars``'s ``volume`` beside
+``resample_quotes_to_bars``'s.
+"""
+
+
+@pytest.mark.parametrize("form", sorted(_EVASIONS), ids=lambda k: k.replace(" ", "_"))
+def test_gate3b_the_fabrication_scanner_sees_through_every_spelling(form: str) -> None:
+    """A gate that only sees the literal spelling is a gate that teaches people to rename."""
+    tree = ast.parse(_FABRICATION_HEADER + _EVASIONS[form])
+
+    offences = _fabrications_in(tree, _measurement_fields(), "<probe>")
+
+    assert offences, f"{form!r} evaded the scanner: {_EVASIONS[form]!r}"
+
+
+@pytest.mark.parametrize("form", sorted(_HONEST_READINGS), ids=lambda k: k.replace(" ", "_"))
+def test_gate3b_the_fabrication_scanner_leaves_a_real_reading_alone(form: str) -> None:
+    """The other half of the gate: an adapter reading a payload writes an expression."""
+    tree = ast.parse(_FABRICATION_HEADER + _HONEST_READINGS[form])
+
+    assert _fabrications_in(tree, _measurement_fields(), "<probe>") == []
 
 
 def test_gate3b_the_fabrication_list_cannot_hold_a_stale_or_silent_entry():
     """Self-cleaning, on the same discipline as DERIVES_RECORDS and IRREDUCIBLE."""
     fabricated = _fabricated_measurements()
-    for relative, why in FABRICATES_MEASUREMENTS.items():
+    for relative, (values, why) in FABRICATES_MEASUREMENTS.items():
         assert why.strip(), f"{relative} is on FABRICATES_MEASUREMENTS with no justification"
         assert relative in fabricated, (
             f"FABRICATES_MEASUREMENTS names {relative}, which fabricates nothing any more; "
             f"drop the entry rather than leave a licence lying around"
+        )
+        found = {offence.value for offence in fabricated[relative]}
+        stale = sorted(v for v in values if v not in found)
+        assert not stale, (
+            f"FABRICATES_MEASUREMENTS licenses {stale} in {relative}, which no longer "
+            f"writes it; drop the value rather than leave a licence lying around"
         )
 
 
@@ -797,9 +1157,13 @@ why the value is asserted rather than taken on trust — the same discipline
 :data:`crocodile.core.capability.IRREDUCIBLE` carries for the symmetry gate.
 """
 
-_PROBE_VALUES = (0, 1, 2, 3)
-"""Ints to feed a formula. Small and non-negative: every formula in the registry
-validates its inputs, and a probe that only ever trips validation measures nothing."""
+_PROBE_VALUES = (0, 1, 2, 3, 4, 391, 1_000_000)
+"""Ints to feed a formula. Non-negative, because every formula in the registry validates
+its inputs and a probe that only ever trips validation measures nothing — but not all
+small. The first version stopped at 3, so a key read only behind a guard that rejects
+everything below 4 was never reached at all, and a formula could hide a whole branch
+from the probe by validating its way past it. 391 is one bar past a full US session,
+which is the smallest input that separates a saturating formula from a linear one."""
 
 
 class _KeyRecorder(Mapping[str, object]):
