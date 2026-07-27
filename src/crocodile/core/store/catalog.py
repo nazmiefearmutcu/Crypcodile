@@ -546,6 +546,50 @@ class Catalog:
 
         return sorted(channels)
 
+    def channel_row_counts(self) -> dict[str, int]:
+        """Return every channel in the lake mapped to its row count.
+
+        The one answer to "what is in my lake", because there were two. The crypto CLI
+        walked the filesystem, so a partition directory with no parquet parts yet showed
+        as ``0``; the equity CLI listed ``_registered_channels``, so the same directory
+        was absent entirely — and if it was the only one, the lake reported itself empty.
+        Two commands of the same name, one lake, different answers.
+
+        Discovery is the filesystem walk. A ``channel=`` directory that exists is
+        something the lake has: it is what ingestion having started and written nothing
+        looks like, and collapsing that into "no such channel" makes a stalled collector
+        indistinguishable from one that was never configured. The view-backed listing can
+        only ever be a subset — DuckDB refuses to register a view over a glob that matches
+        no file — so it cannot report the case at all.
+
+        Counts distinguish zero from unknown, which is the distinction the two sentinels
+        in the tree were reaching for and getting inconsistently:
+
+        * a channel with no registered view counts **0** — there are no parquet parts, so
+          there are no rows, and that is a measurement rather than a failure;
+        * a channel whose view exists but whose ``COUNT(*)`` fails counts **-1**, meaning
+          unknown. Reporting that as ``0`` would state a row count nobody obtained.
+
+        The count goes through DuckDB's relation API rather than a ``SELECT count(*) FROM
+        "{name}"`` built by hand. Every copy of this loop in the tree escaped the name for
+        a quoted identifier and was correct to; passing the name as an argument means
+        there is no identifier to escape and no fourth copy of that reasoning to get wrong.
+
+        Keys follow :meth:`list_channels` order (sorted).
+        """
+        self._refresh_views()
+        counts: dict[str, int] = {}
+        for channel in self.list_channels():
+            if channel not in self._registered_channels:
+                counts[channel] = 0
+                continue
+            try:
+                row = self._conn.view(channel).count("*").fetchone()
+                counts[channel] = int(row[0]) if row else -1
+            except Exception:
+                counts[channel] = -1
+        return counts
+
     def list_dates(self, channel: str) -> list[str]:
         """Return sorted distinct ``date=`` partition values for *channel*.
 

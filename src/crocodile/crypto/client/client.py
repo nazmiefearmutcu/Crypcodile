@@ -227,10 +227,12 @@ class CrypcodileClient:
         DuckDB views). Avoids the heavier per-symbol :meth:`inventory`
         aggregate.
 
-        On query failure for a channel (missing view, empty partition without
-        parquet, DuckDB error), that channel reports ``-1`` so callers can
-        distinguish "unknown/unavailable" from a true zero-row channel.
-        Channel names are SQL-escaped (``"`` → ``""``) for quoted identifiers.
+        A channel with no registered view — an empty partition directory, no parquet
+        parts — reports ``0``: there are no rows, which is a measurement rather than a
+        failure. A channel whose view exists but cannot be counted reports ``-1``,
+        meaning unknown. This method used to report both cases as ``-1``, so it
+        disagreed with the CLI ``catalog`` command about the same lake; both now project
+        :meth:`~crocodile.core.store.catalog.Catalog.channel_row_counts`.
 
         Response shape::
 
@@ -245,18 +247,10 @@ class CrypcodileClient:
         Shared by REST ``GET /api/v1/catalog/stats``, MCP ``catalog_stats``,
         and CLI ``catalog-stats``.
         """
-        channels = self.list_channels()
-        row_counts: dict[str, int] = {}
-        for ch in channels:
-            try:
-                escaped = str(ch).replace('"', '""')
-                row_df = self.query(f'SELECT count(*) AS n FROM "{escaped}"')
-                row_counts[ch] = int(row_df["n"][0])
-            except Exception:
-                row_counts[ch] = -1
+        row_counts = self._catalog.channel_row_counts()
         return {
             "row_counts": row_counts,
-            "channel_count": len(channels),
+            "channel_count": len(row_counts),
         }
 
     def inventory(

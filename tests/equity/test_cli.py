@@ -72,6 +72,32 @@ async def test_cli_catalog_exits_zero_lists_channels(tmp_path: pathlib.Path) -> 
     assert "book_snapshot" in result.output
 
 
+def test_cli_catalog_lists_a_partition_that_has_no_parquet_yet(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The equity half of the ``catalog`` collision, which nothing pinned before.
+
+    This command listed ``Catalog._registered_channels``, and DuckDB registers no view
+    over a glob matching no file — so a partition directory that ingestion had created
+    but not yet written to was absent from the answer, and when it was the only one the
+    lake reported itself empty. The crypto command answered ``0`` for the same lake. That
+    is the state a stalled collector leaves behind, and it is exactly the state worth
+    being able to see.
+    """
+    for channel in ("trade", "funding"):
+        (tmp_path / f"source=alpaca/channel={channel}").mkdir(parents=True)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["catalog", "--data-dir", str(tmp_path)])
+
+    assert result.exit_code == 0, f"stdout:\n{result.output}"
+    assert "No data found" not in result.output
+    assert "trade" in result.output
+    assert "funding" in result.output
+    rows = [ln for ln in result.output.splitlines() if "trade" in ln or "funding" in ln]
+    assert all(ln.strip().endswith("0") for ln in rows), result.output
+
+
 async def test_cli_export_csv_creates_file(tmp_path: pathlib.Path) -> None:
     """``export`` with fmt=csv writes a non-empty file, exit code 0."""
     await _write_fixtures(tmp_path)

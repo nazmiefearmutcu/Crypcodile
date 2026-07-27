@@ -914,10 +914,11 @@ def catalog(
 ) -> None:
     """List channels present in the data lake with their row counts.
 
-    Channel discovery uses the filesystem ``list_channels`` walk
-    (``exchange=*/channel=*``), so empty partition directories appear even
-    before parquet parts exist. Row counts query registered DuckDB views;
-    unregistered / empty partitions report ``0``.
+    Channel discovery uses the filesystem walk, so empty partition directories
+    appear even before parquet parts exist and report ``0`` rows. A channel whose
+    view exists but cannot be counted reports ``-1``, meaning unknown. See
+    :meth:`~crocodile.core.store.catalog.Catalog.channel_row_counts`, which is the
+    one implementation this and the equity command both project.
 
     Use ``--symbols`` to print a per-symbol inventory summary instead
     (inventory still requires queryable parquet/views; empty partitions
@@ -952,27 +953,16 @@ def catalog(
             )
         raise typer.Exit(code=0)
 
-    # Filesystem discovery (parity with catalog-summary / REST / MCP).
-    channels: list[str] = client.list_channels()
+    # One implementation, shared with the equity command and with catalog-stats.
+    counts = cat.channel_row_counts()
 
-    if not channels:
+    if not counts:
         typer.echo("No data found in: " + str(data_dir))
         raise typer.Exit(code=0)
 
     typer.echo(f"{'channel':<24}  {'rows':>10}")
     typer.echo("-" * 36)
-    registered = set(cat._registered_channels)
-    for ch in channels:
-        if ch not in registered:
-            # Empty partition dir (no parquet → no DuckDB view).
-            n = 0
-        else:
-            try:
-                escaped = ch.replace('"', '""')
-                row_df = cat.query(f'SELECT count(*) AS n FROM "{escaped}"')
-                n = int(row_df["n"][0])
-            except Exception:
-                n = 0
+    for ch, n in counts.items():
         typer.echo(f"{ch:<24}  {n:>10,}")
 
 

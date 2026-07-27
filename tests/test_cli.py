@@ -239,34 +239,35 @@ def test_cli_catalog_symbols_empty_partitions_only(tmp_path: pathlib.Path) -> No
     assert "No data found" in result.output
 
 
-def test_cli_catalog_uses_list_channels(
+def test_cli_catalog_delegates_discovery_rather_than_reimplementing_it(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
-    """Default ``catalog`` delegates channel discovery to client.list_channels."""
+    """Migrated: this used to pin ``client.list_channels`` being called by the command.
+
+    The command no longer does its own discovery-and-count loop. There were three such
+    loops — this one, the equity ``catalog`` command, and ``catalog_stats`` — and they
+    gave three different answers for an empty partition directory. All three now project
+    ``Catalog.channel_row_counts``, so what is worth pinning is the delegation, not which
+    of the two lower-level calls it happens to make.
+    """
     from unittest.mock import MagicMock
 
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
 
-    mock_client = MagicMock()
-    mock_client.list_channels.return_value = ["trade", "funding"]
-    mock_client._catalog = MagicMock()
-    mock_client._catalog._registered_channels = set()  # no views → 0 rows
+    catalog = MagicMock()
+    # No views registered, so both channels are empty partition dirs and count 0.
+    catalog.channel_row_counts.return_value = {"trade": 0, "funding": 0}
 
     class _FakeClient:
         def __init__(self, data_dir=None) -> None:  # noqa: ANN001
-            self._catalog = mock_client._catalog
+            self._catalog = catalog
 
         def list_channels(self):
-            return mock_client.list_channels()
+            raise AssertionError("the command must not run its own discovery loop")
 
-        def inventory(self):
-            return mock_client.inventory()
-
-    monkeypatch.setattr(
-        "crocodile.crypto.client.client.CrypcodileClient", _FakeClient
-    )
+    monkeypatch.setattr("crocodile.crypto.client.client.CrypcodileClient", _FakeClient)
     monkeypatch.setattr("crocodile.crypto.legacy.cli.resolve_data_dir", lambda d: d)
 
     runner = CliRunner()
@@ -274,12 +275,7 @@ def test_cli_catalog_uses_list_channels(
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert "trade" in result.output
     assert "funding" in result.output
-    mock_client.list_channels.assert_called_once_with()
-
-
-# ---------------------------------------------------------------------------
-# catalog-summary command
-# ---------------------------------------------------------------------------
+    catalog.channel_row_counts.assert_called_once_with()
 
 
 def test_cli_catalog_summary_empty_lake(tmp_path: pathlib.Path) -> None:

@@ -1203,26 +1203,29 @@ def query(
 def catalog(
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
-    """List channels present in the data lake with their row counts."""
+    """List channels present in the data lake with their row counts.
+
+    Channel discovery uses the filesystem walk, so a partition directory that exists
+    with no parquet parts yet appears and reports ``0`` rows. This command used to list
+    ``Catalog._registered_channels`` instead, which made such a directory vanish — and,
+    when it was the only one, made the lake report itself empty. See
+    :meth:`~crocodile.core.store.catalog.Catalog.channel_row_counts`, which is the one
+    implementation this and the crypto command both project.
+    """
     from crocodile.core.store.catalog import Catalog
     from crocodile.equity.client.client import StockodileClient
 
     data_dir = resolve_data_dir(data_dir)
     cat: Catalog = StockodileClient(data_dir=data_dir)._catalog
-    channels: list[str] = sorted(cat._registered_channels)
+    counts = cat.channel_row_counts()
 
-    if not channels:
+    if not counts:
         typer.echo("No data found in: " + str(data_dir))
         raise typer.Exit(code=0)
 
     typer.echo(f"{'channel':<24}  {'rows':>10}")
     typer.echo("-" * 36)
-    for ch in channels:
-        try:
-            row_df = cat.query(f'SELECT count(*) AS n FROM "{ch}"')
-            n = int(row_df["n"][0])
-        except Exception:
-            n = -1
+    for ch, n in counts.items():
         typer.echo(f"{ch:<24}  {n:>10,}")
 
 
