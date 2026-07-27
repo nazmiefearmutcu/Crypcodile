@@ -44,7 +44,7 @@ from crocodile.equity.analytics.returns import (
     calculate_log_returns,
     calculate_simple_returns,
 )
-from crocodile.equity.analytics.slippage import estimate_slippage
+from crocodile.core.analytics.slippage import estimate_slippage
 
 __all__ = [
     "bsm_delta",

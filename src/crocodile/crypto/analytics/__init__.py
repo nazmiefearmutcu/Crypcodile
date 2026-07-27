@@ -11,7 +11,9 @@ from typing import Any
 _EXPORTS: dict[str, str] = {
     "calculate_ofi": "crocodile.crypto.analytics.ofi",
     "parse_interval_to_ns": "crocodile.crypto.analytics.ofi",
-    "estimate_slippage": "crocodile.crypto.analytics.slippage",
+    "estimate_slippage": "crocodile.core.analytics.slippage",
+    "parse_base_quote": "crocodile.core.analytics.slippage",
+    "parse_size_input": "crocodile.core.analytics.slippage",
     "track_whale_alerts": "crocodile.crypto.analytics.whale",
     "plot_volsurface_3d": "crocodile.crypto.analytics.volsurface_3d",
     "calculate_bollinger_bands": "crocodile.core.analytics.indicators",

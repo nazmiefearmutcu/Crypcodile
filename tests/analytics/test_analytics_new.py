@@ -15,7 +15,7 @@ from crocodile.core.schema.records import BookSnapshot, Liquidation, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.ofi import calculate_ofi, parse_interval_to_ns
-from crocodile.crypto.analytics.slippage import estimate_slippage
+from crocodile.core.analytics.slippage import estimate_slippage
 from crocodile.crypto.analytics.whale import track_whale_alerts
 from crocodile.crypto.client.client import CrypcodileClient
 from crocodile.crypto.legacy.cli import app

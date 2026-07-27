@@ -588,9 +588,9 @@ class CrypcodileClient:
     ) -> pl.DataFrame:
         """Estimate execution slippage for a given symbol and size.
 
-        Thin wrapper over :func:`crocodile.crypto.analytics.slippage.estimate_slippage`.
+        Thin wrapper over :func:`crocodile.core.analytics.slippage.estimate_slippage`.
         """
-        from crocodile.crypto.analytics.slippage import estimate_slippage as _estimate_slippage
+        from crocodile.core.analytics.slippage import estimate_slippage as _estimate_slippage
 
         return _estimate_slippage(self._catalog, symbol, side, size, size_unit)
 

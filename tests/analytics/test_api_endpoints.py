@@ -84,7 +84,7 @@ def test_simulate_price_impact_route_success() -> None:
     })
 
     with patch(
-        "crocodile.crypto.analytics.slippage.estimate_slippage",
+        "crocodile.core.analytics.slippage.estimate_slippage",
         return_value=mock_df,
     ):
         resp = client.post(
@@ -150,7 +150,7 @@ def test_simulate_price_impact_invalid_amount() -> None:
 
 def test_simulate_price_impact_estimation_error() -> None:
     with patch(
-        "crocodile.crypto.analytics.slippage.estimate_slippage",
+        "crocodile.core.analytics.slippage.estimate_slippage",
         side_effect=ValueError("No book snapshots found"),
     ):
         resp = client.post(
@@ -179,7 +179,7 @@ def test_simulate_price_impact_non_finite_floats_json_safe_null() -> None:
         }
     )
     with patch(
-        "crocodile.crypto.analytics.slippage.estimate_slippage",
+        "crocodile.core.analytics.slippage.estimate_slippage",
         return_value=mock_df,
     ):
         resp = client.post(

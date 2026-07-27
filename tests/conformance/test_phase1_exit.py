@@ -237,7 +237,10 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # 431 → 430: the tree had been sitting a finding below its own cap. A budget with
 # slack in it is a budget that lets the next finding in for free, which is the
 # whole thing a ratchet is for.
-_LEGACY_RUFF_BUDGET = 430
+# 430 → 429: the two forked `analytics/slippage.py` modules merged into one under
+# `core`, which is held to zero, so their inherited findings left the legacy tree
+# with them.
+_LEGACY_RUFF_BUDGET = 429
 
 
 def _ruff(*paths: str) -> list[str]:

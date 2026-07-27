@@ -1523,7 +1523,7 @@ async def simulate_price_impact(
         raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' is not supported.")
 
     try:
-        from crocodile.equity.analytics import slippage
+        from crocodile.core.analytics import slippage
 
         catalog = _get_api_catalog()
         df = slippage.estimate_slippage(

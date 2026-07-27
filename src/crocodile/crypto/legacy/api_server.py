@@ -3138,7 +3138,7 @@ async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, A
     # Validate size string or float value
     if isinstance(size, str):
         try:
-            from crocodile.crypto.analytics.slippage import parse_size_input
+            from crocodile.core.analytics.slippage import parse_size_input
             val, _ = parse_size_input(size)
             if val <= 0:
                 raise ValueError
@@ -3189,7 +3189,7 @@ async def simulate_price_impact(payload: PriceImpactPayload) -> list[dict[str, A
         raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' is not supported.")
 
     try:
-        from crocodile.crypto.analytics import slippage
+        from crocodile.core.analytics import slippage
         catalog = _get_api_catalog()
         df = slippage.estimate_slippage(
             catalog=catalog,
