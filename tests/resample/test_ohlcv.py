@@ -275,11 +275,18 @@ def data_dir_with_unknown(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_buy_sell_volume_invariant_with_unknown_trades(data_dir_with_unknown: Path) -> None:
-    """buy_volume + sell_volume == volume for every bar even when Side.UNKNOWN trades exist.
+def test_an_unclassified_trade_is_credited_to_neither_side(data_dir_with_unknown: Path) -> None:
+    """Migrated: this used to pin ``buy_volume + sell_volume == volume`` with UNKNOWN prints.
 
-    The fix: sell_volume = CASE WHEN side='buy' THEN 0.0 ELSE amount END
-    so that UNKNOWN trades are counted in sell_volume, keeping the invariant.
+    That identity held only because ``sell_volume`` was spelled as *everything that is not
+    a buy*, which makes it a statement that every print nobody classified was a sell. The
+    merge with the equity resampler is what made the cost visible: on a consolidated equity
+    tape ``Side.UNKNOWN`` is the normal case, so the same SQL reported entire sessions as
+    seller-initiated. It was equally wrong here, just rarer.
+
+    So the invariant is now an inequality, and the gap is the volume no source attributed.
+    Nothing is lost — the remainder is exactly recoverable, which is what the last
+    assertion states.
     """
     cat = Catalog(data_dir_with_unknown)
     df = resample_ohlcv(cat, "deribit:BTC-PERPETUAL", _ts(0), _ts(_1S_NS), "1m")
@@ -293,15 +300,52 @@ def test_buy_sell_volume_invariant_with_unknown_trades(data_dir_with_unknown: Pa
     # buy_volume = 1.0 (only the BUY trade)
     assert abs(row["buy_volume"] - 1.0) < 1e-9, f"buy_volume={row['buy_volume']}"
 
-    # sell_volume = 2.0 + 0.5 = 2.5 (sell + unknown, i.e. non-buy)
-    assert abs(row["sell_volume"] - 2.5) < 1e-9, f"sell_volume={row['sell_volume']}"
+    # sell_volume = 2.0 — the SELL trade alone. The 0.5 UNKNOWN print used to land here.
+    assert abs(row["sell_volume"] - 2.0) < 1e-9, f"sell_volume={row['sell_volume']}"
 
-    # Core invariant: buy_volume + sell_volume == volume (no amount is lost)
-    delta = abs(row["buy_volume"] + row["sell_volume"] - row["volume"])
-    assert delta < 1e-9, (
-        f"buy_volume({row['buy_volume']}) + sell_volume({row['sell_volume']}) "
-        f"!= volume({row['volume']}), delta={delta}"
-    )
+    # No volume is invented: the two sides never exceed the total.
+    assert row["buy_volume"] + row["sell_volume"] <= row["volume"] + 1e-9
+
+    # And none is hidden: the remainder is the unattributed volume, exactly.
+    unattributed = row["volume"] - row["buy_volume"] - row["sell_volume"]
+    assert abs(unattributed - 0.5) < 1e-9, f"unattributed={unattributed}"
+
+
+def test_a_view_with_no_side_column_reports_no_aggressor_rather_than_failing(
+    tmp_path: Path,
+) -> None:
+    """A lake from a provider that never classified the aggressor has no ``side`` at all.
+
+    The equity resampler this one absorbed never referenced ``side``, so it read such a
+    lake happily; this SQL names the column and DuckDB fails the whole query on a name it
+    cannot resolve. Reachable only since the merge, which is why it is pinned here.
+    """
+    path = tmp_path / "source=alpaca/channel=trade/date=2026-06-21/part-0.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        [
+            {
+                "source": "alpaca",
+                "asset_class": "equity",
+                "channel": "trade",
+                "symbol": "alpaca:AAPL",
+                "symbol_raw": "AAPL",
+                "source_ts": None,
+                "local_ts": _ts(0),
+                "id": "1",
+                "price": 150.0,
+                "amount": 10.0,
+            }
+        ]
+    ).write_parquet(path)
+
+    df = resample_ohlcv(Catalog(tmp_path), "alpaca:AAPL", _ts(0), _ts(_1S_NS), "1m")
+
+    assert len(df) == 1
+    row = df.row(0, named=True)
+    assert row["volume"] == 10.0
+    assert row["buy_volume"] == 0.0, "no side column means no aggressor was ever stated"
+    assert row["sell_volume"] == 0.0
 
 
 def test_resample_nan_trades_ignored(tmp_path: Path) -> None:

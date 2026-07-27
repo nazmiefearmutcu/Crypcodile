@@ -585,7 +585,9 @@ def test_resampling_the_span_uses_every_print_and_opens_at_the_earliest_one(
     assert bar["open"] == 150.0
     assert bar["close"] == 154.0
     assert bar["volume"] == pytest.approx(233.0)
-    assert bar["trade_count"] == 5
+    # Migrated from ``trade_count``: the two catalog resamplers merged into one, and
+    # the survivor emits ``num_trades`` — the canonical record field and lake column.
+    assert bar["num_trades"] == 5
 
 
 # ---------------------------------------------------------------------------

@@ -141,9 +141,9 @@ def resample_metrics(
     Raises:
         ValueError: If ``interval`` cannot be parsed.
     """
-    # Validate and translate the interval — both output values come from our
-    # own regex validation, never from raw user input; safe to embed in SQL.
-    interval_sql, _unit = _parse_interval(interval)
+    # Validate and translate the interval — every component comes from our own
+    # regex validation, never from raw user input; safe to embed in SQL.
+    interval_sql = _parse_interval(interval).sql
     interval_label = interval.strip().lower()
 
     # Refresh catalog views so newly written files are visible.

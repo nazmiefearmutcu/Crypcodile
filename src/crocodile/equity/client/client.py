@@ -144,13 +144,13 @@ class StockodileClient:
     ) -> pl.DataFrame:
         """Resample trade data in the DuckDB Catalog into OHLCV bars.
 
-        Uses the *equity* resampler: the extra columns are ``vwap``/``trade_count``.
-        The identically named ``crocodile.core.resample.ohlcv.resample_ohlcv`` splits
-        the same ``amount`` column by ``side`` instead, which on an equity lake credits
-        every print to ``sell_volume`` rather than returning nothing — see
-        ``crocodile.equity.resample.ohlcv``'s module docstring.
+        There is one resampler now. It used to matter which of two identically named
+        functions this reached — the equity one emitted ``vwap``/``trade_count`` and the
+        crypto one ``buy_volume``/``sell_volume``/``num_trades`` — and the merged
+        implementation emits all of them. The count is spelled ``num_trades``, which is
+        what the canonical ``OHLCV`` record and the lake column call it.
         """
-        from crocodile.equity.resample.ohlcv import resample_ohlcv
+        from crocodile.core.resample.ohlcv import resample_ohlcv
 
         return resample_ohlcv(
             self._catalog,

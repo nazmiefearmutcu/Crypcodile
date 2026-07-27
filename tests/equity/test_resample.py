@@ -26,12 +26,25 @@ from crocodile.equity.resample import (
 )
 
 
-def test_parse_interval() -> None:
-    """Test parse_interval translates shorthand correctly."""
-    assert parse_interval("1s") == (1_000_000_000, "INTERVAL '1 second'", "1s")
-    assert parse_interval("5m") == (300_000_000_000, "INTERVAL '5 minute'", "5m")
-    assert parse_interval("1h") == (3_600_000_000_000, "INTERVAL '1 hour'", "1h")
-    assert parse_interval("1d") == (86_400_000_000_000, "INTERVAL '1 day'", "1d")
+def test_parse_interval_names_its_components_instead_of_numbering_them() -> None:
+    """Migrated: this used to pin a bare 3-tuple, against an equity-only implementation.
+
+    ``core`` had a *different* ``parse_interval`` of the same name and signature returning
+    a 2-tuple whose second element was the bare unit word where this one's was the SQL
+    literal, so importing the wrong one either raised on the unpack or built SQL out of the
+    word ``"minute"``. One function now, and it returns a named structure precisely so that
+    positional unpacking — which is what made the arity difference silent — is not how
+    callers read it.
+    """
+    assert parse_interval("5m").ns == 300_000_000_000
+    assert parse_interval("5m").sql == "INTERVAL '5 minute'"
+    assert parse_interval("5m").polars == "5m"
+    assert parse_interval("5m").unit == "minute"
+
+    assert parse_interval("1s").ns == 1_000_000_000
+    assert parse_interval("1h").ns == 3_600_000_000_000
+    assert parse_interval("1d").ns == 86_400_000_000_000
+    assert parse_interval("1w").ns == 604_800_000_000_000
 
     with pytest.raises(ValueError):
         parse_interval("1x")
@@ -623,7 +636,10 @@ def test_resample_ohlcv_catalog() -> None:
         assert res.row(0, named=True)["close"] == 152.0
         assert res.row(0, named=True)["volume"] == 30.0
         assert res.row(0, named=True)["vwap"] == pytest.approx((150.0 * 10.0 + 152.0 * 20.0) / 30.0)
-        assert res.row(0, named=True)["trade_count"] == 2
+        # Migrated from ``trade_count``: the merged catalog resampler emits the
+        # canonical spelling, which is what the ``OHLCV`` record and the lake column
+        # are called. The Polars frame paths above still say ``trade_count``.
+        assert res.row(0, named=True)["num_trades"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1294,6 +1310,7 @@ def test_a_filled_empty_bucket_carries_the_tail_too() -> None:
     assert len(res) > 1
     assert res["prov_basis"].to_list() == ["ohlcv_from_trades"] * len(res)
     assert res["prov_confidence"].null_count() == 0
-    by_count = dict(zip(res["trade_count"].to_list(), res["prov"].to_list(), strict=True))
+    # Migrated from ``trade_count``: see test_resample_ohlcv_catalog.
+    by_count = dict(zip(res["num_trades"].to_list(), res["prov"].to_list(), strict=True))
     assert by_count[0] == Provenance.DERIVED.value, "an empty bucket rests on the basis"
     assert by_count[3] == Provenance.SYNTHETIC.value, "a scraped bucket is floored by its prints"
