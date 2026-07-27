@@ -7,6 +7,8 @@ The plan specifies:
   - Outputs are globally non-decreasing in local_ts
 """
 
+import msgspec.structs
+
 from crocodile.core.replay.merge import replay
 from crocodile.core.schema.enums import AssetClass, Side
 from crocodile.core.schema.records import BookDelta, Trade
@@ -120,3 +122,69 @@ def test_null_source_ts_consistent_with_present_across_streams():
     result = list(replay([iter([present_trade]), iter([null_trade])]))
     assert result[0].source_ts is None   # NULL comes first
     assert result[1].source_ts == 1
+
+
+# ---------------------------------------------------------------------------
+# The fourth element of the sort key: which origin field wins
+# ---------------------------------------------------------------------------
+
+
+def test_the_origin_tie_break_reads_the_provider_before_the_listing_venue() -> None:
+    """Nothing else in this suite can tell the two orders apart.
+
+    ``_ORIGIN_FIELDS`` was reordered to put ``provider`` ahead of ``exchange``,
+    which is right — equity's ``Instrument`` carries both and they mean different
+    things, the data source versus where the security is listed — but it changes
+    the fourth element of ``_sort_key`` and so the replay order of records that
+    tie on ``(local_ts, source_ts, seq)``. Reverting it would produce a
+    differently ordered stream with every other test still green, because only a
+    record naming *both* fields can distinguish the two orders and no canonical
+    record does.
+    """
+    from crocodile.core.replay.merge import _sort_key
+    from crocodile.equity.schema.records import Instrument
+
+    key = _sort_key(
+        Instrument(  # type: ignore[arg-type]
+            provider="alpaca",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=100,
+            source_ts=90,
+            name="Apple Inc.",
+            exchange="NASDAQ",
+        )
+    )
+
+    assert key[3] == "alpaca", "the tie-break must name who served the data, not where it lists"
+
+
+def test_records_tying_on_everything_else_are_ordered_by_origin() -> None:
+    """The determinism claim, exercised rather than assumed.
+
+    Two records at the same instant with no sequence number tie on the first
+    three key elements. The heap would otherwise return them in whatever order
+    the streams were passed in, so the order is asserted both ways round.
+    """
+    binance = _trade(100, 90)
+    deribit = msgspec.structs.replace(binance, source="deribit")
+    assert binance.source == "test"
+
+    forwards = [r.source for r in replay([iter([binance]), iter([deribit])])]
+    backwards = [r.source for r in replay([iter([deribit]), iter([binance])])]
+
+    assert forwards == backwards == ["deribit", "test"]
+
+
+def test_the_replay_and_the_store_agree_on_the_origin_order() -> None:
+    """Two copies of one precedence, kept honest by comparison.
+
+    ``replay.merge`` states the order separately from ``store.rows`` rather than
+    importing it, so the replay layer does not depend on the store. That is a
+    defensible split only while something notices when they diverge — and the
+    divergence this guards is the one that already happened once, in ``_header``.
+    """
+    from crocodile.core.replay.merge import _ORIGIN_FIELDS as MERGE_ORDER
+    from crocodile.core.store.rows import _ORIGIN_FIELDS as STORE_ORDER
+
+    assert MERGE_ORDER == STORE_ORDER
