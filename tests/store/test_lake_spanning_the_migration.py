@@ -43,6 +43,14 @@ and the canonical half is bucketed because that is what ``ParquetSink`` writes t
 Both halves go through a real schema — the canonical one through the sink itself, the
 legacy ones through the schema ``ParquetSink`` declares for each family — so no side
 is a hand-shaped dict pretending to be a file.
+
+**The five on-chain tags are here because their structs were deleted.** The equity fork
+carried its own ``limit_order_fill``, ``por_update``, ``balance_correction``,
+``reserve_data_updated`` and ``liquidation_call``, and the union merge kept only the
+crypto copies. The rows those structs wrote are still on disk, so each tag gets a
+legacy-dialect partition below and the reachability test counts it. Their only previous
+coverage constructed the retired structs directly, which is coverage that leaves with
+them.
 """
 
 from __future__ import annotations
@@ -56,7 +64,18 @@ import pytest
 
 from crocodile.core.schema.enums import AssetClass, OptType, Side
 from crocodile.core.schema.provenance import Provenance
-from crocodile.core.schema.records import OHLCV, DepthProfile, Instrument, OptionsChain, Trade
+from crocodile.core.schema.records import (
+    OHLCV,
+    BalanceCorrection,
+    DepthProfile,
+    Instrument,
+    LimitOrderFill,
+    LiquidationCall,
+    OptionsChain,
+    PoRUpdate,
+    ReserveDataUpdated,
+    Trade,
+)
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink, _channel_schema
 from crocodile.core.store.rows import (
@@ -74,6 +93,62 @@ _SOURCE = "alpaca"
 
 _CRYPTO_SYMBOL = "binance:BTC-USDT"
 _CRYPTO_SOURCE = "binance"
+
+_ONCHAIN_SYMBOL = "ETH-USDC"
+_ONCHAIN_SOURCE = "base_onchain"
+
+_LEGACY_ONCHAIN_BODIES: dict[str, dict[str, Any]] = {
+    "limit_order_fill": {
+        "tx_hash": "0xabc",
+        "log_index": 1,
+        "protocol": "1inch",
+        "maker": "0x1",
+        "taker": "0x2",
+        "maker_token": "0xa",
+        "taker_token": "0xb",
+        "maker_amount": 1.5,
+        "taker_amount": 2.5,
+        "order_hash": "0xord",
+    },
+    "por_update": {
+        "feed_address": "0xfeed",
+        "token_address": "0xtok",
+        "reserves": 100.0,
+        "total_supply": 100.0,
+        "backing_ratio": 1.0,
+        "is_backed": True,
+    },
+    "balance_correction": {
+        "holder_address": "0xhold",
+        "token_address": "0xtok",
+        "local_balance": 9.0,
+        "onchain_balance": 10.0,
+        "correction_amount": 1.0,
+    },
+    "reserve_data_updated": {
+        "reserve": "0xres",
+        "liquidity_rate": 0.02,
+        "stable_borrow_rate": 0.05,
+        "variable_borrow_rate": 0.04,
+        "liquidity_index": 11,
+        "variable_borrow_index": 12,
+    },
+    "liquidation_call": {
+        "collateral_asset": "0xcol",
+        "debt_asset": "0xdebt",
+        "user": "0xuser",
+        "debt_to_cover": 3.0,
+        "liquidated_collateral_amount": 4.0,
+        "liquidator": "0xliq",
+        "receive_a_token": False,
+    },
+}
+"""The five on-chain records the equity fork declared and the merge deleted.
+
+Field-for-field what the fork's structs held, so each row is the shape its own sink
+schema still declares. Every one of these tags names a *crypto* record in the canonical
+union; the rows below prove the surviving struct reads the retired one's files.
+"""
 
 
 def _legacy_equity_row(channel: str, local_ts: int, **body: Any) -> dict[str, Any]:
@@ -313,6 +388,31 @@ def spanning_lake(tmp_path: Path) -> Path:
         ],
         bucketed=True,
     )
+
+    # --- the five on-chain tags the equity fork wrote and no longer has structs for ---
+    for channel, body in _LEGACY_ONCHAIN_BODIES.items():
+        _write_part(
+            tmp_path,
+            _ONCHAIN_SOURCE,
+            channel,
+            FAMILY_EQUITY,
+            [
+                _legacy_equity_row(
+                    channel,
+                    _TS,
+                    provider=_ONCHAIN_SOURCE,
+                    symbol=_ONCHAIN_SYMBOL,
+                    symbol_raw=_ONCHAIN_SYMBOL,
+                    # The fork's on-chain adapters stamped the block clock in
+                    # ``exchange_ts`` and left ``source_ts`` null, so this also
+                    # exercises ``_header``'s fallback between the two.
+                    source_ts=None,
+                    exchange_ts=_TS,
+                    **body,
+                )
+            ],
+            bucketed=False,
+        )
     return tmp_path
 
 
@@ -564,6 +664,79 @@ def test_a_legacy_instrument_keeps_its_listing_venue_and_does_not_become_its_sou
     assert instrument.source == _SOURCE
     assert instrument.name == "Apple Inc."
     assert instrument.cusip == "037833100"
+
+
+# ---------------------------------------------------------------------------
+# The five tags whose equity structs were deleted
+# ---------------------------------------------------------------------------
+
+
+def test_the_deleted_on_chain_records_read_back_as_the_structs_that_survived_them(
+    spanning_lake: Path,
+) -> None:
+    """Two unions declared these five tags; one union is gone and the files are not.
+
+    The equity fork carried its own ``PoRUpdate``, ``LiquidationCall``,
+    ``ReserveDataUpdated``, ``BalanceCorrection`` and ``LimitOrderFill`` as fork residue —
+    on-chain records inside an equities library — and the merge kept the crypto copies.
+    Deleting a struct that wrote rows is only safe if something still reads them, and the
+    coverage those five had constructed the retired structs directly, so it left with them.
+
+    ``asset_class`` reads back ``EQUITY`` for all five, and that is the honest answer
+    rather than a good one: the row's only surviving evidence of a market is which fork's
+    column dialect it is written in, and the fork that wrote these was the equity one.
+    Nothing on disk says otherwise, and inventing ``CRYPTO`` from the channel name would
+    be the reader deciding a fact the file does not record.
+    """
+    expected = {
+        "limit_order_fill": LimitOrderFill,
+        "por_update": PoRUpdate,
+        "balance_correction": BalanceCorrection,
+        "reserve_data_updated": ReserveDataUpdated,
+        "liquidation_call": LiquidationCall,
+    }
+    for channel, struct in expected.items():
+        (record,) = _replay(spanning_lake, channel, _ONCHAIN_SYMBOL)
+        assert type(record) is struct, channel
+        assert record.source == _ONCHAIN_SOURCE
+        assert record.asset_class is AssetClass.EQUITY
+        assert record.source_ts == _TS, "the fork stamped the block clock in exchange_ts"
+        for field, value in _LEGACY_ONCHAIN_BODIES[channel].items():
+            assert getattr(record, field) == value, f"{channel}.{field}"
+
+
+def test_every_row_in_every_partition_of_this_lake_is_reachable_through_the_record_api(
+    spanning_lake: Path,
+) -> None:
+    """The whole property, counted against the files rather than against a channel list.
+
+    Each test above names one channel it knows about, so a partition nothing thought to
+    name would be unreachable and every one of them would still pass — which is the shape
+    of this project's defining failure, a capability that stops existing with no assertion
+    positioned to see it. This one enumerates the ``channel=`` directories off disk and
+    demands the record API hand back exactly as many records as there are rows in each.
+
+    A retired tag is read by asking for it: ``bar`` answers for ``channel=bar/`` and
+    ``ohlcv`` for ``channel=ohlcv/``, which is why summing per directory works and a
+    single widened name would double-count.
+    """
+    symbols = [_SYMBOL, _CRYPTO_SYMBOL, _ONCHAIN_SYMBOL]
+
+    on_disk: dict[str, int] = {}
+    for part in spanning_lake.rglob("*.parquet"):
+        (directory,) = (p for p in part.parents if p.name.startswith("channel="))
+        channel = directory.name.removeprefix("channel=")
+        on_disk[channel] = on_disk.get(channel, 0) + len(pl.read_parquet(part))
+
+    assert len(on_disk) == 11, f"the fixture built {sorted(on_disk)}"
+
+    client = StockodileClient(spanning_lake)
+    replayed = {
+        channel: len(list(client.replay([channel], symbols, _TS - 400 * _DAY, _TS + 400 * _DAY)))
+        for channel in on_disk
+    }
+
+    assert replayed == on_disk
 
 
 # ---------------------------------------------------------------------------

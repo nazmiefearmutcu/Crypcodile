@@ -1,9 +1,10 @@
 """Every equity channel, flattened and rebuilt through the canonical row codec.
 
 The equity providers build ``crocodile.core.schema.records`` structs now, so the flattener
-under test is ``crocodile.core.store.rows`` — the one the sink actually calls. The equity
-fork's own ``crocodile.equity.store.rows`` still exists to read pre-migration files off
-disk and is exercised in ``tests/equity/store/test_rows.py``.
+under test is ``crocodile.core.store.rows`` — the one the sink actually calls, and since
+the union merge the only one there is. Reading a *pre-migration* equity file is the same
+module's job and is exercised in ``tests/store/test_premerge_equity_rows.py`` and
+``tests/store/test_lake_spanning_the_migration.py``.
 
 ``tests/conformance/test_lake_symmetry.py`` round-trips all 30 canonical channels, but
 every record it builds is stamped ``crypto``. The half that would go wrong for equity is

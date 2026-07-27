@@ -148,6 +148,25 @@ _DELIBERATELY_DROPPED = {
     # has the real CoinbaseSmartWalletDetector. Dropping a stub that shadowed a
     # real implementation is the point of the deduplication, not a loss.
     "DummySmartWalletDetector",
+    # The two equity record structs the canonical union absorbed rather than
+    # copied, so they are the only names the union merge removed from the tree.
+    # Neither is a capability: `test_record_parity.py::_STRUCT_RENAMES` names the
+    # struct each one resolves to and proves, field by field against the frozen
+    # pre-merge snapshot, that nothing they declared has nowhere to go.
+    #
+    # `Bar` was field-for-field identical to equity's own `OHLCV`, which is a
+    # duplicate within one fork rather than across two; `OHLCV` survives because
+    # it says what the record contains. `trade_count` arrives as `num_trades`.
+    "Bar",
+    # `OptionQuote` and crypto's `OptionsChain` describe one option contract in
+    # two dialects, and the crypto spelling wins because it distinguishes a price
+    # from a size (`bid`/`ask`/`last` → `bid_px`/`ask_px`/`last_price`). Its one
+    # field with no crypto counterpart, `volume`, moved onto `OptionsChain`.
+    #
+    # Both tags stay declared on `Channel` and both are keys of
+    # `CHANNEL_SUCCESSORS`, so `channel=bar/` and `channel=option_quote/`
+    # partitions still decode — the struct left, the on-disk vocabulary did not.
+    "OptionQuote",
 }
 
 

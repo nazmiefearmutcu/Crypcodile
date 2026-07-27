@@ -26,10 +26,11 @@ def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
     The DataFrame must contain a ``channel`` column so that ``from_row``
     can reconstruct the correct Record type.
 
-    The reader is ``core``'s, not ``crocodile.equity.store.rows``': the equity providers
-    write canonical records now, so an equity lake's new files carry ``source`` and
-    ``asset_class`` and no ``provider`` column at all — the equity reader would have
-    raised ``KeyError('provider')`` on every one of them.
+    The reader is ``core``'s. The equity fork shipped a second one, and it is deleted
+    rather than wired up here: the equity providers write canonical records now, so an
+    equity lake's new files carry ``source`` and ``asset_class`` and no ``provider``
+    column at all, and the fork's reader would have raised ``KeyError('provider')`` on
+    every one of them.
 
     **One reader, three dialects.** ``core``'s reader speaks the canonical column set,
     the pre-migration crypto one and the pre-migration equity one, choosing between them

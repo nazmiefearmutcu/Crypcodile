@@ -40,9 +40,9 @@ Flattenable = Record
 """What :func:`to_row` accepts.
 
 ``to_row`` reads only the msgspec tag plus ``local_ts`` and ``symbol``, so it
-flattens any record-shaped struct — including the legacy equity union, which
-:mod:`crocodile.equity.store.rows` still hands it. The annotation names the
-canonical union because that is the only family ``core`` may depend on by name.
+flattens any record-shaped struct. Both legacy unions are deleted and this is the
+only family that can reach it now, but the origin-name collapse below is kept
+family-agnostic: a legacy *row* still arrives from disk under its own spelling.
 """
 
 
@@ -326,10 +326,11 @@ def _asset_class_from_legacy_marker(d: dict[str, Any]) -> AssetClass:
 # ---------------------------------------------------------------------------
 # The equity fork spelled nine shared tags differently, and ``migrate_lake``
 # renames directories rather than rewriting files, so those spellings never age
-# out. ``crocodile.equity.store.rows.from_row`` reads them correctly and lost its
-# last production caller, which is how a working capability became an unreachable
-# one. The tables below move that knowledge into the reader everything calls, so
-# one reader speaks both dialects and the family decides which.
+# out. The fork's own ``from_row`` read them correctly and lost its last
+# production caller, which is how a working capability became an unreachable one.
+# The tables below hold that knowledge inside the reader everything calls, so one
+# reader speaks both dialects and the family decides which — and that is what let
+# the fork's module be deleted rather than merely left unused.
 
 _EQUITY_COLUMN_ALIASES: dict[str, dict[str, str]] = {
     Channel.TRADE.value: {"size": "amount"},
@@ -704,11 +705,12 @@ def from_row(row: dict[str, Any]) -> Record:
     :data:`~crocodile.core.schema.enums.CHANNEL_SUCCESSORS` move all of it onto the
     canonical names.
 
-    That dispatch is the point. ``crocodile.equity.store.rows.from_row`` read the
-    equity dialect correctly and lost its last production caller, so the capability
-    was not deferred, it was disconnected — and the reader everything calls
-    answered a legacy equity lake with dropped columns and null required fields
-    instead of an error. Routing by family closes both at once.
+    That dispatch is the point. The equity fork shipped a second ``from_row`` that
+    read its own dialect correctly and lost its last production caller, so the
+    capability was not deferred, it was disconnected — and the reader everything
+    calls answered a legacy equity lake with dropped columns and null required
+    fields instead of an error. Routing by family closes both at once, which is
+    why that second reader could be deleted instead of carried.
 
     The ``channel`` tag is resolved against the same ``Record`` union
     :mod:`crocodile.core.store.parquet_sink` builds its file schema from, so every
