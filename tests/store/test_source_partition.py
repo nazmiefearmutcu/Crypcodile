@@ -47,10 +47,15 @@ async def _write(data_dir: pathlib.Path, *trades: Trade) -> None:
 
 
 def _demote(data_dir: pathlib.Path, prefix: str) -> None:
-    """Rewrite ``source=`` partitions back to a legacy prefix.
+    """Rename ``source=`` partitions back to a legacy prefix.
 
-    Produces exactly what a lake written before the merge looks like, without
-    keeping a fixture lake in the repo that would rot.
+    This is the *directory* half of a pre-merge lake and only that half. The
+    Parquet files underneath are canonical — ``asset_class`` present, no
+    ``exchange_ts`` — because the sink that wrote them is today's. Which is the
+    right fixture for the tests below, since ``migrate_lake`` renames
+    directories and never rewrites a file, so a half-migrated lake is exactly
+    this shape. A file with the pre-merge *column* set is a different subject,
+    and ``tests/store/test_premerge_lake.py`` builds one.
     """
     for child in list(data_dir.iterdir()):
         if child.is_dir() and child.name.startswith("source="):
@@ -121,14 +126,19 @@ async def test_migration_does_not_change_the_answer(tmp_path: pathlib.Path) -> N
     assert migrate_lake(tmp_path) == 1
     after = Catalog(tmp_path).scan("trade", "deribit:BTC-PERPETUAL", _TS - 1, _TS + 1)
 
-    # ``exchange`` is the legacy prefix surfacing as a hive column, and it only
-    # shows up on the "before" side. That is not noise the comparison is hiding:
-    # the canonical file schema carries no ``exchange`` column, so on a
-    # pre-migration lake the hive key is the one thing that still says the row
-    # was written before the merged header — which is what ``from_row`` reads to
-    # recover its asset class. After the rename the directory says ``source=``
-    # and there is nothing left to recognise, which is the point of migrating.
+    # ``exchange`` is the legacy directory name surfacing as a hive column, so
+    # it exists on the "before" side and not the "after". It is dropped because
+    # it is a property of the path, not of the data: these files are canonical
+    # and carry their own ``asset_class``, and ``scan`` never calls ``from_row``
+    # at all. Every column that came out of a Parquet file is compared.
+    #
+    # ``source`` is dropped from both sides and then asserted on both, rather
+    # than only on the "after". It is the one column the two sides derive
+    # differently — projected from the legacy hive key before the rename and
+    # read from ``source=`` after it — which makes it the column most able to
+    # differ, and the least defensible one to leave unchecked.
     assert before.drop("source", "exchange").equals(after.drop("source"))
+    assert before["source"].unique().to_list() == ["deribit"]
     assert after["source"].unique().to_list() == ["deribit"]
 
 

@@ -321,14 +321,14 @@ class Catalog:
         ``bucket=`` level at all. Legacy groups project their key as ``source``
         so the union is over one vocabulary.
 
-        The legacy key also survives under its own name, and that is now
-        load-bearing rather than redundant. A pre-migration crypto lake carried
-        ``exchange`` as a real column; the canonical file schema does not, so on
-        such a lake the hive key is the only thing left saying the row predates
-        the merged header — which is exactly what
-        :func:`crocodile.core.store.rows.from_row` reads to decide its asset
-        class. Excluding it from the projection would make those rows
-        unreconstructable.
+        The legacy key also survives under its own name, as a consequence of the
+        ``*``. That is a convenience, not a load-bearing fact, and it was
+        documented here as the latter: a pre-migration crypto file carries
+        ``exchange`` as a real column of its own, and a canonical file carries
+        ``asset_class``, so :func:`crocodile.core.store.rows.from_row` reads the
+        market off the file in both cases and never needs the hive key. What the
+        projection *is* load-bearing for is ``source``, which is a path component
+        by design and has no column in any file schema.
 
         Prefixes come from :data:`SOURCE_PREFIXES`, a module constant, so the
         interpolated key is never caller-controlled; only the paths are, and
