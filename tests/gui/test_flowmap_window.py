@@ -30,6 +30,7 @@ except ImportError:
     sys.modules['PyQt6.QtWidgets'] = MagicMock()
 
 from crocodile.crypto.gui.flowmap_window import (
+    HAS_FLOWMAP,
     FlowmapWindow,
     compute_hist_target_bw,
     compute_hist_vis_rows,
@@ -38,7 +39,20 @@ from crocodile.crypto.gui.flowmap_window import (
     _DEFAULT_WINDOW_W,
     _DEFAULT_WINDOW_H,
 )
-from flowmap.core import Side
+
+# FlowMap removed its Python package in the v1→v2 cutover (flowmap e6cb3cc, 2026-07-18), so
+# this import is conditional and only the four window tests below depend on it. The five
+# geometry tests are pure arithmetic and keep running either way — a blanket module-level
+# skip would have quietly stopped testing them.
+if HAS_FLOWMAP:
+    from flowmap.core import Side
+else:
+    Side = None
+
+requires_flowmap = pytest.mark.skipif(
+    not (HAS_GUI_LIBS and HAS_FLOWMAP),
+    reason="needs PyQt6 and FlowMap's v1 Python package (removed upstream 2026-07-18)",
+)
 
 
 # --- FIND-P236-01: pure hist bw helpers (no Qt required) ---
@@ -77,7 +91,7 @@ def test_compute_hist_vis_rows_default_and_floor():
     assert compute_hist_vis_rows(_DEFAULT_WINDOW_H, min_vis_rows=1) >= 100
 
 
-@pytest.mark.skipif(not HAS_GUI_LIBS, reason="PyQt6 not installed")
+@requires_flowmap
 def test_ensure_hist_engine_geometry_not_1x1():
     """FIND-P236-01: pre-show DensityEngine must not stay 1-wide before hist binning."""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -105,7 +119,7 @@ def test_ensure_hist_engine_geometry_not_1x1():
     if before_w < _MIN_HIST_BW:
         assert buf.shape[1] > before_w
 
-@pytest.mark.skipif(not HAS_GUI_LIBS, reason="PyQt6 not installed")
+@requires_flowmap
 def test_flowmap_window_initialization():
     """Test that FlowmapWindow correctly instantiates and configures its components."""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -128,7 +142,7 @@ def test_flowmap_window_initialization():
     assert window._iceberg_table.columnCount() == 5
     assert window._iceberg_table.rowCount() == 0
 
-@pytest.mark.skipif(not HAS_GUI_LIBS, reason="PyQt6 not installed")
+@requires_flowmap
 def test_flowmap_window_iceberg_tracking():
     """Test that the Significant Iceberg table correctly processes and filters signals."""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -170,7 +184,7 @@ def test_flowmap_window_iceberg_tracking():
     window._clear_iceberg_table()
     assert window._iceberg_table.rowCount() == 0
 
-@pytest.mark.skipif(not HAS_GUI_LIBS, reason="PyQt6 not installed")
+@requires_flowmap
 def test_flowmap_window_llt_tracking():
     """Test that the Large Lot Tracker table correctly filters and populates resting orders."""
     os.environ["QT_QPA_PLATFORM"] = "offscreen"

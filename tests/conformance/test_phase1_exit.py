@@ -211,7 +211,7 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # ever pointed at them. The number exists so the debt can only shrink: lower it
 # when you fix something, and never raise it. `core` and `contrib` are held to
 # zero separately below, and that is the line new code is written on.
-_LEGACY_RUFF_BUDGET = 478
+_LEGACY_RUFF_BUDGET = 476
 
 
 def _ruff(*paths: str) -> list[str]:

@@ -2,6 +2,9 @@ import sys
 import os
 import math
 import time
+from typing import NoReturn
+
+from crocodile.core.errors import ConfigError
 
 # Default MainWindow geometry (flowmap/ui/main_window.py: resize(1500, 950)).
 _DEFAULT_WINDOW_W = 1500
@@ -90,10 +93,54 @@ flowmap_path = _resolve_flowmap_path()
 if flowmap_path and flowmap_path not in sys.path:
     sys.path.insert(0, flowmap_path)
 
-from flowmap.ui.main_window import MainWindow as StandaloneMainWindow
-from flowmap.core import Level2Snapshot, Level2Update, Trade, BBO, Side as FlowmapSide, is_buy_side
+# FlowMap is an out-of-repo integration (design §16) reached through a path guess, so its
+# absence is a normal state, not a broken install — and it became the normal state when
+# FlowMap deleted its PyQt6 package in the v1→v2 cutover (flowmap e6cb3cc, 2026-07-18).
+#
+# Importing it unconditionally made that absence fatal at *import* time: `import
+# crocodile.crypto.gui` raised ModuleNotFoundError, which aborted pytest collection for the
+# entire suite. An optional integration must never be able to do that. So the import is
+# guarded and the failure moves to *use*, where it can name the cause — the same shape as
+# the evasion extra, which raises ConfigError rather than vanishing.
+try:
+    from flowmap.ui.main_window import MainWindow as StandaloneMainWindow
+    from flowmap.core import (
+        BBO,
+        Level2Snapshot,
+        Level2Update,
+        Side as FlowmapSide,
+        Trade,
+        is_buy_side,
+    )
+
+    HAS_FLOWMAP = True
+except ImportError as _exc:  # pragma: no cover - exercised by the import-safety gate
+    HAS_FLOWMAP = False
+    _FLOWMAP_IMPORT_ERROR = _exc
+
+    def _require_flowmap() -> NoReturn:
+        raise ConfigError(
+            "The FlowMap window needs FlowMap's Python package, which is not importable "
+            f"({_FLOWMAP_IMPORT_ERROR}). FlowMap removed it in its v1 to v2 cutover on "
+            "2026-07-18; the embedded window here still targets v1. Point FLOWMAP_HOME at "
+            "a checkout that contains a `flowmap/` package, or use FlowMap standalone."
+        )
+
+    class StandaloneMainWindow:  # type: ignore[no-redef]
+        """Placeholder base so this module imports; instantiating it explains itself."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _require_flowmap()
+
+    BBO = Level2Snapshot = Level2Update = Trade = FlowmapSide = None  # type: ignore[assignment,misc]
+
+    def is_buy_side(*args: object, **kwargs: object) -> NoReturn:  # type: ignore[misc]
+        _require_flowmap()
+
 
 def dict_to_flowmap_objects(event: dict) -> list:
+    if not HAS_FLOWMAP:
+        _require_flowmap()
     channel = event.get("channel")
     local_ts_ns = event.get("local_ts", 0)
     ts_sec = local_ts_ns / 1_000_000_000.0
