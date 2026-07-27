@@ -959,3 +959,126 @@ def test_a_bar_frame_that_declares_no_width_reports_no_confidence() -> None:
 
     assert bars.row(0, named=True)["prov_confidence"] is None
     assert bars.row(0, named=True)["prov"] == Provenance.DERIVED.value
+
+
+# ---------------------------------------------------------------------------
+# The fourth frame builder — the one the client actually exposes
+# ---------------------------------------------------------------------------
+
+
+def _scraped_trade_lake(root: Path) -> None:
+    """A lake of ``google_finance`` prints: a last price off a rendered page, no size."""
+    tail = provenance_fields("scraped_last_price")
+    path = root / "source=google_finance/channel=trade/date=2026-06-21/part-0.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        [
+            {
+                "source": "google_finance",
+                "asset_class": "equity",
+                "channel": "trade",
+                "symbol": "AAPL",
+                "symbol_raw": "AAPL",
+                "source_ts": None,
+                "local_ts": 1782060000000000000 + i * 100_000_000,
+                "id": str(i),
+                "price": 150.0 + i,
+                "amount": 0.0,
+                "prov": tail.prov.value,
+                "prov_basis": tail.prov_basis,
+                "prov_confidence": tail.prov_confidence,
+            }
+            for i in range(3)
+        ]
+    ).write_parquet(path)
+
+
+def test_the_catalog_resampler_states_a_tail_rather_than_taking_the_header_default() -> None:
+    """The highest-traffic path stated no provenance at all while the other three were fixed.
+
+    ``StockodileClient.resample()`` exposes this one and only this one, and its frame came
+    back with no ``prov``, ``prov_basis`` or ``prov_confidence`` column. Written back to the
+    lake or compared against records, those bars took the header default — NATIVE at 1.0 —
+    over prices scraped off a rendered page at ``prov_confidence=0.0``. The emitted level is
+    floored by the worst print in the bucket, so this bucket is SYNTHETIC.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _scraped_trade_lake(Path(tmp_dir))
+        with Catalog(tmp_dir) as catalog:
+            res = resample_ohlcv(
+                catalog,
+                "AAPL",
+                1782060000000000000,
+                1782060000000000000 + 1_000_000_000,
+                "1s",
+            )
+
+    row = res.row(0, named=True)
+    assert {"prov", "prov_basis", "prov_confidence"} <= set(res.columns)
+    assert row["prov"] == Provenance.SYNTHETIC.value
+    assert row["prov_basis"] == "ohlcv_from_trades"
+    assert row["prov_confidence"] == 1.0
+
+
+def test_the_catalog_resampler_stays_derived_over_venue_prints() -> None:
+    """The floor is on distrust, not a copy: NATIVE inputs still make a DERIVED bar.
+
+    A bar is not something a venue published, whatever the prints under it were.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "source=alpaca/channel=trade/date=2026-06-21/part-0.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            [
+                {
+                    "source": "alpaca",
+                    "asset_class": "equity",
+                    "channel": "trade",
+                    "symbol": "AAPL",
+                    "symbol_raw": "AAPL",
+                    "source_ts": None,
+                    "local_ts": 1782060000000000000 + i * 100_000_000,
+                    "id": str(i),
+                    "price": 150.0 + i,
+                    "amount": 10.0,
+                    "prov": Provenance.NATIVE.value,
+                }
+                for i in range(2)
+            ]
+        ).write_parquet(path)
+        with Catalog(tmp_dir) as catalog:
+            res = resample_ohlcv(
+                catalog,
+                "AAPL",
+                1782060000000000000,
+                1782060000000000000 + 1_000_000_000,
+                "1s",
+            )
+
+    assert res.row(0, named=True)["prov"] == Provenance.DERIVED.value
+
+
+def test_a_filled_empty_bucket_carries_the_tail_too() -> None:
+    """An empty grid bar joins no prints, so it makes no claim of its own and takes the basis.
+
+    It must still carry the three columns: a frame where only some rows state a tail is a
+    frame where the rest silently take the header default.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _scraped_trade_lake(Path(tmp_dir))
+        with Catalog(tmp_dir) as catalog:
+            res = resample_ohlcv(
+                catalog,
+                "AAPL",
+                1782060000000000000 - 3_000_000_000,
+                1782060000000000000 + 1_000_000_000,
+                "1s",
+                fill_empty=True,
+            )
+
+    assert len(res) > 1
+    assert res["prov_basis"].to_list() == ["ohlcv_from_trades"] * len(res)
+    assert res["prov_confidence"].null_count() == 0
+    by_count = dict(zip(res["trade_count"].to_list(), res["prov"].to_list(), strict=True))
+    assert by_count[0] == Provenance.DERIVED.value, "an empty bucket rests on the basis"
+    assert by_count[3] == Provenance.SYNTHETIC.value, "a scraped bucket is floored by its prints"

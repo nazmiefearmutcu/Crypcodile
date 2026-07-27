@@ -130,8 +130,28 @@ def _quantity_expr(available: Iterable[str]) -> str:
     return f"coalesce({', '.join(present)})"
 
 
-def _build_no_fill_sql(interval_sql: str, interval_label: str, qty: str) -> str:
+def _trust_rank_case(floor: Provenance) -> str:
+    """Return SQL folding the ``trade`` view's ``prov`` column onto its numeric trust rank.
+
+    The aggregation has to emit the *worst* level among the prints in a bucket, and
+    ``max()`` over an enum's spelling is alphabetical, not an order. :func:`trust_rank`
+    is the one place that order is written down, so the CASE is generated from it rather
+    than restated; a second hand-written ordering here is a second place for it to
+    disagree. A row whose ``prov`` is null or unrecognised reads as the basis's own level,
+    which is the same reading :func:`_rank_inputs` gives a frame that states nothing.
+
+    Both the values and the ranks come from :class:`Provenance`, never from a caller, so
+    interpolating them is safe.
+    """
+    whens = " ".join(f"WHEN '{value}' THEN {rank}" for value, rank in _TRUST_RANKS.items())
+    return f"CASE prov {whens} ELSE {trust_rank(floor)} END"
+
+
+def _build_no_fill_sql(
+    interval_sql: str, interval_label: str, qty: str, rank_case: str | None
+) -> str:
     """Return the aggregation SQL for non-empty bars only."""
+    rank = f"    max({rank_case})::INTEGER               AS {_PROV_RANK},\n" if rank_case else ""
     return (
         "SELECT\n"
         f"    epoch_ns(time_bucket({interval_sql}, make_timestamp(local_ts // 1000))) AS bar,\n"
@@ -143,6 +163,7 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str, qty: str) -> str:
         "    last(price ORDER BY local_ts)           AS close,\n"
         f"    sum({qty})                             AS volume,\n"
         f"    sum(price * {qty}) / nullif(sum({qty}), 0.0) AS vwap,\n"
+        f"{rank}"
         "    count(*)::BIGINT                        AS trade_count\n"
         "FROM trade\n"
         "WHERE symbol = ?\n"
@@ -156,7 +177,12 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str, qty: str) -> str:
 
 
 def _build_fill_sql(
-    interval_sql: str, interval_label: str, start_ns: int, end_ns: int, qty: str
+    interval_sql: str,
+    interval_label: str,
+    start_ns: int,
+    end_ns: int,
+    qty: str,
+    rank_case: str | None,
 ) -> str:
     """Return the fill-enabled SQL.
 
@@ -164,6 +190,10 @@ def _build_fill_sql(
     CTE; DuckDB does not accept ``?`` parameters inside ``generate_series``
     bounds that also feed ``time_bucket``.
     """
+    agg_rank = (
+        f"        max({rank_case})::INTEGER           AS {_PROV_RANK},\n" if rank_case else ""
+    )
+    filled_rank = f"        a.{_PROV_RANK},\n" if rank_case else ""
     return (
         "WITH\n"
         "agg AS (\n"
@@ -176,6 +206,7 @@ def _build_fill_sql(
         "        last(price ORDER BY local_ts)           AS close,\n"
         f"        sum({qty})                             AS volume,\n"
         f"        sum(price * {qty}) / nullif(sum({qty}), 0.0) AS vwap,\n"
+        f"{agg_rank}"
         "        count(*)::BIGINT                        AS trade_count\n"
         "    FROM trade\n"
         "    WHERE symbol = ?\n"
@@ -204,6 +235,7 @@ def _build_fill_sql(
         "        a.close,\n"
         "        coalesce(a.volume, 0.0)      AS volume,\n"
         "        a.vwap,\n"
+        f"{filled_rank}"
         "        coalesce(a.trade_count, 0)   AS trade_count\n"
         "    FROM grid g\n"
         "    LEFT JOIN agg a USING (bar_ts)\n"
@@ -248,6 +280,9 @@ def resample_ohlcv(
             volume       Float64  (0.0 for empty fill bars)
             vwap         Float64  sum(price*amount)/sum(amount), NULL at zero volume
             trade_count  Int64    (0 for empty fill bars)
+            prov         Utf8     ohlcv_from_trades' level, floored by the worst print's
+            prov_basis   Utf8     always ``"ohlcv_from_trades"``
+            prov_confidence Float64
 
         An empty DataFrame (0 rows, 0 columns) if the ``trade`` view does not
         exist yet, matching the ``Catalog`` empty-result contract: callers must
@@ -255,6 +290,15 @@ def resample_ohlcv(
 
         This is the *equity* schema. See the module docstring for how it differs
         from ``crocodile.core.resample.ohlcv.resample_ohlcv``'s.
+
+        **The provenance tail is not optional here.** This is the fourth frame
+        builder in the module and the only one ``StockodileClient.resample()``
+        exposes, so it is the highest-traffic path — and it stated nothing at all
+        while the other three were being fixed for exactly that. Bars written back
+        to the lake, or compared against records, then took the header default:
+        NATIVE at confidence 1.0, over prices ``google_finance`` scraped off a
+        rendered page at ``prov_confidence=0.0``. ``prov`` is floored by the worst
+        print in the bucket, so a bucket of scraped prints comes back SYNTHETIC.
 
     Raises:
         ValueError: If *interval* cannot be parsed.
@@ -273,12 +317,17 @@ def resample_ohlcv(
         return pl.DataFrame()
     qty = _quantity_expr(columns)
 
+    tail = provenance_fields("ohlcv_from_trades")
+    # A view with no ``prov`` column states no level, and the emitted one then rests on
+    # the basis alone — the same reading ``_rank_inputs`` gives such a frame.
+    rank_case = _trust_rank_case(tail.prov) if "prov" in columns else None
+
     if fill_empty:
-        sql = _build_fill_sql(interval_sql, interval_label, start_ns, end_ns, qty)
+        sql = _build_fill_sql(interval_sql, interval_label, start_ns, end_ns, qty, rank_case)
         # symbol (agg WHERE), start_ns, end_ns, symbol (filled SELECT)
         params: list[object] = [symbol, start_ns, end_ns, symbol]
     else:
-        sql = _build_no_fill_sql(interval_sql, interval_label, qty)
+        sql = _build_no_fill_sql(interval_sql, interval_label, qty, rank_case)
         params = [symbol, start_ns, end_ns]
 
     try:
@@ -288,7 +337,22 @@ def resample_ohlcv(
         # No trade data has ever been written → the view does not exist.
         return pl.DataFrame()
 
-    return df
+    has_rank = rank_case is not None and _PROV_RANK in df.columns
+    if has_rank:
+        # A filled bucket with no prints joins nothing, so its rank is null; it makes no
+        # claim of its own and takes the basis's level, as an empty frame would.
+        df = df.with_columns(
+            pl.col(_PROV_RANK).fill_null(trust_rank(tail.prov)).cast(pl.Int32)
+        )
+    df = df.with_columns(
+        _emitted_prov(has_rank, tail.prov),
+        pl.lit(tail.prov_basis).alias("prov_basis"),
+        pl.lit(tail.prov_confidence).alias("prov_confidence"),
+    )
+    if has_rank:
+        df = df.drop(_PROV_RANK)
+
+    return _order_columns(df)
 
 
 # ---------------------------------------------------------------------------
@@ -938,12 +1002,20 @@ _DESIRED_COLS = [
 # ---------------------------------------------------------------------------
 # The provenance tail, in frame form
 # ---------------------------------------------------------------------------
-# The three functions above build records and state their tail on each one. The
-# three below build frames and used to state nothing at all — a bar frame came
-# back with no ``prov`` column, so a caller writing those rows to the lake, or
-# comparing them against records, had the header default applied for them: NATIVE
-# at confidence 1.0, the claim that a venue reported this bar. Same laundering,
-# one type further out.
+# Three functions in this module build records and state their tail on each one.
+# **Four** build frames — ``resample_trades_df``, ``resample_quotes_df`` and
+# ``resample_bars_df`` below, and ``resample_ohlcv`` at the top of the file, which
+# aggregates in DuckDB rather than in Polars. This comment used to say three, and
+# the one it left out is the only one ``StockodileClient.resample()`` exposes: a
+# miscount in a comment is how the highest-traffic path went on stating no
+# provenance through the round that fixed the other three.
+#
+# All four used to state nothing at all — a bar frame came back with no ``prov``
+# column, so a caller writing those rows to the lake, or comparing them against
+# records, had the header default applied for them: NATIVE at confidence 1.0, the
+# claim that a venue reported this bar. Same laundering, one type further out.
+# ``_emitted_prov`` and ``_order_columns`` are shared by all four, DuckDB path
+# included, so the tail cannot be spelled two ways.
 
 _TRUST_RANKS: dict[str, int] = {level.value: trust_rank(level) for level in Provenance}
 _LEVEL_BY_RANK: dict[int, str] = {rank: value for value, rank in _TRUST_RANKS.items()}
