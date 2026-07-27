@@ -541,6 +541,30 @@ def _scraped_last_price(_: Mapping[str, Any]) -> float:
     return 0.0
 
 
+@register_basis("farcaster_cast_search", level=Provenance.SYNTHETIC, inputs=[])
+def _farcaster_cast_search(_: Mapping[str, Any]) -> float:
+    """Social metrics modelled from a page of casts: 0.0, by definition.
+
+    Neynar's cast-search endpoint returns casts. :class:`FarcasterCorrelation` requires a
+    24-hour mention count, a developer-activity score and a trending rank, and the endpoint
+    publishes none of the three — they are counted, scored from author bios and ranked by
+    the adapter. Every measurement on the record is modelled, so there is no sampling
+    evidence to grade and nothing about the method that varies, which is why this is a
+    constant and why it is declared as one.
+
+    0.0 is the reading ``unavailable`` and ``scraped_last_price`` carry, and for the same
+    reason: not that the numbers are wrong, but that no part of them was sampled. The
+    header default this replaces said Farcaster published a trending rank directly, and
+    left a consumer filtering ``prov != NATIVE`` silent on a record with nothing measured
+    on it at all.
+
+    What this does not fix, and cannot from here: ``mentions_24h`` names a window the
+    query does not request, so a count over an untimed search is filed under a
+    twenty-four-hour field. That is a schema question rather than a provenance one.
+    """
+    return 0.0
+
+
 _TRUST_ORDER: Final[tuple[Provenance, ...]] = (
     Provenance.NATIVE,
     Provenance.DERIVED,

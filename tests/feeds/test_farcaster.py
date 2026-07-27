@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import FarcasterCorrelation
 from crocodile.core.store.parquet_sink import FAMILY_CANONICAL, _channel_schema
 from crocodile.core.store.rows import from_row, to_row
@@ -10,25 +11,53 @@ from crocodile.crypto.feeds.farcaster import FarcasterSocialClient
 
 
 @pytest.mark.asyncio
-async def test_farcaster_social_client_offline():
-    client = FarcasterSocialClient(api_key=None)
-    
-    # Check default mock resolution for DEGEN
-    degen = await client.get_token_correlation("DEGEN")
-    assert isinstance(degen, FarcasterCorrelation)
-    assert degen.symbol == "farcaster:DEGEN"
-    assert degen.symbol_raw == "DEGEN"
-    assert degen.mentions_24h == 1250
-    assert degen.dev_activity_score == 8.5
-    assert degen.trending_rank == 1
+async def test_a_client_that_cannot_call_neynar_returns_no_record():
+    """It used to return a table of numbers typed into the source file.
 
-    # Check trending list
-    trending = await client.get_trending_tokens()
-    assert len(trending) == 3
-    symbols = [t.symbol_raw for t in trending]
-    assert "DEGEN" in symbols
-    assert "BRETT" in symbols
-    assert "AERO" in symbols
+    DEGEN at 1250 mentions, rank 1, at `prov=native, prov_confidence=1.0`. The same path
+    was taken on any non-200 and inside a bare `except`, so a timeout during live
+    collection substituted literals for measurements mid-run and
+    `SELECT mentions_24h ... WHERE symbol='farcaster:DEGEN'` returned 1250 on every row
+    ever written.
+    """
+    client = FarcasterSocialClient(api_key=None)
+
+    assert await client.get_token_correlation("DEGEN") is None
+    assert await client.get_trending_tokens() == []
+
+
+@pytest.mark.asyncio
+async def test_metrics_modelled_from_a_page_of_casts_do_not_claim_to_be_reported():
+    """Neynar returns casts; none of the record's three required fields is published.
+
+    The count is a page length, the score is a substring test over author bios and the
+    rank is arithmetic on the count — so the row carries the basis that says so, and the
+    REST and MCP surfaces are required to warn on it.
+    """
+    payload = {
+        "casts": [
+            {"author": {"profile": {"bio": {"text": "solidity developer"}}}},
+            {"author": {"profile": {"bio": {"text": "just here for the memes"}}}},
+        ]
+    }
+    client = FarcasterSocialClient(api_key="a-key")
+
+    with patch("aiohttp.ClientSession.get") as mock_get:
+        response = AsyncMock()
+        response.status = 200
+        response.json = AsyncMock(return_value=payload)
+        mock_get.return_value.__aenter__ = AsyncMock(return_value=response)
+        mock_get.return_value.__aexit__ = AsyncMock(return_value=None)
+        record = await client.get_token_correlation("DEGEN")
+
+    assert isinstance(record, FarcasterCorrelation)
+    assert record.prov is Provenance.SYNTHETIC
+    assert record.prov_basis == "farcaster_cast_search"
+    assert record.prov_confidence == 0.0
+    # Counted, not scaled. `mentions * 24` under the comment "scale mock velocity" made
+    # `max(mentions_24h)` return the page size times a constant for every saturating token.
+    assert record.mentions_24h == 2
+    assert record.dev_activity_score == 5.0
 
 def test_farcaster_correlation_row_conversions():
     record = FarcasterCorrelation(

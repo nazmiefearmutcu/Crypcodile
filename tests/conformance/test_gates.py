@@ -1513,6 +1513,14 @@ CONSTANT_BY_DEFINITION: dict[str, tuple[float, str]] = {
         "quantity that makes a Trade a trade is unsampled at every call. Nothing varies "
         "because nothing about the method varies.",
     ),
+    "farcaster_cast_search": (
+        0.0,
+        "Neynar's cast search returns casts, and every one of FarcasterCorrelation's "
+        "three required fields is produced by the adapter from them — a page length, a "
+        "substring test over author bios, and arithmetic on the count. There is no "
+        "sampling evidence to grade because nothing on the record was sampled, which is "
+        "the same reading scraped_last_price carries for the same reason.",
+    ),
 }
 """Bases whose confidence is a constant, the value, and the argument for it.
 
