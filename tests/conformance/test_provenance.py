@@ -15,6 +15,7 @@ from crocodile.core.schema.provenance import (
     provenance_fields,
     register_basis,
     registered_bases,
+    worst_provenance,
 )
 
 _EXPECTED_BASES = frozenset(
@@ -172,10 +173,13 @@ def test_provenance_fields_is_the_blessed_tail():
     assert tail.prov is Provenance.SYNTHETIC
     assert tail.prov_basis == "yahoo_1m_vap"
     assert tail.prov_confidence == pytest.approx(0.5)
-    assert tail.prov_inputs == ["bar"]
+    # ``ohlcv``, not ``bar``: the producer consumes canonical OHLCV records written to
+    # ``channel=ohlcv/``, and declaring a retired channel made
+    # ``WHERE list_contains(prov_inputs, 'ohlcv')`` return zero synthetic depth profiles.
+    assert tail.prov_inputs == ["ohlcv"]
 
     tail.prov_inputs.append("mutated")
-    assert provenance_fields("yahoo_1m_vap", {"n_volume_bars": 195}).prov_inputs == ["bar"]
+    assert provenance_fields("yahoo_1m_vap", {"n_volume_bars": 195}).prov_inputs == ["ohlcv"]
 
 
 def test_provenance_fields_defaults_inputs_for_input_free_bases():
@@ -306,13 +310,63 @@ def test_a_quote_bar_is_synthetic_and_a_trade_bar_is_not():
     assert level_for("ohlcv_from_quotes") is Provenance.SYNTHETIC
 
     assert provenance_fields("ohlcv_from_trades").prov_inputs == ["trade"]
-    assert provenance_fields("ohlcv_from_ohlcv").prov_inputs == ["ohlcv"]
     assert provenance_fields("ohlcv_from_quotes").prov_inputs == ["quote"]
+    assert (
+        provenance_fields("ohlcv_from_ohlcv", _FULL_BUCKET).prov_inputs == ["ohlcv"]
+    )
 
 
 def test_none_of_the_bar_aggregations_claims_a_venue_reported_it():
     """The failure they were all one edit away from: the header default says NATIVE."""
     for basis in ("ohlcv_from_trades", "ohlcv_from_ohlcv", "ohlcv_from_quotes"):
-        assert provenance_fields(basis).prov is not Provenance.NATIVE
-        assert confidence_for(basis, {}) == 1.0
-        assert describe(basis).strip(), f"{basis} has to argue for its constant"
+        assert level_for(basis) is not Provenance.NATIVE
+        assert describe(basis).strip(), f"{basis} has to argue for its number"
+
+
+_FULL_BUCKET = {"covered_ns": 3_600_000_000_000, "interval_ns": 3_600_000_000_000}
+
+
+def test_re_bucketing_bars_measures_coverage_instead_of_asserting_it():
+    """C1: the resampler holds the denominator, so 1.0 was a choice, not a limit.
+
+    ``resample_bars_to_bars`` parses the interval it was asked for and every input bar
+    declares its own width, so the duration a complete bucket holds is exactly as
+    computable as ``yahoo_1m_vap``'s 390 — and a 1d bar built from three 1m bars used to
+    score 1.0 while the same three bars scored 0.0077 through the vap formula.
+    """
+    hour = 3_600_000_000_000
+    minute = 60_000_000_000
+
+    assert confidence_for("ohlcv_from_ohlcv", _FULL_BUCKET) == 1.0
+    assert confidence_for(
+        "ohlcv_from_ohlcv", {"covered_ns": 3 * minute, "interval_ns": hour}
+    ) == pytest.approx(0.05)
+    assert confidence_for("ohlcv_from_ohlcv", {"covered_ns": 0, "interval_ns": hour}) == 0.0
+    # Re-bucketing wide bars into narrow ones is a full bucket, not an over-full one.
+    assert confidence_for("ohlcv_from_ohlcv", {"covered_ns": 4 * hour, "interval_ns": hour}) == 1.0
+
+
+def test_re_bucketing_rejects_a_bucket_with_no_width():
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("ohlcv_from_ohlcv", {"covered_ns": 1, "interval_ns": 0})
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("ohlcv_from_ohlcv", {"covered_ns": -1, "interval_ns": 1})
+
+
+def test_worst_provenance_orders_the_levels_by_trust():
+    assert worst_provenance([Provenance.NATIVE]) is Provenance.NATIVE
+    assert worst_provenance([Provenance.NATIVE, Provenance.DERIVED]) is Provenance.DERIVED
+    assert (
+        worst_provenance([Provenance.DERIVED, Provenance.SYNTHETIC, Provenance.NATIVE])
+        is Provenance.SYNTHETIC
+    )
+    assert (
+        worst_provenance([Provenance.SYNTHETIC, Provenance.UNAVAILABLE])
+        is Provenance.UNAVAILABLE
+    )
+
+
+def test_worst_provenance_refuses_an_empty_run():
+    """Returning NATIVE for "no inputs" would be the laundering it exists to stop."""
+    with pytest.raises(ValueError, match="no worst of none"):
+        worst_provenance([])

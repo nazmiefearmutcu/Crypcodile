@@ -624,3 +624,103 @@ def test_resample_ohlcv_catalog() -> None:
         assert res.row(0, named=True)["volume"] == 30.0
         assert res.row(0, named=True)["vwap"] == pytest.approx((150.0 * 10.0 + 152.0 * 20.0) / 30.0)
         assert res.row(0, named=True)["trade_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# What a re-bucketed bar claims about itself
+# ---------------------------------------------------------------------------
+
+
+_MINUTE_NS = 60_000_000_000
+
+
+def _minute_bar(index: int, **overrides: object) -> OHLCV:
+    """One 1-minute bar, so each test below states only the field it is about."""
+    kwargs: dict[str, object] = {
+        "source": "alpaca",
+        "symbol": "AAPL",
+        "symbol_raw": "AAPL",
+        "local_ts": index * _MINUTE_NS,
+        "asset_class": AssetClass.EQUITY,
+        "source_ts": None,
+        "interval": "1m",
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "close": 100.5,
+        "volume": 10.0,
+    }
+    kwargs.update(overrides)
+    return OHLCV(**kwargs)  # type: ignore[arg-type]
+
+
+def test_a_re_bucketed_bar_measures_its_coverage_instead_of_claiming_a_full_one() -> None:
+    """C1: the resampler holds the denominator its confidence was refusing to use.
+
+    Three 1-minute bars do not make a day. ``yahoo_1m_vap`` scores the same three inputs
+    0.0077 and this scored 1.0, on the argument that a resampler cannot observe a stream
+    it was not given — true of trades, false here, where every input declares its width.
+    """
+    bars = list(resample_bars_to_bars([_minute_bar(i) for i in range(3)], "1d"))
+
+    assert len(bars) == 1
+    assert bars[0].prov_basis == "ohlcv_from_ohlcv"
+    assert bars[0].prov_confidence == pytest.approx(3 / 1440)
+
+
+def test_a_fully_covered_bucket_still_scores_one() -> None:
+    """The formula has to leave the honest case alone."""
+    bars = list(resample_bars_to_bars([_minute_bar(i) for i in range(60)], "1h"))
+
+    assert len(bars) == 1
+    assert bars[0].prov_confidence == 1.0
+
+
+def test_a_re_bucketed_bar_cannot_be_better_sampled_than_the_bars_it_came_from() -> None:
+    """Summing declared widths alone would report a full day made of half-empty hours."""
+    inputs = [_minute_bar(i, prov_confidence=0.5) for i in range(60)]
+
+    bars = list(resample_bars_to_bars(inputs, "1h"))
+
+    assert bars[0].prov_confidence == pytest.approx(0.5)
+
+
+def test_re_bucketing_synthetic_bars_does_not_launder_them_into_derived() -> None:
+    """C2: a caller filtering ``WHERE prov != 'synthetic'`` got quote bars back as derived.
+
+    ``resample_quotes_to_bars`` produces SYNTHETIC bars whose ``volume`` is a structural
+    zero — nothing in them was transacted. Re-bucketing them reported DERIVED, over prices
+    that were never traded, while every input record carried its own ``prov`` and said so.
+    """
+    quotes = [
+        Quote(
+            source="alpaca",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=i * _MINUTE_NS,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            bid_px=99.0,
+            bid_sz=1.0,
+            ask_px=101.0,
+            ask_sz=1.0,
+        )
+        for i in range(60)
+    ]
+    quote_bars = list(resample_quotes_to_bars(quotes, "1m"))
+    assert {b.prov for b in quote_bars} == {Provenance.SYNTHETIC}
+
+    wider = list(resample_bars_to_bars(quote_bars, "1h"))
+
+    assert len(wider) == 1
+    assert wider[0].prov is Provenance.SYNTHETIC
+    assert wider[0].prov_basis == "ohlcv_from_ohlcv"
+    assert wider[0].volume == 0.0
+
+
+def test_re_bucketing_venue_bars_stays_derived_rather_than_inheriting_native() -> None:
+    """The propagation is a floor on distrust, not a copy of the input's level."""
+    bars = list(resample_bars_to_bars([_minute_bar(i) for i in range(60)], "1h"))
+
+    assert all(b.prov is Provenance.NATIVE for b in [_minute_bar(0)])
+    assert bars[0].prov is Provenance.DERIVED

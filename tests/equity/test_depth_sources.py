@@ -31,7 +31,11 @@ def test_synthetic_source_builds_labeled_profile():
     assert prof.is_synthetic is True
     assert prof.prov is Provenance.SYNTHETIC
     assert prof.prov_basis == "yahoo_1m_vap"
-    assert prof.prov_inputs == ["bar"]
+    # ``ohlcv``, not ``bar``. The producer consumes canonical OHLCV records and the sink
+    # writes them to ``channel=ohlcv/``; declaring the retired tag made
+    # ``WHERE list_contains(prov_inputs, 'ohlcv')`` return zero synthetic depth profiles,
+    # which is the shape of loss this whole tail exists to prevent.
+    assert prof.prov_inputs == ["ohlcv"]
     # Three volume-bearing bars out of a 390-bar session. The number used to be the
     # struct default 1.0 — a full sample — because `volume_at_price` counted the bars
     # and threw the count away, so every synthetic profile claimed to be as well

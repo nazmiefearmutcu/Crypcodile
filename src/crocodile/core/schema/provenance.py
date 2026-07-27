@@ -27,7 +27,7 @@ import importlib
 import pkgutil
 import sys
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, Final, NamedTuple
 
@@ -47,6 +47,7 @@ __all__ = [
     "provenance_fields",
     "register_basis",
     "registered_bases",
+    "worst_provenance",
 ]
 
 
@@ -132,7 +133,7 @@ def register_basis(
     Args:
         basis: The ``prov_basis`` name this formula answers for.
         level: The provenance level records built on this basis carry.
-        inputs: The data channels the method consumes (``["bar"]``, ``[]``, ...). This is a
+        inputs: The data channels the method consumes (``["ohlcv"]``, ``[]``, ...). This is a
             property of the method rather than of any call site, which is why it is declared
             here; it becomes the record's ``prov_inputs``. Note this is a different thing
             from the ``inputs`` mapping passed to :func:`confidence_for`, which carries the
@@ -335,7 +336,7 @@ def _unavailable(_: Mapping[str, Any]) -> float:
     return 0.0
 
 
-@register_basis("yahoo_1m_vap", level=Provenance.SYNTHETIC, inputs=["bar"])
+@register_basis("yahoo_1m_vap", level=Provenance.SYNTHETIC, inputs=["ohlcv"])
 def _yahoo_1m_vap(inputs: Mapping[str, Any]) -> float:
     """Volume-at-price depth: confidence is the session coverage of the profile.
 
@@ -385,16 +386,33 @@ def _alpaca_l1(inputs: Mapping[str, Any]) -> float:
     return n / _L1_QUOTED_SIDES
 
 
-def _aggregate_is_total(_: Mapping[str, Any]) -> float:
-    """Shared body for the three bar-aggregation bases: an aggregate is not a sample.
+def _aggregate_of_an_undeclared_stream(_: Mapping[str, Any]) -> float:
+    """Shared body for the two bases whose input stream declares no size: 1.0, argued.
 
-    The constant 1.0 is the same claim ``native`` makes and not the same claim as
-    "correct". A bar is a *function* of the records handed to the resampler — every print
-    in the bucket is in the open, high, low, close and volume, and none of them is
-    estimated — so there is nothing partial to measure within the level. What the bar
-    might be missing is records the caller never supplied, and a resampler cannot observe
-    a stream it was not given; inventing a number to stand for that unobservable is what
-    this registry exists to refuse.
+    A bar is a *function* of the records handed to the resampler — every print in the
+    bucket is in the open, high, low, close and volume, and none of them is estimated.
+    What the bar might be missing is records the caller never supplied, and a resampler
+    cannot observe a stream it was not given.
+
+    The obvious counter-argument, and why it does not land here. ``high`` and ``low`` are
+    order statistics over the supplied sample, so a one-quote minute yields
+    ``open == high == low == close`` with ``volume = 0.0`` and still scores 1.0 — which is
+    precisely the claim ``yahoo_1m_vap`` refuses for a three-bar profile. The difference is
+    the denominator, not the sparsity. ``yahoo_1m_vap`` divides by 390 because a regular US
+    session *contains* 390 one-minute bars whether or not any were fetched: the reference
+    exists independently of the input, so "how much of it did we get" is answerable. A trade
+    or quote stream has no such reference. How many prints a minute should hold is not a
+    property of the market, it is whatever traded, and dividing by a number invented to
+    stand for it would be the constant this registry exists to refuse, one indirection
+    deeper.
+
+    That is an argument for refusing to measure, not a claim that the sparsity does not
+    matter — so the sparsity is reported where it can be reported honestly, as a count
+    rather than a ratio: the bar carries ``num_trades``, which is the sample size, and for
+    a quote bar it is the quote count. ``ohlcv_from_ohlcv`` is the case where the
+    denominator *does* exist, because every input bar declares its own width, and that one
+    is measured. The contrast is the argument: measure when the input declares a
+    denominator, refuse to invent one when it does not.
 
     The claim that the bar was not reported by a venue is ``prov``'s, and it is the level
     each registration below states — not this number.
@@ -408,23 +426,11 @@ register_basis(
     inputs=["trade"],
     doc=(
         "Bars aggregated from trade prints. DERIVED, not NATIVE: the venue reported the "
-        "prints, not the bar. Confidence is 1.0 because the aggregation is total — see "
-        "_aggregate_is_total."
+        "prints, not the bar. Confidence is a constant 1.0, and the argument for it — "
+        "including why it is not the claim yahoo_1m_vap refuses — is in "
+        "_aggregate_of_an_undeclared_stream."
     ),
-)(_aggregate_is_total)
-
-register_basis(
-    "ohlcv_from_ohlcv",
-    level=Provenance.DERIVED,
-    inputs=["ohlcv"],
-    doc=(
-        "Lower-resolution bars re-bucketed into wider ones. Same claim as "
-        "ohlcv_from_trades one level up: first-open/max-high/min-low/last-close over "
-        "bars is exact, so confidence is 1.0 — see _aggregate_is_total. Note this "
-        "flattens its inputs' own provenance: a bar built from synthetic bars reports "
-        "DERIVED, which is why the input channel is named rather than assumed."
-    ),
-)(_aggregate_is_total)
+)(_aggregate_of_an_undeclared_stream)
 
 register_basis(
     "ohlcv_from_quotes",
@@ -434,11 +440,74 @@ register_basis(
         "Bars whose prices are quotes. SYNTHETIC rather than DERIVED because a quote is "
         "a different data class from the traded prices a bar reports: nothing here was "
         "ever transacted, and `volume` is a structural 0.0 rather than a measured one — "
-        "quotes carry no size that belongs in a bar. Confidence is 1.0 in the sense "
-        "_aggregate_is_total gives it: fully determined by the quotes seen, which is not "
-        "a claim that a quote bar is a trade bar."
+        "quotes carry no size that belongs in a bar. Confidence is a constant 1.0 on the "
+        "argument in _aggregate_of_an_undeclared_stream; the sample size a one-quote "
+        "bucket has is on the record, as num_trades."
     ),
-)(_aggregate_is_total)
+)(_aggregate_of_an_undeclared_stream)
+
+
+@register_basis("ohlcv_from_ohlcv", level=Provenance.DERIVED, inputs=["ohlcv"])
+def _ohlcv_from_ohlcv(inputs: Mapping[str, Any]) -> float:
+    """Re-bucketed bars: confidence is how much of the wider bucket the inputs cover.
+
+    ``min(covered_ns / interval_ns, 1.0)``, where ``interval_ns`` is the width of the
+    emitted bar and ``covered_ns`` is the summed width of the input bars that fell in it,
+    each weighted by its own ``prov_confidence``.
+
+    The denominator is observable, which is the whole reason this basis measures where
+    ``ohlcv_from_trades`` does not. The resampler holds ``interval_ns`` from parsing the
+    interval it was asked for, and every input bar declares its own ``interval``, so the
+    duration a complete bucket would hold is exactly as computable as ``yahoo_1m_vap``'s
+    390. It was reported as 1.0 while holding both numbers: a 1d bar built from three 1m
+    bars scored 1.0, where ``yahoo_1m_vap`` on the same three scored 0.0077.
+
+    Weighting by the input's own confidence is what keeps the derivation from outranking
+    what it derives from. Twenty-four 1h bars each covering half their hour re-bucket into
+    a day that is half covered, not a whole one; summing declared widths alone would have
+    reported 1.0 for it. The same rule in the other dimension is ``prov``'s: the emitted
+    bar carries the worst level among its inputs, so re-bucketing synthetic bars yields
+    synthetic ones rather than laundering them into DERIVED.
+
+    Saturating at 1.0 says the bucket is as covered as this method can make it. A caller
+    re-bucketing wide bars into narrower ones passes more coverage than the bucket holds,
+    and that is a full bucket, not an over-full one.
+    """
+    covered_ns = _require_int(inputs, "covered_ns")
+    interval_ns = _require_int(inputs, "interval_ns")
+    if interval_ns <= 0:
+        raise ConfidenceInputError(f"input 'interval_ns' must be positive, got {interval_ns}")
+    if covered_ns < 0:
+        raise ConfidenceInputError(f"input 'covered_ns' must be non-negative, got {covered_ns}")
+    return min(covered_ns / interval_ns, 1.0)
+
+
+_TRUST_ORDER: Final[tuple[Provenance, ...]] = (
+    Provenance.NATIVE,
+    Provenance.DERIVED,
+    Provenance.SYNTHETIC,
+    Provenance.UNAVAILABLE,
+)
+"""The levels from most to least trustworthy, which is what makes "worst" well defined."""
+
+
+def worst_provenance(levels: Iterable[Provenance]) -> Provenance:
+    """Return the least trustworthy level in ``levels``.
+
+    A derivation can never be more trustworthy than its worst input, and the level a basis
+    registers is a ceiling rather than a measurement — ``Impl.prov`` says the same thing
+    about implementations. Without this, re-bucketing quote-derived bars produced
+    ``prov=derived`` over prices that were never transacted, and a caller filtering
+    ``WHERE prov != 'synthetic'`` got them back with nothing to notice.
+
+    Raises:
+        ValueError: if ``levels`` is empty. There is no worst of nothing, and returning
+            NATIVE for it would be the laundering this function exists to stop.
+    """
+    materialised = list(levels)
+    if not materialised:
+        raise ValueError("worst_provenance() needs at least one level; there is no worst of none")
+    return max(materialised, key=_TRUST_ORDER.index)
 
 
 @register_basis("book_resample", level=Provenance.DERIVED, inputs=["book_snapshot", "book_delta"])

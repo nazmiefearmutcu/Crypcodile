@@ -620,3 +620,185 @@ def test_gate3b_every_resampler_that_builds_a_record_is_declared():
         f"{undeclared}. Add each with the argument for why it derives, so the "
         f"prov= gate covers it."
     )
+
+
+# ---------------------------------------------------------------------------
+# Gate 3c — a registered formula's output must actually vary with its inputs
+# ---------------------------------------------------------------------------
+# Gate 3 scans *call sites* for a hand-written ``prov_confidence=``. That is the
+# bypass it was built for, and it left the registry itself unwatched — so a
+# constant moved one indirection inwards was invisible to every gate here, and the
+# test that pinned it (``confidence_for(basis, {}) == 1.0``) could not fail: it
+# asserted whatever the registry held, plus that a docstring was non-empty, which
+# is not the same as arguing. ``ohlcv_from_ohlcv`` reported 1.0 for a 1d bar built
+# from three 1m bars while holding both numbers the ratio needs.
+#
+# So the registry is probed instead of read: feed each formula different inputs and
+# require the answers to differ. A constant is still allowed — ``native`` is 1.0 and
+# ``unavailable`` is 0.0 *by definition* — but only when declared and argued below,
+# and the declaration is checked against the formula rather than trusted.
+
+CONSTANT_BY_DEFINITION: dict[str, tuple[float, str]] = {
+    "native": (
+        1.0,
+        "A venue-reported value is fully sampled at its own level because it was read "
+        "rather than reconstructed. There is no partial reading of a number a venue "
+        "published.",
+    ),
+    "unavailable": (
+        0.0,
+        "A hole carries no information, so it is fully unsampled at any level. This is "
+        "the definition of the level, not a measurement of an instance of it.",
+    ),
+    "ohlcv_from_trades": (
+        1.0,
+        "A trade stream declares no denominator. How many prints a bucket should hold is "
+        "not a property of the market, so there is nothing to divide by — unlike "
+        "ohlcv_from_ohlcv, where each input bar declares its own width, and unlike "
+        "yahoo_1m_vap, where a session contains 390 one-minute bars whether or not any "
+        "were fetched. The sample size is reported on the record as num_trades.",
+    ),
+    "ohlcv_from_quotes": (
+        1.0,
+        "Same argument as ohlcv_from_trades, and the same absent denominator: a quote "
+        "stream has no count a bucket ought to contain. A one-quote bucket really does "
+        "yield open == high == low == close, and what says so is num_trades = 1 and a "
+        "volume that is a structural zero, not a ratio with an invented base.",
+    ),
+}
+"""Bases whose confidence is a constant, the value, and the argument for it.
+
+An entry silences the probe below, which is exactly why the argument is mandatory and
+why the value is asserted rather than taken on trust — the same discipline
+:data:`crocodile.core.capability.IRREDUCIBLE` carries for the symmetry gate.
+"""
+
+_PROBE_VALUES = (0, 1, 2, 3)
+"""Ints to feed a formula. Small and non-negative: every formula in the registry
+validates its inputs, and a probe that only ever trips validation measures nothing."""
+
+
+class _KeyRecorder(Mapping[str, object]):
+    """A mapping that answers every lookup and remembers what was asked for.
+
+    Formulas declare the observables they need by reading them, not in the registration
+    — ``inputs=`` names data *channels*, which is a different thing. Rather than keep a
+    second hand-written list of key names for the gate to go stale against, the keys are
+    discovered by letting the formula ask.
+    """
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+        self.seen: list[str] = []
+
+    def __getitem__(self, key: str) -> object:
+        if key not in self.seen:
+            self.seen.append(key)
+        return self._value
+
+    def __iter__(self):
+        return iter(self.seen)
+
+    def __len__(self) -> int:
+        return len(self.seen)
+
+
+def _shipped_registry() -> dict[str, object]:
+    """The bases ``crocodile`` itself registers.
+
+    Reaching into ``_REGISTRY`` is deliberate: ``registered_bases()`` returns names, and
+    this gate needs the formula. Tests register throwaway bases in the same process, so
+    the registry is filtered to formulas defined under ``crocodile.`` — otherwise this
+    gate would pass or fail on test ordering.
+    """
+    from crocodile.core.schema.provenance import _REGISTRY, load_all_bases
+
+    load_all_bases()
+    return {
+        basis: registered
+        for basis, registered in _REGISTRY.items()
+        if getattr(registered.fn, "__module__", "").startswith("crocodile.")
+    }
+
+
+def _observed_keys(fn) -> list[str]:
+    """Return the input keys ``fn`` reads, discovered by calling it under a recorder."""
+    keys: list[str] = []
+    for value in _PROBE_VALUES:
+        recorder = _KeyRecorder(value)
+        try:
+            fn(recorder)
+        except Exception:  # noqa: BLE001 - a rejected probe still reveals the keys read
+            pass
+        for key in recorder.seen:
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
+def _probe_results(basis: str, keys: list[str]) -> set[float]:
+    """Vary one key at a time over :data:`_PROBE_VALUES` and collect the answers.
+
+    One at a time, because the two-key formulas are ratios: scaling every key together
+    leaves ``book_resample``'s ``1 - lookahead/interval`` unchanged, and a probe that
+    moves nothing would read a real formula as a constant.
+    """
+    from crocodile.core.schema.provenance import ConfidenceInputError, confidence_for
+
+    results: set[float] = set()
+    for key in keys:
+        for value in _PROBE_VALUES:
+            inputs = dict.fromkeys(keys, 1)
+            inputs[key] = value
+            try:
+                results.add(confidence_for(basis, inputs))
+            except ConfidenceInputError:
+                continue
+    return results
+
+
+@pytest.mark.parametrize(
+    "basis", sorted(set(_shipped_registry()) - set(CONSTANT_BY_DEFINITION))
+)
+def test_gate3c_a_registered_formula_varies_with_its_inputs(basis: str) -> None:
+    """A confidence that cannot change is a constant, whatever it is spelled as."""
+    fn = _shipped_registry()[basis].fn
+    keys = _observed_keys(fn)
+    assert keys, (
+        f"{basis} reads no inputs, so its confidence cannot vary. Measure something "
+        f"observable, or declare it in CONSTANT_BY_DEFINITION with the argument."
+    )
+    results = _probe_results(basis, keys)
+    assert len(results) > 1, (
+        f"{basis} returned {results} for every probe over {keys}; its confidence does "
+        f"not depend on its inputs. A number that never moves is a constant living in "
+        f"the registry, which is the one place no other gate looks."
+    )
+
+
+@pytest.mark.parametrize("basis", sorted(CONSTANT_BY_DEFINITION))
+def test_gate3c_a_declared_constant_is_the_constant_it_declares(basis: str) -> None:
+    """The exemption is checked, not trusted.
+
+    A basis on the list that quietly grew a formula, or that returns something other than
+    the value argued for, would otherwise be exempt from both this gate and Gate 3.
+    """
+    from crocodile.core.schema.provenance import confidence_for, describe
+
+    expected, why = CONSTANT_BY_DEFINITION[basis]
+    assert why.strip(), f"{basis} is on CONSTANT_BY_DEFINITION with no argument"
+    assert basis in _shipped_registry(), f"{basis} is declared constant but is not registered"
+
+    fn = _shipped_registry()[basis].fn
+    keys = _observed_keys(fn)
+    observed = _probe_results(basis, keys) if keys else {confidence_for(basis, {})}
+    assert observed == {expected}, (
+        f"{basis} is declared constant at {expected} but returned {sorted(observed)}"
+    )
+    assert describe(basis).strip(), f"{basis} must carry the argument in its description too"
+
+
+def test_gate3c_the_constant_list_holds_no_stale_entry() -> None:
+    """A name that left the registry must not leave its exemption behind."""
+    unknown = sorted(set(CONSTANT_BY_DEFINITION) - set(_shipped_registry()))
+    assert not unknown, f"CONSTANT_BY_DEFINITION names unregistered bases: {unknown}"

@@ -56,7 +56,12 @@ import duckdb
 import polars as pl
 
 from crocodile.core.schema.enums import AssetClass
-from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.provenance import (
+    Provenance,
+    ProvenanceFields,
+    provenance_fields,
+    worst_provenance,
+)
 from crocodile.core.schema.records import OHLCV, Quote, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.equity.resample._interval import parse_interval as _parse_interval
@@ -548,18 +553,48 @@ def resample_quotes_to_bars(
         )
 
 
+def _bar_width_ns(interval_label: str, cache: dict[str, int]) -> int:
+    """Return one input bar's declared width in nanoseconds.
+
+    Raises:
+        ValueError: from ``_parse_interval`` if the bar's own ``interval`` string is not
+            one this codebase can parse. That is loud on purpose: the width is the
+            numerator of the emitted bar's confidence, and a bar silently counted as
+            zero-width would drag the score down with nothing to point at.
+    """
+    width = cache.get(interval_label)
+    if width is None:
+        width = _parse_interval(interval_label)[0]
+        cache[interval_label] = width
+    return width
+
+
 def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLCV]:
     """Resample lower-resolution OHLCV records into higher-resolution OHLCV records.
 
     Assumes OHLCV records are ordered by local_ts.
+
+    Each emitted bar measures its own coverage and inherits its worst input's level; see
+    the ``ohlcv_from_ohlcv`` registration and :func:`worst_provenance`. Both used to be
+    constants, and both were wrong in the same direction: a 1d bar built from three 1m
+    bars reported ``prov_confidence=1.0``, and re-bucketing quote-derived bars turned
+    ``synthetic`` into ``derived`` over prices that were never transacted.
     """
     interval_ns, _, interval_label = _parse_interval(interval)
     adjusted_interval: int | None = None
+    width_cache: dict[str, int] = {}
 
-    # Re-bucketing bars is exact, but the wider bar is still not a venue's bar. Note this
-    # does not carry its inputs' provenance forward: a bar built from synthetic bars
-    # reports DERIVED, which the basis' registration says out loud.
-    tail = provenance_fields("ohlcv_from_ohlcv")
+    # Coverage of the bucket being accumulated, each input weighted by its own
+    # confidence, and the worst level seen in it.
+    covered_ns = 0.0
+    input_levels: list[Provenance] = []
+
+    def _tail_for_bucket() -> ProvenanceFields:
+        fields = provenance_fields(
+            "ohlcv_from_ohlcv",
+            {"covered_ns": round(covered_ns), "interval_ns": interval_ns},
+        )
+        return fields._replace(prov=worst_provenance([fields.prov, *input_levels]))
 
     current_bucket: int | None = None
     open_px = 0.0
@@ -604,6 +639,8 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             volume = bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
+            covered_ns = _bar_width_ns(bar.interval, width_cache) * bar.prov_confidence
+            input_levels = [bar.prov]
             if bar.num_trades is not None:
                 trade_count_sum = bar.num_trades
                 has_trade_count = True
@@ -617,6 +654,8 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             volume += bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum += vwap_val * bar.volume
+            covered_ns += _bar_width_ns(bar.interval, width_cache) * bar.prov_confidence
+            input_levels.append(bar.prov)
             if bar.num_trades is not None:
                 trade_count_sum += bar.num_trades
                 has_trade_count = True
@@ -628,6 +667,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
                 if volume > 0
                 else (vwap_vol_sum if vwap_vol_sum > 0 else None)
             )
+            tail = _tail_for_bucket()
             yield OHLCV(
                 source=source,
                 symbol=symbol,
@@ -656,6 +696,8 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             volume = bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
+            covered_ns = _bar_width_ns(bar.interval, width_cache) * bar.prov_confidence
+            input_levels = [bar.prov]
             if bar.num_trades is not None:
                 trade_count_sum = bar.num_trades
                 has_trade_count = True
@@ -667,6 +709,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
         vwap = (
             (vwap_vol_sum / volume) if volume > 0 else (vwap_vol_sum if vwap_vol_sum > 0 else None)
         )
+        tail = _tail_for_bucket()
         yield OHLCV(
             source=source,
             symbol=symbol,
