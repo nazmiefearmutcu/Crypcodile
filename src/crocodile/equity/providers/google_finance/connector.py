@@ -452,13 +452,20 @@ class GoogleFinanceProvider(Provider):
                                 tag = TAG_MAP[key_text]
                                 end_str = ""
                                 if key_text == "Ex-dividend date":
-                                    end_str = parse_date(val_text)
-                                    val = 0.0
-                                    unit = "date"
-                                else:
-                                    val, unit = parse_val_and_unit(val_text, key_text)
-                                    if val is None:
-                                        continue
+                                    # The page publishes a date here and no number, and
+                                    # Fundamental.val is required. It used to be filled with
+                                    # 0.0 under unit="date" — the field admitting in one
+                                    # column what prov=native denied in another — so
+                                    # SELECT avg(val) ... WHERE source='google_finance'
+                                    # averaged a sentinel in with real facts, and a consumer
+                                    # filtering prov != 'native' to find the non-measurements
+                                    # got nothing back. There is no record type here for a
+                                    # date-valued fact, so the row is dropped rather than
+                                    # given an invented quantity.
+                                    continue
+                                val, unit = parse_val_and_unit(val_text, key_text)
+                                if val is None:
+                                    continue
                                 records.append(
                                     Fundamental(
                                         source=self.name,

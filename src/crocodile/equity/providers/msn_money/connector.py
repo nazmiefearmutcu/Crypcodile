@@ -5,9 +5,9 @@ import logging
 import os
 import random
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 import aiohttp
 
@@ -40,17 +40,74 @@ def get_spoofed_headers() -> dict[str, str]:
     }
 
 
-def safe_float(v: Any, default: float = 0.0) -> float:
+def safe_float(v: Any) -> float | None:
+    """Parse one MSN chart entry, answering ``None`` where the page published no number.
+
+    It used to take a ``default`` and answer ``0.0``, which collapsed "the page said zero"
+    into "the page said nothing" — and the callers below write required measurement fields,
+    where those two are different claims. A caller that genuinely has a default can still
+    write ``or`` at its own call site; none of the ones here does, because a price of zero
+    is not a missing price, it is a false one.
+    """
     if v is None:
-        return default
+        return None
     try:
         if isinstance(v, str):
             v = v.strip().replace(",", "")
             if v in ("", "N/A", "null", "None"):
-                return default
+                return None
         return float(v)
     except (ValueError, TypeError):
-        return default
+        return None
+
+
+_BAR_SERIES: Final[tuple[tuple[str, str], ...]] = (
+    ("open", "openPrices"),
+    ("high", "pricesHigh"),
+    ("low", "pricesLow"),
+    ("close", "prices"),
+    ("volume", "volumes"),
+)
+"""``OHLCV`` field ← the MSN chart series that carries it.
+
+MSN ships these as five independent arrays beside ``timeStamps`` and guarantees nothing
+about their relative lengths, which is why they are read through one guard rather than
+five.
+"""
+
+
+def _bar_measurements(series: Mapping[str, Any], index: int) -> dict[str, float] | None:
+    """Read one bar out of MSN's parallel chart arrays, or ``None`` if the page is short.
+
+    Entries inside the arrays are ``null`` or ``"N/A"`` across halts and holidays, and the
+    arrays themselves run shorter than ``timeStamps``. The code this replaced substituted
+    ``0.0`` for both cases — ``safe_float(close_p[idx]) if idx < len(close_p) else 0.0`` —
+    and the bar it built carried the header's default ``prov=NATIVE``, so a short ``prices``
+    array put a close of ``0.0`` into the lake as a venue-reported price:
+    ``SELECT min(close) FROM ohlcv WHERE source='msn_money'`` returned a number no share
+    ever traded at, with nothing on the row to tell it from a real one. The provider's own
+    suite pinned that as behaviour, asserting ``bar.open == 0.0`` beside ``bar.low ==
+    150.0`` — a bar whose high is below its low.
+
+    A bar *is* its five numbers. Where the page did not publish one of them there is no bar
+    to report, so the caller skips it rather than inventing the missing quantity.
+
+    ``volume`` is guarded exactly like the four prices, deliberately. A structural zero
+    would be honest only if MSN's omission were structural — the way a quote-derived bar
+    genuinely has no traded volume — and nothing in the payload separates "this instrument
+    does not trade" from "this array is short". Declaring a structural zero on that guess
+    is the same fabrication with a certificate attached.
+    """
+    measured: dict[str, float] = {}
+    for field, key in _BAR_SERIES:
+        column = series.get(key)
+        if not isinstance(column, list) or index >= len(column):
+            return None
+        value = safe_float(column[index])
+        if value is None:
+            return None
+        measured[field] = value
+    return measured
 
 
 class MsnMoneyProvider(Provider):
@@ -171,11 +228,6 @@ class MsnMoneyProvider(Provider):
                         )
                         if is_valid:
                             series = data[0]["series"]
-                            open_p = series.get("openPrices", [])
-                            close_p = series.get("prices", [])
-                            high_p = series.get("pricesHigh", [])
-                            low_p = series.get("pricesLow", [])
-                            volumes = series.get("volumes", [])
                             timestamps = series.get("timeStamps", [])
 
                             # Prefer chart type for interval (weekend gaps break first-pair heuristics)
@@ -232,9 +284,28 @@ class MsnMoneyProvider(Provider):
                                     dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                                     source_ts = int(dt.timestamp() * 1e9)
                                 except Exception:
-                                    source_ts = None
+                                    # An unreadable stamp used to become source_ts=None, and
+                                    # the window filter below skipped itself for those — so a
+                                    # backfill for one June week returned bars it could not
+                                    # place in time and had not asked for.
+                                    log.debug(
+                                        "MSN Money: unreadable chart timestamp %r for %s",
+                                        ts_str,
+                                        symbol,
+                                    )
+                                    continue
 
-                                if source_ts is not None and not (start_ns <= source_ts <= end_ns):
+                                if not (start_ns <= source_ts <= end_ns):
+                                    continue
+
+                                measured = _bar_measurements(series, idx)
+                                if measured is None:
+                                    log.debug(
+                                        "MSN Money: incomplete chart bar at index %d for %s; "
+                                        "skipping rather than zero-filling",
+                                        idx,
+                                        symbol,
+                                    )
                                     continue
 
                                 bar = OHLCV(
@@ -244,11 +315,11 @@ class MsnMoneyProvider(Provider):
                                     source_ts=source_ts,
                                     local_ts=local_ts,
                                     interval=computed_interval,
-                                    open=safe_float(open_p[idx]) if idx < len(open_p) else 0.0,
-                                    high=safe_float(high_p[idx]) if idx < len(high_p) else 0.0,
-                                    low=safe_float(low_p[idx]) if idx < len(low_p) else 0.0,
-                                    close=safe_float(close_p[idx]) if idx < len(close_p) else 0.0,
-                                    volume=safe_float(volumes[idx]) if idx < len(volumes) else 0.0,
+                                    open=measured["open"],
+                                    high=measured["high"],
+                                    low=measured["low"],
+                                    close=measured["close"],
+                                    volume=measured["volume"],
                                     asset_class=AssetClass.EQUITY,
                                 )
                                 yield bar
@@ -280,7 +351,16 @@ class MsnMoneyProvider(Provider):
                                 try:
                                     dt = datetime.strptime(ex_date, "%Y-%m-%d").replace(tzinfo=UTC)
                                     ts = int(dt.timestamp() * 1e9)
-                                    if start_ns <= ts <= end_ns:
+                                    amount = safe_float(ex_div_amt)
+                                    # "N/A" is truthy, so the guard above passes it through and
+                                    # the old 0.0 default made it a declared $0.00 dividend.
+                                    if amount is None:
+                                        log.debug(
+                                            "MSN Money: unreadable dividend amount %r for %s",
+                                            ex_div_amt,
+                                            symbol,
+                                        )
+                                    elif start_ns <= ts <= end_ns:
                                         yield CorporateAction(
                                             source=self.name,
                                             symbol=symbol.upper(),
@@ -289,7 +369,7 @@ class MsnMoneyProvider(Provider):
                                             local_ts=local_ts,
                                             ex_date=ex_date,
                                             type=CorpActionType.DIVIDEND_CASH,
-                                            value=safe_float(ex_div_amt),
+                                            value=amount,
                                             asset_class=AssetClass.EQUITY,
                                         )
                                 except Exception as e:
@@ -310,11 +390,13 @@ class MsnMoneyProvider(Provider):
                                     if start_ns <= ts <= end_ns:
                                         split_str = str(last_split_factor)
                                         if ":" in split_str:
-                                            parts = split_str.split(":")
-                                            try:
-                                                val = float(parts[0]) / float(parts[1])
-                                            except (ValueError, ZeroDivisionError):
-                                                val = float(parts[0])
+                                            numerator, _, denominator = split_str.partition(":")
+                                            # Falling back to the numerator alone turned a
+                                            # "3:for-2" into a 3.0 split factor rather than
+                                            # 1.5, and a price series back-adjusted by it
+                                            # carries a permanent 2x step no consumer can
+                                            # see, because the row still said prov=native.
+                                            val = float(numerator) / float(denominator)
                                         else:
                                             val = float(split_str)
                                         yield CorporateAction(

@@ -541,6 +541,72 @@ def _scraped_last_price(_: Mapping[str, Any]) -> float:
     return 0.0
 
 
+_AMM_LADDER_LEVELS: Final[int] = 5
+"""Levels a side of the reconstructed AMM ladder asks for. The denominator of one basis
+and a property of that reconstruction, not of depth in general — scoped like
+``_YAHOO_1M_VAP_SESSION_BARS`` above."""
+
+
+@register_basis("amm_tick_curve", level=Provenance.SYNTHETIC, inputs=[])
+def _amm_tick_curve(inputs: Mapping[str, Any]) -> float:
+    """A concentrated-liquidity curve reshaped as a book: how much of the ladder it fills.
+
+    ``n_levels / 5``, where ``n_levels`` counts the price levels the pool's active
+    liquidity actually supports a non-zero size at, out of the five a side asks for.
+
+    :attr:`Provenance.SYNTHETIC` and not :attr:`Provenance.DERIVED`, which is the whole
+    point of the entry. Every number is computed from real chain state — the active tick,
+    the liquidity in range, the token decimals — but liquidity in range is what the pool
+    *could* fill, not orders anyone placed. That is a different data class from the resting
+    depth a :class:`~crocodile.core.schema.records.BookSnapshot` reports, which is the line
+    ``SYNTHETIC`` draws and the line ``alpaca_l1`` stays the other side of: a top of book
+    reshaped into a profile is still quotes somebody posted.
+
+    The count is the honest observable because the reconstruction thins out. It assumes
+    the active liquidity holds across five tick-spacings either side of the current tick,
+    and where it does not the level computes to nothing — so the levels that survive are
+    the levels the curve has evidence for. A pool with liquidity at one spacing scores
+    0.2, which is the sparse profile ``yahoo_1m_vap`` refuses to call full, measured the
+    same way.
+
+    The predecessor of that count was ``max(size, 0.0001)``, which floored every empty
+    level into a dust order: ``SELECT min(bid_sz) … WHERE source='base_onchain'`` returned
+    0.0001 and ``WHERE bid_sz > 0`` — "is there liquidity here" — answered yes for a
+    drained pool. A level with no size is not a level.
+
+    Saturating at five says the ladder is as filled as this method builds it, not that the
+    curve has become a book; ``prov`` stays ``SYNTHETIC`` at every value.
+    """
+    n = _require_int(inputs, "n_levels")
+    if n < 0:
+        raise ConfidenceInputError(f"input 'n_levels' must be non-negative, got {n}")
+    return min(n / _AMM_LADDER_LEVELS, 1.0)
+
+
+@register_basis("farcaster_cast_search", level=Provenance.SYNTHETIC, inputs=[])
+def _farcaster_cast_search(_: Mapping[str, Any]) -> float:
+    """Social metrics modelled from a page of casts: 0.0, by definition.
+
+    Neynar's cast-search endpoint returns casts. :class:`FarcasterCorrelation` requires a
+    24-hour mention count, a developer-activity score and a trending rank, and the endpoint
+    publishes none of the three — they are counted, scored from author bios and ranked by
+    the adapter. Every measurement on the record is modelled, so there is no sampling
+    evidence to grade and nothing about the method that varies, which is why this is a
+    constant and why it is declared as one.
+
+    0.0 is the reading ``unavailable`` and ``scraped_last_price`` carry, and for the same
+    reason: not that the numbers are wrong, but that no part of them was sampled. The
+    header default this replaces said Farcaster published a trending rank directly, and
+    left a consumer filtering ``prov != NATIVE`` silent on a record with nothing measured
+    on it at all.
+
+    What this does not fix, and cannot from here: ``mentions_24h`` names a window the
+    query does not request, so a count over an untimed search is filed under a
+    twenty-four-hour field. That is a schema question rather than a provenance one.
+    """
+    return 0.0
+
+
 _TRUST_ORDER: Final[tuple[Provenance, ...]] = (
     Provenance.NATIVE,
     Provenance.DERIVED,

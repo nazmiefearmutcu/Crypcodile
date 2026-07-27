@@ -247,6 +247,40 @@ def test_parse_csv_rest_format_yyyy_mm_dd() -> None:
     assert recs[0].open == 180.0
 
 
+def test_a_series_with_no_volume_column_yields_no_bars() -> None:
+    """Stooq's FX and bond CSVs publish Date,Open,High,Low,Close and nothing else.
+
+    Neither family starts with "^", so both took the OHLCV arm, where the missing column
+    was padded with zeros: `SELECT sum(volume) ... WHERE symbol='EURUSD'` returned 0.0 as
+    measured turnover, indistinguishable from a genuinely untraded day, at prov=NATIVE.
+    `OHLCV.volume` is required, so there is nowhere honest to record the absence.
+    """
+    from crocodile.equity.providers.stooq.connector import StooqProvider
+
+    p = object.__new__(StooqProvider)
+    p.name = "stooq"
+    csv = b"Date,Open,High,Low,Close\n2026-06-20,1.0850,1.0871,1.0842,1.0866\n"
+
+    recs = StooqProvider._parse_csv(p, csv, "EURUSD", 0, 2 * 10**18)
+
+    assert recs == []
+
+
+def test_an_index_series_with_no_volume_column_still_yields_its_level() -> None:
+    """An IndexValue carries no volume field, so the missing column costs it nothing."""
+    from crocodile.equity.providers.stooq.connector import StooqProvider
+
+    p = object.__new__(StooqProvider)
+    p.name = "stooq"
+    csv = b"Date,Open,High,Low,Close\n2026-06-20,5100.0,5140.0,5090.0,5130.0\n"
+
+    recs = StooqProvider._parse_csv(p, csv, "^SPX", 0, 2 * 10**18)
+
+    assert len(recs) == 1
+    assert isinstance(recs[0], IndexValue)
+    assert recs[0].value == 5130.0
+
+
 def test_parse_csv_bulk_zip_angle_headers() -> None:
     from crocodile.core.schema.records import OHLCV
     from crocodile.equity.providers.stooq.connector import StooqProvider

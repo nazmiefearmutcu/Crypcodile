@@ -1,4 +1,3 @@
-import math
 from typing import Any, cast
 
 import pytest
@@ -91,8 +90,14 @@ def test_extreme_overflow_underflow_prices() -> None:
         assert len(snapshot.bids) == 5
         assert len(snapshot.asks) == 5
 
-def test_extreme_reserves_fallback() -> None:
-    # test reserves overflow and underflow on fallback path
+def test_a_pool_with_no_tick_liquidity_yields_no_book_whatever_its_reserves() -> None:
+    """Reserve validation still rejects None, and no reserve magnitude buys back a book.
+
+    Reserves used to feed an invented ladder -- `SELECT avg(ask_px - bid_px) / avg(price)`
+    over every base_onchain book_ticker row returned exactly 0.001, a constant 10bp spread
+    presented as a measured top of book -- so 1e300 and 1e-300 both "produced depth". Only
+    a tick curve produces depth now, and these payloads have none.
+    """
     for r in [None]:
         msg = {
             "type": "onchain_update",
@@ -110,7 +115,6 @@ def test_extreme_reserves_fallback() -> None:
         with pytest.raises(TypeError):
             list(normalize_onchain_update(msg, local_ts=9999))
 
-    # Test extreme reserves values (e.g. 1e300, 1e-300)
     for reserve in [1e300, 1e-300]:
         msg = {
             "type": "onchain_update",
@@ -126,10 +130,7 @@ def test_extreme_reserves_fallback() -> None:
             "swaps": []
         }
         records = list(normalize_onchain_update(msg, local_ts=9999))
-        assert len(records) == 2
-        snapshot = cast(BookSnapshot, records[1])
-        assert len(snapshot.bids) == 5
-        assert len(snapshot.asks) == 5
+        assert records == []
 
 def test_float_inputs_for_integers() -> None:
     # decimals and tickSpacing can be float, or string representations of float/int
@@ -205,7 +206,13 @@ def test_negative_and_zero_tick_spacing() -> None:
         assert len(snapshot.bids) == 5
         assert len(snapshot.asks) == 5
 
-def test_depth_is_exactly_5() -> None:
+def test_only_a_tick_curve_gives_depth_5_and_reserve_only_pools_give_no_book() -> None:
+    """Depth 5 is a property of the tick curve, not of every base_onchain payload.
+
+    Setups 2 and 3 also reported depth 5 before, off `price * (1 -/+ 0.0005 * i)`, so
+    `SELECT avg(ask_px - bid_px) / avg(price)` over every base_onchain book_ticker row
+    returned exactly 0.001 -- a constant 10bp spread presented as a measured top of book.
+    """
     # Setup 1: Uniswap V3 active
     msg_active = {
         "type": "onchain_update",
@@ -247,10 +254,7 @@ def test_depth_is_exactly_5() -> None:
         "swaps": []
     }
     records_fallback = list(normalize_onchain_update(msg_fallback, local_ts=9999))
-    snapshot_fallback = cast(BookSnapshot, records_fallback[1])
-    assert len(snapshot_fallback.bids) == 5
-    assert len(snapshot_fallback.asks) == 5
-    assert snapshot_fallback.depth == 5
+    assert records_fallback == []
 
     # Setup 3: Aerodrome V2
     msg_aero = {
@@ -270,10 +274,7 @@ def test_depth_is_exactly_5() -> None:
         "swaps": []
     }
     records_aero = list(normalize_onchain_update(msg_aero, local_ts=9999))
-    snapshot_aero = cast(BookSnapshot, records_aero[1])
-    assert len(snapshot_aero.bids) == 5
-    assert len(snapshot_aero.asks) == 5
-    assert snapshot_aero.depth == 5
+    assert records_aero == []
 
 def test_tick_overflow_raises_error() -> None:
     # Force underflow in price_ratio to use state["tick"], and set tick to a huge value to cause OverflowError
@@ -299,7 +300,12 @@ def test_tick_overflow_raises_error() -> None:
     assert len(records) == 0
 
 def test_nan_inf_liquidity() -> None:
-    # 1. NaN liquidity causes fallback to CP path (because nan > 0 is False)
+    """Neither NaN nor Inf liquidity may raise, and neither may produce a book.
+
+    NaN fails `liquidity > 0`, so it is a payload with no usable curve; it used to land on
+    the invented `price * (1 -/+ 0.0005 * i)` ladder and emit a top of book anyway.
+    """
+    # 1. NaN liquidity is not a curve to read (nan > 0 is False), so no book is emitted
     msg_nan = {
         "type": "onchain_update",
         "block": 100,
@@ -319,12 +325,7 @@ def test_nan_inf_liquidity() -> None:
         "swaps": []
     }
     records_nan = list(normalize_onchain_update(msg_nan, local_ts=9999))
-    assert len(records_nan) == 2
-    snapshot_nan = cast(BookSnapshot, records_nan[1])
-    # The sizes should be finite because it fell back to CP formula using finite reserves
-    for bid_px, bid_sz in snapshot_nan.bids:
-        assert math.isfinite(bid_sz)
-        assert bid_sz > 0
+    assert records_nan == []
 
     # 2. Inf liquidity executes the active V3 path (inf > 0 is True)
     msg_inf = {

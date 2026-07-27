@@ -84,14 +84,23 @@ class DeriveConnector:
     def fetch_options_chain(
         self,
         underlying_symbol: str = "BTC",
-        underlying_price: float = 60000.0,
+        underlying_price: float | None = None,
         greeks_solver: GreeksSolverAdapter | None = None,
         rate: float = 0.0,
     ) -> list[OptionsChain]:
         """Query the option markets and normalize into OptionsChain records.
 
-        If a greeks_solver is provided, the option Greeks (delta, gamma, vega, theta, rho)
-        will be calculated dynamically.
+        If a greeks_solver *and* an ``underlying_price`` are given, the Greeks are computed
+        from them. Without a forward there is nothing to compute against, so they stay
+        ``None``.
+
+        ``underlying_price`` used to default to ``60000.0``. ``getMarkets()`` returns no
+        spot or forward, so that number was the whole of what the lake knew about the
+        underlying: ``SELECT DISTINCT underlying_price ... WHERE source='derive'`` returned
+        one row, ``60000.0``, for BTC, ETH and SOL alike, presented as a measured spot at
+        ``prov=native``. Moneyness computed as ``strike / underlying_price`` became a pure
+        function of strike, and every ETH row was out by roughly twenty times. A default
+        that is a plausible price is worse than no default, because it never raises.
         """
         if not self.w3 or not self.viewer_contract:
             raise RuntimeError("Connector is not connected. Call connect() first.")
@@ -147,7 +156,12 @@ class DeriveConnector:
             theta = None
             rho = None
 
-            if greeks_solver is not None and t_years > 0.0 and mark_iv > 0.0:
+            if (
+                greeks_solver is not None
+                and underlying_price is not None
+                and t_years > 0.0
+                and mark_iv > 0.0
+            ):
                 try:
                     g = greeks_solver.greeks(
                         forward=underlying_price,
@@ -176,7 +190,11 @@ class DeriveConnector:
                 source="derive",
                 symbol=symbol,
                 symbol_raw=symbol_raw,
-                source_ts=local_ts,
+                # getMarkets() is a view call and carries no block timestamp. None is what
+                # the header docstring says to write when the source stamped nothing;
+                # local_ts here made SELECT avg(local_ts - source_ts) return exactly 0 for
+                # every Derive row, presented as zero venue-to-collector latency.
+                source_ts=None,
                 local_ts=local_ts,
                 asset_class=AssetClass.CRYPTO,
                 underlying=underlying_symbol,
@@ -188,11 +206,19 @@ class DeriveConnector:
                 mark_iv=mark_iv,
                 bid_px=bid_px,
                 bid_sz=bid_sz,
-                bid_iv=mark_iv,
+                # The ABI carries one `iv`, which is the mark. Copying it into both sides
+                # made avg(ask_iv - bid_iv) exactly 0.0 on every row — the same fabricated
+                # zero-width two-sided quote the google_finance scrape shipped — and
+                # deribit, one module over, reads genuine per-side IVs into these columns,
+                # so the two sources were indistinguishable while meaning opposite things.
+                bid_iv=None,
+                ask_iv=None,
                 ask_px=ask_px,
                 ask_sz=ask_sz,
-                ask_iv=mark_iv,
-                last_price=mark_price,
+                # No trade is published here. last_price=mark_price made
+                # `last_price != mark_price` false on every row, so any last-vs-mark
+                # dislocation screen returned the empty set by construction.
+                last_price=None,
                 open_interest=open_interest,
                 delta=delta,
                 gamma=gamma,

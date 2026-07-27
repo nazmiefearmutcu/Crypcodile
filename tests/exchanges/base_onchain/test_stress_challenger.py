@@ -22,6 +22,10 @@ def test_normalize_standard_case() -> None:
             "price": 50000.0,
             "reserve0": 10.0,
             "reserve1": 500000.0,
+            # A pool that reports its tick curve is the baseline; a reserves-only payload
+            # has no book to report, which would make this a test of nothing.
+            "liquidity": 100000,
+            "tick": 0,
         },
         "swaps": [
             {
@@ -34,27 +38,24 @@ def test_normalize_standard_case() -> None:
             }
         ]
     }
-    
+
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 3
-    
+
     trade = cast(Trade, records[0])
     ticker = cast(BookTicker, records[1])
     snapshot = cast(BookSnapshot, records[2])
-    
+
     assert isinstance(trade, Trade)
     assert trade.price == 50100.0
     assert trade.amount == 0.1
     assert trade.side == Side.BUY
-    
+
     assert isinstance(ticker, BookTicker)
-    assert ticker.bid_px == 50000.0 * 0.9995
-    assert ticker.ask_px == 50000.0 * 1.0005
-    expected_ask_sz = 10.0 * (1.0 - 1.0 / math.sqrt(1.0005))
-    expected_bid_sz = 10.0 * (1.0 / math.sqrt(0.9995) - 1.0)
-    assert math.isclose(ticker.bid_sz, expected_bid_sz, rel_tol=1e-9)
-    assert math.isclose(ticker.ask_sz, expected_ask_sz, rel_tol=1e-9)
-    
+    assert ticker.bid_px < 50000.0 < ticker.ask_px
+    assert ticker.bid_sz > 0.0
+    assert ticker.ask_sz > 0.0
+
     assert isinstance(snapshot, BookSnapshot)
     assert len(snapshot.bids) == 5
     assert len(snapshot.asks) == 5
@@ -84,24 +85,33 @@ def test_normalize_extreme_prices() -> None:
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 0
 
-    # 3. Extremely small price (1e-30) -> should yield ticker and snapshot
-    msg = dict(base_msg, state={"price": 1e-30, "reserve0": 1.0, "reserve1": 1.0})
+    # 3. Extremely small price (1e-30) -> should yield ticker and snapshot.
+    # `liquidity` is what keeps this a price test: without a curve the payload has no book
+    # at all, so an extreme price would no longer reach any of the arithmetic under test.
+    msg = dict(
+        base_msg,
+        state={"price": 1e-30, "reserve0": 1.0, "reserve1": 1.0, "liquidity": 100000, "tick": 0},
+    )
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 2
     ticker = cast(BookTicker, records[0])
-    assert ticker.bid_px == 1e-30 * 0.9995
-    expected_bid_sz = 1.0 * (1.0 / math.sqrt(0.9995) - 1.0)
-    assert math.isclose(ticker.bid_sz, expected_bid_sz, rel_tol=1e-9)
+    assert ticker.bid_px < 1e-30 < ticker.ask_px
+    assert math.isfinite(ticker.bid_sz)
+    assert ticker.bid_sz > 0.0
 
     # 4. Extremely large price (1e30) -> should yield ticker and snapshot
-    msg = dict(base_msg, state={"price": 1e30, "reserve0": 1.0, "reserve1": 1.0})
+    msg = dict(
+        base_msg,
+        state={"price": 1e30, "reserve0": 1.0, "reserve1": 1.0, "liquidity": 100000, "tick": 0},
+    )
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 2
     ticker = cast(BookTicker, records[0])
-    expected_ask_sz = 1.0 * (1.0 - 1.0 / math.sqrt(1.0005))
-    expected_bid_sz = 1.0 * (1.0 / math.sqrt(0.9995) - 1.0)
-    assert math.isclose(ticker.bid_sz, expected_bid_sz, rel_tol=1e-9)
-    assert math.isclose(ticker.ask_sz, expected_ask_sz, rel_tol=1e-9)
+    assert ticker.bid_px < 1e30 < ticker.ask_px
+    assert math.isfinite(ticker.bid_sz)
+    assert math.isfinite(ticker.ask_sz)
+    assert ticker.bid_sz > 0.0
+    assert ticker.ask_sz > 0.0
 
     # 5. Infinity price -> should return early and yield no ticker/snapshot
     msg = dict(base_msg, state={"price": float("inf"), "reserve0": 1.0, "reserve1": 1.0})
@@ -116,45 +126,56 @@ def test_normalize_extreme_prices() -> None:
 
 def test_normalize_extreme_reserves() -> None:
     """Test reserve edge cases: zero, negative, very large, inf, nan."""
+    # Every case carries `liquidity`/`tick` so the book comes off the curve and the reserve
+    # value under test is exercised where it still has an effect: the validation that runs
+    # before any book is built. Sizes are the curve's, so no reserve floor is asserted --
+    # a level the curve holds nothing at is dropped now rather than floored to 0.0001.
+    curve = {"liquidity": 100000, "tick": 0}
     base_msg = {
         "type": "onchain_update",
         "block": 100,
         "pool": "cbBTC-USDC",
         "pool_type": "uniswap_v3",
         "timestamp": 1600000000,
-        "state": {"price": 100.0},
+        "state": {"price": 100.0, **curve},
         "swaps": []
     }
 
-    # 1. Missing reserves -> should default to 0.0 and be capped at 0.0001
-    msg = dict(base_msg, state={"price": 100.0})
+    # 1. Missing reserves -> should default to 0.0 and not disturb the book
+    msg = dict(base_msg, state={"price": 100.0, **curve})
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 2
     ticker = cast(BookTicker, records[0])
-    assert ticker.bid_sz == 0.0001
-    assert ticker.ask_sz == 0.0001
+    assert ticker.bid_sz > 0.0
+    assert ticker.ask_sz > 0.0
 
     # 2. Zero reserves
-    msg = dict(base_msg, state={"price": 100.0, "reserve0": 0.0, "reserve1": 0.0})
+    msg = dict(base_msg, state={"price": 100.0, "reserve0": 0.0, "reserve1": 0.0, **curve})
     records = list(normalize_onchain_update(msg, local_ts=9999))
     ticker = cast(BookTicker, records[0])
-    assert ticker.bid_sz == 0.0001
-    assert ticker.ask_sz == 0.0001
+    assert ticker.bid_sz > 0.0
+    assert ticker.ask_sz > 0.0
 
-    # 3. Negative reserves -> should be capped at 0.0001
-    msg = dict(base_msg, state={"price": 100.0, "reserve0": -10.0, "reserve1": -20.0})
+    # 3. Negative reserves -> should be clamped to 0.0
+    msg = dict(base_msg, state={"price": 100.0, "reserve0": -10.0, "reserve1": -20.0, **curve})
     records = list(normalize_onchain_update(msg, local_ts=9999))
     ticker = cast(BookTicker, records[0])
-    assert ticker.bid_sz == 0.0001
-    assert ticker.ask_sz == 0.0001
+    assert ticker.bid_sz > 0.0
+    assert ticker.ask_sz > 0.0
 
     # 4. Infinity reserves -> should be discarded
-    msg = dict(base_msg, state={"price": 100.0, "reserve0": float("inf"), "reserve1": float("inf")})
+    msg = dict(
+        base_msg,
+        state={"price": 100.0, "reserve0": float("inf"), "reserve1": float("inf"), **curve},
+    )
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 0
 
     # 5. NaN reserves -> should be discarded
-    msg = dict(base_msg, state={"price": 100.0, "reserve0": float("nan"), "reserve1": float("nan")})
+    msg = dict(
+        base_msg,
+        state={"price": 100.0, "reserve0": float("nan"), "reserve1": float("nan"), **curve},
+    )
     records = list(normalize_onchain_update(msg, local_ts=9999))
     assert len(records) == 0
 
@@ -184,6 +205,9 @@ def test_normalize_large_swaps() -> None:
             "price": 50000.0,
             "reserve0": 10.0,
             "reserve1": 500000.0,
+            # Keeps the two book records in the count so the swap total stays the subject.
+            "liquidity": 100000,
+            "tick": 0,
         },
         "swaps": swaps
     }
@@ -205,7 +229,8 @@ def test_normalize_corrupted_swaps() -> None:
         "pool": "cbBTC-USDC",
         "pool_type": "uniswap_v3",
         "timestamp": 1600000000,
-        "state": {"price": 100.0},
+        # Keeps the two book records in the count so the corrupted swap stays the subject.
+        "state": {"price": 100.0, "liquidity": 100000, "tick": 0},
         "swaps": [
             {
                 "tx_hash": "0x123",

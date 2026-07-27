@@ -21,6 +21,7 @@ Shape gotchas handled here (found by live-probing Kraken / KuCoin / MEXC):
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -35,6 +36,8 @@ from crocodile.core.schema.records import (
     Trade,
 )
 from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
+
+log = logging.getLogger(__name__)
 
 # ccxt gives millisecond epoch timestamps; the crypcodile schema is nanoseconds.
 _MS_TO_NS = 1_000_000
@@ -160,26 +163,43 @@ def normalize_ticker(
 
     A ticker missing **both** ``bid`` and ``ask`` yields nothing — a book
     ticker with no quote is meaningless and would poison downstream mid-price
-    math (``sqrt(bid*ask)``).
+    math (``sqrt(bid*ask)``). A ticker missing either **size** yields nothing
+    for the same reason: ``bid_sz`` and ``ask_sz`` are required fields, and
+    ``bidVolume``/``askVolume`` are optional in ccxt's unified shape — absent on
+    Kraken and others this adapter exists to cover. They used to be padded with
+    ``or 0.0``, which is this connector's version of the fabrication the
+    ``google_finance`` quote was: ``SELECT avg(bid_sz) … WHERE source='kraken'``
+    returned 0.0 as a measured resting size at the touch, and ``WHERE bid_sz > 0``
+    — the "is there liquidity here" filter — deleted every such venue silently.
     """
     canonical = _canonical(registry, exchange, symbol_raw)
     exchange_ts = _ms_to_ns(ticker.get("timestamp"))
     bid = _f(ticker.get("bid"))
     ask = _f(ticker.get("ask"))
+    bid_sz = _f(ticker.get("bidVolume"))
+    ask_sz = _f(ticker.get("askVolume"))
 
     if bid is not None and ask is not None:
-        yield BookTicker(
-            source=exchange,
-            symbol=canonical,
-            symbol_raw=symbol_raw,
-            source_ts=exchange_ts,
-            local_ts=local_ts,
-            asset_class=AssetClass.CRYPTO,
-            bid_px=bid,
-            bid_sz=_f(ticker.get("bidVolume")) or 0.0,
-            ask_px=ask,
-            ask_sz=_f(ticker.get("askVolume")) or 0.0,
-        )
+        if bid_sz is None or ask_sz is None:
+            log.debug(
+                "%s: ticker for %s quotes no size; a BookTicker cannot carry an "
+                "unreported size, so no top of book is emitted",
+                exchange,
+                symbol_raw,
+            )
+        else:
+            yield BookTicker(
+                source=exchange,
+                symbol=canonical,
+                symbol_raw=symbol_raw,
+                source_ts=exchange_ts,
+                local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
+                bid_px=bid,
+                bid_sz=bid_sz,
+                ask_px=ask,
+                ask_sz=ask_sz,
+            )
 
     if is_contract:
         info = ticker.get("info") or {}

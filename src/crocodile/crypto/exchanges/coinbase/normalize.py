@@ -244,6 +244,15 @@ def _normalize_ticker(
         log.debug("coinbase: ticker missing best_bid/best_ask for %s", raw_symbol)
         return
 
+    # The sizes are guarded like the prices. They were padded with 0.0, and the live
+    # frame does carry them, so the pad was defensive rather than load-bearing — but a
+    # zero in a required size field is a measured "nothing rests at the touch", not a
+    # missing reading, and the day Coinbase changes the frame that is what the lake
+    # would record without a word.
+    if bid_sz_raw is None or ask_sz_raw is None:
+        log.debug("coinbase: ticker missing best_bid_size/best_ask_size for %s", raw_symbol)
+        return
+
     yield BookTicker(
         source=EXCHANGE,
         symbol=canonical,
@@ -252,9 +261,9 @@ def _normalize_ticker(
         local_ts=local_ts,
         asset_class=AssetClass.CRYPTO,
         bid_px=float(bid_px_raw),
-        bid_sz=float(bid_sz_raw) if bid_sz_raw is not None else 0.0,
+        bid_sz=float(bid_sz_raw),
         ask_px=float(ask_px_raw),
-        ask_sz=float(ask_sz_raw) if ask_sz_raw is not None else 0.0,
+        ask_sz=float(ask_sz_raw),
         update_id=msg.get("sequence"),
     )
 

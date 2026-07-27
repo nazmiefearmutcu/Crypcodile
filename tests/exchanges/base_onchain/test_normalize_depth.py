@@ -1,16 +1,18 @@
 import math
 from typing import Any, cast
 
-from crocodile.core.schema.records import BookSnapshot
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
 
 
-def test_normalize_depth_5_levels_aerodrome() -> None:
-    """Verify that Aerodrome V2 pools yield exactly 5 levels of depth and match CP formulas."""
-    price = 2.0
-    reserve0 = 1000.0
-    reserve1 = 2000.0
-    
+def test_an_aerodrome_pool_yields_no_book_and_still_yields_its_trades() -> None:
+    """Aerodrome V2 reports reserves, never a tick curve, so it reports no book at all.
+
+    This case used to build the ladder out of `price * (1 -/+ 0.0005 * i)`, which is why
+    `SELECT avg(ask_px - bid_px) / avg(price)` over every base_onchain book_ticker row
+    returned exactly 0.001: a constant 10bp spread presented as a measured top of book.
+    The swaps the pool did report are observed, so they still normalize.
+    """
     msg = {
         "type": "onchain_update",
         "block": 100,
@@ -18,54 +20,36 @@ def test_normalize_depth_5_levels_aerodrome() -> None:
         "pool_type": "aerodrome_v2",
         "timestamp": 1600000000,
         "state": {
-            "price": price,
-            "reserve0": reserve0,
-            "reserve1": reserve1,
+            "price": 2.0,
+            "reserve0": 1000.0,
+            "reserve1": 2000.0,
             "decimals0": 18,
             "decimals1": 6,
         },
-        "swaps": []
+        "swaps": [
+            {
+                "tx_hash": "0x123",
+                "log_index": 0,
+                "timestamp": 1600000001,
+                "price": 2.01,
+                "amount": 4.0,
+                "is_buy": True,
+            }
+        ]
     }
-    
+
     records = list(normalize_onchain_update(msg, local_ts=9999))
-    assert len(records) == 2
-    
-    snapshot = cast(BookSnapshot, records[1])
-    
-    assert len(snapshot.bids) == 5
-    assert len(snapshot.asks) == 5
-    
-    # Verify exact prices and sizes for constant product AMM
-    for i in range(1, 6):
-        spread_prev = 0.0005 * (i - 1)
-        spread_curr = 0.0005 * i
-        
-        expected_bid_px = price * (1.0 - spread_curr)
-        expected_ask_px = price * (1.0 + spread_curr)
-        
-        expected_ask_sz = reserve0 * (
-            1.0 / math.sqrt(1.0 + spread_prev) - 1.0 / math.sqrt(1.0 + spread_curr)
-        )
-        expected_bid_sz = reserve0 * (
-            1.0 / math.sqrt(1.0 - spread_curr) - 1.0 / math.sqrt(1.0 - spread_prev)
-        )
-        
-        bid_px, bid_sz = snapshot.bids[i - 1]
-        ask_px, ask_sz = snapshot.asks[i - 1]
-        
-        assert math.isclose(bid_px, expected_bid_px, rel_tol=1e-9)
-        assert math.isclose(ask_px, expected_ask_px, rel_tol=1e-9)
-        assert math.isclose(bid_sz, expected_bid_sz, rel_tol=1e-9)
-        assert math.isclose(ask_sz, expected_ask_sz, rel_tol=1e-9)
+
+    assert len(records) == 1
+    assert isinstance(records[0], Trade)
 
 
-def test_normalize_depth_5_levels_uniswap_v3_fallback() -> None:
-    """Verify Uniswap V3 fallback path has exactly 5 levels and uses CP formula."""
-    price = 50000.0
-    reserve0 = 10.0
-    reserve1 = 500000.0
-    
-    # Uniswap V3 but WITHOUT 'liquidity' in state
+def test_a_uniswap_v3_pool_with_no_liquidity_yields_no_book_and_still_its_trades() -> None:
+    """A V3 payload with no `liquidity` carries no curve to read a book off, so none is read.
+
+    Reserves alone reached the same invented ladder as Aerodrome above -- the whole venue's
+    top of book was `price * (1 -/+ 0.0005)` regardless of pool, block, or depth behind it.
+    """
     msg = {
         "type": "onchain_update",
         "block": 100,
@@ -73,43 +57,28 @@ def test_normalize_depth_5_levels_uniswap_v3_fallback() -> None:
         "pool_type": "uniswap_v3",
         "timestamp": 1600000000,
         "state": {
-            "price": price,
-            "reserve0": reserve0,
-            "reserve1": reserve1,
+            "price": 50000.0,
+            "reserve0": 10.0,
+            "reserve1": 500000.0,
             "decimals0": 8,
             "decimals1": 6,
         },
-        "swaps": []
+        "swaps": [
+            {
+                "tx_hash": "0xabc",
+                "log_index": 3,
+                "timestamp": 1600000001,
+                "price": 50100.0,
+                "amount": 0.1,
+                "is_buy": False,
+            }
+        ]
     }
-    
+
     records = list(normalize_onchain_update(msg, local_ts=9999))
-    assert len(records) == 2
-    
-    snapshot = cast(BookSnapshot, records[1])
-    assert len(snapshot.bids) == 5
-    assert len(snapshot.asks) == 5
-    
-    for i in range(1, 6):
-        spread_prev = 0.0005 * (i - 1)
-        spread_curr = 0.0005 * i
-        
-        expected_bid_px = price * (1.0 - spread_curr)
-        expected_ask_px = price * (1.0 + spread_curr)
-        
-        expected_ask_sz = reserve0 * (
-            1.0 / math.sqrt(1.0 + spread_prev) - 1.0 / math.sqrt(1.0 + spread_curr)
-        )
-        expected_bid_sz = reserve0 * (
-            1.0 / math.sqrt(1.0 - spread_curr) - 1.0 / math.sqrt(1.0 - spread_prev)
-        )
-        
-        bid_px, bid_sz = snapshot.bids[i - 1]
-        ask_px, ask_sz = snapshot.asks[i - 1]
-        
-        assert math.isclose(bid_px, expected_bid_px, rel_tol=1e-9)
-        assert math.isclose(ask_px, expected_ask_px, rel_tol=1e-9)
-        assert math.isclose(bid_sz, expected_bid_sz, rel_tol=1e-9)
-        assert math.isclose(ask_sz, expected_ask_sz, rel_tol=1e-9)
+
+    assert len(records) == 1
+    assert isinstance(records[0], Trade)
 
 
 def test_normalize_depth_uniswap_v3_active_unflipped() -> None:

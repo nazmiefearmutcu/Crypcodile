@@ -102,10 +102,20 @@ def test_derive_connector_fetch_and_normalize() -> None:
         assert chain.source == "derive"
         assert chain.underlying == "BTC"
         assert chain.underlying_price == 60000.0
-        # expiry / local_ts / source_ts must be nanoseconds (not s or ms)
+        # expiry / local_ts must be nanoseconds (not s or ms)
         assert chain.expiry == expected_expiry_ns
         assert chain.local_ts >= 1_000_000_000_000_000_000  # ~ns epoch magnitude
-        assert chain.source_ts == chain.local_ts
+        # getMarkets() is a view call with no block timestamp, so the venue stamped
+        # nothing and the record says so. It used to repeat local_ts, which made
+        # `SELECT avg(local_ts - source_ts)` return exactly 0 for every Derive row,
+        # presented as zero venue-to-collector latency.
+        assert chain.source_ts is None
+        # The ABI carries one `iv` and no trade. Copying the mark into both IV sides and
+        # into last_price made `avg(ask_iv - bid_iv)` exactly 0.0 and
+        # `last_price != mark_price` false on every row, by construction.
+        assert chain.bid_iv is None
+        assert chain.ask_iv is None
+        assert chain.last_price is None
 
     # Verify first (Call) option values
     c_chain = [c for c in chains if c.opt_type == OptType.CALL][0]

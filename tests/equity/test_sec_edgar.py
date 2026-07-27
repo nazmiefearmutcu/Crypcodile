@@ -168,6 +168,45 @@ async def test_get_fundamentals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_fact_with_no_numeric_value_is_skipped_not_filed_as_zero() -> None:
+    """`_safe_float` answered 0.0 for an absent or unparseable `val`, at prov=NATIVE.
+
+    `Fundamental.val` is required, so `SELECT sum(val) ... WHERE tag='Revenues'` added
+    those zeros in and `avg(val)` was dragged toward zero by facts nobody ever filed —
+    with no column on the row separating a reported zero from an unparsed one.
+    """
+    mock_facts = {
+        "cik": 320193,
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {"val": None, "end": "2020-09-30", "accn": "a", "fy": 2020},
+                            {"val": "n/a", "end": "2020-12-31", "accn": "b", "fy": 2020},
+                            {"val": 0.0, "end": "2021-03-31", "accn": "c", "fy": 2021},
+                        ]
+                    },
+                }
+            }
+        },
+    }
+
+    client = SecEdgarClient()
+    client._ticker_to_cik["AAPL"] = 320193
+    client._cik_to_primary_ticker[320193] = "AAPL"
+
+    with patch.object(client, "fetch_company_facts", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = mock_facts
+        facts = await client.get_fundamentals("AAPL", deduplicate=False)
+
+    # The filed zero survives — a reported 0.0 is a measurement. The two the filing did
+    # not supply do not, and that is the distinction the old default destroyed.
+    assert [f.val for f in facts] == [0.0]
+
+
+@pytest.mark.asyncio
 async def test_parse_company_facts_zip() -> None:
     """Test parsing of bulk ZIP company facts."""
     mock_facts = {

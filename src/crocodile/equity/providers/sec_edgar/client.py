@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from collections.abc import AsyncGenerator, Generator, Iterable
@@ -16,14 +17,25 @@ from crocodile.core.ratelimit import TokenBucketLimiter
 from crocodile.core.schema.enums import AssetClass, FundPeriod
 from crocodile.core.schema.records import Filing, Fundamental
 
+log = logging.getLogger(__name__)
 
-def _safe_float(val: Any) -> float:
+
+def _safe_float(val: Any) -> float | None:
+    """Parse an XBRL fact value, answering ``None`` where the filing published no number.
+
+    It used to answer ``0.0`` for both an absent ``val`` and an unparseable one, and
+    ``Fundamental.val`` is required — so a fact nobody reported went into the lake as a
+    reported zero at the header's default ``prov=NATIVE``. ``SELECT sum(val) … WHERE
+    tag='Revenues'`` added those zeros in and ``avg(val)`` was dragged toward zero by
+    facts that were never filed, with no column on the row separating a reported zero
+    from an unparsed one. The caller skips the fact instead.
+    """
     if val is None:
-        return 0.0
+        return None
     try:
         return float(val)
     except (ValueError, TypeError):
-        return 0.0
+        return None
 
 
 def _parse_zip_chunk(
@@ -275,6 +287,16 @@ class SecEdgarClient:
                                 fp = FundPeriod(fp_str)
                             except ValueError:
                                 pass
+                        fact_val = _safe_float(val_obj.get("val"))
+                        if fact_val is None:
+                            log.debug(
+                                "sec_edgar: %s/%s fact for %s carries no numeric val; "
+                                "skipping rather than filing a zero",
+                                taxonomy,
+                                tag,
+                                symbol,
+                            )
+                            continue
                         yield Fundamental(
                             source="sec_edgar",
                             symbol=symbol,
@@ -284,7 +306,7 @@ class SecEdgarClient:
                             taxonomy=taxonomy,
                             tag=tag,
                             unit=unit,
-                            val=_safe_float(val_obj.get("val")),
+                            val=fact_val,
                             end=val_obj.get("end", ""),
                             start=val_obj.get("start"),
                             fy=val_obj.get("fy"),

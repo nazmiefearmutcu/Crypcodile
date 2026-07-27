@@ -551,7 +551,23 @@ class StooqProvider(Provider):
         highs = df["HIGH"].to_list()
         lows = df["LOW"].to_list()
         closes = df["CLOSE"].to_list()
-        volumes = df["VOL"].to_list() if "VOL" in df.columns else [0.0] * len(df)
+        # Stooq's FX and bond series ship Date,Open,High,Low,Close with no volume column
+        # at all, and neither symbol family starts with "^", so they take the OHLCV arm
+        # below rather than the index one. Padding the column with zeros made
+        # SELECT sum(volume) ... WHERE symbol='EURUSD' return 0.0 as measured turnover,
+        # indistinguishable from a genuinely untraded day, on a row claiming prov=NATIVE.
+        # OHLCV.volume is required, so there is nowhere to put the absence: the bars are
+        # not emitted, and the caller is told which column is missing rather than left to
+        # infer it from a lake full of zeros.
+        if not is_index and "VOL" not in df.columns:
+            log.error(
+                "Stooq CSV for %r has no VOL column; a bar cannot report an unmeasured "
+                "volume, so no bars are emitted for it",
+                symbol,
+            )
+            return []
+        # Empty only on the index arm below, which builds IndexValue and never indexes it.
+        volumes = df["VOL"].to_list() if "VOL" in df.columns else []
 
         local_ts = now_ns()
 
