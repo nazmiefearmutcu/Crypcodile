@@ -149,10 +149,16 @@ class QueryParams(msgspec.Struct, frozen=True):
 
     One field, and the absence of the other two is the point. The legacy REST payload also
     carried ``limit``, which is now :attr:`CapabilityContext.row_limit
-    <crocodile.core.capability.CapabilityContext.row_limit>`: it was never a request for
-    fewer rows, it defaulted to the hard maximum and was clamped to it, which makes it a
-    ceiling the *surface* imposes. Leaving it in the struct would let a caller raise its own
-    ceiling.
+    <crocodile.core.capability.CapabilityContext.row_limit>`. That it defaulted to the hard
+    maximum and was clamped to it is not what decides this, because ``catalog-scan``'s
+    ``limit`` defaulted the same way and *is* kept: the difference is that
+    :meth:`Catalog.scan <crocodile.core.store.catalog.Catalog.scan>` takes a limit and
+    :meth:`Catalog.query <crocodile.core.store.catalog.Catalog.query>` does not. REST had to
+    invent one, by wrapping the caller's SQL as ``SELECT * FROM (…) AS _q LIMIT n`` — which
+    is exactly what :meth:`CapabilityContext.query
+    <crocodile.core.capability.CapabilityContext.query>` now does, once, for every surface.
+    A parameter a surface synthesised is that surface's ceiling; leaving it in the struct
+    would let a caller raise their own.
     """
 
     sql: str
