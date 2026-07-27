@@ -813,12 +813,19 @@ class Catalog:
         # ``instrument`` channel it is the *listing* venue. Reading it first
         # reported NASDAQ as the source of an Alpaca-served row, the same
         # confusion :mod:`crocodile.core.store.rows` guards the partition path
-        # against. The order is taken from that module rather than restated here:
-        # the local copy omitted ``provider``, which is the name the still-live
-        # legacy equity union gives the same thing, so an equity view with no
-        # ``source`` column fell through to the listing venue after all. The names
-        # come from a module constant, never from a caller, so interpolating one
-        # into the SQL is safe.
+        # against.
+        #
+        # The order is taken from :data:`_ORIGIN_FIELDS` rather than restated here.
+        # The local copy that preceded it omitted ``provider``; the claim written
+        # beside that change — that an equity view with no ``source`` column then
+        # fell through to the listing venue — has no failing test behind it and
+        # cannot be produced through ``Catalog``, because :meth:`_read_expr`
+        # projects ``source`` unconditionally on every group. What sharing the
+        # constant actually buys is that a fourth origin spelling added to
+        # ``rows`` is honoured here without anyone remembering to add it, and that
+        # the two modules cannot disagree about precedence. The names come from a
+        # module constant, never from a caller, so interpolating one into the SQL
+        # is safe.
         origin_col = next((c for c in _ORIGIN_FIELDS if c in col_names), None)
 
         if origin_col is not None:
