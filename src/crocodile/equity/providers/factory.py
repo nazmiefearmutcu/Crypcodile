@@ -25,11 +25,13 @@ _VALID_NAMES = sorted(_REGISTRY)
 def list_providers() -> list[str]:
     """Sorted names of the registered equity providers.
 
-    The counterpart of ``crocodile.crypto.exchanges.factory.list_exchanges``, and it
+    The counterpart of :func:`crocodile.crypto.exchanges.factory.list_exchanges`, and it
     exists for the same reason that one does: something outside this module needs to ask
-    which sources this asset class serves. The surface projection asks it to decide which
-    market a canonical ``source:SYMBOL`` belongs to, and reading ``_REGISTRY`` from there
-    would have made a private mapping part of the contract.
+    which sources this asset class serves. Two callers do — the ``list-exchanges``
+    capability, which needs both halves to answer one question about the whole build, and
+    the surface projection, which uses it to decide which market a canonical
+    ``source:SYMBOL`` belongs to. Both would otherwise read ``_REGISTRY`` across a package
+    boundary, which is how a rename becomes a caller's problem.
 
     Note this cannot be answered with :func:`supported_channels`, which returns ``None``
     both for an unknown provider and for a registered one that declares no channels.
