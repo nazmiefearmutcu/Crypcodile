@@ -623,6 +623,122 @@ def test_gate3b_every_resampler_that_builds_a_record_is_declared():
 
 
 # ---------------------------------------------------------------------------
+# Gate 3b, widened — a fabricated measurement anywhere in the tree, not just in resample/
+# ---------------------------------------------------------------------------
+# The discovery rule above looks in ``resample`` packages, which was where every
+# derivation lived when it was written. ``google_finance`` put a synthesiser in
+# ``providers/`` — ``Trade(amount=1.0)`` and a ``Quote`` with ``bid_px == ask_px``
+# and ``bid_sz = ask_sz = 1.0`` — and it was outside every gate by construction.
+# So the scan below covers the whole tree, and looks for the thing that made those
+# records fabrications rather than derivations: a *literal number* standing where a
+# measurement belongs.
+#
+# "Where a measurement belongs" is derived from the structs rather than listed:
+# a required field annotated exactly ``float``. Those are the quantities a record
+# cannot exist without and cannot have a default for — ``Trade.amount``,
+# ``Quote.bid_sz``, ``OHLCV.volume``, ``DepthProfile.reference_price``. An adapter
+# reading one off a payload writes an expression; only a fabricated one writes ``1.0``.
+
+FABRICATES_MEASUREMENTS: dict[str, str] = {}
+"""Modules that write a literal number into a required measurement field, and why.
+
+Empty, and that is the point: every entry is a record asserting a quantity nobody
+measured. Adding one is allowed — a structural zero can be the honest encoding, as
+``ohlcv_from_quotes`` argues for a quote bar's ``volume`` — but it is allowed *out
+loud*, with the argument next to it, on the same discipline as
+:data:`crocodile.core.capability.IRREDUCIBLE`. A silent one is what shipped a
+zero-width NBBO at ``prov_confidence=1.0``.
+
+Key is the path relative to ``src/crocodile``; value is the argument.
+"""
+
+
+def _measurement_fields() -> dict[str, frozenset[str]]:
+    """Return ``{record class: required fields annotated exactly float}``."""
+    return {
+        cls.__name__: frozenset(
+            f.name for f in msgspec.structs.fields(cls) if f.required and f.type is float
+        )
+        for cls in _declared_record_types()
+    }
+
+
+def _canonical_record_calls_by_class(tree: ast.AST, names: frozenset[str]) -> list[tuple[str, ast.Call]]:
+    """Every canonical-record construction in ``tree``, paired with the class it builds.
+
+    Import aliases are resolved for the reason :func:`_canonical_record_calls` gives:
+    a scanner matching bare class names reads an aliasing module as building nothing.
+    """
+    local: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "crocodile.core.schema.records":
+            for alias in node.names:
+                if alias.name in names:
+                    local[alias.asname or alias.name] = alias.name
+    calls: list[tuple[str, ast.Call]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in local:
+            calls.append((local[func.id], node))
+        elif isinstance(func, ast.Attribute) and func.attr in names:
+            calls.append((func.attr, node))
+    return calls
+
+
+def _fabricated_measurements() -> dict[str, list[str]]:
+    """Return ``{module: offences}`` for every literal number in a measurement position."""
+    fields = _measurement_fields()
+    names = frozenset(fields)
+    root = _source_root()
+    found: dict[str, list[str]] = {}
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root).as_posix()
+        for cls, call in _canonical_record_calls_by_class(ast.parse(path.read_text()), names):
+            for kw in call.keywords:
+                if kw.arg not in fields[cls] or not isinstance(kw.value, ast.Constant):
+                    continue
+                if not isinstance(kw.value.value, int | float) or isinstance(kw.value.value, bool):
+                    continue
+                found.setdefault(relative, []).append(
+                    f"{relative}:{kw.value.lineno} {cls}.{kw.arg} = {kw.value.value!r}"
+                )
+    return found
+
+
+def test_gate3b_no_module_fabricates_a_measurement_without_declaring_it():
+    """The gate the ``resample``-only discovery rule could not have caught.
+
+    ``Trade.amount = 1.0`` on every scraped last price made
+    ``SELECT sum(amount) … WHERE source='google_finance'`` return the poll count as share
+    volume, and it lived in ``providers/``, where no rule looked.
+    """
+    offenders = {
+        module: offences
+        for module, offences in _fabricated_measurements().items()
+        if module not in FABRICATES_MEASUREMENTS
+    }
+    assert not offenders, (
+        f"literal numbers in required measurement fields: "
+        f"{sorted(o for offences in offenders.values() for o in offences)}. "
+        f"Read the value from the source, or add the module to FABRICATES_MEASUREMENTS "
+        f"with the argument for why a constant is the honest encoding."
+    )
+
+
+def test_gate3b_the_fabrication_list_cannot_hold_a_stale_or_silent_entry():
+    """Self-cleaning, on the same discipline as DERIVES_RECORDS and IRREDUCIBLE."""
+    fabricated = _fabricated_measurements()
+    for relative, why in FABRICATES_MEASUREMENTS.items():
+        assert why.strip(), f"{relative} is on FABRICATES_MEASUREMENTS with no justification"
+        assert relative in fabricated, (
+            f"FABRICATES_MEASUREMENTS names {relative}, which fabricates nothing any more; "
+            f"drop the entry rather than leave a licence lying around"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Gate 3c — a registered formula's output must actually vary with its inputs
 # ---------------------------------------------------------------------------
 # Gate 3 scans *call sites* for a hand-written ``prov_confidence=``. That is the
@@ -664,6 +780,12 @@ CONSTANT_BY_DEFINITION: dict[str, tuple[float, str]] = {
         "stream has no count a bucket ought to contain. A one-quote bucket really does "
         "yield open == high == low == close, and what says so is num_trades = 1 and a "
         "volume that is a structural zero, not a ratio with an invented base.",
+    ),
+    "scraped_last_price": (
+        0.0,
+        "The page publishes a price and never a size, for any symbol at any time, so the "
+        "quantity that makes a Trade a trade is unsampled at every call. Nothing varies "
+        "because nothing about the method varies.",
     ),
 }
 """Bases whose confidence is a constant, the value, and the argument for it.

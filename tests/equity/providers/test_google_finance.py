@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from crocodile.core.schema.enums import AssetClass, SecurityType, Side
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import Fundamental, IndexValue, Quote, Record, Trade
 from crocodile.core.sink.memory import MemorySink
 from crocodile.equity.providers.google_finance.connector import (
@@ -180,21 +181,25 @@ async def test_google_finance_scrape_symbol() -> None:
 
     records = await provider._scrape_symbol("AAPL")
 
-    assert len(records) == 5
+    assert len(records) == 4
 
     # Verify Trade
     trades = [r for r in records if isinstance(r, Trade)]
     assert len(trades) == 1
     assert trades[0].symbol == "AAPL"
     assert trades[0].price == 150.25
-    assert trades[0].amount == 1.0
+    # The scrape observes a price and no size. 1.0 made `sum(amount)` return the poll
+    # count as share volume; a structural zero contributes nothing, which is the truth.
+    assert trades[0].amount == 0.0
+    assert trades[0].prov is Provenance.SYNTHETIC
+    assert trades[0].prov_basis == "scraped_last_price"
+    assert trades[0].prov_confidence == 0.0
 
-    # Verify Quote
-    quotes = [r for r in records if isinstance(r, Quote)]
-    assert len(quotes) == 1
-    assert quotes[0].symbol == "AAPL"
-    assert quotes[0].bid_px == 150.25
-    assert quotes[0].ask_px == 150.25
+    # No Quote. bid_px == ask_px == last price with size 1.0 a side is a fabricated
+    # zero-width two-sided quote, and it shipped as prov=native — so
+    # `avg(ask_px - bid_px)` read 0.0 as a measured spread while a consumer watching for
+    # `prov != NATIVE` stayed silent. There is no honest Quote to build from one number.
+    assert [r for r in records if isinstance(r, Quote)] == []
 
     # Verify Fundamentals
     fundamentals = [r for r in records if isinstance(r, Fundamental)]
@@ -299,7 +304,7 @@ async def test_google_finance_run() -> None:
         local_ts=123,
         id="",
         price=150.0,
-        amount=1.0,
+        amount=0.0,
         asset_class=AssetClass.EQUITY,
         side=Side.UNKNOWN,
     )
@@ -503,3 +508,34 @@ async def test_google_finance_key_value_misalignment() -> None:
     assert len(fundamentals) == 1
     assert fundamentals[0].tag == "open"
     assert fundamentals[0].val == 150.0
+
+
+@pytest.mark.asyncio
+async def test_google_finance_says_it_cannot_serve_quotes_instead_of_inventing_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A configured channel that silently produces nothing looks like a quiet market."""
+    provider = GoogleFinanceProvider(
+        symbols=["AAPL"],
+        channels=["quote"],
+        out=MemorySink(),
+        registry=InstrumentRegistry(),
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.text = AsyncMock(
+        return_value="<html><body><div class='N6SYTe'>$150.25</div></body></html>"
+    )
+    mock_session = MagicMock()
+    mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
+    provider.session = mock_session
+
+    with caplog.at_level("WARNING"):
+        records = await provider._scrape_symbol("AAPL")
+        await provider._scrape_symbol("AAPL")
+
+    assert records == []
+    warnings = [r for r in caplog.records if "cannot serve the 'quote' channel" in r.message]
+    assert len(warnings) == 1, "warned once per provider, not once per poll"

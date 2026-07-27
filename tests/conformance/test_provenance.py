@@ -26,6 +26,7 @@ _EXPECTED_BASES = frozenset(
         "ohlcv_from_ohlcv",
         "ohlcv_from_quotes",
         "ohlcv_from_trades",
+        "scraped_last_price",
         "unavailable",
         "yahoo_1m_vap",
     }
@@ -370,3 +371,10 @@ def test_worst_provenance_refuses_an_empty_run():
     """Returning NATIVE for "no inputs" would be the laundering it exists to stop."""
     with pytest.raises(ValueError, match="no worst of none"):
         worst_provenance([])
+
+
+def test_a_scraped_last_price_is_not_a_venue_reported_print():
+    """C7: every google_finance last price shipped prov=native, prov_confidence=1.0."""
+    assert level_for("scraped_last_price") is Provenance.SYNTHETIC
+    assert confidence_for("scraped_last_price", {}) == 0.0
+    assert "no per-print size" in describe("scraped_last_price")

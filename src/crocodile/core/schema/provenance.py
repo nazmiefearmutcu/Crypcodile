@@ -482,6 +482,27 @@ def _ohlcv_from_ohlcv(inputs: Mapping[str, Any]) -> float:
     return min(covered_ns / interval_ns, 1.0)
 
 
+@register_basis("scraped_last_price", level=Provenance.SYNTHETIC, inputs=[])
+def _scraped_last_price(_: Mapping[str, Any]) -> float:
+    """A last price lifted off a web page, reported as a trade: 0.0, by definition.
+
+    ``google_finance`` scrapes one number — the last traded price — and the record it
+    fills is a :class:`~crocodile.core.schema.records.Trade`, which cannot exist without a
+    quantity. The page publishes no per-print size at any time, for any symbol, so the
+    measurement that makes a trade a trade is unsampled at every call. There is nothing
+    that varies, which is why this is a constant and why it is declared as one rather than
+    left to look like a formula.
+
+    0.0 is the same reading ``unavailable`` carries: no sampling evidence. It is not the
+    claim that the price is wrong — the price was really the last trade — and ``prov``
+    stays :attr:`Provenance.SYNTHETIC` to say the record's shape is modelled rather than
+    observed. What this refuses to be is the 1.0 the header defaults to, which said the
+    venue reported a one-share print directly and left a consumer filtering on
+    ``prov != NATIVE`` silent.
+    """
+    return 0.0
+
+
 _TRUST_ORDER: Final[tuple[Provenance, ...]] = (
     Provenance.NATIVE,
     Provenance.DERIVED,

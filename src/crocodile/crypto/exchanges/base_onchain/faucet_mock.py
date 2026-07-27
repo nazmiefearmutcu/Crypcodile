@@ -6,8 +6,6 @@ from typing import Optional
 
 from web3 import Web3
 
-from crocodile.core.schema.enums import AssetClass, Side
-from crocodile.core.schema.records import Trade
 
 log = logging.getLogger(__name__)
 
@@ -61,27 +59,12 @@ class BaseSepoliaFaucetMockStream:
                 
                 amount = round(random.uniform(0.01, 0.5), 4)
 
-                # Create the Trade record
-                trade = Trade(
-                    source="base_sepolia",
-                    symbol="base_sepolia:ETH-FAUCET",
-                    symbol_raw="ETH-FAUCET",
-                    source_ts=int(time.time() * 1_000_000_000),
-                    local_ts=int(time.time() * 1_000_000_000),
-                    asset_class=AssetClass.CRYPTO,
-                    id=f"{tx_hash}-0",
-                    price=0.0, # faucet dripped for free
-                    amount=amount,
-                    side=Side.BUY, # transfer to user
-                    sender=user_addr,
-                    is_smart_wallet=False
-                )
-
-                # Format as onchain update structure or serialize directly
-                # To match connector queues, let's serialize the trade or put it as JSON
-                # Wait, if we serialize directly or put the json msg:
-                # Since ingest/normalize parses connector updates, we can serialize the Trade directly or format as json dict.
-                # Let's put a normalized onchain update msg:
+                # The queue carries the connector's own onchain-update wire format, which
+                # `normalize` turns into records. A canonical `Trade` used to be built here
+                # as well and never read — dead, but not harmless: it carried invented
+                # addresses and a random amount under the header default, which says
+                # `prov=native`, and one line wiring it to a sink would have written
+                # simulated prints into a lake as venue-reported ones.
                 update_msg = {
                     "type": "onchain_update",
                     "block": random.randint(100000, 200000),

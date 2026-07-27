@@ -12,7 +12,8 @@ import aiohttp
 from bs4 import BeautifulSoup, Tag
 
 from crocodile.core.schema.enums import AssetClass, SecurityType, Side
-from crocodile.core.schema.records import Fundamental, IndexValue, Quote, Record, Trade
+from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.records import Fundamental, IndexValue, Record, Trade
 from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.base import Provider
 from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
@@ -164,6 +165,31 @@ TAG_MAP = {
 }
 
 
+SCRAPED_LAST_PRICE = "scraped_last_price"
+"""The registered basis for a price lifted off a rendered quote page.
+
+Before this, every scraped last price shipped the header default —
+``prov=native, prov_basis='native', prov_confidence=1.0``, which reads as *the venue
+reported this value directly* — beside ``conditions=["synthetic", "last_price"]``. The
+condition string was the only dissent, and no consumer filters on it. A consumer built
+on "warn whenever ``prov != NATIVE``" stayed silent on every one of these records.
+"""
+
+_UNPUBLISHED_SIZE = 0.0
+"""The quantity a scraped last price carries, because the page publishes none.
+
+``Trade.amount`` is required: a trade cannot exist without a quantity. The old value was
+``1.0``, which is not a small error but a different kind of one — it made
+``SELECT sum(amount) … WHERE source='google_finance'`` return the *poll count*, presented
+as share volume, and the number grew with the scrape interval rather than with trading.
+
+A structural zero is the encoding this codebase already uses for "this method carries no
+size": ``ohlcv_from_quotes`` bars report ``volume = 0.0`` for the same reason and say so
+in the registration. It sums to nothing, which is the truth about how much volume a
+scrape contributes, and ``prov_basis`` names the method that produced it.
+"""
+
+
 class GoogleFinanceProvider(Provider):
     name = "google_finance"
     ws_url = ""
@@ -180,6 +206,33 @@ class GoogleFinanceProvider(Provider):
         self.session: aiohttp.ClientSession | None = None
         self._running = False
         self._resolved_symbol_cache: dict[str, str] = {}
+        self._warned_no_quotes = False
+
+    def _warn_no_quotes_once(self) -> None:
+        """Say that the ``quote`` channel yields nothing here, rather than filling it.
+
+        The quote page renders one number, the last price. The record that used to be
+        built from it set ``bid_px = ask_px = price`` and ``bid_sz = ask_sz = 1.0`` — a
+        two-sided quote of zero width, at a price nobody quoted, in sizes nobody posted,
+        labelled NATIVE. ``SELECT avg(ask_px - bid_px) … WHERE source='google_finance'``
+        returned 0.0 and read as a measured spread; a real zero-width NBBO is a locked
+        market, which is a rare and interesting event rather than every row.
+
+        There is no honest record to emit instead: ``Quote`` requires four fields and the
+        scrape observes none of them. So this warns once and emits nothing. Silence would
+        be the third bad option — a channel that is configured, never errors, and never
+        produces a row looks like a market with no quotes.
+        """
+        if self._warned_no_quotes:
+            return
+        self._warned_no_quotes = True
+        log.warning(
+            "%s cannot serve the 'quote' channel: the page publishes a last price and no "
+            "bid/ask. It used to emit a zero-width quote at that price with size 1.0 on "
+            "both sides, labelled prov=native. Nothing is emitted for this channel now; "
+            "use a provider with a real top of book (alpaca, finnhub) if you need quotes.",
+            self.name,
+        )
 
     async def list_instruments(self) -> list[Instrument]:
         insts = []
@@ -337,8 +390,8 @@ class GoogleFinanceProvider(Provider):
                             )
                         )
                 else:
-                    # Google last-price is not an exchange print/NBBO — mark synthetic
                     if "trade" in self.channels:
+                        tail = provenance_fields(SCRAPED_LAST_PRICE)
                         records.append(
                             Trade(
                                 source=self.name,
@@ -348,30 +401,18 @@ class GoogleFinanceProvider(Provider):
                                 local_ts=local_ts,
                                 id="",
                                 price=price,
-                                amount=1.0,
+                                amount=_UNPUBLISHED_SIZE,
                                 conditions=["synthetic", "last_price"],
                                 asset_class=AssetClass.EQUITY,
                                 side=Side.UNKNOWN,
+                                prov=tail.prov,
+                                prov_basis=tail.prov_basis,
+                                prov_confidence=tail.prov_confidence,
+                                prov_inputs=tail.prov_inputs,
                             )
                         )
                     if "quote" in self.channels:
-                        records.append(
-                            Quote(
-                                source=self.name,
-                                symbol=symbol.upper(),
-                                symbol_raw=symbol,
-                                source_ts=source_ts,
-                                local_ts=local_ts,
-                                bid_px=price,
-                                bid_sz=1.0,
-                                ask_px=price,
-                                ask_sz=1.0,
-                                is_nbbo=False,
-                                is_consolidated=False,
-                                conditions=["synthetic", "last_price"],
-                                asset_class=AssetClass.EQUITY,
-                            )
-                        )
+                        self._warn_no_quotes_once()
 
                 # Parse fundamentals
                 if "fundamental" in self.channels:
