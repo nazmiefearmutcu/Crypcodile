@@ -266,4 +266,4 @@ def test_instrument_registry_fallback() -> None:
         inst_raw = registry.by_raw("alpaca", "AAPL")
         assert inst_raw is not None
         assert inst_raw.symbol == "AAPL"
-        assert inst_raw.provider == "alpaca"
+        assert inst_raw.source == "alpaca", "who serves the data, not where AAPL lists"

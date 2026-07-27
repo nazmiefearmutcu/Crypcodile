@@ -319,8 +319,10 @@ class Instrument(
 ):
     """The persisted reference record for a listed security.
 
-    Not to be confused with the in-memory identity object of the same name that the
-    provider layer passes around; that one is not a record and is relocated separately.
+    The in-memory identity object the provider layer passes around is
+    :class:`crocodile.equity.reference.identity.InstrumentIdentity`. It shared this name
+    until the union merge, one import line away and with four fields in common, which is a
+    wrong import that type-checks. It is not a record: no tag, no union, never written.
     """
 
     name: str | None = None

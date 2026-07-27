@@ -17,7 +17,8 @@ from crocodile.core.schema.enums import AssetClass, SecurityType
 from crocodile.core.schema.records import BookDelta, BookSnapshot
 from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.base import Provider, backoff_delays
-from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
+from crocodile.equity.reference.identity import InstrumentIdentity
+from crocodile.equity.reference.registry import InstrumentRegistry
 
 
 class DummySink(Sink):
@@ -32,11 +33,11 @@ class DummySink(Sink):
 
 
 class DummyProvider(Provider):
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[InstrumentIdentity]:
         return [
-            Instrument(
+            InstrumentIdentity(
                 symbol="AAPL",
-                provider=self.name,
+                source=self.name,
                 symbol_raw="AAPL",
                 security_type=SecurityType.CS,
             )

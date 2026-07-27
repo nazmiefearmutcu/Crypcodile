@@ -13,7 +13,8 @@ from crocodile.core.schema.records import OHLCV, Quote, Record, Trade
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import rfc3339_to_ns
 from crocodile.equity.providers.base import FatalProviderError, Provider
-from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
+from crocodile.equity.reference.identity import InstrumentIdentity
+from crocodile.equity.reference.registry import InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class AlpacaProvider(Provider):
         self.transport = AiohttpWsTransport(self.ws_url)
         self._running = False
 
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[InstrumentIdentity]:
         insts = []
         for sym in self.symbols:
             sec_type = SecurityType.CS
@@ -83,9 +84,9 @@ class AlpacaProvider(Provider):
                     pass
 
             insts.append(
-                Instrument(
+                InstrumentIdentity(
                     symbol=sym,
-                    provider=self.name,
+                    source=self.name,
                     symbol_raw=sym,
                     security_type=sec_type,
                 )

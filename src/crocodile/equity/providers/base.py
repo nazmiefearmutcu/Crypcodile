@@ -16,7 +16,8 @@ from crocodile.core.schema.records import Record
 
 if TYPE_CHECKING:
     from crocodile.core.sink.base import Sink
-    from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
+    from crocodile.equity.reference.identity import InstrumentIdentity
+    from crocodile.equity.reference.registry import InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ class Provider(ABC):
     def normalize(self, msg: object, local_ts: int) -> Iterable[Record]: ...
 
     @abstractmethod
-    async def list_instruments(self) -> list[Instrument]: ...
+    async def list_instruments(self) -> list[InstrumentIdentity]: ...
 
     def subscribe_channels(self) -> list[str] | list[dict[str, str]]:
         """Return the WS channel descriptors this connector will subscribe to.

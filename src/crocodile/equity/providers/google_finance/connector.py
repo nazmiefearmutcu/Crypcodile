@@ -17,7 +17,8 @@ from crocodile.core.schema.provenance import provenance_fields
 from crocodile.core.schema.records import Fundamental, IndexValue, Record, Trade
 from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.base import Provider
-from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
+from crocodile.equity.reference.identity import InstrumentIdentity
+from crocodile.equity.reference.registry import InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +226,7 @@ class GoogleFinanceProvider(Provider):
         self._running = False
         self._resolved_symbol_cache: dict[str, str] = {}
 
-    async def list_instruments(self) -> list[Instrument]:
+    async def list_instruments(self) -> list[InstrumentIdentity]:
         insts = []
         for sym in self.symbols:
             sec_type = (
@@ -234,9 +235,9 @@ class GoogleFinanceProvider(Provider):
                 else SecurityType.CS
             )
             insts.append(
-                Instrument(
+                InstrumentIdentity(
                     symbol=sym,
-                    provider=self.name,
+                    source=self.name,
                     symbol_raw=sym,
                     security_type=sec_type,
                 )
