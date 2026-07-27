@@ -84,9 +84,12 @@ async def test_live_end_to_end_proof(tmp_path: pathlib.Path) -> None:
     min_ts = min(r.local_ts for r in records)
     max_ts = max(r.local_ts for r in records)
 
-    # Scan for AAPL
+    # Scan for AAPL. The channel is ``ohlcv``: the records written above are canonical
+    # ``OHLCV``, so they land in ``channel=ohlcv/``. Scanning ``bar`` returned zero rows
+    # and asserted a count against it, so the documented live gate was a red build for
+    # anyone who ran it — invisible only because the suite skips this file by default.
     df = catalog.scan(
-        channel="bar",
+        channel="ohlcv",
         symbol=symbol,
         start_ns=min_ts,
         end_ns=max_ts,

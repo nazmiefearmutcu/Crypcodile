@@ -45,6 +45,7 @@ from typing import Final
 import duckdb
 import polars as pl
 
+from crocodile.core.schema.enums import channel_read_set, successor_channel
 from crocodile.core.store.migrate import SOURCE_PREFIX, SOURCE_PREFIXES
 
 log = logging.getLogger(__name__)
@@ -818,6 +819,7 @@ class Catalog:
     def _refresh_views(self) -> None:
         """Scan data_dir for channel directories and create/replace views."""
         # Discover channels from directory names ``channel=<name>``.
+        discovered: set[str] = set()
         for source_dir, _value in self._iter_source_dirs():
             for chan_dir in source_dir.iterdir():
                 if not chan_dir.is_dir() or not chan_dir.name.startswith("channel="):
@@ -826,15 +828,22 @@ class Catalog:
                 # Skip empty / relative / glob-unsafe suffixes (invalid views).
                 if not _is_safe_hive_suffix(channel):
                     continue
-                if channel not in self._registered_channels:
-                    self._create_view(channel)
+                discovered.add(channel)
+                # A retired tag on disk also owes a view under the tag that
+                # absorbed it. Without this, a lake holding only ``channel=bar/``
+                # answers ``SELECT * FROM ohlcv`` with "table does not exist" and
+                # a lake holding both answers it with half its bars.
+                discovered.add(successor_channel(channel))
+        for channel in discovered:
+            if channel not in self._registered_channels:
+                self._create_view(channel)
 
     def _create_view(self, channel: str) -> None:
         """Register a DuckDB VIEW named after the channel.
 
-        The globs cover every source prefix and all dates for that channel so
-        that ``query("SELECT … FROM trade")`` works without extra parameters,
-        including on a lake that is half-migrated.
+        The globs cover every source prefix, every predecessor tag, and all dates
+        for that channel so that ``query("SELECT … FROM trade")`` works without
+        extra parameters, including on a lake that is half-migrated.
 
         Empty partition directories (no ``part-*.parquet`` yet) are skipped
         without raising: DuckDB ``read_parquet`` fails hard when the glob
@@ -844,11 +853,17 @@ class Catalog:
         """
         # Avoid DuckDB "No files found" when only empty hive dirs exist: keep
         # only the prefixes that actually match files.
-        groups: list[tuple[str, list[str]]] = []
+        grouped: dict[str, list[str]] = {}
         for tail in _PART_TAILS:
-            for prefix, pattern in self._source_globs(f"channel={channel}", *tail).items():
-                if _glob.glob(pattern):
-                    groups.append((prefix, [pattern]))
+            for name in channel_read_set(channel):
+                for prefix, pattern in self._source_globs(f"channel={name}", *tail).items():
+                    if _glob.glob(pattern):
+                        # One group per (prefix, layout): the predecessor's parts
+                        # sit under the same hive keys, so they join the same
+                        # read_parquet call and ``union_by_name`` reconciles the
+                        # two column sets.
+                        grouped.setdefault(f"{prefix}\x00{tail[0]}", []).append(pattern)
+        groups = [(key.split("\x00", 1)[0], patterns) for key, patterns in grouped.items()]
         if not groups:
             return
 
@@ -888,12 +903,13 @@ class Catalog:
         """
         channel_dirs: list[tuple[str, Path]] = []
         for source_dir, _value in self._iter_source_dirs():
-            chan_dir = source_dir / f"channel={channel}"
-            if not chan_dir.is_dir():
-                continue
-            split = _split_source_prefix(source_dir.name)
-            assert split is not None  # _iter_source_dirs only yields matches
-            channel_dirs.append((split[0], chan_dir))
+            for name in channel_read_set(channel):
+                chan_dir = source_dir / f"channel={name}"
+                if not chan_dir.is_dir():
+                    continue
+                split = _split_source_prefix(source_dir.name)
+                assert split is not None  # _iter_source_dirs only yields matches
+                channel_dirs.append((split[0], chan_dir))
         if not channel_dirs:
             return []
 

@@ -180,8 +180,11 @@ def test_ohlcv_to_from_row() -> None:
     """One bar record, not two.
 
     The equity fork declared ``Bar`` (tag ``bar``) and ``OHLCV`` (tag ``ohlcv``) with
-    identical fields, and this file used to round-trip both. ``Channel.BAR`` stays
-    declared so a lake written under the old tag still decodes, but nothing constructs it.
+    identical fields, and this file used to round-trip both. Nothing constructs ``bar``
+    now; a lake written under the old tag still decodes because
+    ``crocodile.core.schema.enums.CHANNEL_SUCCESSORS`` maps it onto ``ohlcv`` and every
+    glob widens to cover it — not because ``Channel.BAR`` is still declared, which on its
+    own decoded nothing. ``tests/store/test_premerge_equity_rows.py`` exercises that path.
     """
     o = OHLCV(
         source="stooq",

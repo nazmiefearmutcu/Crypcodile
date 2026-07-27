@@ -27,6 +27,7 @@ from typing import Annotated, Any, cast
 
 import typer
 
+from crocodile.core.schema.enums import successor_channel
 from crocodile.core.sink.base import Sink
 
 
@@ -49,9 +50,10 @@ VALID_PROVIDERS = ["alpaca", "finnhub", "google_finance", "stooq"]
 # Pull/backfill-only providers (no streaming run loop)
 BACKFILL_ONLY_PROVIDERS = ["msn_money", "tiingo"]
 # `ohlcv` is the surviving tag for a bar; `bar` is accepted because lakes and
-# scripts still spell it that way. Rejecting `ohlcv` is what this list did before
-# the two structs collapsed, which made stooq — the one provider that always
-# emitted `ohlcv` — unreachable from the CLI.
+# scripts still spell it that way, and every read widens `ohlcv` to cover the old
+# partitions (see `crocodile.core.schema.enums.CHANNEL_SUCCESSORS`). Rejecting
+# `ohlcv` is what this list did before the two structs collapsed, which made
+# stooq — the one provider that always emitted `ohlcv` — unreachable from the CLI.
 VALID_CHANNELS = ["trade", "quote", "bar", "ohlcv"]
 
 SUGGESTED_SYMBOLS = {
@@ -1095,7 +1097,13 @@ async def run_dashboard(
             "open a new terminal window and run: ",
             style="dim",
         )
-        query_sql = f"SELECT * FROM {channels[0] if channels else 'trade'}"
+        # Name the surviving view, not whatever the user typed. `--channel bar` is
+        # accepted (lakes and scripts still spell it that way) but the collector writes
+        # `channel=ohlcv/`, and on a lake that also holds pre-merge bars
+        # `SELECT * FROM bar` succeeds while showing only the old rows — the worst of
+        # the three outcomes, because it looks like an answer.
+        query_channel = successor_channel(channels[0]) if channels else "trade"
+        query_sql = f"SELECT * FROM {query_channel}"
         footer_text.append(f'stockodile query "{query_sql}"', style="bold yellow")
         footer_text.append("\nPress ")
         footer_text.append("Ctrl-C", style="bold red")

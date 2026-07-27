@@ -9,8 +9,10 @@ and :class:`CorpActionType` and :class:`Channel` are unions of both.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Final
 
 __all__ = [
+    "CHANNEL_SUCCESSORS",
     "AssetClass",
     "Channel",
     "CorpActionType",
@@ -19,6 +21,9 @@ __all__ = [
     "SecurityType",
     "Side",
     "Tape",
+    "channel_predecessors",
+    "channel_read_set",
+    "successor_channel",
 ]
 
 
@@ -162,3 +167,42 @@ class Channel(StrEnum):
     LIMIT_ORDER_FILL = "limit_order_fill"
     BALANCE_CORRECTION = "balance_correction"
     POR_UPDATE = "por_update"
+
+
+CHANNEL_SUCCESSORS: Final[dict[str, str]] = {
+    Channel.BAR.value: Channel.OHLCV.value,
+    Channel.OPTION_QUOTE.value: Channel.OPTIONS_CHAIN.value,
+}
+"""Retired tag → the tag whose record absorbed it.
+
+Keeping the retired member declared prevents nothing on its own. ``channel=bar/``
+directories exist in equity lakes on disk, and a reader that only globs the literal
+string it was handed returns the ``ohlcv`` half of such a lake and calls it all of it —
+no exception, no warning, a short answer. This table is what turns the member into a
+read path: every glob widens a request for the surviving tag to cover its predecessors,
+and :mod:`crocodile.core.store.rows` decodes a row carrying the retired tag into the
+record that absorbed it.
+
+The mapping is deliberately one-directional. Asking for ``bar`` reads ``channel=bar/``
+alone, because a caller naming a retired tag is asking about the old files; asking for
+``ohlcv`` reads both, because that is the whole of what the channel now means.
+"""
+
+
+def successor_channel(channel: str) -> str:
+    """Return the surviving tag for ``channel``, or ``channel`` if it is not retired."""
+    return CHANNEL_SUCCESSORS.get(channel, channel)
+
+
+def channel_predecessors(channel: str) -> tuple[str, ...]:
+    """Return the retired tags whose partitions belong to ``channel``."""
+    return tuple(old for old, new in CHANNEL_SUCCESSORS.items() if new == channel)
+
+
+def channel_read_set(channel: str) -> tuple[str, ...]:
+    """Return every ``channel=`` partition name a read of ``channel`` must cover.
+
+    The surviving tag first, then its predecessors. A caller naming a retired tag gets
+    that tag alone; see :data:`CHANNEL_SUCCESSORS` for why the widening is one-way.
+    """
+    return (channel, *channel_predecessors(channel))

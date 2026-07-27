@@ -39,7 +39,10 @@ def make_provider(
     symbols:
         List of symbol strings to subscribe to.
     channels:
-        List of canonical channel names (e.g. ``"trade"``, ``"quote"``, ``"bar"``).
+        List of canonical channel names (e.g. ``"trade"``, ``"quote"``, ``"ohlcv"``).
+        ``"bar"`` is still accepted by the connectors that predate the struct
+        collapse, but it is a retired tag, not a canonical one, and nothing
+        writes it any more.
     out:
         Sink to receive normalised records.
     registry:

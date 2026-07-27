@@ -31,13 +31,19 @@ record. A consolidated-tape equity print carries no aggressor side, so an equity
 ``Trade`` states ``Side.UNKNOWN``; what equities do want, and what
 :class:`~crocodile.core.schema.records.OHLCV` carries as a field, is ``vwap``.
 
-**The way to get this wrong changed with the union merge.** Both now read
-``sum(amount)`` — the volume column that used to separate them was equity's
-``size``, and there is one spelling now. So calling the crypto one on an equity
+**The way to get this wrong changed with the union merge.** Both now read the
+same quantity column — the one that used to separate them was equity's ``size``,
+and the canonical spelling is ``amount``. So calling the crypto one on an equity
 lake no longer returns zero rows: it returns bars whose ``buy_volume`` is 0.0 and
 whose ``sell_volume`` is the whole session, because ``CASE WHEN side = 'buy'``
 puts every ``unknown`` print on the sell side. An empty result announces itself;
 a plausible one does not.
+
+The rename has a second hazard pointing the other way, and this module reads both
+spellings because of it: a lake collected before *and* after the merge holds both
+columns, and filtering on ``amount`` alone silently discarded the pre-migration
+prints — moving the bar's open, not merely shrinking its volume. See
+:data:`_TRADE_QUANTITY_COLUMNS`.
 
 Choose by asset class, not by which one is easier to import.
 """
@@ -76,7 +82,45 @@ __all__ = [
 # ``symbol``, ``start_ns`` and ``end_ns`` are always ``?`` parameters.
 
 
-def _build_no_fill_sql(interval_sql: str, interval_label: str) -> str:
+_TRADE_QUANTITY_COLUMNS = ("amount", "size")
+"""How the two lakes spell a trade's quantity, canonical first.
+
+``migrate_lake`` renames partition directories and rewrites no Parquet file, so a
+lake collected before and after the union merge holds both columns under one
+``channel=trade/`` directory and ``union_by_name`` makes each row carry the other
+as a null. Reading ``amount`` alone did not merely undercount volume: the WHERE
+clause dropped every pre-migration print, and ``first(price ORDER BY local_ts)``
+runs *after* the filter, so the bar's open became the first surviving print's
+price. A wrong open is not a smaller answer, it is a different one.
+"""
+
+
+def _quantity_expr(available: Iterable[str]) -> str:
+    """Return the SQL expression for a trade's quantity, given the view's columns.
+
+    Built from the columns the ``trade`` view actually exposes rather than
+    hard-coded as ``coalesce(amount, size)``: a lake written entirely after the
+    merge has no ``size`` column at all, and naming a column DuckDB cannot resolve
+    fails the whole query.
+
+    Raises:
+        ValueError: if the view spells the quantity under neither name. Falling
+            back to ``count(*)`` or to zero would report a bar with no volume as
+            a bar with none traded.
+    """
+    columns = set(available)
+    present = [c for c in _TRADE_QUANTITY_COLUMNS if c in columns]
+    if not present:
+        raise ValueError(
+            f"the 'trade' view names a quantity under none of "
+            f"{list(_TRADE_QUANTITY_COLUMNS)}; its columns are {sorted(columns)}"
+        )
+    if len(present) == 1:
+        return present[0]
+    return f"coalesce({', '.join(present)})"
+
+
+def _build_no_fill_sql(interval_sql: str, interval_label: str, qty: str) -> str:
     """Return the aggregation SQL for non-empty bars only."""
     return (
         "SELECT\n"
@@ -87,21 +131,23 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str) -> str:
         "    max(price)                              AS high,\n"
         "    min(price)                              AS low,\n"
         "    last(price ORDER BY local_ts)           AS close,\n"
-        "    sum(amount)                             AS volume,\n"
-        "    sum(price * amount) / nullif(sum(amount), 0.0) AS vwap,\n"
+        f"    sum({qty})                             AS volume,\n"
+        f"    sum(price * {qty}) / nullif(sum({qty}), 0.0) AS vwap,\n"
         "    count(*)::BIGINT                        AS trade_count\n"
         "FROM trade\n"
         "WHERE symbol = ?\n"
         "  AND local_ts >= ?\n"
         "  AND local_ts <= ?\n"
         "  AND price IS NOT NULL AND NOT isnan(price)\n"
-        "  AND amount IS NOT NULL AND NOT isnan(amount)\n"
+        f"  AND {qty} IS NOT NULL AND NOT isnan({qty})\n"
         "GROUP BY 1, 2, 3\n"
         "ORDER BY 1"
     )
 
 
-def _build_fill_sql(interval_sql: str, interval_label: str, start_ns: int, end_ns: int) -> str:
+def _build_fill_sql(
+    interval_sql: str, interval_label: str, start_ns: int, end_ns: int, qty: str
+) -> str:
     """Return the fill-enabled SQL.
 
     ``start_ns``/``end_ns`` are plain ints, safe as numeric literals in the grid
@@ -118,15 +164,15 @@ def _build_fill_sql(interval_sql: str, interval_label: str, start_ns: int, end_n
         "        max(price)                              AS high,\n"
         "        min(price)                              AS low,\n"
         "        last(price ORDER BY local_ts)           AS close,\n"
-        "        sum(amount)                             AS volume,\n"
-        "        sum(price * amount) / nullif(sum(amount), 0.0) AS vwap,\n"
+        f"        sum({qty})                             AS volume,\n"
+        f"        sum(price * {qty}) / nullif(sum({qty}), 0.0) AS vwap,\n"
         "        count(*)::BIGINT                        AS trade_count\n"
         "    FROM trade\n"
         "    WHERE symbol = ?\n"
         "      AND local_ts >= ?\n"
         "      AND local_ts <= ?\n"
         "      AND price IS NOT NULL AND NOT isnan(price)\n"
-        "      AND amount IS NOT NULL AND NOT isnan(amount)\n"
+        f"      AND {qty} IS NOT NULL AND NOT isnan({qty})\n"
         "    GROUP BY 1, 2\n"
         "),\n"
         "grid AS (\n"
@@ -210,12 +256,19 @@ def resample_ohlcv(
     catalog.refresh_views()
     conn = catalog.connection
 
+    try:
+        columns = conn.execute("SELECT * FROM trade LIMIT 0").pl().columns
+    except (duckdb.CatalogException, duckdb.IOException):
+        # No trade data has ever been written → the view does not exist.
+        return pl.DataFrame()
+    qty = _quantity_expr(columns)
+
     if fill_empty:
-        sql = _build_fill_sql(interval_sql, interval_label, start_ns, end_ns)
+        sql = _build_fill_sql(interval_sql, interval_label, start_ns, end_ns, qty)
         # symbol (agg WHERE), start_ns, end_ns, symbol (filled SELECT)
         params: list[object] = [symbol, start_ns, end_ns, symbol]
     else:
-        sql = _build_no_fill_sql(interval_sql, interval_label)
+        sql = _build_no_fill_sql(interval_sql, interval_label, qty)
         params = [symbol, start_ns, end_ns]
 
     try:
@@ -772,11 +825,27 @@ def resample_quotes_df(df: pl.DataFrame, interval: str, price_type: str = "mid")
     return _order_columns(resampled)
 
 
+_BAR_COUNT_COLUMNS = ("trade_count", "num_trades")
+"""How a bar's print count is spelled, this module's own output first.
+
+Both spellings reach :func:`resample_bars_df`. Its own bar frames say ``trade_count``,
+which is the equity schema documented in the module docstring; a frame read off the lake
+says ``num_trades``, which is what the canonical ``OHLCV`` record and its Parquet column
+are called. Looking for ``trade_count`` alone meant a lake-derived frame never matched,
+and the fallback then wrote a literal 1 per bar — turning 2 500 prints into 5, in a
+column whose whole job is to report how many there were.
+"""
+
+
 def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     """Resample lower-resolution bars DataFrame into higher-resolution bars using Polars.
 
     Expects columns: local_ts (or bar), open, high, low, close, volume, and optionally
-    vwap, trade_count, symbol.
+    vwap, symbol, and a print count under either spelling in :data:`_BAR_COUNT_COLUMNS`.
+
+    A frame carrying neither count column produces a null ``trade_count`` rather than a
+    fabricated one: the input did not say how many prints made each bar, and summing
+    invented ones answers the question with the bar count instead.
     """
     if len(df) == 0:
         return pl.DataFrame(schema=_EMPTY_BAR_SCHEMA)
@@ -796,8 +865,11 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     if "vwap" not in df.columns:
         df_dt = df_dt.with_columns(pl.col("close").alias("vwap"))
 
-    if "trade_count" not in df.columns:
-        df_dt = df_dt.with_columns(pl.lit(1).alias("trade_count"))
+    count_column = next((c for c in _BAR_COUNT_COLUMNS if c in df.columns), None)
+    if count_column is None:
+        df_dt = df_dt.with_columns(pl.lit(None, dtype=pl.Int64).alias("trade_count"))
+    elif count_column != "trade_count":
+        df_dt = df_dt.with_columns(pl.col(count_column).alias("trade_count"))
 
     resampled = df_dt.group_by_dynamic(
         "datetime",
@@ -815,7 +887,14 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
             .then((pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum())
             .otherwise(None)
             .alias("vwap"),
-            pl.col("trade_count").sum().cast(pl.Int64).alias("trade_count"),
+            # A bucket in which no input bar published a count reports none. Polars sums
+            # all-null to 0, and "zero prints made this bar" is a different false claim
+            # from the fabricated 1-per-bar this replaced. Matches what
+            # ``resample_bars_to_bars`` does with the same input.
+            pl.when(pl.col("trade_count").null_count() == pl.len())
+            .then(pl.lit(None, dtype=pl.Int64))
+            .otherwise(pl.col("trade_count").sum().cast(pl.Int64))
+            .alias("trade_count"),
         ]
     )
 

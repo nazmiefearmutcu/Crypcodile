@@ -10,6 +10,7 @@ import pytest
 
 from crocodile.core.replay.orderbook import BookGap
 from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import OHLCV, BookDelta, BookSnapshot, Quote, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.equity.resample import (
@@ -303,6 +304,56 @@ def test_resample_bars_df() -> None:
         (102.0 * 1000.0 + 102.2 * 2000.0) / 3000.0
     )
     assert res.row(0, named=True)["trade_count"] == 30
+
+
+def _bars_frame(count_column: str | None) -> pl.DataFrame:
+    """Two 1-second bars carrying their print count under ``count_column``, or under none."""
+    rows: list[dict[str, object]] = [
+        {
+            "local_ts": 0,
+            "open": 100.0,
+            "high": 105.0,
+            "low": 99.0,
+            "close": 102.0,
+            "volume": 1000.0,
+            "symbol": "AAPL",
+        },
+        {
+            "local_ts": 1_000_000_000,
+            "open": 102.0,
+            "high": 103.0,
+            "low": 101.0,
+            "close": 102.5,
+            "volume": 2000.0,
+            "symbol": "AAPL",
+        },
+    ]
+    if count_column is not None:
+        for row, count in zip(rows, (1000, 1500), strict=True):
+            row[count_column] = count
+    return pl.DataFrame(rows)
+
+
+def test_resample_bars_df_reads_the_count_a_lake_derived_frame_actually_carries() -> None:
+    """The canonical field and the Parquet column are both ``num_trades``.
+
+    This test used to hand-build a frame spelled ``trade_count``, which is the one
+    spelling that made the lookup succeed — so the suite could not see that a frame read
+    off the lake missed it entirely and fell through to a fabricated 1 per bar. Measured
+    then: 2 as the summed count of 2 500 prints.
+    """
+    res = resample_bars_df(_bars_frame("num_trades"), "1m")
+
+    assert len(res) == 1
+    assert res.row(0, named=True)["trade_count"] == 2500
+
+
+def test_resample_bars_df_reports_no_count_rather_than_one_per_bar() -> None:
+    """A frame that never said how many prints made each bar must not be answered with 2."""
+    res = resample_bars_df(_bars_frame(None), "1m")
+
+    assert len(res) == 1
+    assert res.row(0, named=True)["trade_count"] is None
 
 
 def test_resample_book_snapshots() -> None:

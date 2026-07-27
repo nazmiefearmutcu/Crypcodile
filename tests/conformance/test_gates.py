@@ -10,13 +10,14 @@ import ast
 import inspect
 import pathlib
 from collections import Counter
+from collections.abc import Iterator, Mapping
 from typing import get_args
 
 import msgspec
 import pytest
 
 from crocodile.core.schema import records
-from crocodile.core.schema.enums import AssetClass, Channel, Side
+from crocodile.core.schema.enums import CHANNEL_SUCCESSORS, AssetClass, Channel, Side
 from crocodile.core.schema.provenance import Provenance, provenance_fields
 from crocodile.core.schema.records import OHLCV, Funding, OptionsChain, Record, Trade, _Header
 
@@ -206,37 +207,97 @@ def test_gate1_channel_enum_covers_every_record_tag() -> None:
     """``Channel`` names at least every tag a record declares.
 
     A subset, deliberately not an equality: ``Channel`` also carries members whose
-    structs arrive with the equity port, plus ``bar`` and ``book_ticker``, which have
-    stored data in existing lakes and stay as deprecated members after their structs
-    collapse into ``ohlcv`` and ``quote``. Deleting a member to green this gate would
-    be data loss wearing a passing build.
+    structs arrive with the equity port, plus ``bar`` and ``option_quote``, which have
+    stored data in existing lakes and stay after their structs collapse into ``ohlcv``
+    and ``options_chain``. What keeps those partitions readable is the read path
+    ``CHANNEL_SUCCESSORS`` declares, not the member; see the gate below.
     """
     tags = {c.__struct_config__.tag for c in _declared_record_types()}
     members = {c.value for c in Channel}
     assert tags <= members, f"record tags with no Channel member: {sorted(tags - members)}"
 
 
-def test_gate1_channel_members_without_a_record_are_deliberate() -> None:
-    """Channel may outlive a struct, but only on purpose.
+def test_gate1_channel_members_without_a_record_have_a_read_path() -> None:
+    """Channel may outlive a struct, but only with somewhere for its rows to go.
 
-    Every member below names a partition directory that exists in a lake on disk, so the
-    member stays even though the equity struct that wrote it is gone:
+    This gate used to assert that the member was *declared*, and called deleting one
+    "data loss wearing a passing build". The declaration prevented nothing. A lake
+    holding ``channel=bar/`` alongside ``channel=ohlcv/`` returned the ``ohlcv`` half
+    and called it all of it, and ``replay(["bar"])`` raised ``Unknown channel tag``, so
+    those rows were unreachable through the record API entirely — with ``Channel.BAR``
+    declared the whole time. Only a read path prevents the loss, so that is what is
+    asserted: every orphaned member names the tag that absorbed it, and that tag has a
+    live record.
 
-    ``bar`` — equity's ``Bar`` was field-for-field identical to equity's own ``OHLCV``;
-    both collapse into the canonical ``ohlcv``.
-    ``book_ticker`` — equity's ``BookTicker`` was an alias of ``Quote``, kept only "for
-    onchain normalized records". The crypto struct of that name survives, so this member
-    is not actually orphaned today; it is listed because the equity spelling is gone.
-    ``option_quote`` — equity's ``OptionQuote`` merged into ``options_chain``, which is
-    the same instrument with more precise field names and an epoch-nanosecond expiry.
+    ``book_ticker`` is not an orphan and is not exempted. Equity's ``BookTicker`` was an
+    alias of ``Quote``, but the crypto struct of that name survives, so the member has a
+    record and never reaches the check below.
 
-    Any *other* orphan is a porting mistake. The fix is never to delete a ``Channel``
-    member — that is data loss wearing a passing build — but to port the record.
+    Any member that is neither backed by a record nor mapped to one is a porting
+    mistake. The fix is never to delete it — that really would drop a partition on the
+    floor — but to port the record or declare the successor.
     """
-    DEPRECATED = {"bar", "book_ticker", "option_quote"}
     tags = {c.__struct_config__.tag for c in _declared_record_types()}
-    orphans = {c.value for c in Channel} - tags - DEPRECATED
-    assert not orphans, f"Channel members with no record and no deprecation note: {sorted(orphans)}"
+    orphans = {c.value for c in Channel} - tags
+
+    unmapped = sorted(o for o in orphans if o not in CHANNEL_SUCCESSORS)
+    assert not unmapped, (
+        f"Channel members with no record and no successor: {unmapped}. "
+        f"A declared member is not a read path; map it in CHANNEL_SUCCESSORS or port "
+        f"the record."
+    )
+    dangling = sorted(o for o in orphans if CHANNEL_SUCCESSORS[o] not in tags)
+    assert not dangling, f"retired tags whose successor has no record either: {dangling}"
+
+
+@pytest.mark.parametrize(
+    ("retired", "row"),
+    [
+        pytest.param(
+            "bar",
+            {
+                "interval": "1d",
+                "open": 1.0,
+                "high": 2.0,
+                "low": 0.5,
+                "close": 1.5,
+                "volume": 9.0,
+                "trade_count": 77,
+            },
+            id="bar",
+        ),
+        pytest.param(
+            "option_quote",
+            {"underlying": "AAPL", "expiry": "2026-06-18", "strike": 1.0, "type": "C"},
+            id="option_quote",
+        ),
+    ],
+)
+def test_gate1_a_row_under_a_retired_tag_decodes_into_its_successor(
+    retired: str, row: dict[str, object]
+) -> None:
+    """The read path the gate above requires, exercised rather than described.
+
+    ``CHANNEL_SUCCESSORS`` naming a tag is only half of a read path; the other half is
+    ``from_row`` accepting a row that carries it.
+    """
+    from crocodile.core.store.rows import from_row
+
+    record = from_row(
+        {
+            "channel": retired,
+            "provider": "alpaca",
+            "symbol": "AAPL",
+            "symbol_raw": "AAPL",
+            "source_ts": None,
+            "local_ts": 1_700_000_000_000_000_000,
+            "date": "2023-11-14",
+            "bucket": 42,
+            **row,
+        }
+    )
+
+    assert record.__struct_config__.tag == CHANNEL_SUCCESSORS[retired]
 
 
 def test_option_expiry_is_nanoseconds() -> None:

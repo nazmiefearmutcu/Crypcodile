@@ -27,8 +27,13 @@ from typing import Any, cast
 import mmh3
 import msgspec.structs
 
-from crocodile.core.schema.enums import AssetClass
-from crocodile.core.schema.provenance import Provenance
+from crocodile.core.schema.enums import (
+    AssetClass,
+    Channel,
+    Side,
+    successor_channel,
+)
+from crocodile.core.schema.provenance import Provenance, level_for, registered_bases
 from crocodile.core.schema.records import Record, _Header
 
 Flattenable = Record
@@ -194,35 +199,63 @@ def to_row(record: Flattenable) -> dict[str, Any]:
 _PARTITION_COLS = frozenset({"channel", "date", "bucket"})
 
 
+_LEVEL_SIZE_KEYS = ("amount", "size")
+"""How the two lakes spell the second element of a book level, canonical first.
+
+The forks disagreed — the canonical schema writes ``list[struct{price, amount}]``
+and the equity fork wrote ``list[struct{price, size}]`` — and ``migrate_lake``
+renames partition directories without rewriting a Parquet file, so both shapes
+sit in lakes that are read today. Reading only ``amount`` raised ``KeyError`` on
+every equity-written level, which is why the equity dialect needed its own reader.
+
+A level whose size is null is refused rather than defaulted: ``0.0`` is not a
+missing value in this protocol, it is the canonical *removal* of that price
+level, so an unreadable level would silently delete a real one from the
+reconstructed book.
+"""
+
+
 def _coerce_levels_from_row(raw: Any) -> list[tuple[float, float]]:
     """Convert list-of-dicts or list-of-tuples book levels to list[tuple[float, float]].
 
     When read back from Parquet via Polars, book levels arrive as a list of
-    dicts ``[{"price": ..., "amount": ...}, ...]``.  This converts to the
-    canonical Level = tuple[float, float] form.
+    dicts ``[{"price": ..., "amount": ...}, ...]`` — or ``{"price", "size"}`` from
+    a pre-migration equity file. Both convert to the canonical
+    ``Level = tuple[float, float]`` form.
+
+    Raises:
+        KeyError: if a level dict names its size under neither spelling, or
+            leaves it null. See :data:`_LEVEL_SIZE_KEYS`.
     """
     if not raw:
         return []
     result: list[tuple[float, float]] = []
     for item in raw:
         if isinstance(item, dict):
-            result.append((float(item["price"]), float(item["amount"])))
+            size = next((item[k] for k in _LEVEL_SIZE_KEYS if item.get(k) is not None), None)
+            if size is None:
+                raise KeyError(
+                    f"book level {item!r} has no non-null size under any of "
+                    f"{list(_LEVEL_SIZE_KEYS)}; defaulting it to 0.0 would read as a "
+                    f"level removal"
+                )
+            result.append((float(item["price"]), float(size)))
         else:
             # Already a tuple/list of two numbers
             result.append((float(item[0]), float(item[1])))
     return result
 
 
-def _asset_class_from_legacy_marker(d: dict[str, Any]) -> AssetClass:
-    """Read the market off a row that predates the canonical ``asset_class`` field.
+def _row_family(d: dict[str, Any]) -> str:
+    """Return which record union wrote this row, by the **value** of its marker.
 
-    Walks :data:`_FAMILY_MARKERS` in its declared order and tests the marker's
-    **value**, not its presence. Both halves matter and each fixes a real misread:
+    Walks :data:`_FAMILY_MARKERS` in its declared order. Both halves matter and
+    each fixes a real misread:
 
-    * *Order.* ``provider`` is consulted first. The equity file schema declares
-      an ``exchange`` column, so matching ``exchange`` first stamped every
-      equity row ``CRYPTO`` — silently, because an ``ohlcv`` row's field names
-      overlap enough between the two forks that nothing else raised.
+    * *Order.* ``provider`` is consulted before ``exchange``. The equity file
+      schema declares an ``exchange`` column, so matching ``exchange`` first
+      stamped every equity row ``CRYPTO`` — silently, because an ``ohlcv`` row's
+      field names overlap enough between the two forks that nothing else raised.
     * *Value, not key.* That equity ``exchange`` column is vestigial and always
       null; it exists only so new parts match the parts already beside them.
       ``ParquetSink`` materialises every schema key as a column, so the key is
@@ -232,22 +265,198 @@ def _asset_class_from_legacy_marker(d: dict[str, Any]) -> AssetClass:
       the pre-merge rows arrive carrying ``asset_class`` as a null and the
       canonical rows carrying ``exchange`` as one. Only the values separate them.
 
+    ``parquet_sink._row_family`` asks the same question of a row on its way *out*
+    and can settle it on key presence, because it is looking at a dict ``to_row``
+    just built rather than at a union of two file schemas.
+
     Raises:
-        KeyError: if no marker carries a value. An asset class invented here is
-            indistinguishable from one that was recorded.
+        KeyError: if no marker carries a value. A family guessed here picks the
+            column dialect the rest of the read is conducted in, so guessing it
+            would mistranslate every field rather than fail.
     """
     for marker, family in _FAMILY_MARKERS:
-        asset_class = _LEGACY_FAMILY_ASSET_CLASS.get(family)
-        if asset_class is not None and d.get(marker) is not None:
-            return asset_class
+        if d.get(marker) is not None:
+            return family
     raise KeyError(
-        f"row carries no 'asset_class' and none of the pre-migration origin "
-        f"columns {sorted(_LEGACY_FAMILY_ASSET_CLASS)} hold a value; "
-        f"its market cannot be established"
+        f"row names its origin under none of {[m for m, _ in _FAMILY_MARKERS]}; "
+        f"neither its market nor its column dialect can be established "
+        f"(symbol={d.get('symbol')!r}, local_ts={d.get('local_ts')!r})"
     )
 
 
-def _header(d: dict[str, Any]) -> dict[str, Any]:
+def _asset_class_from_legacy_marker(d: dict[str, Any]) -> AssetClass:
+    """Read the market off a row that predates the canonical ``asset_class`` field.
+
+    Raises:
+        KeyError: if the family is the canonical one, which is unreachable for a
+            row with no ``asset_class``, or if no marker carries a value. An
+            asset class invented here is indistinguishable from one recorded.
+    """
+    asset_class = _LEGACY_FAMILY_ASSET_CLASS.get(_row_family(d))
+    if asset_class is None:
+        raise KeyError(
+            f"row carries no 'asset_class' and none of the pre-migration origin "
+            f"columns {sorted(_LEGACY_FAMILY_ASSET_CLASS)} hold a value; "
+            f"its market cannot be established"
+        )
+    return asset_class
+
+
+# ---------------------------------------------------------------------------
+# The legacy equity dialect
+# ---------------------------------------------------------------------------
+# The equity fork spelled nine shared tags differently, and ``migrate_lake``
+# renames directories rather than rewriting files, so those spellings never age
+# out. ``crocodile.equity.store.rows.from_row`` reads them correctly and lost its
+# last production caller, which is how a working capability became an unreachable
+# one. The tables below move that knowledge into the reader everything calls, so
+# one reader speaks both dialects and the family decides which.
+
+_EQUITY_COLUMN_ALIASES: dict[str, dict[str, str]] = {
+    Channel.TRADE.value: {"size": "amount"},
+    Channel.OHLCV.value: {"trade_count": "num_trades"},
+    Channel.INSTRUMENT.value: {"exchange_name": "exchange"},
+    Channel.OPTIONS_CHAIN.value: {
+        "type": "opt_type",
+        "bid": "bid_px",
+        "ask": "ask_px",
+        "last": "last_price",
+        "implied_volatility": "mark_iv",
+    },
+}
+"""Legacy equity column → canonical field, keyed by the **canonical** channel tag.
+
+Applied after :func:`successor_channel`, so ``bar`` rows are already ``ohlcv`` and
+``option_quote`` rows already ``options_chain`` by the time these are consulted.
+
+``implied_volatility`` becomes ``mark_iv`` on the argument
+:class:`~crocodile.core.schema.records.OptionsChain` already makes: a feed that
+publishes a single IV per contract is publishing the mark.
+"""
+
+_EQUITY_ABSENT_FIELD_VALUES: dict[str, dict[str, Any]] = {
+    Channel.TRADE.value: {"side": Side.UNKNOWN.value},
+    Channel.OPTIONS_CHAIN.value: {"underlying_price": None},
+}
+"""Canonical fields no legacy equity column holds, and what the fork's own adapters write.
+
+Neither entry is a guess about the observation; both are facts about the fork:
+
+``Trade.side`` — the legacy equity ``Trade`` struct had no ``side`` field at all,
+because a consolidated-tape print does not classify the aggressor. Every equity
+adapter in the tree writes ``Side.UNKNOWN`` for the same prints today, which is
+the claim the canonical record reserves for exactly this case.
+
+``OptionsChain.underlying_price`` — required with no default and legitimately
+``None``; the legacy ``OptionQuote`` carried no such column, and the field's own
+contract is that ``None`` means the source published none. It has to be passed
+explicitly because a required field absent from the row is a ``TypeError``, not
+a default.
+"""
+
+
+def _legacy_expiry_to_ns(value: Any) -> int:
+    """Convert the legacy ``YYYY-MM-DD`` option expiry to UTC epoch nanoseconds.
+
+    ``OptionsChain.expiry`` is nanoseconds because a date cannot express the
+    intraday expiry of a 0DTE. Midnight UTC is the only reading a bare date
+    supports and it is what the fork's own dates meant; the conversion is total
+    in this direction, which is the direction that must not lose anything.
+    """
+    if isinstance(value, int):
+        return value
+    date = datetime.datetime.strptime(str(value), "%Y-%m-%d").replace(tzinfo=datetime.UTC)
+    return int(date.timestamp()) * 1_000_000_000
+
+
+_EQUITY_VALUE_CONVERSIONS: dict[str, dict[str, Callable[[Any], Any]]] = {
+    Channel.OPTIONS_CHAIN.value: {"expiry": _legacy_expiry_to_ns},
+}
+"""Legacy equity values whose *type* changed, not just their name."""
+
+_LEGACY_DEPTH_PROVENANCE_COLUMNS = ("basis", "is_synthetic")
+"""The equity fork's provenance prototype, which the four-field tail generalised.
+
+Their presence is why the old ``_header`` docstring — "the fork only ever wrote
+venue-reported records" — was false: the equity fork wrote synthetic
+volume-at-price depth profiles and recorded it in these two columns. Reading them
+is the difference between a legacy synthetic profile that says so and one that
+reads back as NATIVE with a confidence of 1.0.
+"""
+
+_UNMEASURED_LEGACY_CONFIDENCE = 0.0
+"""What a pre-migration row's confidence is, given it recorded no measurement.
+
+The fork stored the *method* (``basis``) and the *level* (``is_synthetic``) but
+never a sampling number, so there is nothing on disk to compute one from. 1.0
+would be the claim that the profile is as well sampled as this method can make
+it — a legacy profile would then outrank every live one, including the measured
+three-bar profile that scores 0.0077. 0.0 is the reading ``unavailable`` already
+carries for the same situation: no sampling evidence survives. It is a statement
+about the file, not about the profile, and ``prov`` is what says which level the
+profile is at.
+"""
+
+
+def _translate_legacy_equity(channel: str, d: dict[str, Any]) -> None:
+    """Rewrite one legacy equity row in place into the canonical column dialect.
+
+    ``channel`` is the canonical tag, already resolved through
+    :func:`successor_channel`.
+
+    A legacy column wins only where it carries a value. That matters for a lake
+    spanning the migration: ``union_by_name`` gives a pre-migration row the
+    canonical columns as nulls and a post-migration row the legacy ones, so both
+    spellings are present on every row and only the values separate them.
+    """
+    for legacy, canonical in _EQUITY_COLUMN_ALIASES.get(channel, {}).items():
+        value = d.pop(legacy, None)
+        if value is not None:
+            d[canonical] = value
+    for field, convert in _EQUITY_VALUE_CONVERSIONS.get(channel, {}).items():
+        if d.get(field) is not None:
+            d[field] = convert(d[field])
+    for field, fallback in _EQUITY_ABSENT_FIELD_VALUES.get(channel, {}).items():
+        if d.get(field) is None:
+            d[field] = fallback
+
+
+def _legacy_provenance(d: dict[str, Any], family: str) -> tuple[Provenance, str, float]:
+    """Return the ``(prov, basis, confidence)`` a pre-migration row states about itself.
+
+    The crypto fork's records carried no provenance concept and no method that
+    could produce anything but a venue reading, so NATIVE is the truth about
+    those files. The equity fork's did not: its ``DepthProfile`` carried ``basis``
+    and ``is_synthetic``, the prototype this tail generalised, and defaulting
+    those rows to NATIVE reported a modelled volume-at-price ladder as something
+    the venue published.
+
+    Raises:
+        ValueError: if a row claims ``is_synthetic`` while recording no ``basis``.
+            The surfaces are required to emit ``describe(basis)`` as a warning for
+            every non-native record, so a synthetic row with no method named is one
+            that would be served with an empty warning.
+    """
+    basis = d.get("basis")
+    is_synthetic = d.get("is_synthetic")
+    if family != FAMILY_EQUITY or basis is None:
+        if is_synthetic:
+            raise ValueError(
+                f"row claims is_synthetic={is_synthetic!r} but records no 'basis'; "
+                f"the method behind a synthetic record cannot be described "
+                f"(symbol={d.get('symbol')!r}, local_ts={d.get('local_ts')!r})"
+            )
+        return Provenance.NATIVE, "native", 1.0
+
+    basis = str(basis)
+    if basis in registered_bases():
+        level = level_for(basis)
+    else:
+        level = Provenance.SYNTHETIC if is_synthetic else Provenance.DERIVED
+    return level, basis, _UNMEASURED_LEGACY_CONFIDENCE
+
+
+def _header(d: dict[str, Any], family: str) -> dict[str, Any]:
     """Rebuild the ten canonical header fields from one flattened row.
 
     Two shapes reach this function and both have to work. Rows ``to_row`` writes
@@ -258,12 +467,14 @@ def _header(d: dict[str, Any]) -> dict[str, Any]:
     reading a Parquet byte, so those files keep their columns forever and this
     is the only place the two spellings can be reconciled.
 
-    The market comes from :func:`_asset_class_from_legacy_marker`, which reads
-    the same marker table the sink picks a file schema with. ``source`` is
-    resolved the same way, by value: on a bare Parquet read there is no
-    ``source`` column at all — it is a path component — and the previous
-    key-presence fallback turned an equity file's null ``exchange`` into the
-    literal string ``'None'``.
+    The market comes from :func:`_row_family`, which reads the same marker table
+    the sink picks a file schema with. ``source`` is resolved the same way, by
+    value: on a bare Parquet read there is no ``source`` column at all — it is a
+    path component — and the previous key-presence fallback turned an equity
+    file's null ``exchange`` into the literal string ``'None'``.
+
+    The provenance tail is absent from every pre-migration row, and what stands
+    in for it is family-dependent; see :func:`_legacy_provenance`.
     """
     source = next((d[f] for f in _ORIGIN_FIELDS if d.get(f) is not None), None)
     if source is None:
@@ -280,11 +491,14 @@ def _header(d: dict[str, Any]) -> dict[str, Any]:
     if source_ts is None:
         source_ts = d.get("exchange_ts")
 
-    # The provenance tail is absent from every pre-migration row. Falling back
-    # to the struct defaults says NATIVE, which is the truth about those files:
-    # the fork only ever wrote venue-reported records.
     prov = d.get("prov")
-    prov_confidence = d.get("prov_confidence")
+    if prov is None:
+        level, basis, confidence = _legacy_provenance(d, family)
+    else:
+        level = Provenance(prov)
+        basis = d.get("prov_basis") or "native"
+        raw_confidence = d.get("prov_confidence")
+        confidence = float(raw_confidence) if raw_confidence is not None else 1.0
     return {
         "source": str(source),
         "symbol": str(d["symbol"]),
@@ -292,9 +506,9 @@ def _header(d: dict[str, Any]) -> dict[str, Any]:
         "local_ts": int(d["local_ts"]),
         "asset_class": asset_class,
         "source_ts": int(source_ts) if source_ts is not None else None,
-        "prov": Provenance(prov) if prov is not None else Provenance.NATIVE,
-        "prov_basis": d.get("prov_basis") or "native",
-        "prov_confidence": float(prov_confidence) if prov_confidence is not None else 1.0,
+        "prov": level,
+        "prov_basis": basis,
+        "prov_confidence": confidence,
         "prov_inputs": list(d.get("prov_inputs") or []),
     }
 
@@ -374,15 +588,39 @@ def _coerce_field(annotation: Any, value: Any) -> Any:
     raise TypeError(f"no read rule for canonical record field annotation {annotation!r}")
 
 
+def _admits_none(annotation: Any) -> bool:
+    """Return whether ``None`` is a value the field's own annotation permits."""
+    if annotation is type(None):
+        return True
+    if typing.get_origin(annotation) in (types.UnionType, typing.Union):
+        return any(a is type(None) for a in typing.get_args(annotation))
+    return False
+
+
 def _record_body(struct: Any, d: dict[str, Any]) -> dict[str, Any]:
     """Rebuild everything below the header for one record class.
 
     A column that is absent, or present and null on a field that has a default,
     is left out so the struct's own default stands — that is how ``buy_volume``
-    reads back as ``0.0`` and ``num_trades`` as ``None`` from the same null. A
-    null on a field with *no* default is passed through instead: ``OptionsChain``
-    requires ``underlying_price`` and permits it to be ``None``, and dropping it
-    would turn "the venue published no underlying price" into a missing argument.
+    reads back as ``0.0`` and ``num_trades`` as ``None`` from the same null.
+
+    A null on a field with no default is passed through only when the field's
+    annotation admits it. ``OptionsChain.underlying_price`` is ``float | None``
+    and required, so dropping it would turn "the venue published no underlying
+    price" into a missing argument. ``Trade.amount`` is ``float`` and
+    ``Trade.side`` is ``Side``, and msgspec does not type-check ``__init__`` —
+    so the same passthrough handed back ``Trade(amount=None, side=None)``, which
+    raises ``TypeError`` in the caller's ``sum()`` and ``AttributeError`` on
+    ``rec.side.value``, both several frames from the reader that made them. It
+    also breaks the contract ``side`` states outright: ``Side.UNKNOWN`` is how a
+    record says the venue did not classify the aggressor, and ``None`` is not
+    that value.
+
+    Raises:
+        ValueError: for a null on a required field whose annotation forbids it.
+            Every such null is a dialect the family dispatch did not translate,
+            and a record built around one travels further than the read that
+            produced it.
     """
     body: dict[str, Any] = {}
     for field in msgspec.structs.fields(struct):
@@ -396,9 +634,18 @@ def _record_body(struct: Any, d: dict[str, Any]) -> dict[str, Any]:
             continue
         value = d[column]
         if value is None:
-            if field.required:
+            if not field.required:
+                continue
+            if _admits_none(field.type):
                 body[field.name] = None
-            continue
+                continue
+            raise ValueError(
+                f"{struct.__name__}.{field.name} is required and cannot be None, but "
+                f"column {column!r} is null on this row "
+                f"(source={d.get('source')!r}, symbol={d.get('symbol')!r}, "
+                f"local_ts={d.get('local_ts')!r}); "
+                f"no known column dialect supplies it"
+            )
         body[field.name] = _coerce_field(field.type, value)
     return body
 
@@ -406,18 +653,29 @@ def _record_body(struct: Any, d: dict[str, Any]) -> dict[str, Any]:
 def from_row(row: dict[str, Any]) -> Record:
     """Reconstruct a canonical Record from a flat dict (e.g., read from Parquet).
 
-    The ``channel`` field is the discriminator, resolved against the same
-    ``Record`` union :mod:`crocodile.core.store.parquet_sink` builds its file
-    schema from, so every channel the sink can write can be read back. Fields are
-    coerced from their declared annotations: partition-only columns (``date``,
-    ``bucket``) are stripped, enums are rebuilt from their values, and book
-    levels are converted from list-of-dicts back to ``list[tuple]``.
+    **One reader, three dialects.** :func:`_row_family` decides which union wrote
+    the row from the value of its origin marker, and that decides how the rest of
+    the row is spelled. A canonical row is read as-is. A pre-migration crypto row
+    calls its origin ``exchange`` and its timestamp ``exchange_ts`` and is
+    otherwise field-identical. A pre-migration equity row spells a trade quantity
+    ``size``, a book level ``{price, size}``, a bar's print count ``trade_count``,
+    an instrument's listing venue ``exchange_name``, and tags a bar ``bar`` and an
+    option chain ``option_quote``; :func:`_translate_legacy_equity` and
+    :data:`~crocodile.core.schema.enums.CHANNEL_SUCCESSORS` move all of it onto the
+    canonical names.
 
-    The header is rebuilt by :func:`_header`, which also accepts a row from a
-    crypto lake written before the union merge — ``exchange`` becomes
-    ``source``, ``exchange_ts`` becomes ``source_ts``, and a row whose only
-    populated origin column is ``exchange`` reads back as
-    :attr:`AssetClass.CRYPTO`.
+    That dispatch is the point. ``crocodile.equity.store.rows.from_row`` read the
+    equity dialect correctly and lost its last production caller, so the capability
+    was not deferred, it was disconnected — and the reader everything calls
+    answered a legacy equity lake with dropped columns and null required fields
+    instead of an error. Routing by family closes both at once.
+
+    The ``channel`` tag is resolved against the same ``Record`` union
+    :mod:`crocodile.core.store.parquet_sink` builds its file schema from, so every
+    channel the sink can write can be read back. Fields are coerced from their
+    declared annotations: partition-only columns (``date``, ``bucket``) are
+    stripped, enums are rebuilt from their values, and book levels are converted
+    from list-of-dicts back to ``list[tuple]``.
 
     Args:
         row: Flat dict as produced by ``to_row()`` or read from Parquet via
@@ -427,12 +685,18 @@ def from_row(row: dict[str, Any]) -> Record:
         A canonical Record instance.
 
     Raises:
-        ValueError: If the ``channel`` value is unrecognised.
+        KeyError: if the row names its origin under no known marker, so its
+            dialect cannot be established.
+        ValueError: if the ``channel`` value is unrecognised, or a required field
+            is null under every dialect this reader knows.
     """
-    channel = row["channel"]
-    struct = _RECORD_BY_CHANNEL.get(channel)
-    if struct is None:
-        raise ValueError(f"Unknown channel tag: {channel!r}")
     # Strip partition-only columns
     d: dict[str, Any] = {k: v for k, v in row.items() if k not in _PARTITION_COLS}
-    return cast("Record", struct(**_header(d), **_record_body(struct, d)))
+    family = _row_family(d)
+    channel = successor_channel(row["channel"])
+    struct = _RECORD_BY_CHANNEL.get(channel)
+    if struct is None:
+        raise ValueError(f"Unknown channel tag: {row['channel']!r}")
+    if family == FAMILY_EQUITY:
+        _translate_legacy_equity(channel, d)
+    return cast("Record", struct(**_header(d, family), **_record_body(struct, d)))
