@@ -12,6 +12,7 @@ import msgspec
 import polars as pl
 import pytest
 
+from crocodile.capabilities import analytics
 from crocodile.core import capability
 from crocodile.core.analytics.indicators import (
     INDICATOR_NAMES,
@@ -20,7 +21,6 @@ from crocodile.core.analytics.indicators import (
     calculate_rsi,
     calculate_sma,
 )
-from crocodile.core.analytics.slippage import estimate_slippage
 from crocodile.core.capability import (
     REGISTRY,
     AssetClass,
@@ -43,14 +43,14 @@ def _isolate_registry() -> Iterator[None]:
     replace-in-place branch.
     """
     registry = dict(REGISTRY)
-    builtins = set(capability._BUILTIN_NAMES)
+    builtins = set(capability._DECLARED_NAMES)
     try:
         yield
     finally:
         REGISTRY.clear()
         REGISTRY.update(registry)
-        capability._BUILTIN_NAMES.clear()
-        capability._BUILTIN_NAMES.update(builtins)
+        capability._DECLARED_NAMES.clear()
+        capability._DECLARED_NAMES.update(builtins)
 
 
 class _Params(msgspec.Struct, frozen=True):
@@ -89,23 +89,23 @@ def test_register_returns_the_capability(_isolate_registry: None) -> None:
     assert REGISTRY["fixture-cap"] is cap
 
 
-def test_installing_a_builtin_twice_is_idempotent(_isolate_registry: None) -> None:
-    """The seeding runs at import time, and ``load_all_bases()`` swallows import errors.
+def test_declaring_the_same_capability_twice_is_idempotent(_isolate_registry: None) -> None:
+    """A batch module declares at import time, and ``load_all_bases()`` swallows errors.
 
-    A ``ValueError`` from a re-run of this module's body would therefore not fail loudly;
-    it would leave a registry quietly missing everything declared after it.
+    A ``ValueError`` from a re-run of a batch module's body would therefore not fail
+    loudly; it would leave a registry quietly missing everything declared after it.
     """
-    capability._install(_a_capability())
-    capability._install(_a_capability())
+    capability.declare(_a_capability())
+    capability.declare(_a_capability())
     assert sorted(REGISTRY) == sorted({*REGISTRY} | {"fixture-cap"})
     assert REGISTRY["fixture-cap"].name == "fixture-cap"
 
 
-def test_a_foreign_duplicate_still_fails_after_a_builtin_is_installed(
+def test_a_foreign_duplicate_still_fails_after_a_capability_is_declared(
     _isolate_registry: None,
 ) -> None:
-    """Idempotency is scoped to names this module installed, not a blanket amnesty."""
-    capability._install(_a_capability())
+    """Idempotency is scoped to names already declared, not a blanket amnesty."""
+    capability.declare(_a_capability())
     with pytest.raises(ValueError, match="already registered"):
         register(_a_capability())
 
@@ -114,7 +114,7 @@ def test_the_seeded_registry_holds_indicators() -> None:
     cap = REGISTRY["indicators"]
     assert cap.returns is ReturnKind.TABLE
     assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
-    assert all(impl.fn is apply_indicators for impl in cap.impls.values())
+    assert all(impl.fn is analytics.indicators for impl in cap.impls.values())
 
 
 def test_the_seeded_registry_holds_slippage_under_one_name() -> None:
@@ -127,7 +127,7 @@ def test_the_seeded_registry_holds_slippage_under_one_name() -> None:
     cap = REGISTRY["slippage"]
     assert cap.returns is ReturnKind.SCALAR
     assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
-    assert all(impl.fn is estimate_slippage for impl in cap.impls.values())
+    assert all(impl.fn is analytics.slippage for impl in cap.impls.values())
     assert cap.aliases == ("simulate-price-impact",)
     assert "simulate-price-impact" not in REGISTRY, (
         "an alias that is also a registered name is two capabilities again"

@@ -17,6 +17,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from crocodile import capabilities
 from crocodile.core.schema import provenance
 
 
@@ -24,6 +25,22 @@ from crocodile.core.schema import provenance
 def _load_every_basis_once() -> None:
     """Import every basis before any snapshot is taken, so all snapshots are complete."""
     provenance.load_all_bases()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _declare_every_capability_once() -> None:
+    """Import every batch module before any registry snapshot is taken.
+
+    The capability registry has the same hazard the docstring above describes for bases,
+    and for the same mechanical reason: ``test_capability.py`` and
+    ``test_pending_symmetry.py`` both snapshot ``REGISTRY`` per test and restore it
+    afterwards. A snapshot taken before ``crocodile.capabilities`` had been imported is
+    missing every declaration in it, so restoring that snapshot *evicts* them — and
+    ``sys.modules`` has the batch module cached, so a later ``load_all()`` never re-runs
+    its ``declare()`` calls and the capabilities never come back. The symmetry gates that
+    ran afterwards would then be measuring an empty registry, vacuously.
+    """
+    capabilities.load_all()
 
 
 @pytest.fixture(autouse=True)

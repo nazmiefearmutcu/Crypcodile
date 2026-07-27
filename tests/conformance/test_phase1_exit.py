@@ -255,10 +255,32 @@ def _ruff(*paths: str) -> list[str]:
     return [line for line in result.stdout.splitlines() if ": " in line]
 
 
+# Every package that is not inherited debt. `_LEGACY_RUFF_BUDGET` covers `crypto` and
+# `equity`; between them these two lists must cover `src/crocodile` entirely, or a new
+# top-level package lands outside every lint gate — which is how a prohibited constant
+# once moved into the one place nothing looked.
+_CLEAN_PACKAGES = (
+    "src/crocodile/core",
+    "src/crocodile/contrib",
+    "src/crocodile/capabilities",
+)
+
+
 def test_the_merged_core_is_lint_clean() -> None:
     """Everything Phase 1 actually wrote holds to zero."""
-    findings = _ruff("src/crocodile/core", "src/crocodile/contrib")
+    findings = _ruff(*_CLEAN_PACKAGES)
     assert not findings, f"{len(findings)} findings in core/contrib:\n" + "\n".join(findings[:20])
+
+
+def test_every_package_is_covered_by_one_of_the_two_lint_gates() -> None:
+    """A package on neither list is lint-unchecked, and nothing would say so."""
+    gated = {pathlib.PurePath(p).name for p in _CLEAN_PACKAGES} | {"crypto", "equity"}
+    packages = {
+        path.name
+        for path in _SRC.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file() and path.name != "__pycache__"
+    }
+    assert packages <= gated, f"packages under no ruff gate: {sorted(packages - gated)}"
 
 
 def test_the_legacy_surfaces_do_not_get_worse() -> None:
