@@ -93,6 +93,25 @@ _ORIGIN_FIELDS: tuple[str, ...] = (
     *(marker for marker, family in _FAMILY_MARKERS if family != FAMILY_CANONICAL),
 )
 
+_FAMILY_ORIGIN_FIELD: dict[str, str] = {
+    FAMILY_CANONICAL: "source",
+    **{family: marker for marker, family in _FAMILY_MARKERS if family != FAMILY_CANONICAL},
+}
+"""What *this* family calls the place the data came from — one name, not a search.
+
+:data:`_ORIGIN_FIELDS` is the write-side precedence, where the record in hand belongs
+to exactly one family and the first name it answers to is the right one. On the read
+side a union of two file schemas puts every name on every row, so walking them in
+order reads whichever the row happens to carry a value under: a canonical
+``instrument`` with no ``source`` column — and on a bare ``read_parquet`` there is
+none, because ``source`` is a path component — fell through to ``exchange`` and
+reported ``source='NASDAQ'``, the *listing venue*. That is precisely the confusion
+:data:`_FAMILY_MARKERS` exists to prevent on the write side and
+``_inventory_for_channel`` on the query side, reproduced once more on the read side.
+The family already decides the column dialect for the rest of the row; it decides
+this too.
+"""
+
 # Partition columns computed from the record rather than read off it. A record
 # field sharing one of these names loses to it, so it is moved to ``<name>_val``
 # before they are written.
@@ -408,11 +427,24 @@ def _translate_legacy_equity(channel: str, d: dict[str, Any]) -> None:
     spanning the migration: ``union_by_name`` gives a pre-migration row the
     canonical columns as nulls and a post-migration row the legacy ones, so both
     spellings are present on every row and only the values separate them.
+
+    A legacy column that is present and *null* still creates the canonical key, as
+    a null. On a lake spanning the migration the canonical column exists anyway and
+    this changes nothing; on an all-legacy lake it does not, and the missing key
+    meant :func:`_record_body` skipped the field entirely on ``if column not in d``.
+    The struct constructor then raised ``TypeError: Missing required argument
+    'amount'`` — naming a column that appears nowhere in the file — instead of the
+    ``ValueError`` at the bottom of :func:`_record_body`, which names the column that
+    *is* there and says no known dialect supplies it. Applies to every aliased field.
     """
     for legacy, canonical in _EQUITY_COLUMN_ALIASES.get(channel, {}).items():
-        value = d.pop(legacy, None)
+        if legacy not in d:
+            continue
+        value = d.pop(legacy)
         if value is not None:
             d[canonical] = value
+        elif canonical not in d:
+            d[canonical] = None
     for field, convert in _EQUITY_VALUE_CONVERSIONS.get(channel, {}).items():
         if d.get(field) is not None:
             d[field] = convert(d[field])
@@ -468,18 +500,22 @@ def _header(d: dict[str, Any], family: str) -> dict[str, Any]:
     is the only place the two spellings can be reconciled.
 
     The market comes from :func:`_row_family`, which reads the same marker table
-    the sink picks a file schema with. ``source`` is resolved the same way, by
-    value: on a bare Parquet read there is no ``source`` column at all — it is a
-    path component — and the previous key-presence fallback turned an equity
-    file's null ``exchange`` into the literal string ``'None'``.
+    the sink picks a file schema with, and so does the origin: the family names one
+    column (:data:`_FAMILY_ORIGIN_FIELD`) rather than the read walking all three by
+    value. Walking them reported a canonical ``instrument``'s listing venue as its
+    source whenever the row arrived without a ``source`` column, which a bare
+    ``read_parquet`` always does — ``source`` is a path component.
 
     The provenance tail is absent from every pre-migration row, and what stands
     in for it is family-dependent; see :func:`_legacy_provenance`.
     """
-    source = next((d[f] for f in _ORIGIN_FIELDS if d.get(f) is not None), None)
+    origin_field = _FAMILY_ORIGIN_FIELD[family]
+    source = d.get(origin_field)
     if source is None:
         raise KeyError(
-            f"row names its origin under none of {_ORIGIN_FIELDS}; it cannot say where it came from"
+            f"row is from the {family!r} record family, which names its origin "
+            f"{origin_field!r}, and that column is absent or null; it cannot say where "
+            f"it came from (symbol={d.get('symbol')!r}, local_ts={d.get('local_ts')!r})"
         )
 
     raw_class = d.get("asset_class")
@@ -639,10 +675,14 @@ def _record_body(struct: Any, d: dict[str, Any]) -> dict[str, Any]:
             if _admits_none(field.type):
                 body[field.name] = None
                 continue
+            # The origin is walked by value here rather than resolved through the
+            # family, because this is a diagnostic and a row that got this far may
+            # be the one whose family markers are the problem.
+            origin = next((d[f] for f in _ORIGIN_FIELDS if d.get(f) is not None), None)
             raise ValueError(
                 f"{struct.__name__}.{field.name} is required and cannot be None, but "
                 f"column {column!r} is null on this row "
-                f"(source={d.get('source')!r}, symbol={d.get('symbol')!r}, "
+                f"(source={origin!r}, symbol={d.get('symbol')!r}, "
                 f"local_ts={d.get('local_ts')!r}); "
                 f"no known column dialect supplies it"
             )

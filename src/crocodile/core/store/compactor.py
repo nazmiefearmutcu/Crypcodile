@@ -118,13 +118,22 @@ class ParquetCompactor:
             return
 
         now = time.time()
-        # Find all leaf directories: {source,exchange,provider}=*/channel=*/date=*/bucket=*
+        # Find all leaf directories, in both on-disk layouts:
+        #   {source,exchange,provider}=*/channel=*/date=*/bucket=*   (crypto, canonical)
+        #   {source,exchange,provider}=*/channel=*/date=*            (the equity fork)
         # Legacy prefixes are included so a lake that has not run `migrate-lake`
-        # still gets compacted rather than silently accumulating small parts.
+        # still gets compacted rather than silently accumulating small parts — and
+        # the second layout is included for the same reason. Requiring `bucket=*`
+        # meant an equity lake, which wrote its parts directly under `date=`, was
+        # never compacted at all: no error, no log line, just small files forever.
+        # `part-*.parquet` is matched non-recursively below, so a date directory
+        # that *does* have buckets contributes nothing here and is not compacted
+        # twice.
         bucket_dirs = [
-            bucket_dir
+            leaf
             for prefix in SOURCE_PREFIXES
-            for bucket_dir in self.data_dir.glob(f"{prefix}*/channel=*/date=*/bucket=*")
+            for tail in ("channel=*/date=*/bucket=*", "channel=*/date=*")
+            for leaf in self.data_dir.glob(f"{prefix}*/{tail}")
         ]
 
         for bucket_dir in bucket_dirs:
@@ -179,7 +188,19 @@ class ParquetCompactor:
                 if not dfs:
                     continue
 
-                combined_df = pl.concat(dfs)
+                # `diagonal_relaxed`, not the default vertical concat. One bucket in
+                # a lake spanning the migration holds a 25-column canonical part
+                # beside a 15-column legacy one — the mixed partition the whole
+                # merge design rests on — and vertical concat raised `ShapeError:
+                # unable to append to a DataFrame of width 25 with a DataFrame of
+                # width 15` into the handler below. So such a bucket never
+                # compacted and accumulated small files forever, which is the one
+                # thing this service exists to prevent. Diagonal unions the column
+                # sets and fills the absences with nulls, which is exactly what
+                # `Catalog` already does on read with `union_by_name => true`; the
+                # relaxed form also reconciles a column that widened its dtype
+                # across the two schemas.
+                combined_df = pl.concat(dfs, how="diagonal_relaxed")
 
                 # Write to temporary file (not part-* so catalog won't see it mid-write)
                 temp_file = bucket_dir / f"temp-compact-{uuid.uuid4().hex}.parquet"

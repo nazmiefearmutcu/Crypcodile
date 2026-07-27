@@ -12,7 +12,8 @@ import pytest
 from crocodile.core.schema.enums import AssetClass, Side
 from crocodile.core.schema.records import Trade
 from crocodile.core.store.compactor import ParquetCompactor
-from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.core.store.parquet_sink import ParquetSink, _channel_schema
+from crocodile.core.store.rows import FAMILY_EQUITY, _date_from_ns, _symbol_bucket
 
 
 def _trade(price: float = 1.0, local_ts: int = 1700000000000000000) -> Trade:
@@ -250,3 +251,103 @@ async def test_stop_awaits_inflight_when_started(tmp_path: pathlib.Path) -> None
     assert len(post_files) == 1
     assert post_files[0].name.startswith("part-compacted-")
 
+
+
+# ---------------------------------------------------------------------------
+# The partition the merge design rests on
+# ---------------------------------------------------------------------------
+# These tests are synchronous and drive ``compact()`` with ``asyncio.run``: the
+# assertions are filesystem reads, and pathlib inside an async def is a lint
+# finding the rest of this file predates rather than endorses.
+
+
+def _legacy_equity_part(directory: pathlib.Path, name: str, local_ts: int) -> pathlib.Path:
+    """Write one pre-migration equity part: the fork's column set, in its dialect."""
+    schema = _channel_schema("trade", FAMILY_EQUITY)
+    row = {
+        "provider": "alpaca",
+        "symbol": "AAPL",
+        "symbol_raw": "AAPL",
+        "source_ts": local_ts,
+        "local_ts": local_ts,
+        "channel": "trade",
+        "date": _date_from_ns(local_ts),
+        "bucket": _symbol_bucket("AAPL"),
+        "exchange": None,
+        "id": name,
+        "price": 149.0,
+        "size": 5.0,
+    }
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    pl.DataFrame([{k: row.get(k) for k in schema}], schema=schema).write_parquet(path)
+    return path
+
+
+def _write_canonical_trade(tmp_path: pathlib.Path, local_ts: int) -> None:
+    """Put one canonical equity trade through the real sink."""
+
+    async def build() -> None:
+        sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=1, flush_interval_seconds=9999)
+        await sink.put(
+            Trade(
+                source="alpaca",
+                symbol="AAPL",
+                symbol_raw="AAPL",
+                source_ts=local_ts,
+                local_ts=local_ts,
+                asset_class=AssetClass.EQUITY,
+                id="canonical",
+                price=150.0,
+                amount=1.0,
+                side=Side.BUY,
+            )
+        )
+        await sink.flush()
+
+    asyncio.run(build())
+
+
+def test_a_bucket_holding_both_column_sets_compacts_rather_than_growing_forever(
+    tmp_path: pathlib.Path,
+) -> None:
+    """One canonical part beside one legacy part is the shape the merge is *about*.
+
+    ``pl.concat`` defaults to vertical and raised ``ShapeError: unable to append to a
+    DataFrame of width 25 with a DataFrame of width 15`` into the handler, so the bucket
+    never compacted and accumulated small files forever — which is the one thing this
+    service exists to prevent.
+    """
+    local_ts = 1_700_000_000_000_000_000
+    _write_canonical_trade(tmp_path, local_ts)
+
+    bucket_dir = next(tmp_path.glob("source=alpaca/channel=trade/date=*/bucket=*"))
+    _legacy_equity_part(bucket_dir, "part-legacy.parquet", local_ts)
+    assert len(list(bucket_dir.glob("part-*.parquet"))) == 2
+
+    asyncio.run(ParquetCompactor(tmp_path, min_age_seconds=0.0).compact())
+
+    parts = list(bucket_dir.glob("part-*.parquet"))
+    assert len(parts) == 1
+    assert parts[0].name.startswith("part-compacted-")
+    merged = pl.read_parquet(parts[0])
+    assert len(merged) == 2
+    assert set(merged["id"].to_list()) == {"canonical", "part-legacy.parquet"}
+
+
+def test_the_layout_with_no_bucket_level_is_compacted_too(tmp_path: pathlib.Path) -> None:
+    """``bucket_dirs`` required ``bucket=*``, so an equity lake was never compacted at all.
+
+    The equity fork wrote its parts directly under ``date=``. Not one of them was ever a
+    candidate — no error, no log line, just small files forever.
+    """
+    date_dir = tmp_path / "source=alpaca" / "channel=trade" / "date=2023-11-14"
+    _legacy_equity_part(date_dir, "part-a.parquet", 1_700_000_000_000_000_000)
+    _legacy_equity_part(date_dir, "part-b.parquet", 1_700_000_000_000_000_001)
+
+    asyncio.run(ParquetCompactor(tmp_path, min_age_seconds=0.0).compact())
+
+    parts = list(date_dir.glob("part-*.parquet"))
+    assert len(parts) == 1
+    assert parts[0].name.startswith("part-compacted-")
+    assert len(pl.read_parquet(parts[0])) == 2

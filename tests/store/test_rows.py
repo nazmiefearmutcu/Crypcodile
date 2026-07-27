@@ -618,3 +618,69 @@ def test_the_provenance_tail_survives_a_round_trip():
         volume=10.0,
     )
     assert from_row(to_row(original)) == original
+
+
+# ---------------------------------------------------------------------------
+# What the reader says when the row cannot supply a field
+# ---------------------------------------------------------------------------
+
+
+def test_an_all_legacy_row_names_the_column_that_is_there_not_one_that_is_not():
+    """I2: the good error did not fire on a lake with no canonical files in it.
+
+    On a lake spanning the migration ``union_by_name`` supplies ``amount`` as a null,
+    and the reader raises the ``ValueError`` that names it. On an all-legacy lake there
+    is no ``amount`` column at all: the alias found ``size`` null, created no canonical
+    key, ``_record_body`` skipped the field on ``if column not in d``, and msgspec raised
+    ``TypeError: Missing required argument 'amount'`` — naming a column that appears
+    nowhere in the file, several frames from the row that caused it.
+    """
+    import pytest
+
+    row = {
+        "provider": "alpaca",
+        "symbol": "AAPL",
+        "symbol_raw": "AAPL",
+        "source_ts": _BASE_TS,
+        "local_ts": _BASE_TS,
+        "channel": "trade",
+        "id": "L0",
+        "price": 150.0,
+        "size": None,
+    }
+
+    with pytest.raises(ValueError, match=r"Trade\.amount is required"):
+        from_row(row)
+
+
+def test_a_canonical_row_reads_its_origin_from_its_own_family_not_the_listing_venue():
+    """I3: ``_header`` walked all three origin names by value and took the first hit.
+
+    A canonical ``Instrument`` read off a bare Parquet file has no ``source`` column —
+    it is a path component — and does have ``exchange``, which on this record is where
+    the security is *listed*. The walk reported ``source='NASDAQ'``: the exact confusion
+    ``_FAMILY_MARKERS`` and ``_inventory_for_channel`` each exist to prevent, reproduced
+    on the read side.
+    """
+    import pytest
+
+    from crocodile.core.schema.records import Instrument
+
+    row = {
+        "symbol": "AAPL",
+        "symbol_raw": "AAPL",
+        "local_ts": _BASE_TS,
+        "source_ts": _BASE_TS,
+        "asset_class": "equity",
+        "channel": "instrument",
+        "exchange": "NASDAQ",
+        "name": "Apple Inc.",
+    }
+
+    with pytest.raises(KeyError, match="canonical"):
+        from_row(row)
+
+    record = from_row({**row, "source": "alpaca"})
+    assert isinstance(record, Instrument)
+    assert record.source == "alpaca"
+    assert record.exchange == "NASDAQ"
