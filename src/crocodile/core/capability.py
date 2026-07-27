@@ -31,7 +31,9 @@ from crocodile.core.schema.provenance import Provenance
 
 __all__ = [
     "IRREDUCIBLE",
+    "PENDING_SYMMETRY",
     "REGISTRY",
+    "SPEC_METHODS",
     "AssetClass",
     "Capability",
     "Impl",
@@ -136,6 +138,51 @@ the data while saying so, so an absent source is a reason to declare a
 :attr:`Provenance.SYNTHETIC` implementation, not to claim irreducibility. Adding a name
 here silences a build failure, which is exactly why the justification is mandatory and
 exactly why an empty one is itself a build failure.
+"""
+
+
+SPEC_METHODS: Final[dict[str, str]] = {
+    "M1": "Lift volsurface into core; equity chain from Yahoo, IV solved from mid if absent.",
+    "M2": "Aggregate the Yahoo option chain's open_interest per underlying.",
+    "M3": "Equity universe from SEC EDGAR x OpenFIGI x Tiingo, merged by CoverageResolver.",
+    "M4": "Form 4 insider transactions plus a new SEC EDGAR 13F-HR parser.",
+    "M5": "carry generalizes funding-apr; new keyless `treasury` provider for the risk-free leg.",
+    "M6": "Equity depth from the synthetic VAP ladder, upgraded by Alpaca L1 when keyed.",
+    "M7": "Order-flow imbalance derived from L1 quote changes.",
+}
+"""The seven methods design §9.1 commits to for closing the equity gap, by their spec ids.
+
+Here so that :data:`PENDING_SYMMETRY` can only point at a plan that was actually written
+down. A deadline that names a method nobody specified is a deadline nobody owns.
+"""
+
+
+PENDING_SYMMETRY: Final[dict[str, str]] = {}
+"""Capabilities that are asymmetric *on schedule*, mapped to the method that closes them.
+
+Phase 2 ports 48 crypto capabilities into :data:`REGISTRY`, and their equity halves are
+Phase 3 work. That leaves the symmetry gate three possible futures and two of them are
+lies:
+
+- **Do not register them until both halves exist.** The registry stops describing the
+  product, and the surfaces cannot be projections of it, which is the whole of Phase 2.
+- **Put them on** :data:`IRREDUCIBLE`. That mapping means *no equity analogue can exist* —
+  a claim about the market. Using it for "not built yet" is exactly the scheduling excuse
+  its justifications are tested against, and once a name is there nothing ever makes it
+  leave.
+- **Say so, with a deadline.** This.
+
+The rules, each enforced by a gate in ``tests/conformance/test_pending_symmetry.py``:
+
+1. every value names a method in :data:`SPEC_METHODS`;
+2. a name may not be here and on :data:`IRREDUCIBLE` — those are opposite claims;
+3. every name here must be registered and must actually be asymmetric, so the ledger
+   cannot quietly hold names that no longer need it;
+4. it must be **empty** at Phase 3's exit, which is what makes it a schedule rather than a
+   second exemption list.
+
+Empty today. Phase 2 fills it as it ports, and Phase 3 empties it again; the count only
+ever moving in those two directions is the property worth watching.
 """
 
 

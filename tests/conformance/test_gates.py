@@ -293,14 +293,25 @@ def test_gate2_registry_is_not_empty():
 
 
 def test_gate2_every_capability_is_symmetric():
-    from crocodile.core.capability import IRREDUCIBLE, REGISTRY, AssetClass
+    """Two ways out, and both cost something.
+
+    ``IRREDUCIBLE`` is a claim about the market and is permanent. ``PENDING_SYMMETRY`` is a
+    claim about the schedule and has to be repaid by Phase 3's exit. Anything else fails
+    here, which is what stops Phase 2's port from being able to quietly drop a half.
+    """
+    from crocodile.core.capability import (
+        IRREDUCIBLE,
+        PENDING_SYMMETRY,
+        REGISTRY,
+        AssetClass,
+    )
 
     for cap in REGISTRY.values():
-        if cap.name in IRREDUCIBLE:
+        if cap.name in IRREDUCIBLE or cap.name in PENDING_SYMMETRY:
             continue
         assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}, (
-            f"{cap.name} implements {sorted(cap.impls)}; add the missing asset class "
-            f"or justify it in IRREDUCIBLE"
+            f"{cap.name} implements {sorted(cap.impls)}; add the missing asset class, "
+            f"schedule it in PENDING_SYMMETRY, or justify it in IRREDUCIBLE"
         )
 
 
