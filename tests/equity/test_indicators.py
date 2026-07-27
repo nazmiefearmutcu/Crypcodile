@@ -1,10 +1,19 @@
-"""Tests for stockodile technical analysis indicators."""
+"""Tests for the equity indicator import path.
+
+Migrated: these used to import ``crocodile.equity.analytics.indicators``, a near-copy of
+the core module that disagreed with it on RSI warm-up and Bollinger deviation. Core
+adopted this side's arithmetic and the copy is gone, so the subject is no longer a second
+implementation — it is the re-export, and what these pin is that an equity caller reaching
+for ``calculate_rsi`` still gets the seeded Wilder answer it has always got. The import is
+deliberately the package path an equity caller uses rather than the core module, so
+repointing the re-export somewhere else fails here.
+"""
 
 import numpy as np
 import polars as pl
 import pytest
 
-from crocodile.equity.analytics.indicators import (
+from crocodile.equity.analytics import (
     calculate_bollinger_bands,
     calculate_ema,
     calculate_macd,
@@ -76,6 +85,11 @@ def test_ema() -> None:
 
 
 def test_rsi() -> None:
+    """Unchanged by the merge: these are the numbers the equity path already returned.
+
+    Recorded here because the same assertions used to fail against core and now pass — it
+    was the crypto arithmetic that moved, not this one.
+    """
     # Setup price movement: prices increasing steadily
     prices = [10.0, 11.0, 12.0, 13.0, 14.0]
 

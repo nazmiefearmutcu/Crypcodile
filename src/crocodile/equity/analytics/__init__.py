@@ -1,9 +1,17 @@
 """Analytics module for Stockodile.
 
 Includes functions for returns, risk metrics, option pricing, and fundamental ratios.
+
+The five indicator primitives are re-exported from :mod:`crocodile.core.analytics.
+indicators` rather than defined here. They used to be a near-copy of that module which
+differed from it on RSI warm-up and Bollinger deviation, so ``from crocodile.equity.
+analytics import calculate_rsi`` and ``from crocodile.core.analytics.indicators import
+calculate_rsi`` returned different numbers under one name — the collision that stops a
+single ``indicators`` capability being declared. Core adopted this side's arithmetic;
+the import path stays so callers do not have to move.
 """
 
-from crocodile.equity.analytics.indicators import (
+from crocodile.core.analytics.indicators import (
     calculate_bollinger_bands,
     calculate_ema,
     calculate_macd,

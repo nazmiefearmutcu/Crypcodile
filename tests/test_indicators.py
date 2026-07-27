@@ -78,14 +78,25 @@ def test_ema() -> None:
         calculate_ema(prices, period=-1)
 
 
-def test_rsi() -> None:
+def test_rsi_warms_up_over_a_full_period_before_reporting_a_value() -> None:
+    """Migrated: this used to pin RSI starting at index 1, which the crypto surfaces served.
+
+    The equity fork seeded Wilder's averages from the mean of the first ``period`` changes
+    and this one started an ``ewm_mean`` at index 0, so the two returned different RSI for
+    the same prices under the same name. Core took the seeded form, so the values this test
+    pins are the ones the crypto CLI, REST and MCP surfaces moved to: the first non-null
+    value slid from index 1 to index ``period``, and every later value changed too, because
+    Wilder's recursion never forgets its seed.
+    """
     prices = [10.0, 11.0, 12.0, 13.0, 14.0]
 
-    # All gains, zero losses. RSI should tend to 100.
+    # All gains, zero losses. RSI should tend to 100 — but only once seeded.
     res_list = calculate_rsi(prices, period=3)
     assert len(res_list) == 5
     assert res_list[0] is None  # first diff is null
-    assert pytest.approx(res_list[1]) == 100.0
+    assert res_list[1] is None  # inside the warm-up: fewer than `period` changes seen
+    assert res_list[2] is None
+    assert pytest.approx(res_list[3]) == 100.0
     assert pytest.approx(res_list[4]) == 100.0
 
     # Steadily decreasing prices. RSI should tend to 0.
@@ -93,19 +104,49 @@ def test_rsi() -> None:
     res_dec = calculate_rsi(dec_prices, period=3)
     assert len(res_dec) == 5
     assert res_dec[0] is None
-    assert pytest.approx(res_dec[1]) == 0.0
+    assert res_dec[1] is None
+    assert res_dec[2] is None
+    assert pytest.approx(res_dec[3]) == 0.0
     assert pytest.approx(res_dec[4]) == 0.0
 
-    # No price movement. RSI should be 50.0
+    # No price movement. RSI should be 50.0 once there is a seed to say so with.
     flat_prices = [10.0, 10.0, 10.0, 10.0]
     res_flat = calculate_rsi(flat_prices, period=3)
     assert len(res_flat) == 4
     assert res_flat[0] is None
-    assert pytest.approx(res_flat[1]) == 50.0
+    assert res_flat[1] is None
+    assert res_flat[2] is None
+    assert pytest.approx(res_flat[3]) == 50.0
 
     # Error case
     with pytest.raises(ValueError):
         calculate_rsi(prices, period=0)
+
+
+def test_rsi_needs_more_prices_than_its_period_to_report_anything() -> None:
+    """A series too short to seed reports nothing rather than a value built from too little.
+
+    The pre-merge crypto arithmetic answered every one of these, because starting the
+    average at index 0 means one observation is enough to average. That is the shape of the
+    warm-up bug: not a wrong number in the first few slots, a number where there is no
+    basis for one.
+    """
+    assert calculate_rsi([10.0, 12.0, 11.0], period=3) == [None, None, None]
+    assert calculate_rsi([10.0, 12.0], period=3) == [None, None]
+
+
+def test_rsi_reports_nothing_across_a_gap_rather_than_calling_it_no_movement() -> None:
+    """A missing price is not a flat price.
+
+    The equity fork coerced a null change to 0.0 while seeding, which turned a hole in the
+    data into an average gain and an average loss of zero — and zero over zero is reported
+    as a perfectly neutral RSI of 50. Core kept its own null propagation when it took the
+    equity seed, so the gap stays visible.
+    """
+    with_gap = [10.0, None, 12.0, 13.0, 14.0, 15.0]
+    res = calculate_rsi(with_gap, period=2)
+    assert res[2] is None, "a fabricated 50.0 here would be the gap reported as calm"
+    assert pytest.approx(res[3]) == 100.0, "and the series recovers once the gap is behind it"
 
 
 def test_macd() -> None:
@@ -154,6 +195,26 @@ def test_bollinger_bands() -> None:
     # Error case
     with pytest.raises(ValueError):
         calculate_bollinger_bands(prices, period=-5)
+
+
+def test_bollinger_bands_measure_the_window_as_a_population_not_a_sample() -> None:
+    """Pins the band half-width, which nothing did while the two forks disagreed about it.
+
+    One fork passed ``ddof=0`` and the other took Polars' ``ddof=1`` default, so the same
+    prices produced bands ``sqrt(period/(period-1))`` apart under one name — and the only
+    Bollinger assertions either suite had were ``upper > mid > lower``, which both satisfy.
+    An unpinned number is how a silent change gets in, so this states the width.
+
+    Over ``[10, 12, 11]`` the mean is 11 and the population deviation is ``sqrt(2/3)``,
+    giving a half-width of ``2 * 0.8165 = 1.633``. The sample deviation is exactly 1.0,
+    which would put the upper band on 13.0 — the answer the crypto surfaces used to give.
+    """
+    upper, mid, lower = calculate_bollinger_bands([10.0, 12.0, 11.0], period=3, k=2.0)
+
+    assert pytest.approx(mid[2]) == 11.0
+    assert pytest.approx(upper[2], abs=1e-4) == 12.6330
+    assert pytest.approx(lower[2], abs=1e-4) == 9.3670
+    assert upper[2] != pytest.approx(13.0), "13.0 is the sample-deviation band, ddof=1"
 
 
 # ---------------------------------------------------------------------------

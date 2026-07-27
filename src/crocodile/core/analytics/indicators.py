@@ -4,6 +4,17 @@ Shared by both asset classes without a fork. The five primitives take a price
 series and know nothing about markets; :func:`apply_indicators` lifts them onto
 an OHLCV frame, which is the record type crypto and equity both produce natively.
 That is what makes ``indicators`` the capability registry's walking skeleton.
+
+The fork this replaced disagreed with itself on two numbers. ``equity/analytics/
+indicators.py`` seeded RSI the way Wilder defined it and took the Bollinger deviation
+over the population; this module started RSI from index 0 and took the sample
+deviation. Each fork's own tests asserted its own answer, so neither was wrong by the
+suite and both were on the wire. The canonical arithmetic won on the merits — see
+:func:`_wilder_average` and :func:`calculate_bollinger_bands` for the two arguments —
+which moved the crypto surfaces' numbers and left the equity ones where they were.
+The one thing that did not come across from the equity copy is its treatment of a
+missing price as zero movement: that turned a gap in the data into a confident RSI of
+50, and a fabricated number is worse than an absent one.
 """
 
 from collections.abc import Sequence
@@ -99,6 +110,31 @@ def calculate_ema(
     return _from_series(res, prices)
 
 
+def _wilder_average(changes: pl.Series, period: int) -> pl.Series:
+    """Wilder's smoothed average of ``changes``, seeded by the mean of the first ``period``.
+
+    Wilder's recursion ``avg[i] = avg[i-1] * (period-1)/period + changes[i]/period`` is an
+    exponentially weighted mean with ``alpha = 1/period``, so the only thing that
+    distinguishes it from a bare ``ewm_mean`` is where it starts: at index ``period``, from
+    the simple mean of ``changes[1..period]``. Starting at index 0 from the first change
+    instead — which is what a bare ``ewm_mean`` does — makes the first value an average of
+    one observation, and because the recursion never forgets its seed the two series stay
+    apart forever rather than converging. Seeding is therefore what makes this RSI the one
+    TA-Lib and every charting package report.
+
+    The seed is ``None`` when any change in the window is, rather than the mean of whatever
+    survived. A gap in the prices means the average gain over that window is unknown, and
+    an average taken over the observations that happened to be present is a number with no
+    stated basis — the same reason the rest of this module propagates nulls instead of
+    treating a missing price as no movement.
+    """
+    window = changes.slice(1, period)
+    seed = None if window.null_count() else window.mean()
+    seeded = pl.concat([pl.Series([seed], dtype=pl.Float64), changes.slice(period + 1)])
+    warmup = pl.Series([None] * period, dtype=pl.Float64)
+    return pl.concat([warmup, seeded.ewm_mean(alpha=1.0 / period, adjust=False)])
+
+
 @overload
 def calculate_rsi(prices: pl.Series, period: int) -> pl.Series: ...
 
@@ -115,20 +151,26 @@ def calculate_rsi(
     prices: pl.Series | np.ndarray | Sequence[float | None],
     period: int,
 ) -> pl.Series | np.ndarray | list[float | None]:
-    """Calculate Relative Strength Index (RSI) over a given period using Wilder's smoothing."""
+    """Calculate Relative Strength Index (RSI) over a given period using Wilder's smoothing.
+
+    Warm-up: the first ``period`` changes seed the averages, so the first value that is not
+    null sits at index ``period`` and ``period + 1`` prices are needed to produce one. A
+    shorter series returns all nulls rather than a number computed from too little.
+    """
     if period <= 0:
         raise ValueError("Period must be a positive integer.")
     series = _to_series(prices)
     if len(series) == 0:
         return _from_series(series, prices)
+    if len(series) <= period:
+        return _from_series(pl.Series([None] * len(series), dtype=pl.Float64), prices)
 
     change = series.diff()
     gain = change.clip(lower_bound=0.0)
     loss = (-change).clip(lower_bound=0.0)
 
-    # Wilder's smoothing uses alpha = 1 / period
-    avg_gain = gain.ewm_mean(alpha=1.0 / period, adjust=False)
-    avg_loss = loss.ewm_mean(alpha=1.0 / period, adjust=False)
+    avg_gain = _wilder_average(gain, period)
+    avg_loss = _wilder_average(loss, period)
 
     rs = avg_gain / avg_loss
 
@@ -238,7 +280,12 @@ def calculate_bollinger_bands(
         return empty, empty, empty
 
     middle = series.rolling_mean(window_size=period)
-    std = series.rolling_std(window_size=period)
+    # Population deviation, not sample. Polars defaults to ddof=1, which treats the window
+    # as a sample drawn from a wider population and widens every band by
+    # sqrt(period/(period-1)) — 2.6% at the default period of 20. Bollinger's bands are
+    # defined over the window itself, so the window is the population and there is nothing
+    # to correct for; a band 2.6% wide of the published one is a different indicator.
+    std = series.rolling_std(window_size=period, ddof=0)
     upper = middle + k * std
     lower = middle - k * std
 
