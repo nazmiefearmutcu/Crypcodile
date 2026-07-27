@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 from unittest.mock import MagicMock, patch
+
 import pytest
 
+from crocodile.core.schema.enums import OptType
+from crocodile.core.schema.records import OptionsChain
 from crocodile.crypto.analytics.blackscholes import PureMathGreeksSolverAdapter
 from crocodile.crypto.exchanges.derive.connector import DeriveConnector
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import OptionsChain
 
 
 def test_derive_connector_connection() -> None:
@@ -98,13 +99,13 @@ def test_derive_connector_fetch_and_normalize() -> None:
     expected_expiry_ns = mock_expiry * 1_000_000_000
     for chain in chains:
         assert isinstance(chain, OptionsChain)
-        assert chain.exchange == "derive"
+        assert chain.source == "derive"
         assert chain.underlying == "BTC"
         assert chain.underlying_price == 60000.0
-        # expiry / local_ts / exchange_ts must be nanoseconds (not s or ms)
+        # expiry / local_ts / source_ts must be nanoseconds (not s or ms)
         assert chain.expiry == expected_expiry_ns
         assert chain.local_ts >= 1_000_000_000_000_000_000  # ~ns epoch magnitude
-        assert chain.exchange_ts == chain.local_ts
+        assert chain.source_ts == chain.local_ts
 
     # Verify first (Call) option values
     c_chain = [c for c in chains if c.opt_type == OptType.CALL][0]

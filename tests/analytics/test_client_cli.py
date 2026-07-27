@@ -18,14 +18,14 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.crypto.analytics.funding import funding_apr as analytics_funding_apr
-from crocodile.crypto.analytics.volsurface import iv_surface as analytics_iv_surface
-from crocodile.crypto.legacy.cli import app
-from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import Funding, OptionsChain
+from crocodile.core.schema.enums import AssetClass, OptType
+from crocodile.core.schema.records import Funding, OptionsChain
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.funding import funding_apr as analytics_funding_apr
+from crocodile.crypto.analytics.volsurface import iv_surface as analytics_iv_surface
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.crypto.legacy.cli import app
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -76,11 +76,12 @@ def funding_lake(tmp_path: Path) -> Path:
     """Write 3 Funding records to a temp lake and return the dir."""
     records = [
         Funding(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + i * _8H_NS,
+            source_ts=_BASE_NS + i * _8H_NS,
             local_ts=_BASE_NS + i * _8H_NS,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=rate,
             funding_timestamp=_BASE_NS + i * _8H_NS,
             interval_hours=_INTERVAL_HOURS,
@@ -102,11 +103,12 @@ def options_lake(tmp_path: Path) -> Path:
     e1_ns = _BASE_NS + _ONE_YEAR_NS
     records: list[object] = [
         OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol="deribit:BTC-90-C",
             symbol_raw="BTC-90-C",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=100.0,
             strike=90.0,
@@ -116,11 +118,12 @@ def options_lake(tmp_path: Path) -> Path:
             mark_iv=0.5,
         ),
         OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol="deribit:BTC-100-C",
             symbol_raw="BTC-100-C",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=100.0,
             strike=100.0,

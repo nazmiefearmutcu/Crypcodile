@@ -68,11 +68,11 @@ def aggregate_open_interest(
 
     # Align across unique local_ts with forward-fill per (exchange, symbol)
     timestamps = sorted(raw_df["local_ts"].unique().to_list())
-    exchanges = sorted(raw_df["exchange"].unique().to_list())
+    exchanges = sorted(raw_df["source"].unique().to_list())
     series_keys = sorted(
         {
-            (row["exchange"], row["symbol"])
-            for row in raw_df.select(["exchange", "symbol"]).unique().iter_rows(named=True)
+            (row["source"], row["symbol"])
+            for row in raw_df.select(["source", "symbol"]).unique().iter_rows(named=True)
         }
     )
 
@@ -85,7 +85,7 @@ def aggregate_open_interest(
         if oi_val is None:
             continue
         ts = row["local_ts"]
-        key = (row["exchange"], row["symbol"])
+        key = (row["source"], row["symbol"])
         oi = float(oi_val)
         if ts not in data_map:
             data_map[ts] = {}

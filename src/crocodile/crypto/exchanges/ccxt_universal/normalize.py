@@ -3,7 +3,7 @@
 Every function here is a pure, synchronous mapping from a ccxt unified data
 structure (as returned by ``fetch_ticker``, ``fetch_order_book``,
 ``fetch_trades``, ``fetch_ohlcv``, ``fetch_funding_rate`` and ``load_markets``)
-onto Crypcodile's canonical :mod:`crocodile.core.schema.legacy.records` types.  No network,
+onto Crypcodile's canonical :mod:`crocodile.core.schema.records` types.  No network,
 no exchange objects — just dicts in, structs out — so the whole normalization
 surface is unit-testable against captured fixtures.
 
@@ -16,7 +16,7 @@ Shape gotchas handled here (found by live-probing Kraken / KuCoin / MEXC):
 * ``timestamp`` is frequently ``None`` (Kraken tickers / books); the schema
   allows ``exchange_ts=None`` so we pass it through rather than fabricating one.
 * ``side`` / ``takerOrMaker`` can be absent; side falls back to
-  :attr:`~crocodile.core.schema.legacy.enums.Side.UNKNOWN`.
+  :attr:`~crocodile.core.schema.enums.Side.UNKNOWN`.
 """
 
 from __future__ import annotations
@@ -24,9 +24,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import (
     OHLCV,
     BookSnapshot,
     BookTicker,
@@ -35,6 +34,7 @@ from crocodile.core.schema.legacy.records import (
     Record,
     Trade,
 )
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 # ccxt gives millisecond epoch timestamps; the crypcodile schema is nanoseconds.
 _MS_TO_NS = 1_000_000
@@ -169,11 +169,12 @@ def normalize_ticker(
 
     if bid is not None and ask is not None:
         yield BookTicker(
-            exchange=exchange,
+            source=exchange,
             symbol=canonical,
             symbol_raw=symbol_raw,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bid_px=bid,
             bid_sz=_f(ticker.get("bidVolume")) or 0.0,
             ask_px=ask,
@@ -187,11 +188,12 @@ def normalize_ticker(
         funding = _f(info.get("fundingRate"))
         if mark is not None or index is not None or funding is not None:
             yield DerivativeTicker(
-                exchange=exchange,
+                source=exchange,
                 symbol=canonical,
                 symbol_raw=symbol_raw,
-                exchange_ts=exchange_ts,
+                source_ts=exchange_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 last_price=_f(ticker.get("last")),
                 mark_price=mark,
                 index_price=index,
@@ -243,11 +245,12 @@ def normalize_order_book(
     asks = _levels(ob.get("asks"), depth)
     nonce = ob.get("nonce")
     return BookSnapshot(
-        exchange=exchange,
+        source=exchange,
         symbol=canonical,
         symbol_raw=symbol_raw,
-        exchange_ts=_ms_to_ns(ob.get("timestamp")),
+        source_ts=_ms_to_ns(ob.get("timestamp")),
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         depth=max(len(bids), len(asks)),
@@ -283,11 +286,12 @@ def normalize_trade(
         return None
     trade_id = trade.get("id")
     return Trade(
-        exchange=exchange,
+        source=exchange,
         symbol=_canonical(registry, exchange, symbol_raw),
         symbol_raw=symbol_raw,
-        exchange_ts=_ms_to_ns(trade.get("timestamp")),
+        source_ts=_ms_to_ns(trade.get("timestamp")),
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(trade_id) if trade_id is not None else "",
         price=price,
         amount=amount,
@@ -341,11 +345,12 @@ def normalize_ohlcv(
     if None in (o, h, low, c, v):
         return None
     return OHLCV(
-        exchange=exchange,
+        source=exchange,
         symbol=_canonical(registry, exchange, symbol_raw),
         symbol_raw=symbol_raw,
-        exchange_ts=_ms_to_ns(candle[0]),
+        source_ts=_ms_to_ns(candle[0]),
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         interval=interval,
         open=o,  # type: ignore[arg-type]
         high=h,  # type: ignore[arg-type]
@@ -376,11 +381,12 @@ def normalize_funding(
     if rate is None:
         return None
     return Funding(
-        exchange=exchange,
+        source=exchange,
         symbol=_canonical(registry, exchange, symbol_raw),
         symbol_raw=symbol_raw,
-        exchange_ts=_ms_to_ns(funding.get("timestamp")),
+        source_ts=_ms_to_ns(funding.get("timestamp")),
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         funding_rate=rate,
         funding_timestamp=_ms_to_ns(funding.get("fundingTimestamp")),
         predicted_funding_rate=_f(funding.get("nextFundingRate")),

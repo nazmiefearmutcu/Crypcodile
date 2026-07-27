@@ -3,7 +3,7 @@
 One :class:`CCXTConnector` class stands in for **every** exchange ccxt supports
 (104 REST venues / 78 WebSocket venues as of ccxt 4.5).  It is parametrised by
 ``ccxt_id`` (e.g. ``"kraken"``, ``"kucoin"``, ``"mexc"``) and normalises ccxt's
-unified market-data structures into the same :mod:`crocodile.core.schema.legacy.records`
+unified market-data structures into the same :mod:`crocodile.core.schema.records`
 types the native connectors emit, so the Parquet lake, replay and analytics
 layers treat a ccxt venue exactly like a hand-written one.
 
@@ -34,10 +34,10 @@ from typing import Any
 
 from crocodile.core.connector import Connector, backoff_delays
 from crocodile.core.ingest.transport import Transport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import now_ns
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
 
 from . import normalize as norm
 

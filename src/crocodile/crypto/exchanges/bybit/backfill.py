@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Funding, OpenInterest, Record, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Funding, OpenInterest, Record, Trade
 from crocodile.core.util.time import ms_to_ns
 
 EXCHANGE = "bybit"
@@ -62,11 +62,12 @@ def parse_trades_page(
     for entry in items:
         out.append(
             Trade(
-                exchange=venue,
+                source=venue,
                 symbol=f"{venue}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ms_to_ns(int(entry["time"])),
+                source_ts=ms_to_ns(int(entry["time"])),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 id=str(entry.get("execId") or entry.get("i") or ""),
                 price=float(entry["price"]),
                 amount=float(entry["size"]),
@@ -95,11 +96,12 @@ def parse_funding_page(
         ts_ns = ms_to_ns(int(entry["fundingRateTimestamp"]))
         out.append(
             Funding(
-                exchange=venue,
+                source=venue,
                 symbol=f"{venue}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ts_ns,
+                source_ts=ts_ns,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 funding_rate=float(entry["fundingRate"]),
                 funding_timestamp=ts_ns,
                 interval_hours=8,  # Bybit default 8h cadence
@@ -126,11 +128,12 @@ def parse_open_interest_page(
     for entry in items:
         out.append(
             OpenInterest(
-                exchange=venue,
+                source=venue,
                 symbol=f"{venue}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ms_to_ns(int(entry["timestamp"])),
+                source_ts=ms_to_ns(int(entry["timestamp"])),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 open_interest=float(entry["openInterest"]),
                 open_interest_value=None,
             )
@@ -216,11 +219,11 @@ class BybitBackfill:
 
             stop = False
             for r in records:
-                if r.exchange_ts is not None:
-                    if r.exchange_ts > end_ns:
+                if r.source_ts is not None:
+                    if r.source_ts > end_ns:
                         stop = True
                         break
-                    if r.exchange_ts < start_ns:
+                    if r.source_ts < start_ns:
                         continue
                 yield r
 
@@ -264,10 +267,10 @@ class BybitBackfill:
 
             stop = False
             for record in records:
-                if record.exchange_ts is not None:
-                    if record.exchange_ts > end_ns:
+                if record.source_ts is not None:
+                    if record.source_ts > end_ns:
                         continue
-                    if record.exchange_ts < start_ns:
+                    if record.source_ts < start_ns:
                         stop = True
                         break
                 yield record
@@ -315,10 +318,10 @@ class BybitBackfill:
 
             stop = False
             for record in records:
-                if record.exchange_ts is not None:
-                    if record.exchange_ts > end_ns:
+                if record.source_ts is not None:
+                    if record.source_ts > end_ns:
                         continue
-                    if record.exchange_ts < start_ns:
+                    if record.source_ts < start_ns:
                         stop = True
                         break
                 yield record

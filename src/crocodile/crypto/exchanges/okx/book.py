@@ -27,9 +27,10 @@ from __future__ import annotations
 from typing import Any
 
 from crocodile.core.ingest.book_sync import SyncResult
-from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.records import BookSnapshot
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookSnapshot
 from crocodile.core.util.time import ms_to_ns, now_ns
+from crocodile.crypto.instruments.registry import InstrumentRegistry
 
 from .normalize import _levels
 
@@ -160,11 +161,12 @@ def parse_rest_books_snapshot(
         sequence_id = int(seq_raw)
 
     return BookSnapshot(
-        exchange=venue,
+        source=venue,
         symbol=canonical,
         symbol_raw=symbol_raw,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         depth=len(bids) + len(asks),

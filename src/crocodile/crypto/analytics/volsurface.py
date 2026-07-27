@@ -38,9 +38,9 @@ import math
 import duckdb
 import polars as pl
 
-from crocodile.crypto.analytics.blackscholes import bs_greeks, implied_vol
-from crocodile.core.schema.legacy.enums import OptType
+from crocodile.core.schema.enums import OptType
 from crocodile.core.store.catalog import Catalog
+from crocodile.crypto.analytics.blackscholes import bs_greeks, implied_vol
 
 __all__ = [
     "iv_surface",
@@ -61,6 +61,7 @@ _NS_PER_DAY: float = 86_400.0 * 1e9
 # ---------------------------------------------------------------------------
 
 import numpy as np
+
 
 class CubicSpline:
     """Natural cubic spline interpolation in pure Python/NumPy."""

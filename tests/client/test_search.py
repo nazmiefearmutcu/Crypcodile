@@ -7,8 +7,8 @@ import pathlib
 import polars as pl
 import pytest
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -27,11 +27,12 @@ def _trade(
     if symbol_raw is None:
         symbol_raw = symbol.rsplit(":", 1)[-1]
     return Trade(
-        exchange=exchange,
+        source=exchange,
         symbol=symbol,
         symbol_raw=symbol_raw,
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(price),
         price=price,
         amount=2.0,
@@ -45,11 +46,12 @@ def _snap(
     symbol: str = "deribit:BTC-PERPETUAL",
 ) -> BookSnapshot:
     return BookSnapshot(
-        exchange=exchange,
+        source=exchange,
         symbol=symbol,
         symbol_raw=symbol.rsplit(":", 1)[-1],
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=[(100.0, 5.0)],
         asks=[(101.0, 4.0)],
         depth=1,

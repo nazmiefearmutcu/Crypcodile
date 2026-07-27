@@ -21,10 +21,10 @@ import aiohttp
 
 from crocodile.core.connector import Connector, backoff_delays
 from crocodile.core.ingest.transport import Transport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import now_ns
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
 
 from . import normalize as norm
 from .client import fetch_markets

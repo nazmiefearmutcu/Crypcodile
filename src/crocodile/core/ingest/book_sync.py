@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
 
-from crocodile.core.schema.legacy.records import BookDelta
+from crocodile.core.schema.records import BookDelta
 
 __all__ = [
     "BookSyncMachine",

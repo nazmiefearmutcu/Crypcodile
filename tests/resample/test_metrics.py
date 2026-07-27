@@ -22,8 +22,8 @@ import polars as pl
 import pytest
 
 from crocodile.core.resample.metrics import resample_metrics
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 
@@ -51,11 +51,12 @@ def _make_trade(
     tid: str,
 ) -> Trade:
     return Trade(
-        exchange="deribit",
+        source="deribit",
         symbol="deribit:BTC-PERPETUAL",
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         id=tid,
         price=price,
         amount=amount,

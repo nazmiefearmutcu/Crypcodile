@@ -5,11 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
-from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookSnapshot, BookTicker, Trade
 from crocodile.core.sink.memory import MemorySink
+from crocodile.crypto.exchanges.base_onchain.connector import (
+    BaseOnchainConnector,
+    BaseOnchainTransport,
+)
+from crocodile.crypto.instruments.registry import InstrumentRegistry
+
 
 @pytest.fixture(autouse=True)
 def mock_load_ipc_sync():
@@ -821,9 +825,9 @@ def test_ipc_dict_reload_on_modification(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_flipped_pool_tick_size_and_custom_tick_size() -> None:
+    from crocodile.core.sink.memory import MemorySink
     from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
     from crocodile.crypto.instruments.registry import InstrumentRegistry
-    from crocodile.core.sink.memory import MemorySink
 
     sink = MemorySink()
     registry = InstrumentRegistry()
@@ -956,10 +960,14 @@ async def test_dynamic_listing_and_polling_validation() -> None:
 
 @pytest.mark.asyncio
 async def test_aerodrome_real_fixture_normalization() -> None:
-    import os
     import json
-    from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector, BaseOnchainTransport
+    import os
+
     from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.exchanges.base_onchain.connector import (
+        BaseOnchainConnector,
+        BaseOnchainTransport,
+    )
     from crocodile.crypto.instruments.registry import InstrumentRegistry
 
     fixture_path = os.path.join(
@@ -1105,7 +1113,11 @@ async def test_is_connection_or_rate_limit() -> None:
     assert t._is_connection_or_rate_limit(socket.gaierror(-2, "Name or service not known")) is True
 
     # web3 exceptions
-    from web3.exceptions import ProviderConnectionError, PersistentConnectionError, ContractLogicError
+    from web3.exceptions import (
+        ContractLogicError,
+        PersistentConnectionError,
+        ProviderConnectionError,
+    )
     assert t._is_connection_or_rate_limit(ProviderConnectionError("cannot connect")) is True
     assert t._is_connection_or_rate_limit(PersistentConnectionError("persistent connection lost")) is True
     assert t._is_connection_or_rate_limit(ContractLogicError("execution reverted")) is False

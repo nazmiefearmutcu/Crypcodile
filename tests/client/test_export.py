@@ -15,8 +15,8 @@ import polars as pl
 import pyarrow.ipc as pa_ipc
 import pytest
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -25,11 +25,12 @@ _SYMBOL = "deribit:BTC-PERPETUAL"
 
 def _trade(local_ts: int, price: float = 1.0) -> Trade:
     return Trade(
-        exchange="deribit",
+        source="deribit",
         symbol=_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(local_ts),
         price=price,
         amount=1.0,
@@ -39,11 +40,12 @@ def _trade(local_ts: int, price: float = 1.0) -> Trade:
 
 def _snap(local_ts: int = _BASE_TS) -> BookSnapshot:
     return BookSnapshot(
-        exchange="deribit",
+        source="deribit",
         symbol=_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=[(100.0, 5.0)],
         asks=[(101.0, 4.0)],
         depth=1,
@@ -298,11 +300,12 @@ async def test_export_multi_symbol_sorted_and_no_null_leakage(
         sym = _SYMBOL if i % 2 == 0 else _SYMBOL_B
         ts = _BASE_TS + i * 1_000_000_000
         trade = Trade(
-            exchange="deribit",
+            source="deribit",
             symbol=sym,
             symbol_raw=sym.split(":")[1],
-            exchange_ts=ts,
+            source_ts=ts,
             local_ts=ts,
+            asset_class=AssetClass.CRYPTO,
             id=str(ts),
             price=float(i + 1),
             amount=1.0,
@@ -328,6 +331,6 @@ async def test_export_multi_symbol_sorted_and_no_null_leakage(
     assert ts_values == sorted(ts_values), "Rows must be sorted by local_ts"
 
     # No spurious nulls introduced by diagonal concat in shared columns
-    for col in ("exchange", "symbol", "price", "amount", "side"):
+    for col in ("source", "symbol", "price", "amount", "side"):
         null_count = df[col].null_count()
         assert null_count == 0, f"Column {col!r} has {null_count} unexpected nulls"

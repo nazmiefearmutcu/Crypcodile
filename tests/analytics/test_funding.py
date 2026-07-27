@@ -20,15 +20,16 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import Funding
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.funding import (
     apr_from_rate,
     funding_apr,
     funding_summary,
     periods_per_year,
 )
-from crocodile.core.schema.legacy.records import Funding
-from crocodile.core.store.catalog import Catalog
-from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -54,11 +55,12 @@ _INTERVAL_HOURS = 8
 def _make_funding(ts: int, rate: float, interval_hours: int) -> Funding:
     """Build a minimal Funding record."""
     return Funding(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         funding_rate=rate,
         funding_timestamp=ts,
         interval_hours=interval_hours,
@@ -325,11 +327,12 @@ def test_funding_apr_default_interval_hours(tmp_path: Path) -> None:
     """Records with interval_hours=None default to 8 in the output."""
     # Write a Funding record with interval_hours=None
     rec = Funding(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=_BASE_NS,
+        source_ts=_BASE_NS,
         local_ts=_BASE_NS,
+        asset_class=AssetClass.CRYPTO,
         funding_rate=0.0001,
         funding_timestamp=_BASE_NS,
         interval_hours=None,  # missing → should default to 8
@@ -354,11 +357,12 @@ def test_funding_apr_rejects_nonpositive_interval(tmp_path: Path) -> None:
     a silently negated APR (for negatives) into a legible ValueError.
     """
     rec = Funding(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=_BASE_NS,
+        source_ts=_BASE_NS,
         local_ts=_BASE_NS,
+        asset_class=AssetClass.CRYPTO,
         funding_rate=0.0001,
         funding_timestamp=_BASE_NS,
         interval_hours=0,  # corrupt / non-positive — must be rejected, not divided by

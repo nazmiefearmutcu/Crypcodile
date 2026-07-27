@@ -18,17 +18,18 @@ from typing import Any
 
 import pytest
 
+from crocodile.core.ingest.gap_bridge import BookResyncBridge
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta, BookSnapshot, Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.crypto.exchanges.okx.book import (
     OkxOrderBookSync,
     SyncResult,
     parse_rest_books_snapshot,
 )
 from crocodile.crypto.exchanges.okx.connector import OKXConnector
-from crocodile.core.ingest.gap_bridge import BookResyncBridge
-from crocodile.core.ingest.transport import FakeTransport
 from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Trade
-from crocodile.core.sink.memory import MemorySink
 
 
 def _rest_books(seq_id: int) -> dict[str, Any]:
@@ -143,7 +144,7 @@ def test_parse_rest_books_snapshot() -> None:
     assert (50000.0, 1.0) in snap.bids
     assert snap.depth == 3
     assert snap.local_ts == 42
-    assert snap.exchange_ts == 1700000000000 * 1_000_000
+    assert snap.source_ts == 1700000000000 * 1_000_000
 
 
 def test_parse_rest_books_snapshot_entry_only() -> None:
@@ -366,11 +367,12 @@ async def test_complete_resync_note_applied_continuity() -> None:
     bridge = BookResyncBridge(sync=sync, fetch_snapshot=fetch, symbol="BTC-USDT")
 
     gap = BookDelta(
-        exchange="okx",
+        source="okx",
         symbol="okx:BTC-USDT",
         symbol_raw="BTC-USDT",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=0,
+        asset_class=AssetClass.CRYPTO,
         bids=[(50000.0, 1.0)],
         asks=[],
         seq_id=250,

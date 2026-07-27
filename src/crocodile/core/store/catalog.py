@@ -319,8 +319,16 @@ class Catalog:
         and the groups are unioned. Two things change it: the source prefix
         (``source=`` / ``exchange=`` / ``provider=``) and whether the lake has a
         ``bucket=`` level at all. Legacy groups project their key as ``source``
-        so the union is over one vocabulary and callers never learn which
-        prefix a row came from.
+        so the union is over one vocabulary.
+
+        The legacy key also survives under its own name, and that is now
+        load-bearing rather than redundant. A pre-migration crypto lake carried
+        ``exchange`` as a real column; the canonical file schema does not, so on
+        such a lake the hive key is the only thing left saying the row predates
+        the merged header — which is exactly what
+        :func:`crocodile.core.store.rows.from_row` reads to decide its asset
+        class. Excluding it from the projection would make those rows
+        unreconstructable.
 
         Prefixes come from :data:`SOURCE_PREFIXES`, a module constant, so the
         interpolated key is never caller-controlled; only the paths are, and
@@ -757,11 +765,20 @@ class Catalog:
 
         # Prefer hive-partition columns when present; otherwise synthesise
         # from the registered channel name / optional exchange filter.
-        has_exchange = "exchange" in col_names
+        #
+        # ``source`` is read before ``exchange`` and the order is load-bearing.
+        # The view always projects ``source`` — legacy prefixes are aliased onto
+        # it — while ``exchange`` is a record field that only some channels have,
+        # and on the canonical ``instrument`` channel it is the *listing* venue.
+        # Reading it first reported NASDAQ as the source of an Alpaca-served row,
+        # the same confusion :mod:`crocodile.core.store.rows` guards the
+        # partition path against. The names come from this literal tuple, never
+        # from a caller, so interpolating one into the SQL is safe.
+        origin_col = next((c for c in ("source", "exchange") if c in col_names), None)
         has_channel = "channel" in col_names
 
-        if has_exchange:
-            exchange_expr = "exchange"
+        if origin_col is not None:
+            exchange_expr = origin_col
         elif exchange is not None:
             exchange_expr = f"'{exchange.replace(chr(39), chr(39) * 2)}'"
         else:
@@ -771,8 +788,8 @@ class Catalog:
 
         where_parts: list[str] = []
         params: list[object] = []
-        if exchange is not None and has_exchange:
-            where_parts.append("exchange = ?")
+        if exchange is not None and origin_col is not None:
+            where_parts.append(f"{origin_col} = ?")
             params.append(exchange)
 
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""

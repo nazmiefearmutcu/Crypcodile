@@ -39,15 +39,15 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import (
     BookDelta,
     BookSnapshot,
     BookTicker,
     Record,
     Trade,
 )
+from crocodile.crypto.instruments.registry import InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -149,11 +149,12 @@ def _normalize_match(
     exchange_ts = _parse_iso_ns(time_str) if time_str else None
     trade_id = msg.get("trade_id") or msg.get("sequence")
     yield Trade(
-        exchange=EXCHANGE,
+        source=EXCHANGE,
         symbol=canonical,
         symbol_raw=raw_symbol,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(trade_id),
         price=float(msg["price"]),
         amount=float(msg["size"]),
@@ -175,11 +176,12 @@ def _normalize_snapshot(
     bids = _parse_snapshot_levels(msg.get("bids", []))
     asks = _parse_snapshot_levels(msg.get("asks", []))
     yield BookSnapshot(
-        exchange=EXCHANGE,
+        source=EXCHANGE,
         symbol=canonical,
         symbol_raw=raw_symbol,
-        exchange_ts=None,  # snapshots have no timestamp on Coinbase
+        source_ts=None,  # snapshots have no timestamp on Coinbase
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         depth=len(bids) + len(asks),
@@ -204,11 +206,12 @@ def _normalize_l2update(
     exchange_ts = _parse_iso_ns(time_str) if time_str else None
     bids, asks = _parse_l2update_changes(msg.get("changes", []))
     yield BookDelta(
-        exchange=EXCHANGE,
+        source=EXCHANGE,
         symbol=canonical,
         symbol_raw=raw_symbol,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         seq_id=None,
@@ -242,11 +245,12 @@ def _normalize_ticker(
         return
 
     yield BookTicker(
-        exchange=EXCHANGE,
+        source=EXCHANGE,
         symbol=canonical,
         symbol_raw=raw_symbol,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bid_px=float(bid_px_raw),
         bid_sz=float(bid_sz_raw) if bid_sz_raw is not None else 0.0,
         ask_px=float(ask_px_raw),

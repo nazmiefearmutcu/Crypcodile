@@ -8,16 +8,16 @@ pytest.importorskip("web3")
 
 from web3 import AsyncHTTPProvider, AsyncWeb3
 
-from crocodile.crypto.exchanges.base_onchain.connector import (
-    BaseOnchainTransport,
-)
 # These tiers drive the surviving Base L2 connector, which is the crypto one:
 # the equity fork shipped a duplicate of it inside an equities library and the
 # merge deleted that duplicate. Its normalizer therefore emits the crypto
 # record classes, so the isinstance filters below have to name those. Importing
 # the equity classes here made every filter match nothing and every assertion
 # run over an empty list.
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker
+from crocodile.core.schema.records import BookSnapshot, BookTicker
+from crocodile.crypto.exchanges.base_onchain.connector import (
+    BaseOnchainTransport,
+)
 
 # =====================================================================
 # Tier 1 E2E Feature Isolation Tests (F1-F6)

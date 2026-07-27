@@ -10,23 +10,24 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from crocodile.core.schema.enums import AssetClass, OptType
+from crocodile.core.schema.records import OptionsChain
+from crocodile.core.sink.memory import MemorySink
 from crocodile.crypto.exchanges.derive.connector import (
     DerivePollConnector,
     _underlying_from_symbol,
 )
 from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import OptionsChain
-from crocodile.core.sink.memory import MemorySink
 
 
 def _sample_chain(underlying: str = "BTC") -> OptionsChain:
     return OptionsChain(
-        exchange="derive",
+        source="derive",
         symbol=f"{underlying}_{underlying}-250101-60000-C",
         symbol_raw=f"{underlying}-250101-60000-C",
-        exchange_ts=1_700_000_000_000,
+        source_ts=1_700_000_000_000,
         local_ts=1_700_000_000_000,
+        asset_class=AssetClass.CRYPTO,
         underlying=underlying,
         underlying_price=60000.0,
         strike=60000.0,
@@ -131,7 +132,7 @@ async def test_poll_once_puts_options_chain_into_sink() -> None:
     assert len(sink.records) == 1
     rec = sink.records[0]
     assert isinstance(rec, OptionsChain)
-    assert rec.exchange == "derive"
+    assert rec.source == "derive"
     assert rec.underlying == "BTC"
     conn.client.connect.assert_called_once()
     conn.client.fetch_options_chain.assert_called_once_with(

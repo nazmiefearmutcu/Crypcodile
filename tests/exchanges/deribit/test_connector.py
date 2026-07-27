@@ -4,14 +4,14 @@ import pathlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from crocodile.core.schema.records import Record, Trade
+from crocodile.core.sink.base import Sink
 from crocodile.crypto.exchanges.deribit.connector import (
     DeribitConnector,
     build_channels,
     parse_instruments,
 )
 from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.records import Record, Trade
-from crocodile.core.sink.base import Sink
 
 _FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 

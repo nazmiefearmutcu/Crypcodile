@@ -1,8 +1,8 @@
 import math
 from typing import Any, cast
 
+from crocodile.core.schema.records import BookSnapshot
 from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
-from crocodile.core.schema.legacy.records import BookSnapshot
 
 
 def test_normalize_depth_5_levels_aerodrome() -> None:

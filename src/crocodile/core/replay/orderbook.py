@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from typing import cast
 
 from crocodile.core.errors import BookGap
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
+from crocodile.core.schema.records import BookDelta, BookSnapshot
 
 # ``BookGap`` used to be declared here as a bare ``Exception``, so an
 # ``except BookGap`` written against ``crocodile.core.errors`` caught nothing

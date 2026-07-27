@@ -15,8 +15,8 @@ from crocodile.core.analytics.indicators import (
     calculate_rsi,
     calculate_sma,
 )
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000
@@ -168,11 +168,12 @@ async def _write_trade_bars(data_dir: pathlib.Path) -> None:
         ts = _BASE_TS + i * 1_000_000_000
         await sink.put(
             Trade(
-                exchange="deribit",
+                source="deribit",
                 symbol="deribit:BTC-PERPETUAL",
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=ts,
+                source_ts=ts,
                 local_ts=ts,
+                asset_class=AssetClass.CRYPTO,
                 id=str(i),
                 price=price,
                 amount=1.0,

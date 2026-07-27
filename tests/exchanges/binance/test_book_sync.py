@@ -3,8 +3,8 @@ import pathlib
 
 import pytest
 
+from crocodile.core.schema.records import BookDelta
 from crocodile.crypto.exchanges.binance.book import OrderBookSync, SyncResult, normalize_depth
-from crocodile.core.schema.legacy.records import BookDelta
 
 P = pathlib.Path(__file__).parent / "fixtures"
 
@@ -98,8 +98,8 @@ def test_normalize_depth_spot_fixture():
     assert delta.seq_id == 105
     # spot has no pu -> prev_seq_id must be None
     assert delta.prev_seq_id is None
-    # exchange_ts: E=1700000000200 ms -> ns
-    assert delta.exchange_ts == 1700000000200 * 1_000_000
+    # source_ts: E=1700000000200 ms -> ns
+    assert delta.source_ts == 1700000000200 * 1_000_000
     # zero-quantity removal level must be present in bids
     assert (49999.0, 0.0) in delta.bids
 
@@ -114,7 +114,7 @@ def test_normalize_depth_futures_fixture():
     # seq_id = u = 100, prev_seq_id = pu = 90
     assert delta.seq_id == 100
     assert delta.prev_seq_id == 90
-    # exchange_ts: E=1700000000300 ms -> ns
-    assert delta.exchange_ts == 1700000000300 * 1_000_000
+    # source_ts: E=1700000000300 ms -> ns
+    assert delta.source_ts == 1700000000300 * 1_000_000
     # zero-quantity removal level in bids
     assert (49998.0, 0.0) in delta.bids

@@ -65,17 +65,21 @@ widened to keep it (see the crypto ``limit_order_fill`` / ``balance_correction``
 from __future__ import annotations
 
 import asyncio
+import enum
 import time
+import types
+import typing
 import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import msgspec.structs
 import polars as pl
 
-from crocodile.core.schema.records import Record
+from crocodile.core.schema.records import Record, _Header
 from crocodile.core.sink.base import Sink
-from crocodile.core.store.rows import to_row
+from crocodile.core.store.rows import _DERIVED_PARTITION_COLS, to_row
 
 # ---------------------------------------------------------------------------
 # Record families
@@ -527,14 +531,103 @@ _EQUITY_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# The canonical family, derived rather than declared
+# ---------------------------------------------------------------------------
+# The two tables above are frozen literals because the files they describe are
+# already on disk and the migration renames rather than rewrites them: a column
+# copied wrong there is a lake that no longer reads as one schema. The canonical
+# lake has no such files yet, and its structs are the thing this whole merge is
+# still moving surfaces onto. So this family's schema is read off the structs.
+#
+# The point is not brevity. This sink *refuses* a row carrying a field its
+# channel schema does not declare, which means a field added to a record and
+# forgotten here would not be dropped quietly — it would take the channel's
+# whole write down at runtime. A second hand-written copy of 30 structs is a
+# second place for that to happen; there is no second copy.
+_CANONICAL_LEVEL_STRUCT = pl.Struct({"price": pl.Float64, "amount": pl.Float64})
+
+_SCALAR_DTYPES: dict[type, Any] = {
+    str: pl.Utf8,
+    int: pl.Int64,
+    float: pl.Float64,
+    bool: pl.Boolean,
+}
+
+
+def _polars_dtype(annotation: Any) -> Any:
+    """Return the Polars dtype that stores one record field.
+
+    Optionality carries no information here — every Parquet column is nullable —
+    so ``X | None`` and ``X`` resolve to the same dtype.
+
+    Raises:
+        TypeError: for an annotation with no mapping. A record field whose type
+            this does not understand must stop the build rather than be assigned
+            a plausible dtype; guessing ``Utf8`` for an unrecognised field is how
+            a structured value becomes a string in the file and nothing says so.
+    """
+    if typing.get_origin(annotation) in (types.UnionType, typing.Union):
+        members = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(members) == 1:
+            annotation = members[0]
+
+    if isinstance(annotation, type):
+        # Enum before the scalar table: a StrEnum *is* a str subclass, and its
+        # members reach the row as their values via ``rows._convert_value``.
+        if issubclass(annotation, enum.Enum):
+            return pl.Utf8
+        dtype = _SCALAR_DTYPES.get(annotation)
+        if dtype is not None:
+            return dtype
+
+    if typing.get_origin(annotation) is list:
+        (inner,) = typing.get_args(annotation)
+        # ``Level`` is ``tuple[float, float]``; the struct field names are the
+        # crypto lake's spelling, which is what every reader in the tree expects.
+        if typing.get_origin(inner) is tuple:
+            return pl.List(_CANONICAL_LEVEL_STRUCT)
+        return pl.List(_polars_dtype(inner))
+
+    raise TypeError(f"no Parquet dtype for canonical record field annotation {annotation!r}")
+
+
+def _build_canonical_schema() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Return ``(common fields, per-channel extras)`` for the canonical union."""
+    header = msgspec.structs.fields(_Header)
+    header_names = {f.name for f in header}
+    common: dict[str, Any] = {
+        f.name: _polars_dtype(f.type) for f in header if f.name not in _PATH_ONLY_COLUMNS
+    }
+    common |= {"channel": pl.Utf8, "date": pl.Utf8, "bucket": pl.Int32}
+
+    extra: dict[str, dict[str, Any]] = {}
+    for struct in typing.get_args(Record):
+        tag = struct.__struct_config__.tag
+        extra[tag] = {
+            # ``to_row`` moves a record field that collides with a partition
+            # column aside — ``ShortVolume.date`` is a settlement day, the
+            # partition ``date`` is the capture day — so the column it writes is
+            # the moved name, and that is the name the schema has to declare.
+            f"{f.name}_val" if f.name in _DERIVED_PARTITION_COLS else f.name: _polars_dtype(f.type)
+            for f in msgspec.structs.fields(struct)
+            if f.name not in header_names
+        }
+    return common, extra
+
+
+_CANONICAL_COMMON_FIELDS, _CANONICAL_CHANNEL_EXTRA = _build_canonical_schema()
+
 _COMMON_FIELDS_BY_FAMILY: dict[str, dict[str, Any]] = {
     FAMILY_CRYPTO: _CRYPTO_COMMON_FIELDS,
     FAMILY_EQUITY: _EQUITY_COMMON_FIELDS,
+    FAMILY_CANONICAL: _CANONICAL_COMMON_FIELDS,
 }
 
 _CHANNEL_EXTRA_BY_FAMILY: dict[str, dict[str, dict[str, Any]]] = {
     FAMILY_CRYPTO: _CRYPTO_CHANNEL_EXTRA,
     FAMILY_EQUITY: _EQUITY_CHANNEL_EXTRA,
+    FAMILY_CANONICAL: _CANONICAL_CHANNEL_EXTRA,
 }
 
 
@@ -562,11 +655,11 @@ def _channel_schema(channel: str, family: str = FAMILY_CRYPTO) -> dict[str, Any]
     resolving the schema they always did.
 
     Raises:
-        ValueError: if the family has no schema table. The canonical union is
-            the live case: ``Sink.put`` is typed against it, but no canonical
-            channel table exists yet, and writing a canonical record through
-            the crypto table would drop ``asset_class`` and every ``prov*``
-            field without a word.
+        ValueError: if the family has no schema table, or the family has one and
+            the channel is not in it. Falling back to another family's table
+            would drop every field the two do not share — a canonical record
+            written through the crypto table loses ``asset_class`` and the whole
+            ``prov*`` tail without a word.
     """
     common = _COMMON_FIELDS_BY_FAMILY.get(family)
     extras = _CHANNEL_EXTRA_BY_FAMILY.get(family)

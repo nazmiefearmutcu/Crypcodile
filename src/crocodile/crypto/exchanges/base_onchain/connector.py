@@ -15,19 +15,20 @@ import web3
 
 from crocodile.core.connector import Connector
 from crocodile.core.ingest.transport import Transport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import Record
 from crocodile.core.sink.base import Sink
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
-from .normalize import normalize_onchain_update
 from .asset_registry import AssetRegistry
-from .smart_wallet import CoinbaseSmartWalletDetector
 from .limit_orders import (
     ONEINCH_ORDER_FILLED_TOPIC,
     ZEROX_LIMIT_ORDER_FILLED_TOPIC,
-    decode_1inch_order_filled,
     decode_0x_limit_order_filled,
+    decode_1inch_order_filled,
 )
+from .normalize import normalize_onchain_update
+from .smart_wallet import CoinbaseSmartWalletDetector
 
 smart_wallet_detector = CoinbaseSmartWalletDetector()
 
@@ -99,6 +100,7 @@ def _write_ipc_to_file(instance: IPCDict, data_dict: dict[str, Any]) -> None:
         log.error(f"Failed to write IPC to file: {e}")
 
 import threading
+
 
 def _load_ipc_sync() -> None:
     TOKENS._sync()
@@ -527,8 +529,8 @@ class BaseOnchainTransport:
         self._block_cache = {}
         _register_custom_pools(custom_pools)
 
-        from crocodile.core.ingest.sync_recovery import SyncRecovery
         from crocodile.core.ingest.rollback_manager import RollbackManager
+        from crocodile.core.ingest.sync_recovery import SyncRecovery
         state_dir = os.path.expanduser("~/.crypcodile/sync_state")
         os.makedirs(state_dir, exist_ok=True)
         self.sync_recovery = SyncRecovery(
@@ -568,9 +570,10 @@ class BaseOnchainTransport:
 
     def _is_connection_or_rate_limit(self, e: Exception) -> bool:
         """Detect connection errors, rate limit errors (429), timeouts, and standard network/RPC gateway issues."""
-        import socket
         import asyncio
-        from web3.exceptions import ProviderConnectionError, PersistentConnectionError
+        import socket
+
+        from web3.exceptions import PersistentConnectionError, ProviderConnectionError
         
         # Check type directly
         if isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError, socket.gaierror, ProviderConnectionError, PersistentConnectionError)):
@@ -1521,13 +1524,14 @@ class BaseOnchainConnector(Connector):
             if m_type == "onchain_update":
                 yield from normalize_onchain_update(msg, local_ts, exchange=self.name)
             elif m_type == "limit_order_fill_update":
-                from crocodile.core.schema.legacy.records import LimitOrderFill
+                from crocodile.core.schema.records import LimitOrderFill
                 yield LimitOrderFill(
-                    exchange=msg["exchange"],
+                    source=msg["exchange"],
                     symbol=msg["symbol"],
                     symbol_raw=msg["symbol_raw"],
-                    exchange_ts=msg["exchange_ts"],
+                    source_ts=msg["exchange_ts"],
                     local_ts=local_ts,
+                    asset_class=AssetClass.CRYPTO,
                     tx_hash=msg["tx_hash"],
                     log_index=msg["log_index"],
                     protocol=msg["protocol"],
@@ -1540,15 +1544,16 @@ class BaseOnchainConnector(Connector):
                     order_hash=msg["order_hash"],
                 )
             elif m_type == "lending_update":
-                from crocodile.core.schema.legacy.records import ReserveDataUpdated, LiquidationCall
+                from crocodile.core.schema.records import LiquidationCall, ReserveDataUpdated
                 evt = msg.get("event")
                 if evt == "ReserveDataUpdated":
                     yield ReserveDataUpdated(
-                        exchange=msg["exchange"],
+                        source=msg["exchange"],
                         symbol=f"lending:{msg['pool']}",
                         symbol_raw=msg["pool"],
-                        exchange_ts=msg["timestamp"] * 1_000_000_000,
+                        source_ts=msg["timestamp"] * 1_000_000_000,
                         local_ts=local_ts,
+                        asset_class=AssetClass.CRYPTO,
                         reserve=msg["reserve"],
                         liquidity_rate=msg["liquidity_rate"],
                         stable_borrow_rate=msg["stable_borrow_rate"],
@@ -1558,11 +1563,12 @@ class BaseOnchainConnector(Connector):
                     )
                 elif evt == "LiquidationCall":
                     yield LiquidationCall(
-                        exchange=msg["exchange"],
+                        source=msg["exchange"],
                         symbol=f"lending:{msg['pool']}",
                         symbol_raw=msg["pool"],
-                        exchange_ts=msg["timestamp"] * 1_000_000_000,
+                        source_ts=msg["timestamp"] * 1_000_000_000,
                         local_ts=local_ts,
+                        asset_class=AssetClass.CRYPTO,
                         collateral_asset=msg["collateral_asset"],
                         debt_asset=msg["debt_asset"],
                         user=msg["user"],

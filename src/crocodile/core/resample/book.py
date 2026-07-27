@@ -50,11 +50,22 @@ Top-N depth
 The ``depth`` field in the emitted snapshot is set to
 ``len(bids) + len(asks)`` *after* truncation.
 
-``exchange_ts`` in emitted snapshots
--------------------------------------
-We cannot know the exchange timestamp for a synthesised snapshot; we set
-``exchange_ts = None`` consistently with the ``local_ts``-only contract used
+``source_ts`` in emitted snapshots
+-----------------------------------
+We cannot know the venue timestamp for a synthesised snapshot; we set
+``source_ts = None`` consistently with the ``local_ts``-only contract used
 elsewhere in the pipeline for derived records.
+
+Provenance
+----------
+An emitted snapshot is reconstructed from other records, so it is a derived
+record and its header ought to say :attr:`Provenance.DERIVED` with a basis
+naming this reconstruction. It still says ``NATIVE``, which is the default:
+:mod:`crocodile.core.schema.provenance` has no registered confidence formula
+for book resampling, and a basis with no formula fails Gate 3 while a
+hand-picked confidence constant is precisely what the registry exists to
+forbid. Registering the formula — and only then flipping this record's tail —
+is a follow-up, deliberately not folded into the union migration.
 
 Gap handling
 -------------
@@ -68,7 +79,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from crocodile.core.replay.orderbook import OrderBook
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
+from crocodile.core.schema.records import BookDelta, BookSnapshot
 
 __all__ = ["resample_book_snapshots"]
 
@@ -150,8 +161,8 @@ def _capture_snapshot(
     Args:
         book:           The live ``OrderBook`` instance.
         trigger_record: The record whose ``local_ts`` crossed the boundary.
-                        Used to copy ``exchange``, ``symbol``, and
-                        ``symbol_raw``.
+                        Used to copy ``source``, ``symbol``, ``symbol_raw``
+                        and ``asset_class``.
         boundary_ns:    The nanosecond timestamp of the bucket boundary.
                         Used as ``local_ts`` for the emitted snapshot.
         top_n:          Maximum bid/ask levels on each side; ``None`` = all.
@@ -173,11 +184,15 @@ def _capture_snapshot(
     depth = len(bids) + len(asks)
 
     return BookSnapshot(
-        exchange=trigger_record.exchange,
+        source=trigger_record.source,
         symbol=trigger_record.symbol,
         symbol_raw=trigger_record.symbol_raw,
-        exchange_ts=None,
+        source_ts=None,
         local_ts=boundary_ns,
+        # Carried from the trigger rather than pinned to CRYPTO: a resampled
+        # book is the same market as the stream it was reconstructed from, and
+        # this engine is in `core` precisely so it can serve either one.
+        asset_class=trigger_record.asset_class,
         bids=bids,
         asks=asks,
         depth=depth,

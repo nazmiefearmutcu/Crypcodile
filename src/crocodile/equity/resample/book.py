@@ -8,10 +8,11 @@ but it is the CRYPTO copy and it does not work on equity input. Three
 independent reasons, each verified against this tree:
 
 1. **Record construction.** ``core``'s ``_capture_snapshot`` emits
-   ``crocodile.core.schema.legacy.records.BookSnapshot`` and reads
-   ``trigger_record.exchange`` / sets ``exchange_ts``. Equity records
-   (``crocodile.equity.schema.records``) have ``provider`` / ``source_ts`` and
-   no ``exchange`` attribute at all, so the call raises ``AttributeError``.
+   ``crocodile.core.schema.records.BookSnapshot`` and reads
+   ``trigger_record.source`` and ``trigger_record.asset_class``. Equity records
+   (``crocodile.equity.schema.records``) still say ``provider`` and carry no
+   ``asset_class`` at all, so the call raises ``AttributeError``. That stops
+   being true the day the equity union moves onto the canonical one too.
 
 2. **Nominal dispatch.** ``core``'s loop tests ``isinstance(record,
    BookSnapshot)`` against the crypto struct. An equity ``BookSnapshot`` is a
@@ -76,8 +77,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from crocodile.core.replay.orderbook import OrderBook
-from crocodile.core.schema.legacy.records import BookDelta as CoreBookDelta
-from crocodile.core.schema.legacy.records import BookSnapshot as CoreBookSnapshot
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta as CoreBookDelta
+from crocodile.core.schema.records import BookSnapshot as CoreBookSnapshot
 from crocodile.equity.schema.records import BookDelta, BookSnapshot
 
 __all__ = ["resample_book_snapshots"]
@@ -88,18 +90,20 @@ def _to_core_record(record: BookSnapshot | BookDelta) -> CoreBookSnapshot | Core
 
     ``OrderBook`` dispatches with ``isinstance`` against the core records, so an
     equity struct has to be presented in those terms. Only the fields the engine
-    actually reads are carried across; ``exchange`` / ``exchange_ts`` are filled
-    from ``provider`` / ``source_ts`` purely to satisfy the constructor and are
-    never read back out — emitted snapshots are rebuilt from the engine's
-    ``bids`` / ``asks`` dicts and the original equity record.
+    actually reads are carried across; ``source`` and ``asset_class`` are filled
+    from ``provider`` and from the fact that this module only ever sees equity
+    input, purely to satisfy the constructor. They are never read back out —
+    emitted snapshots are rebuilt from the engine's ``bids`` / ``asks`` dicts
+    and the original equity record.
     """
     if isinstance(record, BookSnapshot):
         return CoreBookSnapshot(
-            exchange=record.provider,
+            source=record.provider,
             symbol=record.symbol,
             symbol_raw=record.symbol_raw,
-            exchange_ts=record.source_ts,
+            source_ts=record.source_ts,
             local_ts=record.local_ts,
+            asset_class=AssetClass.EQUITY,
             bids=record.bids,
             asks=record.asks,
             depth=record.depth,
@@ -107,11 +111,12 @@ def _to_core_record(record: BookSnapshot | BookDelta) -> CoreBookSnapshot | Core
             is_snapshot=True,
         )
     return CoreBookDelta(
-        exchange=record.provider,
+        source=record.provider,
         symbol=record.symbol,
         symbol_raw=record.symbol_raw,
-        exchange_ts=record.source_ts,
+        source_ts=record.source_ts,
         local_ts=record.local_ts,
+        asset_class=AssetClass.EQUITY,
         bids=record.bids,
         asks=record.asks,
         seq_id=record.seq_id,

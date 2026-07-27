@@ -15,8 +15,8 @@ import pathlib
 
 import pytest
 
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import OptType
+from crocodile.core.schema.records import (
     DerivativeTicker,
     Funding,
     Liquidation,
@@ -158,7 +158,7 @@ def test_binance_rest_open_interest_emits_record() -> None:
     oi = parse_open_interest(raw, venue="binance-usdm", local_ts=0)
     assert isinstance(oi, OpenInterest)
     assert oi.open_interest > 0
-    assert oi.exchange_ts is not None
+    assert oi.source_ts is not None
 
 
 def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
@@ -178,7 +178,7 @@ def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
     - a  → ask_iv  (sell IV)
     - vo → mark_iv (vol)
     - oi → open_interest
-    - E  → exchange_ts (event time, ms)
+    - E  → source_ts (event time, ms)
     """
     from crocodile.crypto.exchanges.binance.normalize import normalize_message
 
@@ -190,7 +190,7 @@ def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
     )
     oc = oc_list[0]
     assert oc.symbol_raw == "BTC-231215-50000-C"
-    assert oc.exchange == "binance-eapi"
+    assert oc.source == "binance-eapi"
     assert oc.mark_price == pytest.approx(0.05)
     assert oc.mark_iv == pytest.approx(0.65)   # vo field (divided by 100 → canonical fraction)
     assert oc.bid_iv == pytest.approx(0.64)    # b field
@@ -203,8 +203,8 @@ def test_binance_eapi_optionmarkprice_emits_options_chain() -> None:
     # opt_type and strike must be parsed from symbol "BTC-231215-50000-C"
     assert oc.opt_type == OptType.CALL
     assert oc.strike == pytest.approx(50000.0)
-    # exchange_ts from E (event time ms → ns)
-    assert oc.exchange_ts == 1700000000000 * 1_000_000
+    # source_ts from E (event time ms → ns)
+    assert oc.source_ts == 1700000000000 * 1_000_000
     assert oc.local_ts == 42
 
 

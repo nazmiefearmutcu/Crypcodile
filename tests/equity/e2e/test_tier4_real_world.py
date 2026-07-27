@@ -8,6 +8,8 @@ import subprocess
 import aiohttp
 import pytest
 
+from crocodile.core.schema.enums import AssetClass
+
 pytest.importorskip("web3")
 
 # Define/mock POOL_SPECS, TOKENS, FACTORIES; import schema records.
@@ -17,7 +19,7 @@ pytest.importorskip("web3")
 # record classes, so the isinstance filters below have to name those. Importing
 # the equity classes here made every filter match nothing and every assertion
 # run over an empty list.
-from crocodile.core.schema.legacy.records import BookSnapshot, Record
+from crocodile.core.schema.records import BookSnapshot, Record
 from crocodile.core.sink.base import Sink
 from crocodile.crypto.exchanges.base_onchain.connector import FACTORIES, TOKENS
 from crocodile.equity.reference.registry import InstrumentRegistry
@@ -77,16 +79,17 @@ class BaseOnchainConnector:
 
     def normalize(self, msg: dict, local_ts: int) -> list[Record | BookTicker]:
         # provider=/source_ts= are the equity record field names; the surviving
-        # crypto BookSnapshot spells them exchange=/exchange_ts=. Same fields.
+        # crypto BookSnapshot spells them exchange=/source_ts=. Same fields.
         snap = BookSnapshot(
-            exchange="base_onchain",
+            source="base_onchain",
             symbol=msg["pool"],
             symbol_raw=msg["pool"],
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bids=[(b[0], b[1]) for b in msg["bids"]],
             asks=[(a[0], a[1]) for a in msg["asks"]],
             depth=len(msg["bids"]),
-            exchange_ts=local_ts,
+            source_ts=local_ts,
             sequence_id=1,
             is_snapshot=True,
         )

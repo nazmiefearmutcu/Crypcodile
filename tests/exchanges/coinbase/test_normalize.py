@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import pathlib
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookDelta, BookSnapshot, BookTicker, Trade
 from crocodile.crypto.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, BookTicker, Trade
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -28,10 +28,10 @@ def test_match_trade_buy() -> None:
     assert t.amount == 0.5
     assert t.side == Side.BUY
     assert t.id == "123456"
-    assert t.exchange == "coinbase"
+    assert t.source == "coinbase"
     assert t.symbol_raw == "BTC-USD"
-    # time "2023-11-14T22:13:20.000000Z" → exchange_ts in ns
-    assert t.exchange_ts is not None
+    # time "2023-11-14T22:13:20.000000Z" → source_ts in ns
+    assert t.source_ts is not None
     assert t.local_ts == 42
     # Coinbase product_id is canonical; symbol should be "coinbase:BTC-USD"
     assert t.symbol == "coinbase:BTC-USD"
@@ -71,15 +71,15 @@ def test_level2_snapshot() -> None:
     assert (50000.0, 1.5) in snap.bids
     assert (49999.0, 2.0) in snap.bids
     assert (50001.0, 0.8) in snap.asks
-    assert snap.exchange == "coinbase"
+    assert snap.source == "coinbase"
 
 
-def test_level2_snapshot_no_exchange_ts() -> None:
-    """Coinbase snapshot has no timestamp → exchange_ts is None."""
+def test_level2_snapshot_no_source_ts() -> None:
+    """Coinbase snapshot has no timestamp → source_ts is None."""
     msg = json.loads((FIXTURES / "level2_snapshot.json").read_text())
     out = list(normalize_message(msg, local_ts=7))
     snaps = [r for r in out if isinstance(r, BookSnapshot)]
-    assert snaps[0].exchange_ts is None
+    assert snaps[0].source_ts is None
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +103,12 @@ def test_level2_update_maps_to_book_delta() -> None:
     assert (50001.0, 1.0) in delta.asks
 
 
-def test_level2_update_has_exchange_ts() -> None:
-    """``l2update`` carries a ``time`` field → exchange_ts set."""
+def test_level2_update_has_source_ts() -> None:
+    """``l2update`` carries a ``time`` field → source_ts set."""
     msg = json.loads((FIXTURES / "level2_update.json").read_text())
     out = list(normalize_message(msg, local_ts=8))
     deltas = [r for r in out if isinstance(r, BookDelta)]
-    assert deltas[0].exchange_ts is not None
+    assert deltas[0].source_ts is not None
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ def test_ticker_emits_book_ticker() -> None:
     assert bt.ask_px == 50001.0
     assert bt.ask_sz == 0.3
     assert bt.symbol_raw == "BTC-USD"
-    assert bt.exchange == "coinbase"
+    assert bt.source == "coinbase"
 
 
 # ---------------------------------------------------------------------------

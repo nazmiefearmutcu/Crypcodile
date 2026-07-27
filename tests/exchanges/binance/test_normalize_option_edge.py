@@ -5,7 +5,7 @@ Covers:
   unknown opt_type, and bad/short YYMMDD expiry (expiry_ns → None).
 - _normalize_eapi_option_markprice: registry-backed path (inst is not None),
   unparseable strike/opt_type (skip/continue → no record yielded),
-  missing "E" key (exchange_ts falls back to local_ts).
+  missing "E" key (source_ts falls back to local_ts).
 - normalize_message: "@depth" stream dispatch to normalize_depth,
   "@optionMarkPrice" whose data is a dict-wrapped shape.
 """
@@ -15,14 +15,14 @@ import pathlib
 
 import pytest
 
+from crocodile.core.schema.enums import OptType
+from crocodile.core.schema.records import BookDelta, OptionsChain
 from crocodile.crypto.exchanges.binance.normalize import (
     _normalize_eapi_option_markprice,
     _parse_eapi_option_symbol,
     normalize_message,
 )
 from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import BookDelta, OptionsChain
 
 P = pathlib.Path(__file__).parent / "fixtures"
 
@@ -188,14 +188,14 @@ def test_unparseable_symbol_with_none_registry_logs_warning(
 
 
 # ---------------------------------------------------------------------------
-# _normalize_eapi_option_markprice - missing "E" key, exchange_ts falls back to local_ts (118-123)
+# _normalize_eapi_option_markprice - missing "E" key, source_ts falls back to local_ts (118-123)
 # ---------------------------------------------------------------------------
 
 
-def test_missing_exchange_ts_falls_back_to_local_ts(
+def test_missing_source_ts_falls_back_to_local_ts(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Entry without 'E' key → exchange_ts equals local_ts passed in."""
+    """Entry without 'E' key → source_ts equals local_ts passed in."""
     entry = {
         "s": "BTC-231215-50000-C",
         "mp": "0.05",
@@ -219,7 +219,7 @@ def test_missing_exchange_ts_falls_back_to_local_ts(
         )
     assert len(out) == 1
     rec = out[0]
-    assert rec.exchange_ts == LOCAL_TS
+    assert rec.source_ts == LOCAL_TS
     assert any("local_ts" in r.message for r in caplog.records)
 
 

@@ -21,11 +21,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from crocodile.crypto.analytics.basis import perp_basis, spot_future_basis, spot_perp_basis
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import DerivativeTicker, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import DerivativeTicker, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.basis import perp_basis, spot_future_basis, spot_perp_basis
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -58,11 +58,12 @@ _ONE_YEAR_NS = 365 * 24 * 3600 * 1_000_000_000
 def _make_trade(ts: int, symbol: str, price: float) -> Trade:
     """Build a minimal Trade record."""
     return Trade(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=symbol,
         symbol_raw=symbol.split(":", 1)[-1],
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         id=f"t_{ts}",
         price=price,
         amount=1.0,
@@ -73,11 +74,12 @@ def _make_trade(ts: int, symbol: str, price: float) -> Trade:
 def _make_derivative_ticker(ts: int, mark: float, index: float) -> DerivativeTicker:
     """Build a minimal DerivativeTicker record."""
     return DerivativeTicker(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=_PERP_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         mark_price=mark,
         index_price=index,
     )
@@ -315,21 +317,23 @@ def test_perp_basis_skips_null_prices(tmp_path: Path) -> None:
         _make_derivative_ticker(_T1, 100.5, 100.0),
         # Row with null mark_price
         DerivativeTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_T2,
+            source_ts=_T2,
             local_ts=_T2,
+            asset_class=AssetClass.CRYPTO,
             mark_price=None,
             index_price=100.0,
         ),
         # Row with null index_price
         DerivativeTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_T3,
+            source_ts=_T3,
             local_ts=_T3,
+            asset_class=AssetClass.CRYPTO,
             mark_price=100.5,
             index_price=None,
         ),
@@ -364,11 +368,12 @@ def test_perp_basis_zero_index_price_does_not_emit_inf(tmp_path: Path) -> None:
         _make_derivative_ticker(_T1, 100.5, 100.0),
         # Pathological row: index_price = 0 would create inf if not filtered
         DerivativeTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_T2,
+            source_ts=_T2,
             local_ts=_T2,
+            asset_class=AssetClass.CRYPTO,
             mark_price=100.5,
             index_price=0.0,
         ),
@@ -390,11 +395,12 @@ def test_perp_basis_zero_mark_price_does_not_appear(tmp_path: Path) -> None:
     records: list[object] = [
         _make_derivative_ticker(_T1, 100.5, 100.0),
         DerivativeTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_T2,
+            source_ts=_T2,
             local_ts=_T2,
+            asset_class=AssetClass.CRYPTO,
             mark_price=0.0,
             index_price=100.0,
         ),

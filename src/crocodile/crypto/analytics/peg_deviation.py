@@ -1,8 +1,10 @@
 import logging
 import time
+
 import polars as pl
+
+from crocodile.core.schema.records import Record
 from crocodile.core.store.catalog import Catalog
-from crocodile.core.schema.legacy.records import Record
 
 log = logging.getLogger(__name__)
 

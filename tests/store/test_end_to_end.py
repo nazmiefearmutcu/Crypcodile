@@ -22,12 +22,13 @@ from collections.abc import Iterator
 
 import pytest
 
-from crocodile.crypto.exchanges.deribit.normalize import normalize_message
 from crocodile.core.replay.merge import replay
 from crocodile.core.replay.orderbook import BookGap, OrderBook
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Record, Trade
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta, BookSnapshot, Record, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.exchanges.deribit.normalize import normalize_message
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -171,11 +172,12 @@ async def test_e2e_book_reconstruction_from_fixture() -> None:
 
     # --- Gap detection: feed a non-contiguous delta → BookGap ---
     gap_delta = BookDelta(
-        exchange="deribit",
+        source="deribit",
         symbol="deribit:BTC-PERPETUAL",
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=_LOCAL_TS_BOOK2 + 1_000_000,
+        asset_class=AssetClass.CRYPTO,
         bids=[],
         asks=[],
         seq_id=999,         # not 102 — gap

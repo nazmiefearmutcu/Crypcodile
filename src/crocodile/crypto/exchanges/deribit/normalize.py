@@ -5,9 +5,8 @@ import time as _time
 from collections.abc import Iterable
 from typing import Any
 
-from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.enums import OptType, Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import AssetClass, OptType, Side
+from crocodile.core.schema.records import (
     BookDelta,
     BookSnapshot,
     DerivativeTicker,
@@ -18,6 +17,7 @@ from crocodile.core.schema.legacy.records import (
     Trade,
 )
 from crocodile.core.util.time import ms_to_ns
+from crocodile.crypto.instruments.registry import InstrumentRegistry
 
 EXCHANGE = "deribit"
 
@@ -121,11 +121,12 @@ def normalize_message(
             sym = t["instrument_name"]
             side = _side(t["direction"])
             yield Trade(
-                exchange=EXCHANGE,
+                source=EXCHANGE,
                 symbol=f"{EXCHANGE}:{sym}",
                 symbol_raw=sym,
-                exchange_ts=ms_to_ns(t["timestamp"]),
+                source_ts=ms_to_ns(t["timestamp"]),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 id=str(t["trade_id"]),
                 price=float(t["price"]),
                 amount=float(t["amount"]),
@@ -134,11 +135,12 @@ def normalize_message(
             )
             if t.get("liquidation"):
                 yield Liquidation(
-                    exchange=EXCHANGE,
+                    source=EXCHANGE,
                     symbol=f"{EXCHANGE}:{sym}",
                     symbol_raw=sym,
-                    exchange_ts=ms_to_ns(t["timestamp"]),
+                    source_ts=ms_to_ns(t["timestamp"]),
                     local_ts=local_ts,
+                    asset_class=AssetClass.CRYPTO,
                     price=float(t["price"]),
                     amount=float(t["amount"]),
                     side=side,
@@ -148,11 +150,12 @@ def normalize_message(
         d: dict[str, Any] = data or {}
         sym = d["instrument_name"]
         common: dict[str, Any] = dict(
-            exchange=EXCHANGE,
+            source=EXCHANGE,
             symbol=f"{EXCHANGE}:{sym}",
             symbol_raw=sym,
-            exchange_ts=ms_to_ns(d["timestamp"]),
+            source_ts=ms_to_ns(d["timestamp"]),
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bids=_levels(d.get("bids", [])),
             asks=_levels(d.get("asks", [])),
         )
@@ -214,11 +217,12 @@ def normalize_message(
 
             greeks: dict[str, Any] = td.get("greeks") or {}
             yield OptionsChain(
-                exchange=EXCHANGE,
+                source=EXCHANGE,
                 symbol=symbol_canonical,
                 symbol_raw=sym,
-                exchange_ts=exchange_ts,
+                source_ts=exchange_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 underlying=underlying,
                 underlying_price=td.get("underlying_price"),
                 strike=strike if strike is not None else 0.0,
@@ -243,11 +247,12 @@ def normalize_message(
         else:
             # Perp / future: emit DerivativeTicker + Funding (from current_funding/funding_8h)
             yield DerivativeTicker(
-                exchange=EXCHANGE,
+                source=EXCHANGE,
                 symbol=symbol_canonical,
                 symbol_raw=sym,
-                exchange_ts=exchange_ts,
+                source_ts=exchange_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 last_price=td.get("last_price"),
                 mark_price=td.get("mark_price"),
                 index_price=td.get("index_price"),
@@ -259,11 +264,12 @@ def normalize_message(
             # canonical: funding_rate = current_funding; funding_8h -> predicted_funding_rate
             if td.get("current_funding") is not None:
                 yield Funding(
-                    exchange=EXCHANGE,
+                    source=EXCHANGE,
                     symbol=symbol_canonical,
                     symbol_raw=sym,
-                    exchange_ts=exchange_ts,
+                    source_ts=exchange_ts,
                     local_ts=local_ts,
+                    asset_class=AssetClass.CRYPTO,
                     funding_rate=float(td["current_funding"]),
                     predicted_funding_rate=td.get("funding_8h"),
                     interval_hours=8,  # Deribit perpetual funding settles every 8 hours

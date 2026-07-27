@@ -87,7 +87,7 @@ def test_oi_aggregator_empty_symbols_list() -> None:
     # Return a dummy dataframe with correct columns but empty symbols
     mock_df = pl.DataFrame({
         "local_ts": [1700000000],
-        "exchange": ["binance"],
+        "source": ["binance"],
         "symbol": ["binance:BTCUSDT"],
         "open_interest": [100.0],
     })
@@ -101,7 +101,7 @@ def test_oi_aggregator_empty_symbols_list() -> None:
 
 def test_oi_aggregator_missing_columns() -> None:
     catalog = MagicMock(spec=Catalog)
-    # Missing local_ts / exchange columns
+    # Missing local_ts / source columns
     mock_df = pl.DataFrame({
         "symbol": ["binance:BTCUSDT"],
         "open_interest": [100.0],
@@ -117,7 +117,7 @@ def test_oi_aggregator_null_timestamps_sorting_crash() -> None:
     # Contains None in local_ts -> sorting raw_df["local_ts"].unique() raises TypeError
     mock_df = pl.DataFrame({
         "local_ts": [1700000000, None],
-        "exchange": ["binance", "okx"],
+        "source": ["binance", "okx"],
         "symbol": ["binance:BTCUSDT", "okx:BTC-USDT"],
         "open_interest": [100.0, 50.0],
     })

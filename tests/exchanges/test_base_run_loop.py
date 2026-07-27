@@ -19,9 +19,9 @@ import pytest
 
 from crocodile.core.connector import Connector
 from crocodile.core.ingest.transport import FakeTransport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 from crocodile.core.sink.memory import MemorySink
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry
 
 # ---------------------------------------------------------------------------
 # Minimal concrete connector for testing — doesn't touch the network

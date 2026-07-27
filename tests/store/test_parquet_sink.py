@@ -7,8 +7,8 @@ import pathlib
 import polars as pl
 import pytest
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
@@ -17,11 +17,12 @@ from crocodile.core.store.parquet_sink import ParquetSink
 
 def _trade(price: float = 1.0, local_ts: int = 1700000000000000000) -> Trade:
     return Trade(
-        exchange="deribit",
+        source="deribit",
         symbol="deribit:BTC-PERPETUAL",
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(price),
         price=price,
         amount=2.0,
@@ -31,11 +32,12 @@ def _trade(price: float = 1.0, local_ts: int = 1700000000000000000) -> Trade:
 
 def _snap(local_ts: int = 1700000000000000000) -> BookSnapshot:
     return BookSnapshot(
-        exchange="deribit",
+        source="deribit",
         symbol="deribit:BTC-PERPETUAL",
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=[(100.0, 5.0), (99.0, 0.0)],  # (99.0, 0.0) is a canonical removal
         asks=[(101.0, 4.0)],
         depth=2,
@@ -366,13 +368,13 @@ async def test_parquet_sink_partial_multi_partition_failure(
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100, flush_interval_seconds=9999)
 
-    # Distinct dates → distinct (exchange, date, bucket) partitions.
+    # Distinct dates → distinct (source, date, bucket) partitions.
     ts_a = 1_700_000_000_000_000_000  # 2023-11-14
     ts_b = 1_700_086_400_000_000_000  # 2023-11-15
     row_a = to_row(_trade(price=1.0, local_ts=ts_a))
     row_b = to_row(_trade(price=2.0, local_ts=ts_b))
-    key_a = (row_a["exchange"], row_a["date"], row_a["bucket"])
-    key_b = (row_b["exchange"], row_b["date"], row_b["bucket"])
+    key_a = (row_a["source"], row_a["date"], row_a["bucket"])
+    key_b = (row_b["source"], row_b["date"], row_b["bucket"])
     assert key_a != key_b
 
     # Insert A then B so groups iteration writes A first (insertion order).
@@ -397,7 +399,7 @@ async def test_parquet_sink_partial_multi_partition_failure(
     buf = sink._buffers["trade"]
     assert len(buf) == 1
     assert buf[0]["price"] == 2.0
-    assert (buf[0]["exchange"], buf[0]["date"], buf[0]["bucket"]) == key_b
+    assert (buf[0]["source"], buf[0]["date"], buf[0]["bucket"]) == key_b
 
     # A is on disk once
     trade_files = [p for p in _find_parquets(tmp_path) if "channel=trade" in str(p)]

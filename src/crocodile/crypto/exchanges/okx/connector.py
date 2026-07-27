@@ -40,13 +40,13 @@ from collections.abc import Iterable
 from typing import Any
 
 from crocodile.core.connector import Connector
-from crocodile.crypto.exchanges.okx.book import OkxOrderBookSync, parse_rest_books_snapshot
 from crocodile.core.ingest.gap_bridge import BookResyncBridge
 from crocodile.core.ingest.transport import Transport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Record
+from crocodile.core.schema.records import BookDelta, BookSnapshot, Record
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import ms_to_ns, now_ns
+from crocodile.crypto.exchanges.okx.book import OkxOrderBookSync, parse_rest_books_snapshot
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 from .normalize import normalize_message
 

@@ -26,9 +26,9 @@ import aiohttp
 
 from crocodile.core.connector import Connector
 from crocodile.core.ingest.transport import Transport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 from crocodile.core.sink.base import Sink
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 from .normalize import normalize_message
 

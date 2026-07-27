@@ -10,7 +10,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import now_ns
 

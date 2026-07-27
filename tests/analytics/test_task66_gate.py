@@ -26,6 +26,8 @@ from pathlib import Path
 
 import polars as pl
 
+from crocodile.core.schema.enums import AssetClass
+
 # ---------------------------------------------------------------------------
 # Constants for fixture lakes
 # ---------------------------------------------------------------------------
@@ -54,17 +56,18 @@ def _examples_dir() -> Path:
 
 
 async def _write_funding_fixture(data_dir: Path) -> None:
-    from crocodile.core.schema.legacy.records import Funding
+    from crocodile.core.schema.records import Funding
     from crocodile.core.store.parquet_sink import ParquetSink
 
     sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
     for i, rate in enumerate([0.0001, -0.0002, 0.0003]):
         rec = Funding(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + i * 1_000_000_000,
+            source_ts=_BASE_NS + i * 1_000_000_000,
             local_ts=_BASE_NS + i * 1_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=rate,
             funding_timestamp=_BASE_NS + i * 1_000_000_000,
             interval_hours=8,
@@ -74,8 +77,8 @@ async def _write_funding_fixture(data_dir: Path) -> None:
 
 
 async def _write_options_fixture(data_dir: Path) -> None:
-    from crocodile.core.schema.legacy.enums import OptType
-    from crocodile.core.schema.legacy.records import OptionsChain
+    from crocodile.core.schema.enums import OptType
+    from crocodile.core.schema.records import OptionsChain
     from crocodile.core.store.parquet_sink import ParquetSink
 
     sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
@@ -86,11 +89,12 @@ async def _write_options_fixture(data_dir: Path) -> None:
     ]:
         sym = f"{_EXCHANGE}:BTC-{int(strike)}-E-C"
         rec = OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=sym,
             symbol_raw=sym.split(":", 1)[-1],
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=100.0,
             strike=strike,
@@ -279,21 +283,22 @@ def test_readme_analytics_has_iv_surface_snippet() -> None:
 
 def test_basis_annualized_expired_branch(tmp_path: Path) -> None:
     """When expiry_ns <= local_ts, annualized_pct falls back to basis_pct."""
-    from crocodile.crypto.analytics.basis import spot_future_basis
-    from crocodile.core.schema.legacy.enums import Side
-    from crocodile.core.schema.legacy.records import Trade
+    from crocodile.core.schema.enums import Side
+    from crocodile.core.schema.records import Trade
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.analytics.basis import spot_future_basis
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
         for symbol, price in [("deribit:F", 101.0), ("deribit:S", 100.0)]:
             rec = Trade(
-                exchange=_EXCHANGE,
+                source=_EXCHANGE,
                 symbol=symbol,
                 symbol_raw=symbol.split(":", 1)[-1],
-                exchange_ts=_BASE_NS,
+                source_ts=_BASE_NS,
                 local_ts=_BASE_NS,
+                asset_class=AssetClass.CRYPTO,
                 id=f"t_{symbol}",
                 price=price,
                 amount=1.0,
@@ -332,20 +337,21 @@ def test_basis_annualized_expired_branch(tmp_path: Path) -> None:
 
 def test_perp_basis_missing_columns(tmp_path: Path) -> None:
     """perp_basis with missing mark_price/index_price columns → empty DF."""
-    from crocodile.crypto.analytics.basis import perp_basis
-    from crocodile.core.schema.legacy.records import Funding
+    from crocodile.core.schema.records import Funding
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.analytics.basis import perp_basis
 
     # Write a funding record (not a derivative_ticker) — perp_basis will find nothing
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
         rec = Funding(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=0.0001,
             funding_timestamp=_BASE_NS,
             interval_hours=8,
@@ -424,19 +430,20 @@ def test_atm_iv_empty_rows() -> None:
 
 def test_snapshot_empty_after_filter(tmp_path: Path) -> None:
     """iv_surface with at_ns before all row timestamps → empty result."""
-    from crocodile.core.schema.legacy.enums import OptType
-    from crocodile.core.schema.legacy.records import OptionsChain
+    from crocodile.core.schema.enums import OptType
+    from crocodile.core.schema.records import OptionsChain
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
         rec = OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=f"{_EXCHANGE}:BTC-100-E-C",
             symbol_raw="BTC-100-E-C",
-            exchange_ts=_BASE_NS + 5_000,
+            source_ts=_BASE_NS + 5_000,
             local_ts=_BASE_NS + 5_000,  # AFTER our at_ns
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=100.0,
             strike=100.0,
@@ -522,20 +529,21 @@ def test_atm_iv_primary_delta_path() -> None:
 
 def test_perp_basis_all_null_prices(tmp_path: Path) -> None:
     """perp_basis with all-null mark_price/index_price → empty DF."""
-    from crocodile.crypto.analytics.basis import perp_basis
-    from crocodile.core.schema.legacy.records import DerivativeTicker
+    from crocodile.core.schema.records import DerivativeTicker
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.analytics.basis import perp_basis
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
         # Write a DerivativeTicker with null mark_price and null index_price
         rec = DerivativeTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_PERP_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             mark_price=None,
             index_price=None,
         )
@@ -644,8 +652,8 @@ def test_term_structure_moneyness_fallback(tmp_path: Path) -> None:
     # This test exercises the path by querying against empty underlying_price,
     # but since the fixture populates underlying_price, we test it differently:
     # by verifying term_structure still works when all rows have the same underlying_price.
-    from crocodile.core.schema.legacy.enums import OptType
-    from crocodile.core.schema.legacy.records import OptionsChain
+    from crocodile.core.schema.enums import OptType
+    from crocodile.core.schema.records import OptionsChain
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
 
@@ -654,11 +662,12 @@ def test_term_structure_moneyness_fallback(tmp_path: Path) -> None:
         for strike, iv in [(95.0, 0.45), (100.0, 0.40), (105.0, 0.42)]:
             sym = f"{_EXCHANGE}:ETH-{int(strike)}-E-C"
             rec = OptionsChain(
-                exchange=_EXCHANGE,
+                source=_EXCHANGE,
                 symbol=sym,
                 symbol_raw=sym.split(":", 1)[-1],
-                exchange_ts=_BASE_NS,
+                source_ts=_BASE_NS,
                 local_ts=_BASE_NS,
+                asset_class=AssetClass.CRYPTO,
                 underlying="ETH",
                 underlying_price=100.0,
                 strike=strike,
@@ -700,21 +709,22 @@ def test_spot_future_basis_duckdb_exception_returns_empty(tmp_path: Path) -> Non
     """
     import duckdb
 
-    from crocodile.crypto.analytics.basis import spot_future_basis
-    from crocodile.core.schema.legacy.enums import Side
-    from crocodile.core.schema.legacy.records import Trade
+    from crocodile.core.schema.enums import Side
+    from crocodile.core.schema.records import Trade
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.analytics.basis import spot_future_basis
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
         for symbol, price in [("deribit:F2", 101.0), ("deribit:S2", 100.0)]:
             rec = Trade(
-                exchange=_EXCHANGE,
+                source=_EXCHANGE,
                 symbol=symbol,
                 symbol_raw=symbol.split(":", 1)[-1],
-                exchange_ts=_BASE_NS,
+                source_ts=_BASE_NS,
                 local_ts=_BASE_NS,
+                asset_class=AssetClass.CRYPTO,
                 id=f"t_{symbol}",
                 price=price,
                 amount=1.0,
@@ -769,21 +779,22 @@ def test_spot_future_basis_unregister_exception_suppressed(tmp_path: Path) -> No
     Same proxy technique: swap ``catalog._conn`` with a proxy whose
     ``unregister`` always raises.
     """
-    from crocodile.crypto.analytics.basis import spot_future_basis
-    from crocodile.core.schema.legacy.enums import Side
-    from crocodile.core.schema.legacy.records import Trade
+    from crocodile.core.schema.enums import Side
+    from crocodile.core.schema.records import Trade
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.analytics.basis import spot_future_basis
 
     async def _write() -> None:
         sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
         for symbol, price in [("deribit:F3", 101.0), ("deribit:S3", 100.0)]:
             rec = Trade(
-                exchange=_EXCHANGE,
+                source=_EXCHANGE,
                 symbol=symbol,
                 symbol_raw=symbol.split(":", 1)[-1],
-                exchange_ts=_BASE_NS,
+                source_ts=_BASE_NS,
                 local_ts=_BASE_NS,
+                asset_class=AssetClass.CRYPTO,
                 id=f"t_{symbol}",
                 price=price,
                 amount=1.0,
@@ -829,11 +840,11 @@ def test_spot_future_basis_asof_join_empty_result(tmp_path: Path) -> None:
     timestamps are later than the future timestamp.  This covers line 138
     (the ``if len(df) == 0: return pl.DataFrame()`` guard after the JOIN).
     """
-    from crocodile.crypto.analytics.basis import spot_future_basis
-    from crocodile.core.schema.legacy.enums import Side
-    from crocodile.core.schema.legacy.records import Trade
+    from crocodile.core.schema.enums import Side
+    from crocodile.core.schema.records import Trade
     from crocodile.core.store.catalog import Catalog
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.analytics.basis import spot_future_basis
 
     # Future trade at T1; spot trade at T2 (AFTER the future) — no prior spot exists.
     async def _write() -> None:
@@ -843,11 +854,12 @@ def test_spot_future_basis_asof_join_empty_result(tmp_path: Path) -> None:
             ("deribit:S4", _BASE_NS + 2_000, 100.0),   # spot   — later (no prior match)
         ]:
             rec = Trade(
-                exchange=_EXCHANGE,
+                source=_EXCHANGE,
                 symbol=symbol,
                 symbol_raw=symbol.split(":", 1)[-1],
-                exchange_ts=ts,
+                source_ts=ts,
                 local_ts=ts,
+                asset_class=AssetClass.CRYPTO,
                 id=f"t_{symbol}",
                 price=price,
                 amount=1.0,
@@ -879,8 +891,8 @@ def test_perp_basis_raw_missing_price_columns(tmp_path: Path) -> None:
     """
     from unittest.mock import patch
 
-    from crocodile.crypto.analytics.basis import perp_basis
     from crocodile.core.store.catalog import Catalog
+    from crocodile.crypto.analytics.basis import perp_basis
 
     catalog = Catalog(tmp_path)
 

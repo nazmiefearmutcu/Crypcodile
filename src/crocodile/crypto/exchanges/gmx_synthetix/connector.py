@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
-import inspect
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
-from web3 import Web3
 from hexbytes import HexBytes
+from web3 import Web3
 
 from crocodile.core.connector import Connector
 from crocodile.core.ingest.transport import Transport
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Funding, Liquidation, Record, Trade
 from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Record, Trade, Funding, Liquidation
 
 log = logging.getLogger(__name__)
 
@@ -374,11 +374,12 @@ class GMXSynthetixConnector(Connector):
             is_long = decoded.args["isLong"]
             side = Side.BUY if is_long else Side.SELL
             yield Trade(
-                exchange="gmx",
+                source="gmx",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts, # Fallback to local_ts as EVM log block timestamp isn't directly inside log dict
+                source_ts=local_ts, # Fallback to local_ts as EVM log block timestamp isn't directly inside log dict
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 price=price,
                 amount=amount,
                 side=side,
@@ -391,11 +392,12 @@ class GMXSynthetixConnector(Connector):
             is_long = decoded.args["isLong"]
             side = Side.SELL if is_long else Side.BUY
             yield Trade(
-                exchange="gmx",
+                source="gmx",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 price=price,
                 amount=amount,
                 side=side,
@@ -408,11 +410,12 @@ class GMXSynthetixConnector(Connector):
             is_long = decoded.args["isLong"]
             side = Side.SELL if is_long else Side.BUY
             yield Liquidation(
-                exchange="gmx",
+                source="gmx",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 price=price,
                 amount=amount,
                 side=side,
@@ -421,11 +424,12 @@ class GMXSynthetixConnector(Connector):
             # entryFundingRate is uint256
             funding_rate = float(decoded.args["entryFundingRate"]) / 1e9 # illustrative scale
             yield Funding(
-                exchange="gmx",
+                source="gmx",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 funding_rate=funding_rate,
             )
 
@@ -453,11 +457,12 @@ class GMXSynthetixConnector(Connector):
             amount = abs(trade_size)
             side = Side.BUY if trade_size > 0 else Side.SELL
             yield Trade(
-                exchange="synthetix",
+                source="synthetix",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 price=price,
                 amount=amount,
                 side=side,
@@ -469,11 +474,12 @@ class GMXSynthetixConnector(Connector):
             amount = abs(size)
             side = Side.SELL if size > 0 else Side.BUY
             yield Liquidation(
-                exchange="synthetix",
+                source="synthetix",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 price=price,
                 amount=amount,
                 side=side,
@@ -481,11 +487,12 @@ class GMXSynthetixConnector(Connector):
         elif event_name_found == "FundingRecomputed":
             funding_rate = float(decoded.args["fundingRate"]) / 1e18
             yield Funding(
-                exchange="synthetix",
+                source="synthetix",
                 symbol=symbol,
                 symbol_raw=raw_symbol,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 funding_rate=funding_rate,
             )
 

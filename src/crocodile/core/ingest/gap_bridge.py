@@ -62,7 +62,7 @@ from crocodile.core.ingest.book_sync import (
     filter_buffered_book_deltas,
     keep_delta_after_snapshot,
 )
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
+from crocodile.core.schema.records import BookDelta, BookSnapshot
 
 __all__ = [
     "BookRecord",

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+
 import polars as pl
 import pytest
 
-from crocodile.crypto.analytics.oi_aggregator import aggregate_open_interest
-from crocodile.core.schema.legacy.records import OpenInterest
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import OpenInterest
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.oi_aggregator import aggregate_open_interest
 
 _BASE_NS = 1_704_067_200_000_000_000
 _T1 = _BASE_NS + 1_000
@@ -18,11 +20,12 @@ _T4 = _BASE_NS + 4_000
 
 def _make_oi(ts: int, exchange: str, symbol: str, oi: float) -> OpenInterest:
     return OpenInterest(
-        exchange=exchange,
+        source=exchange,
         symbol=symbol,
         symbol_raw=symbol.split(":")[-1],
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         open_interest=oi,
     )
 
@@ -130,7 +133,7 @@ def test_oi_aggregator_skips_null_oi_preserves_forward_fill() -> None:
     raw = pl.DataFrame(
         {
             "local_ts": [_T1, _T2, _T3, _T1, _T2, _T3],
-            "exchange": ["binance", "binance", "binance", "okx", "okx", "okx"],
+            "source": ["binance", "binance", "binance", "okx", "okx", "okx"],
             "symbol": [
                 "binance:BTCUSDT",
                 "binance:BTCUSDT",
@@ -180,7 +183,7 @@ def test_oi_aggregator_symbol_filter_literal_not_regex() -> None:
     raw = pl.DataFrame(
         {
             "local_ts": [_T1, _T1, _T1],
-            "exchange": ["binance", "binance", "derive"],
+            "source": ["binance", "binance", "derive"],
             "symbol": [
                 "binance:BTCXUSDT",
                 "binance:BTC-USDT",
@@ -212,7 +215,7 @@ def test_oi_aggregator_empty_symbol_tokens_mean_no_filter() -> None:
     raw = pl.DataFrame(
         {
             "local_ts": [_T1, _T1],
-            "exchange": ["binance", "okx"],
+            "source": ["binance", "okx"],
             "symbol": ["binance:BTCUSDT", "okx:ETH-USDT-SWAP"],
             "open_interest": [100.0, 50.0],
         }

@@ -9,14 +9,14 @@ from typing import Any
 
 from web3 import Web3
 
-from crocodile.crypto.analytics.blackscholes import GreeksSolverAdapter
 from crocodile.core.connector import Connector, backoff_delays
 from crocodile.core.ingest.transport import Transport
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import OptionsChain, Record
+from crocodile.core.schema.enums import AssetClass, OptType
+from crocodile.core.schema.records import OptionsChain, Record
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import now_ns
+from crocodile.crypto.analytics.blackscholes import GreeksSolverAdapter
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 # Nanoseconds per year (for t_years from expiry_ns - local_ts).
 _NS_PER_YEAR: float = 365.25 * 86_400.0 * 1e9
@@ -173,11 +173,12 @@ class DeriveConnector:
             symbol = f"{underlying_symbol}_{symbol_raw}"
 
             record = OptionsChain(
-                exchange="derive",
+                source="derive",
                 symbol=symbol,
                 symbol_raw=symbol_raw,
-                exchange_ts=local_ts,
+                source_ts=local_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 underlying=underlying_symbol,
                 underlying_price=underlying_price,
                 strike=strike,
@@ -219,7 +220,7 @@ class DerivePollConnector(Connector):
 
     Wraps :class:`DeriveConnector`: each poll cycle calls
     :meth:`DeriveConnector.fetch_options_chain` for every configured underlying
-    and writes :class:`~crocodile.core.schema.legacy.records.OptionsChain` records into
+    and writes :class:`~crocodile.core.schema.records.OptionsChain` records into
     the sink.  No websocket transport is used; :meth:`run` owns the loop.
 
     Factory / constructor kwargs

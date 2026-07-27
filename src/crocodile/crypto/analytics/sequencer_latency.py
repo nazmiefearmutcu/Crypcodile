@@ -29,10 +29,10 @@ def calculate_sequencer_latency(catalog: Catalog, exchange: str = "base_onchain"
 
     try:
         catalog.refresh_views()
-        # Query exchange_ts and local_ts from book_ticker table
+        # Query source_ts and local_ts from book_ticker table
         df = catalog.query(
-            f"SELECT local_ts, exchange_ts FROM book_ticker "
-            f"WHERE exchange = '{exchange}' AND exchange_ts IS NOT NULL ORDER BY exchange_ts"
+            f"SELECT local_ts, source_ts FROM book_ticker "
+            f"WHERE source = '{exchange}' AND source_ts IS NOT NULL ORDER BY source_ts"
         )
     except Exception:
         df = pl.DataFrame()
@@ -41,8 +41,8 @@ def calculate_sequencer_latency(catalog: Catalog, exchange: str = "base_onchain"
         try:
             # Fallback to trade table
             df = catalog.query(
-                f"SELECT local_ts, exchange_ts FROM trade "
-                f"WHERE exchange = '{exchange}' AND exchange_ts IS NOT NULL ORDER BY exchange_ts"
+                f"SELECT local_ts, source_ts FROM trade "
+                f"WHERE source = '{exchange}' AND source_ts IS NOT NULL ORDER BY source_ts"
             )
         except Exception:
             df = pl.DataFrame()
@@ -50,11 +50,11 @@ def calculate_sequencer_latency(catalog: Catalog, exchange: str = "base_onchain"
     if df.is_empty() or len(df) < 2:
         return empty_df
 
-    # Calculate production interval (diff of exchange_ts) and ingestion delay (local_ts - exchange_ts)
+    # Production interval (diff of source_ts) and ingestion delay (local_ts - source_ts)
     # Convert nanoseconds to seconds (divide by 1e9)
     df = df.with_columns([
-        (pl.col("exchange_ts").diff() / 1e9).alias("prod_int_sec"),
-        ((pl.col("local_ts") - pl.col("exchange_ts")) / 1e9).alias("ingest_delay_sec")
+        (pl.col("source_ts").diff() / 1e9).alias("prod_int_sec"),
+        ((pl.col("local_ts") - pl.col("source_ts")) / 1e9).alias("ingest_delay_sec")
     ])
 
     # Filter out null (first row prod_int_sec is null)

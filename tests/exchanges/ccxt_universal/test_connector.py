@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
+from crocodile.core.schema.records import BookSnapshot, BookTicker, DerivativeTicker, Trade
 from crocodile.crypto.exchanges.ccxt_universal.connector import CCXTConnector
 from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, DerivativeTicker, Trade
 
 
 class CaptureSink:
@@ -161,7 +161,7 @@ async def test_poll_cycle_emits_all_channels():
     kinds = {type(r) for r in sink.records}
     assert Trade in kinds and BookTicker in kinds and BookSnapshot in kinds
     # every record is tagged with the ccxt id and canonical symbol
-    assert all(r.exchange == "fake" for r in sink.records)
+    assert all(r.source == "fake" for r in sink.records)
     assert all(r.symbol == "fake:BTC/USDT" for r in sink.records)
 
 

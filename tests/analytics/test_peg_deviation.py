@@ -1,10 +1,16 @@
-import pytest
 import pathlib
+
 import polars as pl
-from crocodile.core.schema.legacy.records import BookTicker, BookSnapshot
-from crocodile.core.store.parquet_sink import ParquetSink
+import pytest
+
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookSnapshot, BookTicker
 from crocodile.core.store.catalog import Catalog
-from crocodile.crypto.analytics.peg_deviation import calculate_peg_deviation, check_live_peg_deviation
+from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.peg_deviation import (
+    calculate_peg_deviation,
+    check_live_peg_deviation,
+)
 
 _BASE_TS = 1_700_000_000_000_000_000
 
@@ -14,11 +20,12 @@ async def test_peg_deviation_calculations(tmp_path: pathlib.Path):
     
     # Write a BookTicker showing normal peg ($1.00)
     await sink.put(BookTicker(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="base_onchain:USDC-USDbC",
         symbol_raw="USDC-USDbC",
-        exchange_ts=_BASE_TS,
+        source_ts=_BASE_TS,
         local_ts=_BASE_TS,
+        asset_class=AssetClass.CRYPTO,
         bid_px=0.999,
         bid_sz=1.0,
         ask_px=1.001,
@@ -27,11 +34,12 @@ async def test_peg_deviation_calculations(tmp_path: pathlib.Path):
     
     # Write a BookTicker showing peg deviation ($0.98, which is 2% deviation)
     await sink.put(BookTicker(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="base_onchain:USDC-USDbC",
         symbol_raw="USDC-USDbC",
-        exchange_ts=_BASE_TS + 1_000_000_000,
+        source_ts=_BASE_TS + 1_000_000_000,
         local_ts=_BASE_TS + 1_000_000_000,
+        asset_class=AssetClass.CRYPTO,
         bid_px=0.979,
         bid_sz=1.0,
         ask_px=0.981,
@@ -57,11 +65,12 @@ async def test_peg_deviation_calculations(tmp_path: pathlib.Path):
 def test_live_peg_deviation_helper():
     # Helper should trigger alert when deviation is >= threshold
     alert_ticker = BookTicker(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="base_onchain:USDC-USDbC",
         symbol_raw="USDC-USDbC",
-        exchange_ts=_BASE_TS,
+        source_ts=_BASE_TS,
         local_ts=_BASE_TS,
+        asset_class=AssetClass.CRYPTO,
         bid_px=0.97,
         bid_sz=1.0,
         ask_px=0.97, # mid is 0.97 (3% deviation)
@@ -69,11 +78,12 @@ def test_live_peg_deviation_helper():
     )
     
     normal_ticker = BookTicker(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="base_onchain:USDC-USDbC",
         symbol_raw="USDC-USDbC",
-        exchange_ts=_BASE_TS,
+        source_ts=_BASE_TS,
         local_ts=_BASE_TS,
+        asset_class=AssetClass.CRYPTO,
         bid_px=0.995,
         bid_sz=1.0,
         ask_px=1.005, # mid is 1.0 (0% deviation)

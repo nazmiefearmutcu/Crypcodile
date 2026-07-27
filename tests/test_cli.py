@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pathlib
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade, Funding
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Funding, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -21,11 +21,12 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
     for price in [100.0, 200.0, 300.0]:
         await sink.put(
             Trade(
-                exchange="deribit",
+                source="deribit",
                 symbol="deribit:BTC-PERPETUAL",
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=_BASE_TS,
+                source_ts=_BASE_TS,
                 local_ts=_BASE_TS,
+                asset_class=AssetClass.CRYPTO,
                 id=str(price),
                 price=price,
                 amount=1.0,
@@ -34,11 +35,12 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
         )
     await sink.put(
         BookSnapshot(
-            exchange="deribit",
+            source="deribit",
             symbol="deribit:BTC-PERPETUAL",
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_TS,
+            source_ts=_BASE_TS,
             local_ts=_BASE_TS,
+            asset_class=AssetClass.CRYPTO,
             bids=[(100.0, 5.0)],
             asks=[(101.0, 4.0)],
             depth=1,
@@ -48,11 +50,12 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
     )
     await sink.put(
         Funding(
-            exchange="deribit",
+            source="deribit",
             symbol="deribit:BTC-PERPETUAL",
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_TS,
+            source_ts=_BASE_TS,
             local_ts=_BASE_TS,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=0.0001,
             interval_hours=8,
         )
@@ -241,6 +244,7 @@ def test_cli_catalog_uses_list_channels(
 ) -> None:
     """Default ``catalog`` delegates channel discovery to client.list_channels."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -320,6 +324,7 @@ def test_cli_catalog_summary_uses_client_discovery(
 ) -> None:
     """CLI delegates to client.catalog_summary (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -404,6 +409,7 @@ def test_cli_catalog_stats_uses_client(
 ) -> None:
     """CLI delegates to client.catalog_stats (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -444,6 +450,7 @@ def test_cli_catalog_stats_query_failure_reports_minus_one(
 ) -> None:
     """CLI prints -1 from client.catalog_stats (REST/MCP parity)."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -484,6 +491,7 @@ def test_cli_catalog_stats_escapes_double_quotes(
 ) -> None:
     """CLI prints odd channel keys from client.catalog_stats as-is."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -598,6 +606,7 @@ def test_cli_catalog_dates_strips_channel(
 ) -> None:
     """Whitespace around --channel is stripped before list_dates."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -651,6 +660,7 @@ def test_cli_catalog_dates_uses_client(
 ) -> None:
     """CLI delegates to client.list_dates."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -787,6 +797,7 @@ def test_cli_catalog_symbols_cmd_strips_filters(
 ) -> None:
     """Empty/whitespace --channel/--exchange forwarded to client.list_symbols."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -832,6 +843,7 @@ def test_cli_catalog_symbols_cmd_uses_list_symbols(
 ) -> None:
     """CLI delegates to client.list_symbols (shared REST/MCP/CLI contract)."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -982,8 +994,9 @@ def test_cli_catalog_inventory_strips_filters(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     """Empty/whitespace --channel/--exchange treated as no filter."""
-    import polars as pl
     from unittest.mock import MagicMock
+
+    import polars as pl
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1035,8 +1048,9 @@ def test_cli_catalog_inventory_uses_inventory(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     """CLI forwards channel/exchange filters to client.inventory."""
-    import polars as pl
     from unittest.mock import MagicMock
+
+    import polars as pl
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1163,6 +1177,7 @@ def test_cli_catalog_exchanges_uses_client(
 ) -> None:
     """CLI delegates to client.list_exchanges_on_disk."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1224,8 +1239,8 @@ def test_cli_list_exchanges_matches_factory() -> None:
     """``list-exchanges`` prints sorted factory registry names (no lake)."""
     from typer.testing import CliRunner
 
-    from crocodile.crypto.legacy.cli import app
     from crocodile.crypto.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["list-exchanges"])
@@ -1268,8 +1283,8 @@ def test_cli_list_exchanges_distinct_from_catalog_exchanges(
     """Factory list is independent of on-disk hive partitions."""
     from typer.testing import CliRunner
 
-    from crocodile.crypto.legacy.cli import app
     from crocodile.crypto.exchanges.factory import list_exchanges
+    from crocodile.crypto.legacy.cli import app
 
     # Empty lake: catalog-exchanges → No exchanges.; list-exchanges still full.
     runner = CliRunner()
@@ -1376,11 +1391,12 @@ async def test_cli_search_exchange_filter(tmp_path: pathlib.Path) -> None:
     )
     await sink.put(
         Trade(
-            exchange="binance",
+            source="binance",
             symbol="binance:BTCUSDT",
             symbol_raw="BTCUSDT",
-            exchange_ts=_BASE_TS,
+            source_ts=_BASE_TS,
             local_ts=_BASE_TS,
+            asset_class=AssetClass.CRYPTO,
             id="binance-btc",
             price=50_000.0,
             amount=0.1,
@@ -1424,8 +1440,9 @@ def test_cli_search_strips_exchange_filter(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     """Empty/whitespace --exchange treated as no filter (delegated strip)."""
-    import polars as pl
     from unittest.mock import MagicMock
+
+    import polars as pl
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1597,6 +1614,7 @@ def test_cli_resolve_symbols_strips_channel_and_default_ambiguous(
 ) -> None:
     """Whitespace channel → None; blank ambiguous → error."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1644,6 +1662,7 @@ def test_cli_resolve_symbols_value_error_exits_1(
 ) -> None:
     """Client ValueError (no match / ambiguous / invalid mode) → exit 1."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1681,6 +1700,7 @@ def test_cli_resolve_symbols_uses_client(
 ) -> None:
     """CLI is a thin wrapper over client.resolve_symbols."""
     from unittest.mock import MagicMock
+
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1897,8 +1917,9 @@ def test_cli_data_coverage_strips_empty_channel(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     """Whitespace --channel/--exchange forwarded (strip lives on client)."""
-    import polars as pl
     from unittest.mock import MagicMock
+
+    import polars as pl
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -1958,8 +1979,9 @@ def test_cli_data_coverage_uses_client(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     """CLI delegates to client.data_coverage (shared REST/MCP/CLI contract)."""
-    import polars as pl
     from unittest.mock import MagicMock
+
+    import polars as pl
     from typer.testing import CliRunner
 
     from crocodile.crypto.legacy.cli import app
@@ -2097,6 +2119,7 @@ async def test_cli_replay_exits_zero(tmp_path: pathlib.Path) -> None:
 async def test_cli_shell_exits_zero() -> None:
     """``shell`` runs interactively and exits on 'exit' input."""
     from typer.testing import CliRunner
+
     from crocodile.crypto.legacy.cli import app
 
     runner = CliRunner()
@@ -2108,9 +2131,11 @@ async def test_cli_shell_exits_zero() -> None:
 
 async def test_cli_export_wizard_selects_symbol(tmp_path: pathlib.Path) -> None:
     """Test that select_symbols_interactively runs in export and successfully filters and selects symbols."""
-    from typer.testing import CliRunner
-    from unittest.mock import patch
     import sys
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
     from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
@@ -2146,9 +2171,11 @@ async def test_cli_export_wizard_selects_symbol(tmp_path: pathlib.Path) -> None:
 
 async def test_cli_replay_wizard(tmp_path: pathlib.Path) -> None:
     """Test that select_symbols_interactively runs in replay command."""
-    from typer.testing import CliRunner
-    from unittest.mock import patch
     import sys
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
     from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
@@ -2176,9 +2203,11 @@ async def test_cli_replay_wizard(tmp_path: pathlib.Path) -> None:
 
 async def test_cli_funding_apr_wizard(tmp_path: pathlib.Path) -> None:
     """Test that select_symbols_interactively runs in funding-apr command."""
-    from typer.testing import CliRunner
-    from unittest.mock import patch
     import sys
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
     from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)
@@ -2219,6 +2248,7 @@ def test_resolve_input_symbols_different_channels(tmp_path: pathlib.Path) -> Non
 async def test_cli_indicators_exits_zero(tmp_path: pathlib.Path) -> None:
     """``indicators`` calculates technical analysis indicators, exit code 0."""
     from typer.testing import CliRunner
+
     from crocodile.crypto.legacy.cli import app
 
     await _write_fixtures(tmp_path)

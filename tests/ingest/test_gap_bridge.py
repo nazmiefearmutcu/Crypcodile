@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import pytest
 
-from crocodile.crypto.exchanges.binance.book import OrderBookSync, SyncResult
 from crocodile.core.ingest.book_sync import (
     filter_buffered_book_deltas,
     keep_delta_after_snapshot,
 )
 from crocodile.core.ingest.gap_bridge import BookResyncBridge, TradeSeqGap
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta, BookSnapshot
+from crocodile.crypto.exchanges.binance.book import OrderBookSync, SyncResult
 
 # ---------------------------------------------------------------------------
 # Helpers: fake REST-snapshot fetchers (no network)
@@ -31,11 +32,12 @@ from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
 def _make_snapshot(last_update_id: int) -> BookSnapshot:
     """Build a minimal BookSnapshot with a given sequence_id."""
     return BookSnapshot(
-        exchange="binance-spot",
+        source="binance-spot",
         symbol="binance-spot:BTCUSDT",
         symbol_raw="BTCUSDT",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=0,
+        asset_class=AssetClass.CRYPTO,
         bids=[(50000.0, 1.0)],
         asks=[(50001.0, 1.0)],
         depth=2,
@@ -53,11 +55,12 @@ def _make_delta(
     amount: float = 2.0,
 ) -> BookDelta:
     return BookDelta(
-        exchange="binance-spot",
+        source="binance-spot",
         symbol="binance-spot:BTCUSDT",
         symbol_raw="BTCUSDT",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=u,  # reuse u as local_ts for ordering clarity
+        asset_class=AssetClass.CRYPTO,
         bids=[(price, amount)],
         asks=[],
         seq_id=u,
@@ -269,11 +272,12 @@ class TestBookResyncBridge:
 
         def _make_snapshot_no_seq() -> BookSnapshot:
             return BookSnapshot(
-                exchange="binance-spot",
+                source="binance-spot",
                 symbol="binance-spot:BTCUSDT",
                 symbol_raw="BTCUSDT",
-                exchange_ts=None,
+                source_ts=None,
                 local_ts=0,
+                asset_class=AssetClass.CRYPTO,
                 bids=[(50000.0, 1.0)],
                 asks=[(50001.0, 1.0)],
                 depth=2,

@@ -1,9 +1,9 @@
 import json
 import pathlib
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookTicker, Trade
 from crocodile.crypto.exchanges.binance.normalize import normalize_message
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookTicker, Trade
 
 P = pathlib.Path(__file__).parent / "fixtures"
 
@@ -14,7 +14,7 @@ def test_spot_aggtrade():
     assert isinstance(t, Trade)
     assert t.price == 50000.10 and t.amount == 0.5
     assert t.side == Side.SELL  # m=true => buyer is maker => taker sold
-    assert t.exchange_ts == 1700000000100 * 1_000_000  # uses T, not E
+    assert t.source_ts == 1700000000100 * 1_000_000  # uses T, not E
     assert t.symbol_raw == "BTCUSDT"
 
 

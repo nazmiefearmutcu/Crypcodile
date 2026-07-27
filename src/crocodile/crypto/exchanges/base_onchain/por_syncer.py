@@ -1,7 +1,10 @@
 import logging
 from typing import Any
+
 from web3 import AsyncWeb3
-from crocodile.core.schema.legacy.records import PoRUpdate
+
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import PoRUpdate
 
 log = logging.getLogger(__name__)
 
@@ -90,11 +93,12 @@ class ProofOfReserveSyncer:
         is_backed = backing_ratio >= 1.0
         
         return PoRUpdate(
-            exchange=exchange,
+            source=exchange,
             symbol=f"por:{self.token_address}",
             symbol_raw=self.token_address,
-            exchange_ts=round_data[3] * 1_000_000_000,
+            source_ts=round_data[3] * 1_000_000_000,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             feed_address=self.feed_address,
             token_address=self.token_address,
             reserves=reserves,

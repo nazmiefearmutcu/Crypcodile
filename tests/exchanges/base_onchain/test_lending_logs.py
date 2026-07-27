@@ -1,17 +1,21 @@
 import polars as pl
-from crocodile.core.schema.legacy.records import ReserveDataUpdated, LiquidationCall
-from crocodile.core.store.rows import to_row, from_row
+
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import LiquidationCall, ReserveDataUpdated
 from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.core.store.rows import from_row, to_row
 from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
+
 
 def test_lending_records_row_conversions():
     # 1. Test ReserveDataUpdated
     reserve_update = ReserveDataUpdated(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="lending:AAVE_V3",
         symbol_raw="AAVE_V3",
-        exchange_ts=1700000000000000000,
+        source_ts=1700000000000000000,
         local_ts=1700000000500000000,
+        asset_class=AssetClass.CRYPTO,
         reserve="0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
         liquidity_rate=0.045,
         stable_borrow_rate=0.065,
@@ -33,11 +37,12 @@ def test_lending_records_row_conversions():
 
     # 2. Test LiquidationCall
     liq_call = LiquidationCall(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="lending:SEAMLESS",
         symbol_raw="SEAMLESS",
-        exchange_ts=1700000000000000000,
+        source_ts=1700000000000000000,
         local_ts=1700000000500000000,
+        asset_class=AssetClass.CRYPTO,
         collateral_asset="0x4200000000000000000000000000000000000006",
         debt_asset="0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
         user="0xUserAddressHere",

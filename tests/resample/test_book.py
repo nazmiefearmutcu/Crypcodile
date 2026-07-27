@@ -23,9 +23,10 @@ import pathlib
 
 import pytest
 
-from crocodile.crypto.exchanges.deribit.normalize import normalize_message
 from crocodile.core.resample.book import resample_book_snapshots
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta, BookSnapshot
+from crocodile.crypto.exchanges.deribit.normalize import normalize_message
 
 # Path to the existing Deribit book fixture (snapshot + delta-with-delete)
 BOOK_FIX = (
@@ -52,11 +53,12 @@ def _make_snapshot(
     asks: list[tuple[float, float]] | None = None,
 ) -> BookSnapshot:
     return BookSnapshot(
-        exchange="test",
+        source="test",
         symbol="test:SYM",
         symbol_raw="SYM",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids or [(100.0, 5.0), (99.0, 2.0)],
         asks=asks or [(101.0, 4.0)],
         depth=3,
@@ -72,11 +74,12 @@ def _make_delta(
     asks: list[tuple[float, float]] | None = None,
 ) -> BookDelta:
     return BookDelta(
-        exchange="test",
+        source="test",
         symbol="test:SYM",
         symbol_raw="SYM",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids or [],
         asks=asks or [],
         seq_id=seq_id,
@@ -260,7 +263,7 @@ def test_resample_preserves_exchange_and_symbol() -> None:
 
     assert len(result) >= 1
     snap = result[0]
-    assert snap.exchange == "test"
+    assert snap.source == "test"
     assert snap.symbol == "test:SYM"
     assert snap.symbol_raw == "SYM"
 

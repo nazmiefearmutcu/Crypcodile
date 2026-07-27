@@ -16,17 +16,18 @@ from typing import Any
 
 import pytest
 
+from crocodile.core.ingest.gap_bridge import BookResyncBridge
+from crocodile.core.ingest.transport import FakeTransport
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta, BookSnapshot, Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.crypto.exchanges.binance.book import (
     OrderBookSync,
     SyncResult,
     parse_rest_depth_snapshot,
 )
 from crocodile.crypto.exchanges.binance.connector import BinanceConnector
-from crocodile.core.ingest.gap_bridge import BookResyncBridge
-from crocodile.core.ingest.transport import FakeTransport
 from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Trade
-from crocodile.core.sink.memory import MemorySink
 
 
 def _rest_depth(last_update_id: int) -> dict[str, Any]:
@@ -313,11 +314,12 @@ async def test_complete_resync_note_applied_continuity() -> None:
 
     # Trigger RESYNC and buffer a post-snapshot delta
     gap = BookDelta(
-        exchange="binance-spot",
+        source="binance-spot",
         symbol="binance-spot:BTCUSDT",
         symbol_raw="BTCUSDT",
-        exchange_ts=None,
+        source_ts=None,
         local_ts=0,
+        asset_class=AssetClass.CRYPTO,
         bids=[(50000.0, 1.0)],
         asks=[],
         seq_id=250,

@@ -1,9 +1,13 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock
-from crocodile.crypto.feeds.farcaster import FarcasterSocialClient
-from crocodile.core.schema.legacy.records import FarcasterCorrelation
-from crocodile.core.store.rows import to_row, from_row
+
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import FarcasterCorrelation
 from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.core.store.rows import from_row, to_row
+from crocodile.crypto.feeds.farcaster import FarcasterSocialClient
+
 
 @pytest.mark.asyncio
 async def test_farcaster_social_client_offline():
@@ -28,11 +32,12 @@ async def test_farcaster_social_client_offline():
 
 def test_farcaster_correlation_row_conversions():
     record = FarcasterCorrelation(
-        exchange="farcaster",
+        source="farcaster",
         symbol="farcaster:DEGEN",
         symbol_raw="DEGEN",
-        exchange_ts=1700000000000000000,
+        source_ts=1700000000000000000,
         local_ts=1700000000500000000,
+        asset_class=AssetClass.CRYPTO,
         mentions_24h=1200,
         dev_activity_score=7.8,
         trending_rank=2

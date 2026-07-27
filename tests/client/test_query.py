@@ -6,8 +6,8 @@ import pathlib
 
 import polars as pl
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -20,11 +20,12 @@ def _trade(
     symbol: str = "deribit:BTC-PERPETUAL",
 ) -> Trade:
     return Trade(
-        exchange=exchange,
+        source=exchange,
         symbol=symbol,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(price),
         price=price,
         amount=2.0,
@@ -34,11 +35,12 @@ def _trade(
 
 def _snap(local_ts: int = _BASE_TS) -> BookSnapshot:
     return BookSnapshot(
-        exchange="deribit",
+        source="deribit",
         symbol="deribit:BTC-PERPETUAL",
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=[(100.0, 5.0)],
         asks=[(101.0, 4.0)],
         depth=1,
@@ -95,11 +97,12 @@ async def test_client_scan_multi_symbol_unions_results(tmp_path: pathlib.Path) -
     await sink.put(_trade(1.0, local_ts=_BASE_TS, symbol="deribit:BTC-PERPETUAL"))
     await sink.put(
         Trade(
-            exchange="deribit",
+            source="deribit",
             symbol="deribit:ETH-PERPETUAL",
             symbol_raw="ETH-PERPETUAL",
-            exchange_ts=_BASE_TS + 500_000_000,
+            source_ts=_BASE_TS + 500_000_000,
             local_ts=_BASE_TS + 500_000_000,
+            asset_class=AssetClass.CRYPTO,
             id="eth1",
             price=2000.0,
             amount=1.0,

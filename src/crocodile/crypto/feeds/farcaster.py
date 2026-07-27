@@ -1,8 +1,11 @@
 import logging
 import time
 from typing import Any, Dict, List, Optional
+
 import aiohttp
-from crocodile.core.schema.legacy.records import FarcasterCorrelation
+
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import FarcasterCorrelation
 
 log = logging.getLogger(__name__)
 
@@ -44,11 +47,12 @@ class FarcasterSocialClient:
                         trending_rank = 100 - min(99, mentions)
                         
                         return FarcasterCorrelation(
-                            exchange="farcaster",
+                            source="farcaster",
                             symbol=f"farcaster:{symbol_upper}",
                             symbol_raw=symbol_upper,
-                            exchange_ts=int(time.time() * 1_000_000_000),
+                            source_ts=int(time.time() * 1_000_000_000),
                             local_ts=int(time.time() * 1_000_000_000),
+                            asset_class=AssetClass.CRYPTO,
                             mentions_24h=mentions * 24, # scale mock velocity
                             dev_activity_score=round(dev_score, 2),
                             trending_rank=trending_rank
@@ -85,11 +89,12 @@ class FarcasterSocialClient:
         )
         
         return FarcasterCorrelation(
-            exchange="farcaster",
+            source="farcaster",
             symbol=f"farcaster:{symbol_upper}",
             symbol_raw=symbol_upper,
-            exchange_ts=int(time.time() * 1_000_000_000),
+            source_ts=int(time.time() * 1_000_000_000),
             local_ts=int(time.time() * 1_000_000_000),
+            asset_class=AssetClass.CRYPTO,
             mentions_24h=metrics["mentions"],
             dev_activity_score=metrics["dev_score"],
             trending_rank=metrics["rank"]

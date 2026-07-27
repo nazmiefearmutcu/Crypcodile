@@ -1,18 +1,20 @@
 import asyncio
 import json
-import pytest
-import aiohttp
 from typing import AsyncGenerator
+
+import aiohttp
+import pytest
 from web3 import AsyncHTTPProvider, AsyncWeb3
+
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookSnapshot, BookTicker, Trade
 from crocodile.crypto.exchanges.base_onchain.connector import (
-    BaseOnchainTransport,
-    BaseOnchainConnector,
+    FACTORIES,
     POOL_SPECS,
     TOKENS,
-    FACTORIES
+    BaseOnchainConnector,
+    BaseOnchainTransport,
 )
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
-from crocodile.core.schema.legacy.enums import Side
 
 # =====================================================================
 # Tier 3 E2E Cross-Feature Combination Tests (>=6 tests)

@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import Funding, Liquidation, Trade
 from crocodile.crypto.exchanges.deribit.backfill import (
     DeribitBackfill,
     parse_funding_page,
     parse_trades_page,
 )
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Funding, Liquidation, Trade
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -30,13 +30,13 @@ def test_parse_trades_page_maps_fields():
 
     assert len(trades) == 2
     t0 = trades[0]
-    assert t0.exchange == "deribit"
+    assert t0.source == "deribit"
     assert t0.symbol == "deribit:BTC-PERPETUAL"
     assert t0.symbol_raw == "BTC-PERPETUAL"
     assert t0.price == 50000.5
     assert t0.amount == 2.0
     assert t0.side == Side.BUY
-    assert t0.exchange_ts == 1700000000000 * 1_000_000  # ms → ns
+    assert t0.source_ts == 1700000000000 * 1_000_000  # ms → ns
     assert t0.local_ts == 42
     assert t0.id == "REST-1"
 
@@ -71,14 +71,14 @@ def test_parse_funding_page_maps_interest_8h_as_funding_rate():
     assert len(records) == 2
     f0 = records[0]
     assert isinstance(f0, Funding)
-    assert f0.exchange == "deribit"
+    assert f0.source == "deribit"
     assert f0.symbol == "deribit:BTC-PERPETUAL"
     assert f0.symbol_raw == "BTC-PERPETUAL"
     # canonical: interest_8h -> funding_rate
     assert f0.funding_rate == pytest.approx(0.0001)
     # interest_1h -> predicted_funding_rate
     assert f0.predicted_funding_rate == pytest.approx(0.000012)
-    assert f0.exchange_ts == 1700000000000 * 1_000_000  # ms → ns
+    assert f0.source_ts == 1700000000000 * 1_000_000  # ms → ns
     assert f0.local_ts == 99
 
     f1 = records[1]
@@ -87,15 +87,15 @@ def test_parse_funding_page_maps_interest_8h_as_funding_rate():
 
 
 def test_parse_funding_page_populates_funding_timestamp() -> None:
-    """funding_timestamp must equal exchange_ts (settlement time per Deribit docs)."""
+    """funding_timestamp must equal source_ts (settlement time per Deribit docs)."""
     raw = json.loads((FIXTURES / "rest_funding.json").read_text())
     records = list(parse_funding_page(raw, symbol="BTC-PERPETUAL", local_ts=99))
 
     f0 = records[0]
     # entry['timestamp'] = 1700000000000 ms → funding_timestamp = 1700000000000 * 1_000_000 ns
     assert f0.funding_timestamp == 1700000000000 * 1_000_000
-    # must equal exchange_ts (both derived from the same entry['timestamp'])
-    assert f0.funding_timestamp == f0.exchange_ts
+    # must equal source_ts (both derived from the same entry['timestamp'])
+    assert f0.funding_timestamp == f0.source_ts
 
     f1 = records[1]
     assert f1.funding_timestamp == 1700003600000 * 1_000_000

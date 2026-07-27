@@ -96,12 +96,12 @@ from typing import Literal
 
 import polars as pl
 
-from crocodile.crypto.client.export import ExportFmt
-from crocodile.crypto.client.export import export as _export
 from crocodile.core.replay.merge import replay as _kway_merge
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.rows import from_row
+from crocodile.crypto.client.export import ExportFmt
+from crocodile.crypto.client.export import export as _export
 
 # Minimum search score for resolve_symbols (substring match = 40).
 _RESOLVE_SCORE_THRESHOLD = 40

@@ -1,22 +1,25 @@
 import asyncio
 import json
-import pytest
-import aiohttp
 import os
 import subprocess
 from typing import AsyncGenerator
+
+import aiohttp
+import pytest
 from web3 import AsyncHTTPProvider, AsyncWeb3
+
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookSnapshot, BookTicker, Record, Trade
+from crocodile.core.sink.base import Sink
 from crocodile.crypto.exchanges.base_onchain.connector import (
-    BaseOnchainTransport,
-    BaseOnchainConnector,
+    FACTORIES,
     POOL_SPECS,
     TOKENS,
-    FACTORIES
+    BaseOnchainConnector,
+    BaseOnchainTransport,
 )
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade, Record
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.sink.base import Sink
 from crocodile.crypto.instruments.registry import InstrumentRegistry
+
 
 # A simple recording Sink for testing the pipeline
 class ListSink(Sink):

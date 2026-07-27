@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
+
 import pytest
 
+from crocodile.core.schema.enums import OptType
 from crocodile.crypto.analytics.blackscholes import (
     PureMathGreeksSolverAdapter,
     SciPyGreeksSolverAdapter,
 )
-from crocodile.core.schema.legacy.enums import OptType
 
 
 @pytest.fixture

@@ -1,9 +1,11 @@
 import math
-import pytest
 from typing import Any, cast
 
+import pytest
+
+from crocodile.core.schema.records import BookSnapshot, BookTicker
 from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker
+
 
 def test_extreme_prices() -> None:
     """Verify normalize_onchain_update behavior with extreme prices."""

@@ -27,7 +27,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from crocodile.core.ingest.book_sync import OrderBookSync, SyncResult
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Record
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookDelta, BookSnapshot, Record
 from crocodile.core.util.time import ms_to_ns, now_ns
 from crocodile.crypto.instruments.registry import InstrumentRegistry
 
@@ -75,11 +76,12 @@ def parse_rest_depth_snapshot(
     ts = local_ts if local_ts is not None else now_ns()
 
     return BookSnapshot(
-        exchange=venue,
+        source=venue,
         symbol=canonical,
         symbol_raw=symbol_raw,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         depth=len(bids) + len(asks),
@@ -115,11 +117,12 @@ def normalize_depth(
     asks = _levels(data.get("a", []))
 
     yield BookDelta(
-        exchange=venue,
+        source=venue,
         symbol=canonical,
         symbol_raw=raw_symbol,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         seq_id=u,

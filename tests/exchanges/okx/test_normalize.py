@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crocodile.crypto.exchanges.okx.normalize import normalize_message
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType, Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import OptType, Side
+from crocodile.core.schema.records import (
     BookDelta,
     BookSnapshot,
     DerivativeTicker,
@@ -18,6 +16,8 @@ from crocodile.core.schema.legacy.records import (
     OptionsChain,
     Trade,
 )
+from crocodile.crypto.exchanges.okx.normalize import normalize_message
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -36,10 +36,10 @@ def test_trade_buy_normalization() -> None:
     assert first.price == 50000.10
     assert first.amount == 0.5
     assert first.side == Side.BUY          # "buy" → canonical buy
-    assert first.exchange_ts == 1700000000100 * 1_000_000  # ts ms → ns
+    assert first.source_ts == 1700000000100 * 1_000_000  # ts ms → ns
     assert first.local_ts == 42
     assert first.symbol_raw == "BTC-USDT"
-    assert first.exchange == "okx"
+    assert first.source == "okx"
     assert first.id == "555"
 
 
@@ -69,9 +69,9 @@ def test_books_snapshot() -> None:
     assert (50000.0, 5.0) in snap.bids
     assert (49999.0, 2.0) in snap.bids
     assert (50001.0, 4.0) in snap.asks
-    assert snap.exchange_ts == 1700000000000 * 1_000_000  # ts ms → ns
+    assert snap.source_ts == 1700000000000 * 1_000_000  # ts ms → ns
     assert snap.symbol_raw == "BTC-USDT"
-    assert snap.exchange == "okx"
+    assert snap.source == "okx"
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ def test_open_interest_channel() -> None:
     oi = oi_list[0]
     assert oi.open_interest == 12345.0
     assert oi.open_interest_value == 1234.5   # oiCcy field
-    assert oi.exchange_ts == 1700000000000 * 1_000_000
+    assert oi.source_ts == 1700000000000 * 1_000_000
     assert oi.symbol_raw == "BTC-USDT-SWAP"
 
 
@@ -173,7 +173,7 @@ def test_liq_orders_emits_liquidation() -> None:
     assert liq.side == Side.SELL
     assert liq.amount == 1.5
     assert liq.price == 49000.0            # bkPx (bankruptcy price)
-    assert liq.exchange_ts == 1700000000000 * 1_000_000
+    assert liq.source_ts == 1700000000000 * 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -329,19 +329,19 @@ def test_option_summary_malformed_instid_is_skipped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T2-okx regression: funding-rate exchange_ts != funding_timestamp
+# T2-okx regression: funding-rate source_ts != funding_timestamp
 # ---------------------------------------------------------------------------
 
 
-def test_funding_rate_exchange_ts_is_event_time_not_settlement() -> None:
-    """exchange_ts must be the message/event time (ts), NOT the settlement time (fundingTime).
+def test_funding_rate_source_ts_is_event_time_not_settlement() -> None:
+    """source_ts must be the message/event time (ts), NOT the settlement time (fundingTime).
 
     OKX funding-rate fixture has:
       - ts            = 1700000100000  (event time, ms)
       - fundingTime   = 1700003600000  (settlement time, ms)
 
-    Before the fix both exchange_ts and funding_timestamp were set to fundingTime,
-    making them equal.  After the fix exchange_ts == ts_ns != fundingTime_ns.
+    Before the fix both source_ts and funding_timestamp were set to fundingTime,
+    making them equal.  After the fix source_ts == ts_ns != fundingTime_ns.
     """
     msg = json.loads((FIXTURES / "funding_rate.json").read_text())
     out = list(normalize_message(msg, local_ts=99, venue="okx"))
@@ -350,15 +350,15 @@ def test_funding_rate_exchange_ts_is_event_time_not_settlement() -> None:
     fn = fn_list[0]
     event_ts_ns = 1700000100000 * 1_000_000    # ts field
     settlement_ts_ns = 1700003600000 * 1_000_000  # fundingTime field
-    assert fn.exchange_ts == event_ts_ns, (
-        f"exchange_ts should be event time {event_ts_ns}, got {fn.exchange_ts}"
+    assert fn.source_ts == event_ts_ns, (
+        f"source_ts should be event time {event_ts_ns}, got {fn.source_ts}"
     )
     assert fn.funding_timestamp == settlement_ts_ns, (
         f"funding_timestamp should be settlement time {settlement_ts_ns}, "
         f"got {fn.funding_timestamp}"
     )
-    assert fn.exchange_ts != fn.funding_timestamp, (
-        "exchange_ts must differ from funding_timestamp (event time vs settlement time)"
+    assert fn.source_ts != fn.funding_timestamp, (
+        "source_ts must differ from funding_timestamp (event time vs settlement time)"
     )
 
 

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from unittest.mock import MagicMock
+
 import pytest
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import Funding, Liquidation, Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.crypto.exchanges.gmx_synthetix.connector import GMXSynthetixConnector
 from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade, Funding, Liquidation
-from crocodile.core.sink.memory import MemorySink
+
 
 def test_list_instruments() -> None:
     registry = InstrumentRegistry()
@@ -66,7 +68,7 @@ def test_gmx_increase_position() -> None:
     assert len(records) == 1
     rec = records[0]
     assert isinstance(rec, Trade)
-    assert rec.exchange == "gmx"
+    assert rec.source == "gmx"
     assert rec.price == 50000.0
     assert abs(rec.amount - 0.02) < 1e-9
     assert rec.side == Side.BUY

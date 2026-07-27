@@ -23,16 +23,16 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from crocodile.core.schema.enums import AssetClass, OptType
+from crocodile.core.schema.records import OptionsChain
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.volsurface import (
     iv_surface,
     risk_reversal_butterfly,
     term_structure,
     vol_skew,
 )
-from crocodile.core.schema.legacy.enums import OptType
-from crocodile.core.schema.legacy.records import OptionsChain
-from crocodile.core.store.catalog import Catalog
-from crocodile.core.store.parquet_sink import ParquetSink
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -76,11 +76,12 @@ def _make_chain_row(
     # Derive a unique symbol string per strike/expiry/type
     sym = f"{_SYMBOL_PREFIX}-{int(strike)}-E-{opt_type.value}"
     return OptionsChain(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=sym,
         symbol_raw=sym.split(":", 1)[-1],
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         underlying=_UNDERLYING,
         underlying_price=100.0,
         strike=strike,
@@ -445,11 +446,12 @@ def test_iv_surface_skips_fit_when_underlying_price_missing(tmp_path: Path) -> N
     """
     records: list[object] = [
         OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=f"{_SYMBOL_PREFIX}-90-E-C",
             symbol_raw="BTC-90-E-C",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=None,
             strike=90.0,
@@ -459,11 +461,12 @@ def test_iv_surface_skips_fit_when_underlying_price_missing(tmp_path: Path) -> N
             mark_iv=0.5,
         ),
         OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=f"{_SYMBOL_PREFIX}-100-E-C",
             symbol_raw="BTC-100-E-C",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=None,
             strike=100.0,
@@ -473,11 +476,12 @@ def test_iv_surface_skips_fit_when_underlying_price_missing(tmp_path: Path) -> N
             mark_iv=0.45,
         ),
         OptionsChain(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=f"{_SYMBOL_PREFIX}-110-E-C",
             symbol_raw="BTC-110-E-C",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             underlying=_UNDERLYING,
             underlying_price=None,
             strike=110.0,

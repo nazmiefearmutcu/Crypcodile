@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import OHLCV
 from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.records import OHLCV
 
 EXCHANGE = "coingecko"
 INTERVAL = "24h"
@@ -70,11 +71,12 @@ def coin_to_ohlcv(
     volume = _f(coin.get("total_volume")) or 0.0
     symbol_raw = str(coin_id)
     return OHLCV(
-        exchange=EXCHANGE,
+        source=EXCHANGE,
         symbol=_canonical(registry, symbol_raw),
         symbol_raw=symbol_raw,
-        exchange_ts=None,
+        source_ts=None,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         interval=INTERVAL,
         open=open_,
         high=high if high is not None else max(open_, close),

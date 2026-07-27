@@ -7,14 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import Funding, OpenInterest, Trade
 from crocodile.crypto.exchanges.bybit.backfill import (
     BybitBackfill,
     parse_funding_page,
     parse_open_interest_page,
     parse_trades_page,
 )
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Funding, OpenInterest, Trade
 
 # ---------------------------------------------------------------------------
 # parse_trades_page
@@ -54,8 +54,8 @@ def test_parse_trades_page_basic() -> None:
     assert first.price == 50000.10
     assert first.amount == 0.5
     assert first.side == Side.BUY
-    assert first.exchange_ts == 1700000000100 * 1_000_000  # ms → ns
-    assert first.exchange == "bybit"
+    assert first.source_ts == 1700000000100 * 1_000_000  # ms → ns
+    assert first.source == "bybit"
     assert first.symbol == "bybit:BTCUSDT"
 
     second = records[1]
@@ -91,7 +91,7 @@ def test_parse_funding_page() -> None:
     assert isinstance(first, Funding)
     assert first.funding_rate == 0.0001
     assert first.funding_timestamp == 1700003600000 * 1_000_000
-    assert first.exchange == "bybit"
+    assert first.source == "bybit"
     assert first.symbol == "bybit:BTCUSDT"
     assert first.interval_hours == 8  # Bybit default 8h cadence
 
@@ -119,8 +119,8 @@ def test_parse_open_interest_page() -> None:
     oi = records[0]
     assert isinstance(oi, OpenInterest)
     assert oi.open_interest == 12345.6
-    assert oi.exchange_ts == 1700000000000 * 1_000_000
-    assert oi.exchange == "bybit"
+    assert oi.source_ts == 1700000000000 * 1_000_000
+    assert oi.source == "bybit"
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +353,7 @@ async def test_backfill_open_interest_follows_cursor_pagination() -> None:
 # ---------------------------------------------------------------------------
 # Bybit /recent-trade returns pages in ASCENDING timestamp order (oldest first).
 # When a page contains a mix of in-range and above-end_ns records, the stop
-# signal (exchange_ts > end_ns) fires only after yielding in-range records.
+# signal (source_ts > end_ns) fires only after yielding in-range records.
 # This test validates that assumption: in-range records before the boundary
 # record MUST be yielded even though the same page has an above-bound record.
 
@@ -524,7 +524,7 @@ async def test_backfill_open_interest_filters_by_time_bounds() -> None:
 async def test_backfill_trades_mixed_page_yields_in_range_records() -> None:
     """Ascending-order assumption: in-range records before stop boundary must be yielded.
 
-    The stop logic (exchange_ts > end_ns → break) is safe ONLY because Bybit
+    The stop logic (source_ts > end_ns → break) is safe ONLY because Bybit
     returns trades in ascending timestamp order.  A mixed page (in-range record
     followed by an above-bound record) must yield the in-range record and then
     stop — it must NOT discard it.

@@ -5,19 +5,20 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-import pytest
+
 import polars as pl
+import pytest
 from typer.testing import CliRunner
 
-from crocodile.crypto.analytics.slippage import estimate_slippage
-from crocodile.crypto.analytics.ofi import calculate_ofi, parse_interval_to_ns
-from crocodile.crypto.analytics.whale import track_whale_alerts
-from crocodile.crypto.legacy.cli import app
-from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade, Liquidation
-from crocodile.core.schema.legacy.enums import Side
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Liquidation, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.ofi import calculate_ofi, parse_interval_to_ns
+from crocodile.crypto.analytics.slippage import estimate_slippage
+from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.crypto.legacy.cli import app
 
 _BASE_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
 _SYMBOL = "deribit:BTC-PERPETUAL"
@@ -60,11 +61,12 @@ def slippage_lake(tmp_path: Path) -> Path:
     path = tmp_path / "slippage"
     path.mkdir(exist_ok=True)
     snapshot = BookSnapshot(
-        exchange=_EXCHANGE,
+        source=_EXCHANGE,
         symbol=_SYMBOL,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=_BASE_NS,
+        source_ts=_BASE_NS,
         local_ts=_BASE_NS,
+        asset_class=AssetClass.CRYPTO,
         bids=[(100.0, 2.0), (99.0, 3.0)],
         asks=[(101.0, 1.0), (102.0, 4.0)],
         depth=2,
@@ -165,44 +167,48 @@ def ofi_lake(tmp_path: Path) -> Path:
     snapshots = [
         # Snap 1: Start
         BookSnapshot(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             bids=[(100.0, 2.0)],
             asks=[(101.0, 1.0)],
             depth=1,
         ),
         # Snap 2: Size changed only (10s later)
         BookSnapshot(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + 10_000_000_000,
+            source_ts=_BASE_NS + 10_000_000_000,
             local_ts=_BASE_NS + 10_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             bids=[(100.0, 3.0)],
             asks=[(101.0, 2.0)],
             depth=1,
         ),
         # Snap 3: Prices improved (20s later)
         BookSnapshot(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + 20_000_000_000,
+            source_ts=_BASE_NS + 20_000_000_000,
             local_ts=_BASE_NS + 20_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             bids=[(101.0, 4.0)],
             asks=[(102.0, 1.0)],
             depth=1,
         ),
         # Snap 4: Prices worsened (30s later)
         BookSnapshot(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + 30_000_000_000,
+            source_ts=_BASE_NS + 30_000_000_000,
             local_ts=_BASE_NS + 30_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             bids=[(100.0, 2.0)],
             asks=[(101.0, 3.0)],
             depth=1,
@@ -269,32 +275,35 @@ def whale_lake(tmp_path: Path) -> Path:
     path.mkdir(exist_ok=True)
     records = [
         Trade(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS,
+            source_ts=_BASE_NS,
             local_ts=_BASE_NS,
+            asset_class=AssetClass.CRYPTO,
             id="t1",
             price=100.0,
             amount=2.0,  # val = 200
             side=Side.BUY,
         ),
         Liquidation(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + 5_000_000_000,
+            source_ts=_BASE_NS + 5_000_000_000,
             local_ts=_BASE_NS + 5_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             price=100.0,
             amount=15.0,  # val = 1500
             side=Side.SELL,
         ),
         Trade(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol=_SYMBOL,
             symbol_raw="BTC-PERPETUAL",
-            exchange_ts=_BASE_NS + 10_000_000_000,
+            source_ts=_BASE_NS + 10_000_000_000,
             local_ts=_BASE_NS + 10_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             id="t2",
             price=100.0,
             amount=20.0,  # val = 2000
@@ -353,8 +362,8 @@ def test_client_methods(slippage_lake: Path, ofi_lake: Path, whale_lake: Path) -
 
 def test_cli_commands_non_interactive(slippage_lake: Path, ofi_lake: Path, whale_lake: Path) -> None:
     import os
-    from unittest.mock import patch
     from collections import namedtuple
+    from unittest.mock import patch
 
     os.environ["POLARS_FMT_MAX_COLS"] = "20"
     os.environ["POLARS_TABLE_WIDTH"] = "1000"

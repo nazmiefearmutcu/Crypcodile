@@ -1,7 +1,10 @@
 import logging
 from typing import Any
+
 from web3 import AsyncWeb3
-from crocodile.core.schema.legacy.records import BalanceCorrection
+
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BalanceCorrection
 
 log = logging.getLogger(__name__)
 
@@ -63,11 +66,12 @@ class RebaseValidator:
                 if abs(diff) > threshold:
                     corrections.append(
                         BalanceCorrection(
-                            exchange=exchange,
+                            source=exchange,
                             symbol=f"correction:{self.token_address}",
                             symbol_raw=self.token_address,
-                            exchange_ts=None,
+                            source_ts=None,
                             local_ts=local_ts,
+                            asset_class=AssetClass.CRYPTO,
                             holder_address=holder,
                             token_address=self.token_address,
                             local_balance=local_bal,

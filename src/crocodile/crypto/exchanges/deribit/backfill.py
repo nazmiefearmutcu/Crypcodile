@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Funding, Liquidation, Record, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Funding, Liquidation, Record, Trade
 from crocodile.core.util.time import ms_to_ns
 
 EXCHANGE = "deribit"
@@ -47,11 +47,12 @@ def parse_trades_page(raw: dict[str, Any], local_ts: int) -> list[Record]:
         side = _side(t["direction"])
         exchange_ts = ms_to_ns(t["timestamp"])
         trade = Trade(
-            exchange=EXCHANGE,
+            source=EXCHANGE,
             symbol=f"{EXCHANGE}:{sym}",
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             id=str(t["trade_id"]),
             price=float(t["price"]),
             amount=float(t["amount"]),
@@ -62,11 +63,12 @@ def parse_trades_page(raw: dict[str, Any], local_ts: int) -> list[Record]:
         if t.get("liquidation"):
             out.append(
                 Liquidation(
-                    exchange=EXCHANGE,
+                    source=EXCHANGE,
                     symbol=f"{EXCHANGE}:{sym}",
                     symbol_raw=sym,
-                    exchange_ts=exchange_ts,
+                    source_ts=exchange_ts,
                     local_ts=local_ts,
+                    asset_class=AssetClass.CRYPTO,
                     price=float(t["price"]),
                     amount=float(t["amount"]),
                     side=side,
@@ -90,11 +92,12 @@ def parse_funding_page(
     for entry in entries:
         out.append(
             Funding(
-                exchange=EXCHANGE,
+                source=EXCHANGE,
                 symbol=f"{EXCHANGE}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ms_to_ns(entry["timestamp"]),
+                source_ts=ms_to_ns(entry["timestamp"]),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 funding_rate=float(entry["interest_8h"]),
                 predicted_funding_rate=float(entry["interest_1h"]),
                 interval_hours=8,

@@ -3,9 +3,11 @@ import logging
 import random
 import time
 from typing import Optional
+
 from web3 import Web3
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
+
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 
 log = logging.getLogger(__name__)
 
@@ -61,11 +63,12 @@ class BaseSepoliaFaucetMockStream:
 
                 # Create the Trade record
                 trade = Trade(
-                    exchange="base_sepolia",
+                    source="base_sepolia",
                     symbol="base_sepolia:ETH-FAUCET",
                     symbol_raw="ETH-FAUCET",
-                    exchange_ts=int(time.time() * 1_000_000_000),
+                    source_ts=int(time.time() * 1_000_000_000),
                     local_ts=int(time.time() * 1_000_000_000),
+                    asset_class=AssetClass.CRYPTO,
                     id=f"{tx_hash}-0",
                     price=0.0, # faucet dripped for free
                     amount=amount,

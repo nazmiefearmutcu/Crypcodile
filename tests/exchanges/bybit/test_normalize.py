@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 import pathlib
 
-from crocodile.crypto.exchanges.bybit.normalize import normalize_message
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType, Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import OptType, Side
+from crocodile.core.schema.records import (
     BookDelta,
     BookSnapshot,
     BookTicker,
@@ -18,6 +16,8 @@ from crocodile.core.schema.legacy.records import (
     OptionsChain,
     Trade,
 )
+from crocodile.crypto.exchanges.bybit.normalize import normalize_message
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -36,10 +36,10 @@ def test_trade_buy_normalization() -> None:
     assert first.price == 50000.10
     assert first.amount == 0.5
     assert first.side == Side.BUY          # "Buy" → lowercase buy
-    assert first.exchange_ts == 1700000000100 * 1_000_000  # T field ms→ns
+    assert first.source_ts == 1700000000100 * 1_000_000  # T field ms→ns
     assert first.local_ts == 42
     assert first.symbol_raw == "BTCUSDT"
-    assert first.exchange == "bybit"
+    assert first.source == "bybit"
 
 
 def test_trade_sell_normalization() -> None:
@@ -67,7 +67,7 @@ def test_orderbook_snapshot() -> None:
     assert (49999.0, 1.5) in snap.bids
     assert (49998.0, 2.0) in snap.bids
     assert (50001.0, 0.8) in snap.asks
-    assert snap.exchange_ts == 1700000000000 * 1_000_000  # ts field ms→ns
+    assert snap.source_ts == 1700000000000 * 1_000_000  # ts field ms→ns
     assert snap.symbol_raw == "BTCUSDT"
 
 
@@ -273,20 +273,20 @@ def test_liquidation_golden_fixture() -> None:
     """``liquidation.BTCUSDT`` message → Liquidation record with correct fields.
 
     Bybit V5 liquidation topic: data = {symbol, side, size, price, updatedTime}.
-    side "Buy" (liquidated long) → Side.BUY; updatedTime ms → exchange_ts ns.
+    side "Buy" (liquidated long) → Side.BUY; updatedTime ms → source_ts ns.
     """
     msg = json.loads((FIXTURES / "liquidation.json").read_text())
     out = list(normalize_message(msg, local_ts=55, venue="bybit"))
     liqs = [r for r in out if isinstance(r, Liquidation)]
     assert len(liqs) == 1, f"expected 1 Liquidation, got {len(liqs)}"
     liq = liqs[0]
-    assert liq.exchange == "bybit"
+    assert liq.source == "bybit"
     assert liq.symbol_raw == "BTCUSDT"
     assert liq.symbol == "bybit:BTCUSDT"
     assert liq.side == Side.BUY          # "Buy" → canonical Side.BUY
     assert liq.price == 49500.0
     assert liq.amount == 0.3
-    assert liq.exchange_ts == 1700000001000 * 1_000_000  # updatedTime ms → ns
+    assert liq.source_ts == 1700000001000 * 1_000_000  # updatedTime ms → ns
     assert liq.local_ts == 55
 
 

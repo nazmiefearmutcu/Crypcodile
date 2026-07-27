@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from crocodile.core.schema.records import OHLCV
 from crocodile.crypto.exchanges.coingecko import normalize as norm
 from crocodile.crypto.instruments.registry import Kind
-from crocodile.core.schema.legacy.records import OHLCV
 
 LOCAL_TS = 1_700_000_000_000_000_000
 

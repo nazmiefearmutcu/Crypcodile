@@ -60,9 +60,9 @@ def test_calculate_dynamic_chaos_score() -> None:
             return pl.DataFrame({"bid_px": [0.995], "ask_px": [1.005]})
         if "book_snapshot" in sql_lower:
             return pl.DataFrame({"bids": [[[0.99, 100.0]]], "asks": [[[1.01, 100.0]]]})
-        if "sequencer_delay" in sql_lower or "exchange_ts" in sql_lower:
+        if "sequencer_delay" in sql_lower or "source_ts" in sql_lower:
             return pl.DataFrame(
-                {"local_ts": [1700000000000000000], "exchange_ts": [1699999999000000000]}
+                {"local_ts": [1700000000000000000], "source_ts": [1699999999000000000]}
             )
         return pl.DataFrame()
 

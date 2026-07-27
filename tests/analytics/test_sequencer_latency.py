@@ -8,12 +8,13 @@ import pathlib
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.crypto.analytics.sequencer_latency import calculate_sequencer_latency
-from crocodile.crypto.legacy.cli import app
-from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.core.schema.legacy.records import BookTicker
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookTicker
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.sequencer_latency import calculate_sequencer_latency
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.crypto.legacy.cli import app
 
 _BASE_TS = 1_700_000_000_000_000_000
 _EXCHANGE = "base_onchain"
@@ -24,16 +25,17 @@ async def _write_latency_lake(data_dir: pathlib.Path) -> None:
     sink = ParquetSink(data_dir=data_dir, max_buffer_rows=10, flush_interval_seconds=9999)
 
     # BookTickers with 2-second production intervals and rising ingestion delay:
-    # 1. exchange_ts = BASE, local_ts = BASE + 0.5s
-    # 2. exchange_ts = BASE + 2.0s, local_ts = BASE + 2.7s (interval=2.0, delay=0.7)
-    # 3. exchange_ts = BASE + 4.0s, local_ts = BASE + 4.9s (interval=2.0, delay=0.9)
+    # 1. source_ts = BASE, local_ts = BASE + 0.5s
+    # 2. source_ts = BASE + 2.0s, local_ts = BASE + 2.7s (interval=2.0, delay=0.7)
+    # 3. source_ts = BASE + 4.0s, local_ts = BASE + 4.9s (interval=2.0, delay=0.9)
     await sink.put(
         BookTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol="base_onchain:AERO-USDC",
             symbol_raw="AERO-USDC",
-            exchange_ts=_BASE_TS,
+            source_ts=_BASE_TS,
             local_ts=_BASE_TS + int(0.5 * 1e9),
+            asset_class=AssetClass.CRYPTO,
             bid_px=1.0,
             bid_sz=1.0,
             ask_px=1.01,
@@ -42,11 +44,12 @@ async def _write_latency_lake(data_dir: pathlib.Path) -> None:
     )
     await sink.put(
         BookTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol="base_onchain:AERO-USDC",
             symbol_raw="AERO-USDC",
-            exchange_ts=_BASE_TS + int(2.0 * 1e9),
+            source_ts=_BASE_TS + int(2.0 * 1e9),
             local_ts=_BASE_TS + int(2.7 * 1e9),
+            asset_class=AssetClass.CRYPTO,
             bid_px=1.0,
             bid_sz=1.0,
             ask_px=1.01,
@@ -55,11 +58,12 @@ async def _write_latency_lake(data_dir: pathlib.Path) -> None:
     )
     await sink.put(
         BookTicker(
-            exchange=_EXCHANGE,
+            source=_EXCHANGE,
             symbol="base_onchain:AERO-USDC",
             symbol_raw="AERO-USDC",
-            exchange_ts=_BASE_TS + int(4.0 * 1e9),
+            source_ts=_BASE_TS + int(4.0 * 1e9),
             local_ts=_BASE_TS + int(4.9 * 1e9),
+            asset_class=AssetClass.CRYPTO,
             bid_px=1.0,
             bid_sz=1.0,
             ask_px=1.01,

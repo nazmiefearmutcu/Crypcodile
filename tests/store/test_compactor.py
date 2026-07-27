@@ -5,22 +5,24 @@ from __future__ import annotations
 import asyncio
 import pathlib
 import time
-import pytest
-import polars as pl
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
-from crocodile.core.store.parquet_sink import ParquetSink
+import polars as pl
+import pytest
+
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 from crocodile.core.store.compactor import ParquetCompactor
+from crocodile.core.store.parquet_sink import ParquetSink
 
 
 def _trade(price: float = 1.0, local_ts: int = 1700000000000000000) -> Trade:
     return Trade(
-        exchange="binance",
+        source="binance",
         symbol="binance:BTC-USDT",
         symbol_raw="BTCUSDT",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(price),
         price=price,
         amount=1.5,

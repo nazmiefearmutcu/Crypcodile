@@ -37,7 +37,7 @@ from __future__ import annotations
 import math
 from typing import NamedTuple, Protocol
 
-from crocodile.core.schema.legacy.enums import OptType
+from crocodile.core.schema.enums import OptType
 
 __all__ = [
     "Greeks",

@@ -8,17 +8,19 @@ pytest.importorskip("web3")
 
 from web3 import AsyncHTTPProvider, AsyncWeb3
 
+# These tiers drive the surviving Base L2 connector, which is the crypto one:
+# the equity fork shipped a duplicate of it inside an equities library and the
+# merge deleted that duplicate. Its normalizer therefore emits the canonical
+# record classes, so the isinstance filters below have to name those. Importing
+# the equity classes here made every filter match nothing and every assertion
+# run over an empty list. ``BookTicker`` is imported under its own name and not
+# aliased to ``Quote``: the canonical union has a separate ``Quote`` struct for
+# the consolidated-tape form, and the alias read as that one.
+from crocodile.core.schema.records import BookSnapshot, BookTicker, Trade
 from crocodile.crypto.exchanges.base_onchain.connector import (
     BaseOnchainTransport,
 )
 from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
-# These tiers drive the surviving Base L2 connector, which is the crypto one:
-# the equity fork shipped a duplicate of it inside an equities library and the
-# merge deleted that duplicate. Its normalizer therefore emits the crypto
-# record classes, so the isinstance filters below have to name those. Importing
-# the equity classes here made every filter match nothing and every assertion
-# run over an empty list.
-from crocodile.core.schema.legacy.records import BookSnapshot, Trade, BookTicker as Quote
 
 # =====================================================================
 # Tier 2 E2E Boundary & Corner Case Tests (>=30 tests)
@@ -406,11 +408,11 @@ async def test_t2_timestamp_drift() -> None:
         "swaps": [],
     }
     records = list(normalize_onchain_update(msg, 123456789))
-    tickers = [r for r in records if isinstance(r, Quote)]
+    tickers = [r for r in records if isinstance(r, BookTicker)]
     # Same field, merged schema's name: the equity records called it source_ts,
-    # the surviving crypto records call it exchange_ts. Neither connector treats
+    # the surviving crypto records call it source_ts. Neither connector treats
     # a far-future timestamp specially -- both emit sec * 1e9 unchanged.
-    assert tickers[0].exchange_ts == 9999999999 * 1_000_000_000
+    assert tickers[0].source_ts == 9999999999 * 1_000_000_000
 
 
 # 15. USDC transfer log missing parameters
@@ -534,7 +536,7 @@ async def test_t2_aerodrome_flipped_address_edge() -> None:
         "swaps": [],
     }
     records = list(normalize_onchain_update(msg, 123456789))
-    tickers = [r for r in records if isinstance(r, Quote)]
+    tickers = [r for r in records if isinstance(r, BookTicker)]
     assert len(tickers) > 0
     assert tickers[0].bid_px > 0
 

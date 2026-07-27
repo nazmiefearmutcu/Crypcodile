@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+
 import polars as pl
 import pytest
 
-from crocodile.crypto.analytics.basis import spot_perp_basis
-from crocodile.core.schema.legacy.records import BookSnapshot, DerivativeTicker
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookSnapshot, DerivativeTicker
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.basis import spot_perp_basis
 
 _BASE_NS = 1_704_067_200_000_000_000
 _T1 = _BASE_NS + 1_000
@@ -21,11 +23,12 @@ _PERP_SYMBOL = "gmx:ETH-PERP"
 
 def _make_book_snapshot(ts: int, symbol: str, bid: float, ask: float) -> BookSnapshot:
     return BookSnapshot(
-        exchange="gmx",
+        source="gmx",
         symbol=symbol,
         symbol_raw=symbol.split(":")[-1],
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         bids=[(bid, 1.0)],
         asks=[(ask, 1.0)],
         depth=1,
@@ -33,11 +36,12 @@ def _make_book_snapshot(ts: int, symbol: str, bid: float, ask: float) -> BookSna
 
 def _make_derivative_ticker(ts: int, mark: float, index: float) -> DerivativeTicker:
     return DerivativeTicker(
-        exchange="gmx",
+        source="gmx",
         symbol=_PERP_SYMBOL,
         symbol_raw="ETH-PERP",
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         mark_price=mark,
         index_price=index,
     )

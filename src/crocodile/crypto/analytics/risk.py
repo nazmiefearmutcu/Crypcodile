@@ -158,13 +158,13 @@ def calculate_dynamic_chaos_score(
         if catalog is not None and symbol is not None:
             try:
                 df_delay = catalog.query(
-                    f"SELECT local_ts, exchange_ts FROM book_ticker "
-                    f"WHERE symbol = '{symbol}' AND exchange_ts IS NOT NULL "
+                    f"SELECT local_ts, source_ts FROM book_ticker "
+                    f"WHERE symbol = '{symbol}' AND source_ts IS NOT NULL "
                     f"ORDER BY local_ts DESC LIMIT 1"
                 )
                 if not df_delay.is_empty():
                     sequencer_delay = (
-                        df_delay["local_ts"][0] - df_delay["exchange_ts"][0]
+                        df_delay["local_ts"][0] - df_delay["source_ts"][0]
                     ) / 1e9
             except Exception:
                 pass

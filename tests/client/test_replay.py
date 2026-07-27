@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pathlib
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookDelta, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookDelta, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -24,11 +24,12 @@ def _trade(
     symbol: str = "deribit:BTC-PERPETUAL",
 ) -> Trade:
     return Trade(
-        exchange=exchange,
+        source=exchange,
         symbol=symbol,
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(local_ts),
         price=price,
         amount=1.0,
@@ -38,11 +39,12 @@ def _trade(
 
 def _eth_trade(local_ts: int, price: float = 2000.0) -> Trade:
     return Trade(
-        exchange="deribit",
+        source="deribit",
         symbol="deribit:ETH-PERPETUAL",
         symbol_raw="ETH-PERPETUAL",
-        exchange_ts=local_ts,
+        source_ts=local_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         id=f"eth-{local_ts}",
         price=price,
         amount=0.5,
@@ -225,11 +227,12 @@ async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
         ts = _BASE_TS + i * 2_000_000_000
         await sink.put(
             Trade(
-                exchange="deribit",
+                source="deribit",
                 symbol=symbol,
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=ts,
+                source_ts=ts,
                 local_ts=ts,
+                asset_class=AssetClass.CRYPTO,
                 id=str(ts),
                 price=price,
                 amount=1.0,
@@ -242,11 +245,12 @@ async def test_replay_multi_channel_interleaved(tmp_path: pathlib.Path) -> None:
         ts = _BASE_TS + 1_000_000_000 + i * 2_000_000_000
         await sink.put(
             BookDelta(
-                exchange="deribit",
+                source="deribit",
                 symbol=symbol,
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=ts,
+                source_ts=ts,
                 local_ts=ts,
+                asset_class=AssetClass.CRYPTO,
                 bids=[(100.0 + i, 1.0)],
                 asks=[],
                 seq_id=i + 1,
@@ -298,11 +302,12 @@ async def test_replay_limit_bounds_global_merge_output(tmp_path: pathlib.Path) -
         delta_ts = trade_ts + 1_000_000_000
         await sink.put(
             Trade(
-                exchange="deribit",
+                source="deribit",
                 symbol=symbol,
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=trade_ts,
+                source_ts=trade_ts,
                 local_ts=trade_ts,
+                asset_class=AssetClass.CRYPTO,
                 id=str(trade_ts),
                 price=float(i + 1),
                 amount=1.0,
@@ -311,11 +316,12 @@ async def test_replay_limit_bounds_global_merge_output(tmp_path: pathlib.Path) -
         )
         await sink.put(
             BookDelta(
-                exchange="deribit",
+                source="deribit",
                 symbol=symbol,
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=delta_ts,
+                source_ts=delta_ts,
                 local_ts=delta_ts,
+                asset_class=AssetClass.CRYPTO,
                 bids=[(100.0 + i, 1.0)],
                 asks=[],
                 seq_id=i + 1,

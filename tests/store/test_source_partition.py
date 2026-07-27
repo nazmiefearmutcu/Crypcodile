@@ -14,23 +14,24 @@ import os
 import pathlib
 
 import pytest
-from crocodile.core.store.parquet_sink import ParquetSink
 
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.migrate import migrate_lake
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.store.parquet_sink import ParquetSink
 
 _TS = 1700000000000000000
 
 
 def _trade(price: float, exchange: str = "deribit") -> Trade:
     return Trade(
-        exchange=exchange,
+        source=exchange,
         symbol=f"{exchange}:BTC-PERPETUAL",
         symbol_raw="BTC-PERPETUAL",
-        exchange_ts=_TS,
+        source_ts=_TS,
         local_ts=_TS,
+        asset_class=AssetClass.CRYPTO,
         id=str(price),
         price=price,
         amount=2.0,
@@ -120,7 +121,14 @@ async def test_migration_does_not_change_the_answer(tmp_path: pathlib.Path) -> N
     assert migrate_lake(tmp_path) == 1
     after = Catalog(tmp_path).scan("trade", "deribit:BTC-PERPETUAL", _TS - 1, _TS + 1)
 
-    assert before.drop("source").equals(after.drop("source"))
+    # ``exchange`` is the legacy prefix surfacing as a hive column, and it only
+    # shows up on the "before" side. That is not noise the comparison is hiding:
+    # the canonical file schema carries no ``exchange`` column, so on a
+    # pre-migration lake the hive key is the one thing that still says the row
+    # was written before the merged header — which is what ``from_row`` reads to
+    # recover its asset class. After the rename the directory says ``source=``
+    # and there is nothing left to recognise, which is the point of migrating.
+    assert before.drop("source", "exchange").equals(after.drop("source"))
     assert after["source"].unique().to_list() == ["deribit"]
 
 

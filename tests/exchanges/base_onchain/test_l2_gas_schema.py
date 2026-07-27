@@ -1,17 +1,20 @@
 import polars as pl
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
-from crocodile.core.store.rows import to_row, from_row
+
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.core.store.rows import from_row, to_row
+
 
 def test_l2_gas_schema_fields():
     # Instantiate Trade with gas and smart wallet fields
     trade = Trade(
-        exchange="base_onchain",
+        source="base_onchain",
         symbol="base_onchain:AERO-USDC",
         symbol_raw="AERO-USDC",
-        exchange_ts=1700000000000000000,
+        source_ts=1700000000000000000,
         local_ts=1700000000500000000,
+        asset_class=AssetClass.CRYPTO,
         id="0xabc-0",
         price=1.25,
         amount=100.0,

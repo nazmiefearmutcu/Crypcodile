@@ -8,10 +8,8 @@ missing ``bid``/``ask``, and contract vs spot markets.
 
 from __future__ import annotations
 
-from crocodile.crypto.exchanges.ccxt_universal import normalize as norm
-from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import (
     OHLCV,
     BookSnapshot,
     BookTicker,
@@ -19,6 +17,8 @@ from crocodile.core.schema.legacy.records import (
     Funding,
     Trade,
 )
+from crocodile.crypto.exchanges.ccxt_universal import normalize as norm
+from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
 
 LOCAL_TS = 1_700_000_000_000_000_000
 
@@ -101,7 +101,7 @@ def test_ticker_yields_book_ticker():
     assert bt.ask_px == 64659.41
     assert bt.bid_sz == 0.790109
     assert bt.symbol == "mexc:BTC/USDT"
-    assert bt.exchange_ts == 1784432846272 * 1_000_000
+    assert bt.source_ts == 1784432846272 * 1_000_000
 
 
 def test_ticker_null_timestamp_passes_through():
@@ -109,7 +109,7 @@ def test_ticker_null_timestamp_passes_through():
     ticker = {"symbol": "BTC/USD", "bid": 64614.9, "ask": 64615.0, "timestamp": None}
     recs = list(norm.normalize_ticker(ticker, exchange="kraken", symbol_raw="BTC/USD",
                                       local_ts=LOCAL_TS))
-    assert recs[0].exchange_ts is None
+    assert recs[0].source_ts is None
 
 
 def test_ticker_without_bid_ask_yields_nothing():
@@ -168,7 +168,7 @@ def test_order_book_nonce_becomes_sequence_id():
     }
     snap = norm.normalize_order_book(ob, exchange="mexc", symbol_raw="BTC/USDT", local_ts=LOCAL_TS)
     assert snap.sequence_id == 77134799125
-    assert snap.exchange_ts == 1784432847967 * 1_000_000
+    assert snap.source_ts == 1784432847967 * 1_000_000
 
 
 # --------------------------------------------------------------------------- #
@@ -183,7 +183,7 @@ def test_trade_normalization():
     assert rec.side is Side.BUY
     assert rec.price == 64615.0
     assert rec.id == "103932511"
-    assert rec.exchange_ts == 1784432836043 * 1_000_000
+    assert rec.source_ts == 1784432836043 * 1_000_000
 
 
 def test_trade_missing_price_dropped():

@@ -211,7 +211,10 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # ever pointed at them. The number exists so the debt can only shrink: lower it
 # when you fix something, and never raise it. `core` and `contrib` are held to
 # zero separately below, and that is the line new code is written on.
-_LEGACY_RUFF_BUDGET = 476
+#
+# 476 → 444: Track A rewrote the import block of 44 crypto modules, and ruff's
+# isort rule was already unhappy with 32 of them.
+_LEGACY_RUFF_BUDGET = 444
 
 
 def _ruff(*paths: str) -> list[str]:

@@ -4,12 +4,12 @@ Merges N pre-sorted per-(channel, symbol) iterators of Records into a single
 globally time-ordered stream using heapq.merge.
 
 Sort key (deterministic tie-break):
-    (local_ts, exchange_ts_or_neg_inf, seq_or_0)
+    (local_ts, source_ts_or_neg_inf, seq_or_0)
 
 Where:
     - local_ts         — primary ordering key; monotonically increasing capture clock
-    - exchange_ts_or_neg_inf — NULL exchange_ts is treated as -inf so it sorts
-                               BEFORE any present exchange_ts at the same local_ts
+    - source_ts_or_neg_inf — NULL source_ts is treated as -inf so it sorts
+                             BEFORE any present source_ts at the same local_ts
     - seq_or_0         — seq_id / sequence_id / update_id (whichever is present)
                          falls back to 0 when absent; breaks remaining ties
 
@@ -26,18 +26,18 @@ import heapq
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from crocodile.core.schema.legacy.records import Record
+from crocodile.core.schema.records import Record
 
-# Sentinel for NULL exchange_ts — must be less than any real ns value.
+# Sentinel for NULL source_ts — must be less than any real ns value.
 # Real timestamps start around 1_000_000_000_000_000_000 ns (2001), so -1 is safely less.
 _NEG_INF: int = -1
 
-# The venue's own timestamp, under each record family's name for it: the
-# canonical header and the equity records say ``source_ts``, the legacy crypto
-# records ``exchange_ts``. Ordering is the one thing a replay engine must get
-# right for every record it is handed, so it reads whichever name is there
-# rather than assuming the fork it was written in.
-_SOURCE_TS_FIELDS = ("exchange_ts", "source_ts")
+# The venue's own timestamp, under each record family's name for it. The
+# canonical header and the legacy equity records both say ``source_ts``; only
+# the retired crypto union said ``exchange_ts``, and it is read second so an
+# instance decoded from a stream that predates the migration still orders
+# correctly instead of silently collapsing to -inf.
+_SOURCE_TS_FIELDS = ("source_ts", "exchange_ts")
 
 # Sequence field per channel tag. Both families tag their records identically,
 # so the tag is a safer discriminator here than the Python class.
@@ -47,15 +47,20 @@ _SEQ_FIELD_BY_TAG = {
     "book_ticker": "update_id",
 }
 
-# Where the record came from, under each family's name for it. Same list as the
-# store's partition key derivation, for the same reason.
-_ORIGIN_FIELDS = ("source", "exchange", "provider")
+# Where the record came from, under each family's name for it. Same list, in the
+# same order, as the store's partition key derivation — and the order is the
+# load-bearing part. ``provider`` must be read before ``exchange`` because the
+# equity ``Instrument`` carries both and they mean different things: who served
+# the data versus where the security is listed. Reading ``exchange`` first tied
+# an Alpaca-served record to NASDAQ, which is the same confusion
+# :mod:`crocodile.core.store.rows` documents against the partition path.
+_ORIGIN_FIELDS = ("source", "provider", "exchange")
 
 
 def _sort_key(record: Record) -> tuple[int, int, int, str, str]:
-    """Return the (local_ts, exchange_ts_or_neg_inf, seq_or_0) tuple for ordering.
+    """Return the (local_ts, source_ts_or_neg_inf, seq_or_0) tuple for ordering.
 
-    NULL exchange_ts → -1 (sorts BEFORE any real nanosecond timestamp).
+    NULL source_ts → -1 (sorts BEFORE any real nanosecond timestamp).
     seq is extracted from whichever field is present on the record type:
         BookDelta   → seq_id
         BookSnapshot → sequence_id
@@ -64,11 +69,11 @@ def _sort_key(record: Record) -> tuple[int, int, int, str, str]:
     """
     local_ts: int = record.local_ts
 
-    exchange_ts: int = _NEG_INF
+    source_ts: int = _NEG_INF
     for field in _SOURCE_TS_FIELDS:
         value = getattr(record, field, None)
         if value is not None:
-            exchange_ts = value
+            source_ts = value
             break
 
     seq: int
@@ -93,7 +98,7 @@ def _sort_key(record: Record) -> tuple[int, int, int, str, str]:
             origin = value
             break
 
-    return (local_ts, exchange_ts, seq, origin, record.symbol)
+    return (local_ts, source_ts, seq, origin, record.symbol)
 
 
 class _Keyed:
@@ -129,7 +134,7 @@ def replay(streams: Iterable[Iterator[Record]]) -> Iterator[Record]:
                  An empty iterable (or all-empty streams) produces an empty output.
 
     Yields:
-        Records in non-decreasing ``(local_ts, exchange_ts_or_neg_inf, seq_or_0)`` order.
+        Records in non-decreasing ``(local_ts, source_ts_or_neg_inf, seq_or_0)`` order.
 
     Note:
         Each input stream MUST be pre-sorted by ``local_ts``; heapq.merge does

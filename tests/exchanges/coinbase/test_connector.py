@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pathlib
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookTicker, Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.crypto.exchanges.coinbase.connector import (
     CoinbaseConnector,
     build_channels,
@@ -11,9 +14,6 @@ from crocodile.crypto.exchanges.coinbase.connector import (
 )
 from crocodile.crypto.exchanges.coinbase.normalize import _parse_iso_ns, normalize_message
 from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookTicker, Trade
-from crocodile.core.sink.memory import MemorySink
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -223,9 +223,9 @@ def test_unhandled_message_type_emits_nothing() -> None:
     assert out == []
 
 
-def test_snapshot_no_time_exchange_ts_is_none() -> None:
-    """Coinbase snapshots have no timestamp → exchange_ts=None."""
-    from crocodile.core.schema.legacy.records import BookSnapshot
+def test_snapshot_no_time_source_ts_is_none() -> None:
+    """Coinbase snapshots have no timestamp → source_ts=None."""
+    from crocodile.core.schema.records import BookSnapshot
 
     msg = {
         "type": "snapshot",
@@ -236,7 +236,7 @@ def test_snapshot_no_time_exchange_ts_is_none() -> None:
     out = list(normalize_message(msg, local_ts=1))
     snaps = [r for r in out if isinstance(r, BookSnapshot)]
     assert len(snaps) == 1
-    assert snaps[0].exchange_ts is None
+    assert snaps[0].source_ts is None
 
 
 def test_normalize_with_registry() -> None:

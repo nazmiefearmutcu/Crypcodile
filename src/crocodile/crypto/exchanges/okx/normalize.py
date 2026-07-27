@@ -33,9 +33,8 @@ import time as _time
 from collections.abc import Iterable
 from typing import Any
 
-from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType, Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import AssetClass, OptType, Side
+from crocodile.core.schema.records import (
     BookDelta,
     BookSnapshot,
     DerivativeTicker,
@@ -47,6 +46,7 @@ from crocodile.core.schema.legacy.records import (
     Trade,
 )
 from crocodile.core.util.time import ms_to_ns
+from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
 
 log = logging.getLogger(__name__)
 
@@ -178,11 +178,12 @@ def _normalize_trades(
         sym: str = entry.get("instId", arg.get("instId", ""))
         canonical = _canonical(venue, sym, registry)
         yield Trade(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=ms_to_ns(int(entry["ts"])),
+            source_ts=ms_to_ns(int(entry["ts"])),
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             id=str(entry["tradeId"]),
             price=float(entry["px"]),
             amount=float(entry["sz"]),
@@ -225,11 +226,12 @@ def _normalize_books(
 
         if is_snapshot:
             yield BookSnapshot(
-                exchange=venue,
+                source=venue,
                 symbol=canonical,
                 symbol_raw=sym,
-                exchange_ts=exchange_ts,
+                source_ts=exchange_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 bids=bids,
                 asks=asks,
                 depth=len(bids) + len(asks),
@@ -238,11 +240,12 @@ def _normalize_books(
             )
         else:
             yield BookDelta(
-                exchange=venue,
+                source=venue,
                 symbol=canonical,
                 symbol_raw=sym,
-                exchange_ts=exchange_ts,
+                source_ts=exchange_ts,
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 bids=bids,
                 asks=asks,
                 seq_id=seq_id,
@@ -292,11 +295,12 @@ def _normalize_tickers(
         funding_ts = ms_to_ns(int(nft_raw)) if nft_raw else None
 
         yield DerivativeTicker(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             last_price=last_price,
             mark_price=mark_price,
             index_price=index_price,
@@ -335,11 +339,12 @@ def _normalize_funding_rate(
         # funding_timestamp = settlement time ("fundingTime")
         funding_ts_ns = ms_to_ns(int(entry["fundingTime"]))
         yield Funding(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=float(entry["fundingRate"]),
             funding_timestamp=funding_ts_ns,
             predicted_funding_rate=(
@@ -367,11 +372,12 @@ def _normalize_open_interest(
         sym: str = entry.get("instId", arg.get("instId", ""))
         canonical = _canonical(venue, sym, registry)
         yield OpenInterest(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=ms_to_ns(int(entry["ts"])),
+            source_ts=ms_to_ns(int(entry["ts"])),
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             open_interest=float(entry["oi"]),
             open_interest_value=float(entry["oiCcy"]) if entry.get("oiCcy") else None,
         )
@@ -400,11 +406,12 @@ def _normalize_liq_orders(
         canonical = _canonical(venue, sym, registry)
         for detail in entry.get("details", []):
             yield Liquidation(
-                exchange=venue,
+                source=venue,
                 symbol=canonical,
                 symbol_raw=sym,
-                exchange_ts=ms_to_ns(int(detail["ts"])),
+                source_ts=ms_to_ns(int(detail["ts"])),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 price=float(detail["bkPx"]),
                 amount=float(detail["sz"]),
                 side=_side(detail["side"]),
@@ -480,11 +487,12 @@ def _normalize_option_summary(
         theta_raw = entry.get("theta")
 
         yield OptionsChain(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             underlying=underlying,
             underlying_price=underlying_price,
             strike=strike,

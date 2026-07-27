@@ -3,12 +3,13 @@ import pathlib
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.crypto.analytics.liquidity_depth import calculate_block_liquidity_depth
-from crocodile.crypto.legacy.cli import app
-from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.core.schema.legacy.records import BookSnapshot
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookSnapshot
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.liquidity_depth import calculate_block_liquidity_depth
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.crypto.legacy.cli import app
 
 _BASE_TS = 1_700_000_000_000_000_000
 _SYMBOL = "base_onchain:DEGEN-WETH"
@@ -22,11 +23,12 @@ async def _write_depth_lake(data_dir: pathlib.Path) -> None:
     # mid-price is 100.0 (bids[0] is 100.0, asks[0] is 100.0)
     await sink.put(
         BookSnapshot(
-            exchange="base_onchain",
+            source="base_onchain",
             symbol=_SYMBOL,
             symbol_raw="DEGEN-WETH",
-            exchange_ts=_BASE_TS,
+            source_ts=_BASE_TS,
             local_ts=_BASE_TS,
+            asset_class=AssetClass.CRYPTO,
             bids=[
                 (100.0, 10.0),
                 (99.0, 5.0),
@@ -50,11 +52,12 @@ async def _write_depth_lake(data_dir: pathlib.Path) -> None:
     # Write a BookSnapshot for block 101
     await sink.put(
         BookSnapshot(
-            exchange="base_onchain",
+            source="base_onchain",
             symbol=_SYMBOL,
             symbol_raw="DEGEN-WETH",
-            exchange_ts=_BASE_TS + 1_000_000_000,
+            source_ts=_BASE_TS + 1_000_000_000,
             local_ts=_BASE_TS + 1_000_000_000,
+            asset_class=AssetClass.CRYPTO,
             bids=[(100.0, 20.0), (99.0, 10.0), (98.0, 5.0), (97.0, 4.0), (94.0, 2.0)],
             asks=[(100.0, 16.0), (101.0, 8.0), (102.0, 6.0), (103.0, 4.0), (106.0, 2.0)],
             depth=5,

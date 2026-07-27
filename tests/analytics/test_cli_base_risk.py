@@ -10,11 +10,12 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
-from crocodile.crypto.legacy.cli import app
-from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.core.schema.legacy.records import BookTicker, OpenInterest
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import BookTicker, OpenInterest
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.analytics.peg_deviation import peg_deviation_from_price
+from crocodile.crypto.client.client import CrypcodileClient
+from crocodile.crypto.legacy.cli import app
 
 _BASE_TS = 1_700_000_000_000_000_000
 _RUNNER = CliRunner()
@@ -22,11 +23,12 @@ _RUNNER = CliRunner()
 
 def _make_oi(ts: int, exchange: str, symbol: str, oi: float) -> OpenInterest:
     return OpenInterest(
-        exchange=exchange,
+        source=exchange,
         symbol=symbol,
         symbol_raw=symbol.split(":")[-1],
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         open_interest=oi,
     )
 
@@ -56,11 +58,12 @@ def peg_lake(tmp_path: Path) -> Path:
         sink = ParquetSink(tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
         await sink.put(
             BookTicker(
-                exchange="base_onchain",
+                source="base_onchain",
                 symbol="base_onchain:USDC-USDbC",
                 symbol_raw="USDC-USDbC",
-                exchange_ts=_BASE_TS,
+                source_ts=_BASE_TS,
                 local_ts=_BASE_TS,
+                asset_class=AssetClass.CRYPTO,
                 bid_px=0.999,
                 bid_sz=1.0,
                 ask_px=1.001,
@@ -69,11 +72,12 @@ def peg_lake(tmp_path: Path) -> Path:
         )
         await sink.put(
             BookTicker(
-                exchange="base_onchain",
+                source="base_onchain",
                 symbol="base_onchain:USDC-USDbC",
                 symbol_raw="USDC-USDbC",
-                exchange_ts=_BASE_TS + 1_000_000_000,
+                source_ts=_BASE_TS + 1_000_000_000,
                 local_ts=_BASE_TS + 1_000_000_000,
+                asset_class=AssetClass.CRYPTO,
                 bid_px=0.979,
                 bid_sz=1.0,
                 ask_px=0.981,

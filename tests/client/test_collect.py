@@ -13,12 +13,12 @@ import pathlib
 
 import pytest
 
-from crocodile.crypto.exchanges.deribit.connector import DeribitConnector
 from crocodile.core.ingest.transport import FakeTransport
-from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.schema.records import Trade
 from crocodile.core.sink.base import Sink
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.crypto.exchanges.deribit.connector import DeribitConnector
+from crocodile.crypto.instruments.registry import InstrumentRegistry
 
 # ─── fixture helpers ────────────────────────────────────────────────────────
 
@@ -102,8 +102,8 @@ async def test_collect_two_connectors_write_parquet_files(tmp_path: pathlib.Path
 
 async def test_collect_records_reach_sink(tmp_path: pathlib.Path) -> None:
     """Records emitted by connectors actually land in the sink."""
-    from crocodile.crypto.client.collect import collect
     from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.client.collect import collect
 
     sink = MemorySink()
     # Two connectors, different symbols, each emitting one Trade
@@ -124,8 +124,8 @@ async def test_collect_one_connector_raises_does_not_crash(tmp_path: pathlib.Pat
     collect() must not propagate the exception — each connector is supervised
     in isolation, matching the plan's "isolated" requirement.
     """
-    from crocodile.crypto.client.collect import collect
     from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.client.collect import collect
 
     class _BrokenTransport(FakeTransport):
         async def connect(self) -> None:
@@ -151,8 +151,8 @@ async def test_collect_one_connector_raises_does_not_crash(tmp_path: pathlib.Pat
 
 async def test_collect_empty_connectors_is_noop(tmp_path: pathlib.Path) -> None:
     """collect([]) with an empty list returns immediately without error."""
-    from crocodile.crypto.client.collect import collect
     from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.client.collect import collect
 
     sink = MemorySink()
     await collect([], sink, max_reconnects=0)
@@ -161,9 +161,9 @@ async def test_collect_empty_connectors_is_noop(tmp_path: pathlib.Path) -> None:
 
 async def test_collect_drains_dlq_and_writes_report(tmp_path: pathlib.Path) -> None:
     """On stop, unparseable frames in the DLQ produce data_dir/dlq_report.json."""
-    from crocodile.crypto.client.collect import collect
     from crocodile.core.ingest.deadletter import DEFAULT_DLQ_REPORT_NAME
     from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.client.collect import collect
 
     sink = MemorySink()
     # One good trade frame + one unparseable frame → DLQ item

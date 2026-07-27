@@ -35,6 +35,7 @@ Design notes:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -90,7 +91,8 @@ def _get_empty_df_for_channel(catalog: Catalog, channel: str) -> pl.DataFrame:
 
     try:
         import msgspec
-        from crocodile.core.schema.legacy import records
+
+        from crocodile.core.schema import records
         cls = None
         for name in dir(records):
             item = getattr(records, name)
@@ -199,10 +201,32 @@ def _write_parquet(df: pl.DataFrame, dest: Path) -> None:
 
 
 def _write_csv(df: pl.DataFrame, dest: Path) -> None:
-    """Write a Polars DataFrame as CSV with header."""
+    """Write a Polars DataFrame as CSV with header, nested columns as JSON text.
+
+    Polars refuses to guess a CSV encoding for a list or a struct — it raises
+    ``ComputeError: CSV format does not support nested data``. That used to
+    affect only the book channels, whose ``bids``/``asks`` are lists. Every
+    canonical record now carries ``prov_inputs``, a ``list[str]``, so leaving it
+    alone would have turned CSV into a format this tool cannot export at all.
+
+    JSON text is the encoding, rather than dropping the column: a dropped column
+    is an export that quietly answers a different question than it was asked.
+    A null stays empty so it reads as a missing cell and not as the string
+    ``"null"``.
+    """
     if len(df) == 0:
         dest.write_bytes(b"")
         return
+    nested = [name for name, dtype in df.schema.items() if dtype.is_nested()]
+    if nested:
+        df = df.with_columns(
+            pl.Series(
+                name,
+                [None if v is None else json.dumps(v) for v in df[name].to_list()],
+                dtype=pl.Utf8,
+            )
+            for name in nested
+        )
     df.write_csv(dest)
 
 

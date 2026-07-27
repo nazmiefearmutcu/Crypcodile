@@ -4,8 +4,8 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Record, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, BookTicker, Record, Trade
 
 log = logging.getLogger(__name__)
 
@@ -46,11 +46,12 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
             raise ValueError(f"Invalid swap numeric value: {e}") from e
 
         yield Trade(
-            exchange=exchange,
+            source=exchange,
             symbol=f"{exchange}:{pool_name}",
             symbol_raw=pool_name,
-            exchange_ts=sw["timestamp"] * 1_000_000_000, # convert sec to ns
+            source_ts=sw["timestamp"] * 1_000_000_000, # convert sec to ns
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             id=f"{sw['tx_hash']}-{sw['log_index']}",
             price=price,
             amount=amount,
@@ -289,11 +290,12 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
     ask_px, ask_sz = asks[0]
     
     yield BookTicker(
-        exchange=exchange,
+        source=exchange,
         symbol=f"{exchange}:{pool_name}",
         symbol_raw=pool_name,
-        exchange_ts=msg["timestamp"] * 1_000_000_000,
+        source_ts=msg["timestamp"] * 1_000_000_000,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bid_px=bid_px,
         bid_sz=bid_sz,
         ask_px=ask_px,
@@ -302,11 +304,12 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
     )
     
     yield BookSnapshot(
-        exchange=exchange,
+        source=exchange,
         symbol=f"{exchange}:{pool_name}",
         symbol_raw=pool_name,
-        exchange_ts=msg["timestamp"] * 1_000_000_000,
+        source_ts=msg["timestamp"] * 1_000_000_000,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         bids=bids,
         asks=asks,
         depth=len(bids),

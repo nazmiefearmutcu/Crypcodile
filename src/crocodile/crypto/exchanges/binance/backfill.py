@@ -19,8 +19,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import OHLCV, OpenInterest, Record, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import OHLCV, OpenInterest, Record, Trade
 from crocodile.core.util.time import ms_to_ns
 
 # ---------------------------------------------------------------------------
@@ -46,11 +46,12 @@ def parse_aggtrades_page(
         side = Side.SELL if entry["m"] else Side.BUY
         out.append(
             Trade(
-                exchange=venue,
+                source=venue,
                 symbol=f"{venue}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ms_to_ns(entry["T"]),
+                source_ts=ms_to_ns(entry["T"]),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 id=str(entry["a"]),
                 price=float(entry["p"]),
                 amount=float(entry["q"]),
@@ -89,11 +90,12 @@ def parse_klines_page(
         buy_volume = float(kline[9])
         out.append(
             OHLCV(
-                exchange=venue,
+                source=venue,
                 symbol=f"{venue}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ms_to_ns(int(kline[0])),
+                source_ts=ms_to_ns(int(kline[0])),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 interval=interval,
                 open=float(kline[1]),
                 high=float(kline[2]),
@@ -120,11 +122,12 @@ def parse_open_interest(
     """
     symbol: str = raw["symbol"]
     return OpenInterest(
-        exchange=venue,
+        source=venue,
         symbol=f"{venue}:{symbol}",
         symbol_raw=symbol,
-        exchange_ts=ms_to_ns(int(raw["time"])),
+        source_ts=ms_to_ns(int(raw["time"])),
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         open_interest=float(raw["openInterest"]),
         open_interest_value=None,
     )
@@ -145,11 +148,12 @@ def parse_open_interest_hist(
     for entry in raw:
         out.append(
             OpenInterest(
-                exchange=venue,
+                source=venue,
                 symbol=f"{venue}:{symbol}",
                 symbol_raw=symbol,
-                exchange_ts=ms_to_ns(int(entry["timestamp"])),
+                source_ts=ms_to_ns(int(entry["timestamp"])),
                 local_ts=local_ts,
+                asset_class=AssetClass.CRYPTO,
                 open_interest=float(entry["sumOpenInterest"]),
                 open_interest_value=float(entry["sumOpenInterestValue"]),
             )
@@ -250,7 +254,7 @@ class BinanceBackfill:
             records = parse_aggtrades_page(page, venue=venue, symbol=symbol, local_ts=local_ts)
             stop = False
             for r in records:
-                if r.exchange_ts is not None and r.exchange_ts > end_ns:
+                if r.source_ts is not None and r.source_ts > end_ns:
                     # fromId pagination ignores endTime on the wire, so enforce the
                     # requested end bound client-side: drop this trade and stop.
                     stop = True

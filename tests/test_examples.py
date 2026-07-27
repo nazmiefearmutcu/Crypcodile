@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from crocodile.core.schema.enums import AssetClass
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -145,7 +147,7 @@ def test_analytics_funding_with_data(tmp_path: Path) -> None:
     """analytics_funding.py exits 0 and prints a table when funding data is present."""
     import asyncio
 
-    from crocodile.core.schema.legacy.records import Funding
+    from crocodile.core.schema.records import Funding
     from crocodile.core.store.parquet_sink import ParquetSink
 
     _BASE_NS = 1_704_067_200_000_000_000
@@ -157,11 +159,12 @@ def test_analytics_funding_with_data(tmp_path: Path) -> None:
         sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
         for i, rate in enumerate([0.0001, -0.0002, 0.0003]):
             rec = Funding(
-                exchange="deribit",
+                source="deribit",
                 symbol="deribit:BTC-PERPETUAL",
                 symbol_raw="BTC-PERPETUAL",
-                exchange_ts=_BASE_NS + i * _8H_NS,
+                source_ts=_BASE_NS + i * _8H_NS,
                 local_ts=_BASE_NS + i * _8H_NS,
+                asset_class=AssetClass.CRYPTO,
                 funding_rate=rate,
                 funding_timestamp=_BASE_NS + i * _8H_NS,
                 interval_hours=8,
@@ -212,8 +215,8 @@ def test_analytics_iv_surface_with_data(tmp_path: Path) -> None:
     """analytics_iv_surface.py exits 0 and prints a surface table when options data is present."""
     import asyncio
 
-    from crocodile.core.schema.legacy.enums import OptType
-    from crocodile.core.schema.legacy.records import OptionsChain
+    from crocodile.core.schema.enums import OptType
+    from crocodile.core.schema.records import OptionsChain
     from crocodile.core.store.parquet_sink import ParquetSink
 
     _BASE_NS = 1_704_067_200_000_000_000
@@ -226,11 +229,12 @@ def test_analytics_iv_surface_with_data(tmp_path: Path) -> None:
         sink = ParquetSink(data_dir, max_buffer_rows=10_000, flush_interval_seconds=9999)
         for strike, mark_iv in [(90.0, 0.5), (100.0, 0.4), (110.0, 0.55)]:
             rec = OptionsChain(
-                exchange="deribit",
+                source="deribit",
                 symbol=f"deribit:BTC-{int(strike)}-C",
                 symbol_raw=f"BTC-{int(strike)}-C",
-                exchange_ts=_BASE_NS,
+                source_ts=_BASE_NS,
                 local_ts=_BASE_NS,
+                asset_class=AssetClass.CRYPTO,
                 underlying="BTC",
                 underlying_price=100.0,
                 strike=strike,

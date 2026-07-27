@@ -21,9 +21,8 @@ import time as _time
 from collections.abc import Iterable
 from typing import Any
 
-from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.enums import OptType, Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import AssetClass, OptType, Side
+from crocodile.core.schema.records import (
     BookDelta,
     BookSnapshot,
     BookTicker,
@@ -35,6 +34,7 @@ from crocodile.core.schema.legacy.records import (
     Trade,
 )
 from crocodile.core.util.time import ms_to_ns
+from crocodile.crypto.instruments.registry import InstrumentRegistry, Kind
 
 log = logging.getLogger(__name__)
 
@@ -165,11 +165,12 @@ def _normalize_trade(
     for entry in data:
         trade_ts_ms = int(entry["T"])
         yield Trade(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=ms_to_ns(trade_ts_ms),
+            source_ts=ms_to_ns(trade_ts_ms),
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             id=str(entry["i"]),
             price=float(entry["p"]),
             amount=float(entry["v"]),
@@ -198,11 +199,12 @@ def _normalize_liquidation(
     canonical = _canonical(venue, sym, registry)
     updated_time_ms: int = int(data.get("updatedTime", 0))
     yield Liquidation(
-        exchange=venue,
+        source=venue,
         symbol=canonical,
         symbol_raw=sym,
-        exchange_ts=ms_to_ns(updated_time_ms),
+        source_ts=ms_to_ns(updated_time_ms),
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         price=float(data["price"]),
         amount=float(data["size"]),
         side=_side(data.get("side", "")),
@@ -228,11 +230,12 @@ def _normalize_orderbook(
 
     if msg_type == "snapshot":
         yield BookSnapshot(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bids=bids,
             asks=asks,
             depth=len(bids) + len(asks),
@@ -242,11 +245,12 @@ def _normalize_orderbook(
     else:
         # delta — prev_seq_id not present in Bybit V5 book delta
         yield BookDelta(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bids=bids,
             asks=asks,
             seq_id=seq_id,
@@ -307,11 +311,12 @@ def _normalize_linear_ticker(
     funding_ts = ms_to_ns(int(next_funding_raw)) if next_funding_raw else None
 
     yield DerivativeTicker(
-        exchange=venue,
+        source=venue,
         symbol=canonical,
         symbol_raw=sym,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         last_price=last_price,
         mark_price=mark_price,
         index_price=index_price,
@@ -322,11 +327,12 @@ def _normalize_linear_ticker(
 
     if funding_rate is not None:
         yield Funding(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=funding_rate,
             funding_timestamp=funding_ts,
             interval_hours=8,  # Bybit default 8h cadence
@@ -337,11 +343,12 @@ def _normalize_linear_ticker(
     ask_px_raw = data.get("ask1Price")
     if bid_px_raw and ask_px_raw:
         yield BookTicker(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bid_px=float(bid_px_raw),
             bid_sz=float(data.get("bid1Size") or 0),
             ask_px=float(ask_px_raw),
@@ -402,11 +409,12 @@ def _normalize_option_ticker(
     mark_iv = float(mark_iv_raw) if mark_iv_raw else None
 
     yield OptionsChain(
-        exchange=venue,
+        source=venue,
         symbol=canonical,
         symbol_raw=sym,
-        exchange_ts=exchange_ts,
+        source_ts=exchange_ts,
         local_ts=local_ts,
+        asset_class=AssetClass.CRYPTO,
         underlying=sym.split("-")[0] if "-" in sym else sym,
         underlying_price=underlying_price,
         strike=strike,

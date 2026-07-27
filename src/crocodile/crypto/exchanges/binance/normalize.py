@@ -4,10 +4,8 @@ import time as _time
 from collections.abc import Iterable
 from typing import Any
 
-from crocodile.crypto.exchanges.binance.book import normalize_depth
-from crocodile.crypto.instruments.registry import InstrumentRegistry
-from crocodile.core.schema.legacy.enums import OptType, Side
-from crocodile.core.schema.legacy.records import (
+from crocodile.core.schema.enums import AssetClass, OptType, Side
+from crocodile.core.schema.records import (
     BookTicker,
     DerivativeTicker,
     Funding,
@@ -17,6 +15,8 @@ from crocodile.core.schema.legacy.records import (
     Trade,
 )
 from crocodile.core.util.time import ms_to_ns
+from crocodile.crypto.exchanges.binance.book import normalize_depth
+from crocodile.crypto.instruments.registry import InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -136,11 +136,12 @@ def _normalize_eapi_option_markprice(
 
         # IV fields: Binance EAPI sends percentage (e.g. 65.0 = 65%); convert to decimal fraction
         yield OptionsChain(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=sym,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             underlying=underlying,
             underlying_price=None,  # not in @optionMarkPrice event
             strike=strike,
@@ -187,11 +188,12 @@ def normalize_message(
         inst = registry.get_raw(venue, raw_symbol) if registry is not None else None
         canonical = inst.canonical if inst is not None else f"{venue}:{raw_symbol}"
         yield Trade(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=raw_symbol,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             id=str(data["a"]),
             price=float(data["p"]),
             amount=float(data["q"]),
@@ -203,11 +205,12 @@ def normalize_message(
         inst = registry.get_raw(venue, raw_symbol) if registry is not None else None
         canonical = inst.canonical if inst is not None else f"{venue}:{raw_symbol}"
         yield BookTicker(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=raw_symbol,
-            exchange_ts=None,
+            source_ts=None,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             bid_px=float(data["b"]),
             bid_sz=float(data["B"]),
             ask_px=float(data["a"]),
@@ -222,22 +225,24 @@ def normalize_message(
         exchange_ts = ms_to_ns(data["E"])
         funding_ts_raw = data.get("T")
         yield DerivativeTicker(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=raw_symbol,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             mark_price=float(data["p"]),
             index_price=float(data["i"]),
             funding_rate=float(data["r"]),
             funding_timestamp=ms_to_ns(funding_ts_raw) if funding_ts_raw is not None else None,
         )
         yield Funding(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=raw_symbol,
-            exchange_ts=exchange_ts,
+            source_ts=exchange_ts,
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             funding_rate=float(data["r"]),
             funding_timestamp=ms_to_ns(funding_ts_raw) if funding_ts_raw is not None else None,
             interval_hours=4,  # Binance USDⓂ perpetuals settle every 4h (appendix §3.2)
@@ -251,11 +256,12 @@ def normalize_message(
         raw_side = order["S"]
         side = Side.BUY if raw_side == "BUY" else Side.SELL if raw_side == "SELL" else Side.UNKNOWN
         yield Liquidation(
-            exchange=venue,
+            source=venue,
             symbol=canonical,
             symbol_raw=raw_symbol,
-            exchange_ts=ms_to_ns(order["T"]),
+            source_ts=ms_to_ns(order["T"]),
             local_ts=local_ts,
+            asset_class=AssetClass.CRYPTO,
             price=float(order["ap"]),  # average execution price
             amount=float(order["q"]),
             side=side,

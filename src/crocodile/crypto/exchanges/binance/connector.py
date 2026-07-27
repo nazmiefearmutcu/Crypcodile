@@ -30,17 +30,17 @@ from collections.abc import Iterable
 from typing import Any, Literal
 
 from crocodile.core.connector import Connector
+from crocodile.core.ingest.gap_bridge import BookResyncBridge
+from crocodile.core.ingest.transport import Transport
+from crocodile.core.schema.records import BookDelta, BookSnapshot, Record
+from crocodile.core.sink.base import Sink
+from crocodile.core.util.time import now_ns
 from crocodile.crypto.exchanges.binance.book import (
     OrderBookSync,
     normalize_depth,
     parse_rest_depth_snapshot,
 )
-from crocodile.core.ingest.gap_bridge import BookResyncBridge
-from crocodile.core.ingest.transport import Transport
 from crocodile.crypto.instruments.registry import Instrument, InstrumentRegistry, Kind
-from crocodile.core.schema.legacy.records import BookDelta, BookSnapshot, Record
-from crocodile.core.sink.base import Sink
-from crocodile.core.util.time import now_ns
 
 from .normalize import normalize_message
 

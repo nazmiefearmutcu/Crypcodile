@@ -1,19 +1,21 @@
 import asyncio
 import json
-import pytest
-import aiohttp
 import math
 from typing import AsyncGenerator
+
+import aiohttp
+import pytest
 from web3 import AsyncHTTPProvider, AsyncWeb3
+
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import BookSnapshot, BookTicker, Trade
 from crocodile.crypto.exchanges.base_onchain.connector import (
-    BaseOnchainTransport,
-    BaseOnchainConnector,
+    FACTORIES,
     POOL_SPECS,
     TOKENS,
-    FACTORIES
+    BaseOnchainConnector,
+    BaseOnchainTransport,
 )
-from crocodile.core.schema.legacy.records import BookSnapshot, BookTicker, Trade
-from crocodile.core.schema.legacy.enums import Side
 from crocodile.crypto.exchanges.base_onchain.normalize import normalize_onchain_update
 
 # =====================================================================
@@ -360,7 +362,7 @@ async def test_t2_timestamp_drift() -> None:
     }
     records = list(normalize_onchain_update(msg, 123456789))
     tickers = [r for r in records if isinstance(r, BookTicker)]
-    assert tickers[0].exchange_ts == 9999999999 * 1_000_000_000
+    assert tickers[0].source_ts == 9999999999 * 1_000_000_000
 
 # 15. USDC transfer log missing parameters
 @pytest.mark.asyncio

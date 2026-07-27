@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import OHLCV, OpenInterest, Trade
 from crocodile.crypto.exchanges.binance.backfill import (
     BinanceBackfill,
     parse_aggtrades_page,
@@ -21,8 +23,6 @@ from crocodile.crypto.exchanges.binance.backfill import (
     parse_open_interest,
     parse_open_interest_hist,
 )
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import OHLCV, OpenInterest, Trade
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -40,14 +40,14 @@ def test_parse_aggtrades_page_maps_fields() -> None:
     assert len(trades) == 2
 
     t0 = trades[0]
-    assert t0.exchange == "binance-spot"
+    assert t0.source == "binance-spot"
     assert t0.symbol == "binance-spot:BTCUSDT"
     assert t0.symbol_raw == "BTCUSDT"
     assert t0.price == 50000.10
     assert t0.amount == 0.5
     # m=true -> buyer is maker -> taker sold -> SELL
     assert t0.side == Side.SELL
-    assert t0.exchange_ts == 1700000000100 * 1_000_000  # T ms -> ns
+    assert t0.source_ts == 1700000000100 * 1_000_000  # T ms -> ns
     assert t0.local_ts == 42
     assert t0.id == "1001"
 
@@ -81,7 +81,7 @@ def test_parse_klines_page_maps_fields() -> None:
     assert len(bars) == 2
 
     b0 = bars[0]
-    assert b0.exchange == "binance-spot"
+    assert b0.source == "binance-spot"
     assert b0.symbol == "binance-spot:BTCUSDT"
     assert b0.symbol_raw == "BTCUSDT"
     assert b0.interval == "1m"
@@ -96,8 +96,8 @@ def test_parse_klines_page_maps_fields() -> None:
     assert b0.sell_volume == pytest.approx(10.5 - 6.3)
     # num_trades from count field (index 8)
     assert b0.num_trades == 150
-    # exchange_ts from openTime (ms -> ns)
-    assert b0.exchange_ts == 1700000000000 * 1_000_000
+    # source_ts from openTime (ms -> ns)
+    assert b0.source_ts == 1700000000000 * 1_000_000
     assert b0.local_ts == 99
 
     b1 = bars[1]
@@ -115,12 +115,12 @@ def test_parse_open_interest_snapshot() -> None:
     oi = parse_open_interest(raw, venue="binance-usdm", local_ts=7)
 
     assert isinstance(oi, OpenInterest)
-    assert oi.exchange == "binance-usdm"
+    assert oi.source == "binance-usdm"
     assert oi.symbol == "binance-usdm:BTCUSDT"
     assert oi.symbol_raw == "BTCUSDT"
     assert oi.open_interest == pytest.approx(12345.678)
-    # time field (ms) -> exchange_ts (ns)
-    assert oi.exchange_ts == 1700000000000 * 1_000_000
+    # time field (ms) -> source_ts (ns)
+    assert oi.source_ts == 1700000000000 * 1_000_000
     assert oi.local_ts == 7
 
 
@@ -141,13 +141,13 @@ def test_parse_open_interest_hist() -> None:
     oi0 = ois[0]
     assert oi0.open_interest == pytest.approx(12000.0)
     assert oi0.open_interest_value == pytest.approx(600000000.0)
-    assert oi0.exchange_ts == 1700000000000 * 1_000_000
+    assert oi0.source_ts == 1700000000000 * 1_000_000
     assert oi0.local_ts == 5
 
     oi1 = ois[1]
     assert oi1.open_interest == pytest.approx(12500.0)
     assert oi1.open_interest_value == pytest.approx(625000000.0)
-    assert oi1.exchange_ts == 1700003600000 * 1_000_000
+    assert oi1.source_ts == 1700003600000 * 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +293,7 @@ async def test_backfill_klines_yields_ohlcv() -> None:
 
 @pytest.mark.asyncio
 async def test_backfill_aggtrades_respects_end_ns() -> None:
-    """backfill_aggtrades must not yield trades with exchange_ts > end_ns.
+    """backfill_aggtrades must not yield trades with source_ts > end_ns.
 
     Regression for the fromId pagination end-bound gap: once pagination switches
     to fromId mode, Binance ignores startTime/endTime on the wire. Without a
@@ -358,7 +358,7 @@ async def test_backfill_aggtrades_respects_end_ns() -> None:
     # the paginator may or may not fetch page2 depending on when the stop fires —
     # what matters is no trade past end_ns is yielded.
     for t in trades:
-        assert t.exchange_ts <= end_ns, f"Trade {t.id} at {t.exchange_ts} exceeds end_ns {end_ns}"
+        assert t.source_ts <= end_ns, f"Trade {t.id} at {t.source_ts} exceeds end_ns {end_ns}"
 
 
 @pytest.mark.asyncio
@@ -411,8 +411,8 @@ async def test_backfill_open_interest_snapshot_none_callback() -> None:
 @pytest.mark.asyncio
 async def test_backfill_open_interest_snapshot_with_callback() -> None:
     """BinanceBackfill.backfill_open_interest returns an OpenInterest record."""
+    from crocodile.core.schema.records import OpenInterest
     from crocodile.crypto.exchanges.binance.backfill import BinanceBackfill
-    from crocodile.core.schema.legacy.records import OpenInterest
 
     async def fake_fetch(symbol: str) -> dict[str, Any]:
         return {"symbol": symbol, "openInterest": "999.0", "time": "1700000000000"}

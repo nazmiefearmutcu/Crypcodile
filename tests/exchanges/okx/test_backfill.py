@@ -7,14 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from crocodile.core.schema.enums import Side
+from crocodile.core.schema.records import Funding, OpenInterest, Trade
 from crocodile.crypto.exchanges.okx.backfill import (
     OKXBackfill,
     parse_funding_page,
     parse_open_interest_page,
     parse_trades_page,
 )
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Funding, OpenInterest, Trade
 
 # ---------------------------------------------------------------------------
 # parse_trades_page
@@ -52,8 +52,8 @@ def test_parse_trades_page_basic() -> None:
     assert first.price == 50000.10
     assert first.amount == 0.5
     assert first.side == Side.BUY
-    assert first.exchange_ts == 1700000000100 * 1_000_000  # ms → ns
-    assert first.exchange == "okx"
+    assert first.source_ts == 1700000000100 * 1_000_000  # ms → ns
+    assert first.source == "okx"
     assert first.symbol == "okx:BTC-USDT"
     assert first.id == "abc-001"
 
@@ -94,7 +94,7 @@ def test_parse_funding_page() -> None:
     assert isinstance(first, Funding)
     assert first.funding_rate == 0.0001
     assert first.funding_timestamp == 1700003600000 * 1_000_000
-    assert first.exchange == "okx"
+    assert first.source == "okx"
     assert first.symbol == "okx:BTC-USDT-SWAP"
     assert first.interval_hours == 8  # OKX default 8h cadence
 
@@ -125,8 +125,8 @@ def test_parse_open_interest_page() -> None:
     assert isinstance(oi, OpenInterest)
     assert oi.open_interest == 12345.0
     assert oi.open_interest_value == 1234.5
-    assert oi.exchange_ts == 1700000000000 * 1_000_000
-    assert oi.exchange == "okx"
+    assert oi.source_ts == 1700000000000 * 1_000_000
+    assert oi.source == "okx"
 
 
 # ---------------------------------------------------------------------------
