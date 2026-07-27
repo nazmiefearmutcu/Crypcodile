@@ -412,3 +412,143 @@ def test_gate3_no_source_file_hand_writes_a_confidence():
         f"hand-written prov_confidence literals: {offenders}. "
         f"Build the tail with provenance_fields(basis, inputs) instead."
     )
+
+
+# ---------------------------------------------------------------------------
+# Gate 3b — a module that derives records must say so on every record it builds.
+# ---------------------------------------------------------------------------
+# Both scanners above look for an explicit ``prov_basis=`` / ``prov_confidence=``
+# keyword. Omission is invisible to them, and omission is not a neutral state:
+# ``_Header`` defaults to ``prov=NATIVE, prov_basis="native",
+# prov_confidence=1.0``, and ``native`` means *the venue reported this value
+# directly*. A derived record that simply says nothing therefore ships a false
+# claim rather than a missing one — and a silent one, because ``describe()`` is
+# what the REST and MCP surfaces are required to emit as a warning for every
+# record whose ``prov`` is not NATIVE. ``core.resample.book`` did exactly this:
+# it built a reconstructed ``BookSnapshot`` with no ``prov*`` argument at all and
+# passed every gate in this file.
+
+DERIVES_RECORDS: dict[str, str] = {
+    "core/resample/book.py": (
+        "Reconstructs a BookSnapshot from an OrderBook replayed over other records; "
+        "nothing it emits was reported by a venue."
+    ),
+    "equity/resample/book.py": (
+        "Same resampler for equity input. Its emitted snapshot is a legacy equity "
+        "struct with no provenance tail at all, so this gate reaches only the "
+        "canonical records `_to_core_record` builds to hand the shared OrderBook — "
+        "re-typed venue snapshots, never yielded and never persisted, which is why "
+        "they say NATIVE and say it out loud."
+    ),
+}
+"""Modules that build records out of other records, and why each one counts as derived.
+
+The justification is mandatory for the same reason it is on
+:data:`crocodile.core.capability.IRREDUCIBLE`: an entry here changes what a gate
+demands, so an entry with nothing to say is an entry nobody argued for. A path that
+no longer exists, or that no longer builds a canonical record, fails its own gate
+rather than sitting here as decoration.
+
+The limit is worth stating: this list is a declaration, and a synthesiser written
+somewhere no rule below looks would go undeclared. The discovery rule covers the
+``resample`` packages, which is where every derivation in the tree lives today.
+"""
+
+
+def _canonical_record_names() -> frozenset[str]:
+    """The class names ``crocodile.core.schema.records`` declares."""
+    return frozenset(cls.__name__ for cls in _declared_record_types())
+
+
+def _canonical_record_calls(tree: ast.AST, names: frozenset[str]) -> list[ast.Call]:
+    """Every call in ``tree`` that constructs a canonical record.
+
+    Import aliases are resolved rather than ignored: ``equity.resample.book`` imports
+    ``BookSnapshot as CoreBookSnapshot``, and a scanner matching bare class names would
+    have read that module as building no records at all — a gate that passes because it
+    could not see its subject.
+    """
+    local: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "crocodile.core.schema.records":
+            for alias in node.names:
+                if alias.name in names:
+                    local[alias.asname or alias.name] = alias.name
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in local:
+            calls.append(node)
+        elif isinstance(func, ast.Attribute) and func.attr in names:
+            # ``records.Trade(...)`` — the module-qualified form.
+            calls.append(node)
+    return calls
+
+
+def _source_root() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[2] / "src" / "crocodile"
+
+
+def test_gate3b_every_declared_deriving_module_exists_and_builds_records():
+    """Self-cleaning, so the list cannot become a place obligations go to be forgotten."""
+    names = _canonical_record_names()
+    root = _source_root()
+    for relative, why in DERIVES_RECORDS.items():
+        path = root / relative
+        assert path.is_file(), f"DERIVES_RECORDS names {relative}, which does not exist"
+        assert why.strip(), f"{relative} is on DERIVES_RECORDS with no justification"
+        assert _canonical_record_calls(ast.parse(path.read_text()), names), (
+            f"{relative} is on DERIVES_RECORDS but builds no canonical record; "
+            f"drop the entry or the gate below guards nothing"
+        )
+
+
+def test_gate3b_a_deriving_module_states_prov_on_every_record_it_builds():
+    """Omission is the bypass Gate 3's two scanners cannot see.
+
+    They look for a keyword that is present and wrong. This looks for one that is
+    absent, in the modules where absent means a reconstruction inheriting the venue's
+    word for itself.
+    """
+    names = _canonical_record_names()
+    root = _source_root()
+    offenders = []
+    for relative in DERIVES_RECORDS:
+        path = root / relative
+        for call in _canonical_record_calls(ast.parse(path.read_text()), names):
+            if not any(kw.arg == "prov" for kw in call.keywords):
+                func = call.func
+                built = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "?")
+                offenders.append(f"{relative}:{call.lineno} {built}(...)")
+    assert not offenders, (
+        f"records built without an explicit prov= in a deriving module: {offenders}. "
+        f"No prov= means prov=NATIVE, prov_basis='native', prov_confidence=1.0 — "
+        f"the claim that a venue reported this value directly."
+    )
+
+
+def test_gate3b_every_resampler_that_builds_a_record_is_declared():
+    """A new resampler cannot be added without answering the question.
+
+    Without this the gate only ever asks what it was already told to ask, which is the
+    vacuous shape a conformance test can least afford: the list stays green by staying
+    short.
+    """
+    names = _canonical_record_names()
+    root = _source_root()
+    undeclared = []
+    for path in sorted(root.rglob("*.py")):
+        if "resample" not in path.relative_to(root).parts:
+            continue
+        if not _canonical_record_calls(ast.parse(path.read_text()), names):
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative not in DERIVES_RECORDS:
+            undeclared.append(relative)
+    assert not undeclared, (
+        f"resampler modules building canonical records but not on DERIVES_RECORDS: "
+        f"{undeclared}. Add each with the argument for why it derives, so the "
+        f"prov= gate covers it."
+    )

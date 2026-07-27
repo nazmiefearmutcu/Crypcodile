@@ -58,14 +58,22 @@ elsewhere in the pipeline for derived records.
 
 Provenance
 ----------
-An emitted snapshot is reconstructed from other records, so it is a derived
-record and its header ought to say :attr:`Provenance.DERIVED` with a basis
-naming this reconstruction. It still says ``NATIVE``, which is the default:
-:mod:`crocodile.core.schema.provenance` has no registered confidence formula
-for book resampling, and a basis with no formula fails Gate 3 while a
-hand-picked confidence constant is precisely what the registry exists to
-forbid. Registering the formula — and only then flipping this record's tail —
-is a follow-up, deliberately not folded into the union migration.
+An emitted snapshot is reconstructed from other records, so it says
+:attr:`Provenance.DERIVED` on the ``book_resample`` basis. It used to say
+``NATIVE`` — not by choice but by omission, since a record built with no
+``prov*`` argument inherits the defaults, and the defaults mean *the venue
+reported this value directly*. That is a false statement written into the lake,
+and a silent one: ``provenance.describe()`` is what the REST and MCP surfaces
+are required to emit as a warning whenever they serve a record whose ``prov``
+is not ``NATIVE``, so a reconstructed book was served indistinguishably from a
+venue snapshot.
+
+The confidence is measured, not chosen — see ``book_resample``'s formula. The
+observable is the emission rule's own lookahead: a boundary is emitted *after*
+the crossing record is applied, so the capture can carry updates stamped later
+than the boundary it is labelled with, and ``interval_ns`` is threaded down to
+``_capture_snapshot`` so the distance can be scored against the bucket width it
+is meant to describe.
 
 Gap handling
 -------------
@@ -79,6 +87,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from crocodile.core.replay.orderbook import OrderBook
+from crocodile.core.schema.provenance import provenance_fields
 from crocodile.core.schema.records import BookDelta, BookSnapshot
 
 __all__ = ["resample_book_snapshots"]
@@ -141,7 +150,7 @@ def resample_book_snapshots(
         # the snapshot includes the state contributed by this record.
         assert next_boundary_ns is not None  # guaranteed once initialized is True
         while ts >= next_boundary_ns:
-            yield _capture_snapshot(book, record, next_boundary_ns, top_n)
+            yield _capture_snapshot(book, record, next_boundary_ns, interval_ns, top_n)
             next_boundary_ns += interval_ns
 
 
@@ -154,6 +163,7 @@ def _capture_snapshot(
     book: OrderBook,
     trigger_record: BookSnapshot | BookDelta,
     boundary_ns: int,
+    interval_ns: int,
     top_n: int | None,
 ) -> BookSnapshot:
     """Build a BookSnapshot from the current ``OrderBook`` state.
@@ -162,9 +172,16 @@ def _capture_snapshot(
         book:           The live ``OrderBook`` instance.
         trigger_record: The record whose ``local_ts`` crossed the boundary.
                         Used to copy ``source``, ``symbol``, ``symbol_raw``
-                        and ``asset_class``.
+                        and ``asset_class``, and — as the newest update this
+                        capture contains — to measure the lookahead the
+                        confidence formula scores.
         boundary_ns:    The nanosecond timestamp of the bucket boundary.
                         Used as ``local_ts`` for the emitted snapshot.
+        interval_ns:    The bucket width, which is what the lookahead is
+                        measured against. Threaded down from the caller rather
+                        than recomputed: it is the only reference that says
+                        whether being 200ms past the boundary is most of the
+                        bar or a rounding error.
         top_n:          Maximum bid/ask levels on each side; ``None`` = all.
 
     Returns:
@@ -183,12 +200,30 @@ def _capture_snapshot(
 
     depth = len(bids) + len(asks)
 
+    # The capture happens after the crossing record is applied, so the newest
+    # update it contains is that record's — possibly stamped after the boundary
+    # this snapshot is labelled with. That distance is the one thing about this
+    # reconstruction that can be wrong, and it is measured here rather than
+    # asserted: a constant written at this call site is exactly what the
+    # registry exists to refuse.
+    tail = provenance_fields(
+        "book_resample",
+        {
+            "lookahead_ns": trigger_record.local_ts - boundary_ns,
+            "interval_ns": interval_ns,
+        },
+    )
+
     return BookSnapshot(
         source=trigger_record.source,
         symbol=trigger_record.symbol,
         symbol_raw=trigger_record.symbol_raw,
         source_ts=None,
         local_ts=boundary_ns,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
         # Carried from the trigger rather than pinned to CRYPTO: a resampled
         # book is the same market as the stream it was reconstructed from, and
         # this engine is in `core` precisely so it can serve either one.

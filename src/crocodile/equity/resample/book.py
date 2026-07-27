@@ -78,6 +78,7 @@ from collections.abc import Iterable, Iterator
 
 from crocodile.core.replay.orderbook import OrderBook
 from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import BookDelta as CoreBookDelta
 from crocodile.core.schema.records import BookSnapshot as CoreBookSnapshot
 from crocodile.equity.schema.records import BookDelta, BookSnapshot
@@ -95,6 +96,13 @@ def _to_core_record(record: BookSnapshot | BookDelta) -> CoreBookSnapshot | Core
     input, purely to satisfy the constructor. They are never read back out —
     emitted snapshots are rebuilt from the engine's ``bids`` / ``asks`` dicts
     and the original equity record.
+
+    ``prov`` is stated rather than left to the default even though the default is
+    the same value. A canonical record built inside a resampler with no ``prov``
+    argument is how ``core.resample.book`` came to write ``NATIVE`` on a
+    reconstruction, so the conformance gate requires the claim to be made out
+    loud here; and out loud it is true — the input is a venue-reported equity
+    record and re-typing it for the engine reconstructs nothing.
     """
     if isinstance(record, BookSnapshot):
         return CoreBookSnapshot(
@@ -104,6 +112,7 @@ def _to_core_record(record: BookSnapshot | BookDelta) -> CoreBookSnapshot | Core
             source_ts=record.source_ts,
             local_ts=record.local_ts,
             asset_class=AssetClass.EQUITY,
+            prov=Provenance.NATIVE,
             bids=record.bids,
             asks=record.asks,
             depth=record.depth,
@@ -117,6 +126,7 @@ def _to_core_record(record: BookSnapshot | BookDelta) -> CoreBookSnapshot | Core
         source_ts=record.source_ts,
         local_ts=record.local_ts,
         asset_class=AssetClass.EQUITY,
+        prov=Provenance.NATIVE,
         bids=record.bids,
         asks=record.asks,
         seq_id=record.seq_id,

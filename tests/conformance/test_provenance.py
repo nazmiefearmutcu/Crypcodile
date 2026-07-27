@@ -17,7 +17,7 @@ from crocodile.core.schema.provenance import (
     registered_bases,
 )
 
-_EXPECTED_BASES = frozenset({"native", "unavailable", "yahoo_1m_vap"})
+_EXPECTED_BASES = frozenset({"book_resample", "native", "unavailable", "yahoo_1m_vap"})
 _SESSION_BARS = 390
 
 
@@ -204,3 +204,33 @@ def test_load_all_bases_is_idempotent_and_survives_bad_imports():
     assert _EXPECTED_BASES <= registered_bases()
     load_all_bases()
     assert _EXPECTED_BASES <= registered_bases()
+
+
+# ---------------------------------------------------------------------------
+# book_resample — the basis a reconstructed BookSnapshot rests on
+# ---------------------------------------------------------------------------
+
+
+def test_book_resample_scores_a_capture_that_earns_its_timestamp():
+    """No lookahead means the capture describes the instant it is stamped with."""
+    assert confidence_for("book_resample", {"lookahead_ns": 0, "interval_ns": 1_000}) == 1.0
+    assert level_for("book_resample") is Provenance.DERIVED
+
+
+def test_book_resample_falls_off_linearly_and_saturates_at_zero():
+    assert confidence_for(
+        "book_resample", {"lookahead_ns": 250, "interval_ns": 1_000}
+    ) == pytest.approx(0.75)
+    assert confidence_for("book_resample", {"lookahead_ns": 1_000, "interval_ns": 1_000}) == 0.0
+    # A run of boundaries dragged along by one late record: still zero, never negative,
+    # so the formula cannot hand the registry a value it has to reject.
+    assert confidence_for("book_resample", {"lookahead_ns": 90_000, "interval_ns": 1_000}) == 0.0
+
+
+def test_book_resample_refuses_inputs_that_could_not_have_been_measured():
+    with pytest.raises(ConfidenceInputError, match="lookahead_ns"):
+        confidence_for("book_resample", {"lookahead_ns": -1, "interval_ns": 1_000})
+    with pytest.raises(ConfidenceInputError, match="interval_ns"):
+        confidence_for("book_resample", {"lookahead_ns": 0, "interval_ns": 0})
+    with pytest.raises(ConfidenceInputError, match="interval_ns"):
+        confidence_for("book_resample", {"lookahead_ns": 0})

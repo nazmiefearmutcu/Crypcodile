@@ -350,3 +350,44 @@ def _yahoo_1m_vap(inputs: Mapping[str, Any]) -> float:
     if n < 0:
         raise ConfidenceInputError(f"input 'n_volume_bars' must be non-negative, got {n}")
     return min(n / _YAHOO_1M_VAP_SESSION_BARS, 1.0)
+
+
+@register_basis("book_resample", level=Provenance.DERIVED, inputs=["book_snapshot", "book_delta"])
+def _book_resample(inputs: Mapping[str, Any]) -> float:
+    """Resampled book depth: confidence is how much of its own timestamp the capture earns.
+
+    ``max(1 - lookahead_ns / interval_ns, 0.0)``, where ``lookahead_ns`` is how far past
+    the emitted boundary the newest applied update lies.
+
+    A resampled snapshot claims to be the book at a bucket boundary, but the resampler
+    applies the boundary-crossing record *first* and captures afterwards — so the state it
+    reports can include updates stamped after the timestamp it carries. That distance is
+    the error, it is directly observable at the capture site, and it is the whole of what
+    can go wrong with this method: the reconstruction itself is exact, since the engine
+    replays absolute levels from a real venue snapshot and raises ``BookGap`` rather than
+    guessing across a sequence break.
+
+    ``1.0`` means the newest update landed on the boundary, so the capture describes the
+    instant it is stamped with. ``0.0`` means it is a whole interval or more ahead, which
+    is what a run of boundaries dragged along by one late record looks like: an interval
+    with no updates emits the state that arrives after it, not the state that held during
+    it. Between the two the score falls linearly, because the error is a duration and
+    nothing about a book makes half an interval of lookahead better than linear.
+
+    A quiet interval is not penalised. If no update arrives between two boundaries the
+    lookahead is zero and the book genuinely did not change, so the reconstruction is
+    exact and says so — absence of updates is not absence of sampling.
+
+    Saturating at zero says the capture has stopped earning its timestamp, not that the
+    book is unknown; ``prov`` stays :attr:`Provenance.DERIVED` at every value.
+    """
+    lookahead_ns = _require_int(inputs, "lookahead_ns")
+    interval_ns = _require_int(inputs, "interval_ns")
+    if interval_ns <= 0:
+        raise ConfidenceInputError(f"input 'interval_ns' must be positive, got {interval_ns}")
+    if lookahead_ns < 0:
+        raise ConfidenceInputError(
+            f"input 'lookahead_ns' must be non-negative, got {lookahead_ns}; "
+            f"a capture cannot precede the record that triggered it"
+        )
+    return max(1.0 - lookahead_ns / interval_ns, 0.0)

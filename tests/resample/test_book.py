@@ -25,6 +25,7 @@ import pytest
 
 from crocodile.core.resample.book import resample_book_snapshots
 from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import BookDelta, BookSnapshot
 from crocodile.crypto.exchanges.deribit.normalize import normalize_message
 
@@ -347,3 +348,62 @@ def test_resample_raises_for_zero_interval() -> None:
     """
     with pytest.raises(ValueError):
         list(resample_book_snapshots([], interval_ns=0))
+
+
+# ---------------------------------------------------------------------------
+# Test: a reconstructed snapshot must not claim to have been reported
+# ---------------------------------------------------------------------------
+
+
+def test_a_resampled_snapshot_does_not_claim_to_be_venue_reported() -> None:
+    """`NATIVE` says the venue reported this value directly. This one it did not.
+
+    The record is built by `_capture_snapshot` in `resample/book.py` out of a
+    reconstructed `OrderBook`, so `prov=NATIVE, prov_basis="native",
+    prov_confidence=1.0` — the struct defaults, inherited by passing no `prov*`
+    field — is a false statement written into the lake. It is also silent
+    downstream: `provenance.describe()` is what the REST and MCP surfaces are
+    required to emit as a warning whenever they serve a record whose `prov` is
+    not `NATIVE`, so a resampled book is served indistinguishably from a venue
+    snapshot.
+    """
+    records: list[BookSnapshot | BookDelta] = [
+        _make_snapshot(local_ts=0, seq=1),
+        _make_delta(local_ts=_1S_NS, seq_id=2, prev_seq_id=1, bids=[(100.0, 10.0)]),
+    ]
+    (snap,) = list(resample_book_snapshots(records, interval_ns=_1S_NS, top_n=10))
+
+    assert snap.prov is Provenance.DERIVED
+    assert snap.prov_basis == "book_resample"
+    assert snap.prov_inputs == ["book_snapshot", "book_delta"]
+
+
+def test_a_resampled_snapshot_scores_its_own_lookahead() -> None:
+    """The confidence is the one thing about this record that is measured.
+
+    An emitted snapshot is stamped at a bucket boundary but is captured *after*
+    the triggering record has been applied, so it can contain updates that
+    happened after the timestamp it carries. The delta below lands exactly on
+    the 1s boundary — no lookahead — while the 10s one drags four earlier
+    boundaries along with it and each of those reports a book from the future.
+    """
+    on_the_boundary = list(
+        resample_book_snapshots(
+            [_make_snapshot(local_ts=0, seq=1), _make_delta(local_ts=_1S_NS, seq_id=2)],
+            interval_ns=_1S_NS,
+        )
+    )
+    assert [s.prov_confidence for s in on_the_boundary] == [1.0]
+
+    stale = list(
+        resample_book_snapshots(
+            [
+                _make_snapshot(local_ts=0, seq=1),
+                _make_delta(local_ts=5 * _1S_NS, seq_id=2),
+            ],
+            interval_ns=_1S_NS,
+        )
+    )
+    # Boundaries 1s..5s, all captured from the state after the 5s delta.
+    assert [s.local_ts for s in stale] == [i * _1S_NS for i in range(1, 6)]
+    assert [s.prov_confidence for s in stale] == [0.0, 0.0, 0.0, 0.0, 1.0]
