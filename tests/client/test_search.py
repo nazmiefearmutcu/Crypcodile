@@ -192,73 +192,91 @@ async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
     assert result["row_counts"]["book_snapshot"] == 1  # type: ignore[index]
 
 
-def test_catalog_stats_count_query(
+def test_catalog_stats_counts_every_channel(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """catalog_stats runs COUNT(*) per channel via query; escapes quotes."""
+    """Migrated: this used to pin the SQL string ``catalog_stats`` built per channel.
+
+    There were three copies of that discover-and-count loop — this one, the crypto CLI
+    ``catalog`` command and the equity one — and they disagreed about an empty partition.
+    They now project ``Catalog.channel_row_counts``, which counts through DuckDB's
+    relation API, so there is no ``FROM "..."`` string left to assert on. What the method
+    promises a caller is unchanged and is what this pins.
+    """
     from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
-    monkeypatch.setattr(client, "list_channels", lambda: ["book_snapshot", "trade"])
+    monkeypatch.setattr(
+        client._catalog, "channel_row_counts", lambda: {"book_snapshot": 42, "trade": 7}
+    )
 
-    calls: list[str] = []
-
-    def _query(sql: str) -> pl.DataFrame:
-        calls.append(sql)
-        if "book_snapshot" in sql:
-            return pl.DataFrame({"n": [42]})
-        if "trade" in sql:
-            return pl.DataFrame({"n": [7]})
-        raise AssertionError(f"unexpected sql: {sql}")
-
-    monkeypatch.setattr(client, "query", _query)
     assert client.catalog_stats() == {
         "row_counts": {"book_snapshot": 42, "trade": 7},
         "channel_count": 2,
     }
-    assert len(calls) == 2
-    assert any('FROM "book_snapshot"' in s for s in calls)
-    assert any('FROM "trade"' in s for s in calls)
 
 
-def test_catalog_stats_query_failure_reports_minus_one(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+def test_catalog_stats_reports_minus_one_only_for_a_count_it_could_not_take(
+    tmp_path: pathlib.Path,
 ) -> None:
+    """Migrated: this used to pin -1 for any failure, including an empty partition.
+
+    That conflated two different facts. A partition directory with no parquet parts has no
+    rows — a measurement — while a registered view that will not count is genuinely
+    unknown, and reporting both as "unknown" is what made this method disagree with the
+    CLI ``catalog`` command about the same lake. Empty partitions now count 0; -1 is
+    reserved for the case nobody obtained an answer for.
+    """
     from crocodile.crypto.client.client import CrypcodileClient
 
-    client = CrypcodileClient(data_dir=tmp_path)
-    monkeypatch.setattr(client, "list_channels", lambda: ["trade", "funding"])
+    (tmp_path / "source=deribit/channel=trade").mkdir(parents=True)
+    (tmp_path / "source=deribit/channel=funding").mkdir(parents=True)
 
-    def _query(sql: str) -> pl.DataFrame:
-        if "trade" in sql:
-            return pl.DataFrame({"n": [10]})
-        raise RuntimeError("view missing")
+    stats = CrypcodileClient(data_dir=tmp_path).catalog_stats()
 
-    monkeypatch.setattr(client, "query", _query)
-    assert client.catalog_stats() == {
-        "row_counts": {"trade": 10, "funding": -1},
-        "channel_count": 2,
-    }
+    assert stats == {"row_counts": {"funding": 0, "trade": 0}, "channel_count": 2}
 
 
-def test_catalog_stats_escapes_double_quotes_in_channel(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+async def test_catalog_stats_counts_a_channel_whose_name_holds_a_double_quote(
+    tmp_path: pathlib.Path,
 ) -> None:
-    from crocodile.crypto.client.client import CrypcodileClient
+    """Migrated: this used to pin the ``"`` -> ``""`` escaping of the identifier.
 
-    client = CrypcodileClient(data_dir=tmp_path)
-    monkeypatch.setattr(client, "list_channels", lambda: ['odd"chan'])
-    calls: list[str] = []
+    The escaping was correct and two of the three copies of this loop did it. The point
+    was never the escape sequence, though — it was that a channel name is data and must
+    not be able to change the query. Passing the name to DuckDB's relation API instead of
+    interpolating it into SQL is the stronger form of the same guarantee, so the subject
+    here is the answer rather than the string that produced it.
+    """
+    from crocodile.core.schema.enums import AssetClass, Side
+    from crocodile.core.schema.records import Trade
+    from crocodile.core.store.catalog import Catalog
+    from crocodile.core.store.parquet_sink import ParquetSink
 
-    def _query(sql: str) -> pl.DataFrame:
-        calls.append(sql)
-        return pl.DataFrame({"n": [1]})
+    odd = 'odd"chan'
+    sink = ParquetSink(tmp_path, max_buffer_rows=10, flush_interval_seconds=9999)
+    await sink.put(
+        Trade(
+            source="deribit",
+            symbol="deribit:BTC-PERPETUAL",
+            symbol_raw="BTC-PERPETUAL",
+            source_ts=1,
+            local_ts=1,
+            asset_class=AssetClass.CRYPTO,
+            id="t1",
+            price=100.0,
+            amount=1.0,
+            side=Side.BUY,
+        )
+    )
+    await sink.flush()
+    # Rename the written partition so the channel's name carries a quote on disk.
+    written = tmp_path / "source=deribit" / "channel=trade"
+    written.rename(written.parent / f"channel={odd}")
 
-    monkeypatch.setattr(client, "query", _query)
-    result = client.catalog_stats()
-    assert result["row_counts"] == {'odd"chan': 1}
-    assert len(calls) == 1
-    assert 'FROM "odd""chan"' in calls[0]
+    counts = Catalog(tmp_path).channel_row_counts()
+
+    assert counts == {odd: 1}, counts
 
 
 def test_list_symbols_empty(tmp_path: pathlib.Path) -> None:
