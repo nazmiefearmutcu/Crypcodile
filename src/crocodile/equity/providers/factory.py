@@ -22,6 +22,18 @@ _REGISTRY: dict[str, type[Provider]] = {
 _VALID_NAMES = sorted(_REGISTRY)
 
 
+def list_providers() -> list[str]:
+    """Sorted names of the registered equity providers.
+
+    The counterpart of :func:`crocodile.crypto.exchanges.factory.list_exchanges`, and it
+    exists because the ``list-exchanges`` capability needs both halves to answer one
+    question — which sources this build can pull from — without reaching into ``_REGISTRY``
+    from outside this module. Reading a private registry across a package boundary is how a
+    rename becomes a caller's problem.
+    """
+    return list(_VALID_NAMES)
+
+
 def supported_channels(provider: str) -> frozenset[str] | None:
     """Return the channels ``provider`` declares it can serve, or ``None`` if it has not.
 
