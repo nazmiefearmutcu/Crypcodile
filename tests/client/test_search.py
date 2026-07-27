@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from unittest.mock import MagicMock
 
 import polars as pl
 import pytest
@@ -192,73 +193,74 @@ async def test_catalog_stats_with_data(tmp_path: pathlib.Path) -> None:
     assert result["row_counts"]["book_snapshot"] == 1  # type: ignore[index]
 
 
-def test_catalog_stats_count_query(
+def test_catalog_stats_delegates_counting_rather_than_reimplementing_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """catalog_stats runs COUNT(*) per channel via query; escapes quotes."""
+    """Migrated: this used to pin ``client.list_channels`` and ``client.query`` per channel.
+
+    ``catalog_stats`` was one of three discovery-and-count loops that disagreed with each
+    other about an empty partition directory; all three now project
+    ``Catalog.channel_row_counts``. What is worth pinning is that the client does not run
+    its own loop — the same reasoning as
+    ``tests/test_cli.py::test_cli_catalog_delegates_discovery_rather_than_reimplementing_it``.
+    """
     from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
-    monkeypatch.setattr(client, "list_channels", lambda: ["book_snapshot", "trade"])
+    counts = MagicMock(return_value={"book_snapshot": 42, "trade": 7})
+    monkeypatch.setattr(client._catalog, "channel_row_counts", counts)
+    monkeypatch.setattr(
+        client,
+        "query",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("catalog_stats must not build its own COUNT(*) SQL")
+        ),
+    )
 
-    calls: list[str] = []
-
-    def _query(sql: str) -> pl.DataFrame:
-        calls.append(sql)
-        if "book_snapshot" in sql:
-            return pl.DataFrame({"n": [42]})
-        if "trade" in sql:
-            return pl.DataFrame({"n": [7]})
-        raise AssertionError(f"unexpected sql: {sql}")
-
-    monkeypatch.setattr(client, "query", _query)
     assert client.catalog_stats() == {
         "row_counts": {"book_snapshot": 42, "trade": 7},
         "channel_count": 2,
     }
-    assert len(calls) == 2
-    assert any('FROM "book_snapshot"' in s for s in calls)
-    assert any('FROM "trade"' in s for s in calls)
+    counts.assert_called_once_with()
 
 
-def test_catalog_stats_query_failure_reports_minus_one(
+def test_catalog_stats_passes_through_the_zero_versus_unknown_distinction(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """``0`` (no parts on disk) and ``-1`` (view exists, count failed) are different answers.
+
+    The distinction is made in ``Catalog.channel_row_counts``; the point here is that the
+    client projects it verbatim rather than normalising one into the other, which is what
+    made the CLI and this method disagree about the same lake.
+    """
     from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
-    monkeypatch.setattr(client, "list_channels", lambda: ["trade", "funding"])
-
-    def _query(sql: str) -> pl.DataFrame:
-        if "trade" in sql:
-            return pl.DataFrame({"n": [10]})
-        raise RuntimeError("view missing")
-
-    monkeypatch.setattr(client, "query", _query)
+    monkeypatch.setattr(
+        client._catalog, "channel_row_counts", lambda: {"trade": 10, "funding": -1, "ohlcv": 0}
+    )
     assert client.catalog_stats() == {
-        "row_counts": {"trade": 10, "funding": -1},
-        "channel_count": 2,
+        "row_counts": {"trade": 10, "funding": -1, "ohlcv": 0},
+        "channel_count": 3,
     }
 
 
-def test_catalog_stats_escapes_double_quotes_in_channel(
+def test_catalog_stats_carries_a_channel_name_that_would_need_quoting(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The escaping this used to assert no longer exists, and that is the improvement.
+
+    Every copy of the old loop built ``COUNT(*) FROM "{channel}"`` by hand and doubled the
+    embedded quote. ``channel_row_counts`` passes the name to DuckDB's relation API
+    instead, so there is no identifier to escape and no fourth copy of that reasoning to
+    get wrong. What is still worth asserting is that such a name survives the projection
+    intact rather than being mangled or dropped on the way out.
+    """
     from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
-    monkeypatch.setattr(client, "list_channels", lambda: ['odd"chan'])
-    calls: list[str] = []
-
-    def _query(sql: str) -> pl.DataFrame:
-        calls.append(sql)
-        return pl.DataFrame({"n": [1]})
-
-    monkeypatch.setattr(client, "query", _query)
-    result = client.catalog_stats()
-    assert result["row_counts"] == {'odd"chan': 1}
-    assert len(calls) == 1
-    assert 'FROM "odd""chan"' in calls[0]
+    monkeypatch.setattr(client._catalog, "channel_row_counts", lambda: {'odd"chan': 1})
+    assert client.catalog_stats()["row_counts"] == {'odd"chan': 1}
 
 
 def test_list_symbols_empty(tmp_path: pathlib.Path) -> None:
