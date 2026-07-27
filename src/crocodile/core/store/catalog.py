@@ -21,9 +21,21 @@ every glob covers all three prefixes, and a lake still on a legacy prefix logs
 one warning per prefix pointing at ``crocodile migrate-lake``.
 
 Views registered:
-    One DuckDB VIEW per channel found on disk, named by the channel string
-    (e.g. ``trade``, ``book_snapshot``).  Views are created lazily on first
-    access and re-created whenever ``refresh_views()`` is called explicitly.
+    One DuckDB VIEW per ``channel=`` directory found on disk, named by the
+    channel string (e.g. ``trade``, ``book_snapshot``).  Views are created lazily
+    on first access and re-created whenever ``refresh_views()`` is called
+    explicitly.
+
+    A tag a record collapsed away — ``bar`` into ``ohlcv``, ``option_quote`` into
+    ``options_chain`` — is a channel like any other here: it has its own
+    directory, so it gets its own view and is read by naming it. ``rows.from_row``
+    still decodes its rows into the record that absorbed it, so the *struct*
+    collapse is invisible while the *partition* is not. Making one name answer for
+    two directories was tried three times and never survived: it forces a
+    deduplication, and deduplication needs a cross-provider row identity this data
+    does not have (equity providers write bare tickers, and a fetched history
+    carries one ``local_ts`` for every bar in it). Turning two directories into one
+    is ``crocodile migrate-lake``'s job — a rename, not a read.
 
 Empty-result contract:
     ``scan()`` returns ``pl.DataFrame()`` (zero columns, zero rows) whenever
@@ -37,7 +49,6 @@ from __future__ import annotations
 import datetime
 import glob as _glob
 import logging
-import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -46,7 +57,6 @@ from typing import Final
 import duckdb
 import polars as pl
 
-from crocodile.core.schema.enums import channel_predecessors, channel_read_set, successor_channel
 from crocodile.core.store.migrate import SOURCE_PREFIX, SOURCE_PREFIXES
 from crocodile.core.store.rows import _ORIGIN_FIELDS
 
@@ -153,12 +163,6 @@ _PART_TAILS: Final = (
     ("date=*", "bucket=*", "part-*.parquet"),
     ("date=*", "part-*.parquet"),
 )
-
-# Columns that separate two records of one instrument at one instant, checked
-# against the view before use. Used only when a channel and a tag it retired both
-# hold rows: see :meth:`Catalog._dedup_clause` for why the successor wins and why
-# ``symbol`` + ``local_ts`` alone is too coarse a key for a bar or a contract.
-_ROW_IDENTITY_DISCRIMINATORS: Final = ("interval", "strike", "expiry", "opt_type")
 
 
 def _split_source_prefix(name: str) -> tuple[str, str] | None:
@@ -453,16 +457,6 @@ class Catalog:
         else:
             limit_clause = ""
 
-        # A scan of a channel whose predecessor tag is also on disk deduplicates
-        # the same way its view does, and for the same reason — ``replay`` reads
-        # through here, not through the view, so a post-merge backfill of an
-        # already-collected date came back twice. See :meth:`_dedup_clause`.
-        dedup = ""
-        if self._spans_a_retired_tag(channel, glob_paths):
-            columns = self._columns_of(read_expr)
-            if columns:
-                dedup = self._dedup_clause(columns, channel)
-
         # Use parameterized query to avoid SQL injection on the symbol value.
         # start_ns and end_ns are ints (no injection risk) but kept as parameters
         # for consistency and to let DuckDB optimise them as typed literals.
@@ -472,7 +466,6 @@ class Catalog:
             WHERE {symbol_filter}
               AND local_ts >= ?
               AND local_ts <= ?
-            {dedup}
             ORDER BY local_ts
             {limit_clause}
         """
@@ -516,17 +509,18 @@ class Catalog:
         exist but views cannot be registered yet (empty partitions / no
         parquet parts).
 
-        Empty lake or missing data directory yields ``[]``. A retired tag is
-        reported under the tag that absorbed it — a lake holding only
-        ``channel=bar/`` lists ``ohlcv`` — because that is the name every read
-        path answers to, and because listing both made one five-row lake report
-        ``{'bar': 3, 'ohlcv': 5}``: eight rows, counted by asking each name what
-        it held when one of them already covers the other. Names are otherwise
-        the raw partition suffixes (e.g. ``trade``, ``book_snapshot``),
-        deduplicated across exchanges and sorted ascending. Non-directory
-        entries, names that are not ``channel=...``, and suffixes that are
-        unsafe as path segments (separators, null/control bytes, ``.`` /
-        ``..``, glob metacharacters, leading/trailing whitespace) are ignored.
+        Empty lake or missing data directory yields ``[]``. Names are the raw
+        partition suffixes (e.g. ``trade``, ``book_snapshot``), deduplicated
+        across exchanges and sorted ascending — a retired tag included, under
+        its own name. A lake holding ``channel=bar/`` beside ``channel=ohlcv/``
+        lists both, because both are there and each is read by naming it;
+        reporting the retired one as its successor told a caller to ask for a
+        name whose read then had to reconcile two directories, and no
+        reconciliation of them survived review. ``crocodile migrate-lake`` is
+        what makes the two into one. Non-directory entries, names that are not
+        ``channel=...``, and suffixes that are unsafe as path segments
+        (separators, null/control bytes, ``.`` / ``..``, glob metacharacters,
+        leading/trailing whitespace) are ignored.
         """
         data_root = self._data_dir.resolve() if self._data_dir.is_dir() else None
         if data_root is None:
@@ -548,7 +542,7 @@ class Catalog:
                     continue
                 channel_str = chan_dir.name[len("channel=") :]
                 if _is_safe_hive_suffix(channel_str):
-                    channels.add(successor_channel(channel_str))
+                    channels.add(channel_str)
 
         return sorted(channels)
 
@@ -567,11 +561,12 @@ class Catalog:
         Dates are the raw partition suffixes (typically ``YYYY-MM-DD``),
         deduplicated across exchanges and sorted ascending.
 
-        The walk covers every tag the channel absorbed, the same widening every
-        other read does: without it ``list_dates("ohlcv")`` reported nothing for
-        a lake whose bars are all under ``channel=bar/``, while ``scan()`` on the
-        same channel read them happily — a discovery call that disagrees with the
-        read it is meant to precede.
+        The walk covers ``channel={channel}`` and nothing else, which is exactly
+        what ``scan()`` reads — a discovery call and the read it precedes must
+        cover the same directories. A lake whose bars are all under
+        ``channel=bar/`` answers ``list_dates("bar")``, not
+        ``list_dates("ohlcv")``; ``list_channels()`` is what says which of the two
+        it holds.
         """
         channel = (channel or "").strip()
         # Reject path traversal and glob injection — never interpolate
@@ -585,25 +580,24 @@ class Catalog:
 
         dates: set[str] = set()
         for source_dir, _value in self._iter_source_dirs():
-            for name in channel_read_set(channel):
-                chan_dir = source_dir / f"channel={name}"
-                if not chan_dir.is_dir():
+            chan_dir = source_dir / f"channel={channel}"
+            if not chan_dir.is_dir():
+                continue
+            # Ensure resolved path stays under data_dir (defence in depth).
+            try:
+                chan_dir.resolve().relative_to(data_root)
+            except (ValueError, OSError):
+                continue
+            try:
+                children = list(chan_dir.iterdir())
+            except OSError:
+                continue
+            for date_dir in children:
+                if not date_dir.is_dir() or not date_dir.name.startswith("date="):
                     continue
-                # Ensure resolved path stays under data_dir (defence in depth).
-                try:
-                    chan_dir.resolve().relative_to(data_root)
-                except (ValueError, OSError):
-                    continue
-                try:
-                    children = list(chan_dir.iterdir())
-                except OSError:
-                    continue
-                for date_dir in children:
-                    if not date_dir.is_dir() or not date_dir.name.startswith("date="):
-                        continue
-                    date_str = date_dir.name[len("date=") :]
-                    if date_str and date_str not in (".", ".."):
-                        dates.add(date_str)
+                date_str = date_dir.name[len("date=") :]
+                if date_str and date_str not in (".", ".."):
+                    dates.add(date_str)
 
         return sorted(dates)
 
@@ -653,13 +647,13 @@ class Catalog:
         as client ``resolve_symbols``), so ``channel=""`` does not falsely
         empty the inventory.
 
-        An unfiltered inventory reports each row once. A retired tag whose
-        successor is also registered is skipped, because the successor's view
-        already globs the retired tag's partitions: counting both made a
-        five-row lake report eight rows through ``/api/v1/inventory``,
-        ``/data-coverage``, the MCP ``inventory`` and ``data_coverage`` tools and
-        both CLI ``catalog`` commands. Naming the retired tag explicitly still
-        works and still reads only the old partitions.
+        An unfiltered inventory reports each ``channel=`` directory on disk once,
+        with the true row count of that directory — a retired tag included, as a
+        channel of its own. The sum over the rows is the lake, so a caller wanting
+        "how many bars are there" adds ``bar`` and ``ohlcv``; no row is counted
+        twice and none is dropped. Folding the two into one entry is what made a
+        five-row lake report eight rows, and the deduplication written to fix
+        *that* is what discarded 249 bars of a 250-bar fetched history.
         """
         self._refresh_views()
         empty = pl.DataFrame(schema=_INVENTORY_SCHEMA)
@@ -671,11 +665,7 @@ class Catalog:
         if isinstance(exchange, str):
             exchange = exchange.strip() or None
 
-        channels = sorted(
-            ch
-            for ch in self._registered_channels
-            if successor_channel(ch) == ch or successor_channel(ch) not in self._registered_channels
-        )
+        channels = sorted(self._registered_channels)
         if channel is not None:
             if channel not in self._registered_channels:
                 return empty
@@ -838,12 +828,12 @@ class Catalog:
         else:
             exchange_expr = "''"
 
-        # The row's own ``channel`` column is deliberately *not* used. A view is
-        # named for one channel and globs every tag that channel absorbed, so on
-        # a lake spanning the migration the column says ``bar`` for rows served
-        # by the ``ohlcv`` view — ``inventory(channel="ohlcv")`` came back
-        # labelled with a tag the caller did not ask for and cannot ask for
-        # again without getting a different set.
+        # The row's own ``channel`` column is deliberately *not* used: the
+        # registered name is the one the caller can ask for again and get this
+        # same set back. They agree now that a view reads one directory, but a
+        # legacy crypto file also carries a ``channel`` column of its own, and
+        # reading the answer off the data rather than off the name it was reached
+        # by is how a discovery call starts disagreeing with the read it precedes.
         channel_expr = f"'{channel.replace(chr(39), chr(39) * 2)}'"
 
         where_parts: list[str] = []
@@ -895,119 +885,39 @@ class Catalog:
                 if not _is_safe_hive_suffix(channel):
                     continue
                 discovered.add(channel)
-                # A retired tag on disk also owes a view under the tag that
-                # absorbed it. Without this, a lake holding only ``channel=bar/``
-                # answers ``SELECT * FROM ohlcv`` with "table does not exist" and
-                # a lake holding both answers it with half its bars.
-                discovered.add(successor_channel(channel))
         for channel in sorted(discovered):
             self._create_view(channel)
 
     def _glob_groups(self, channel: str) -> list[tuple[str, list[str]]]:
-        """Return the read groups covering ``channel`` and every tag it retired.
+        """Return the read groups covering ``channel=<channel>/`` on every source prefix.
 
         Grouped by ``(source prefix, on-disk layout)`` — the *whole* layout tail,
         not its first element. Both entries of :data:`_PART_TAILS` begin
         ``date=*``, so keying on that alone put the bucketed and the non-bucketed
         layout in one ``read_parquet`` list, which is exactly the call
         :meth:`_read_expr` documents DuckDB refusing: "Hive partition mismatch …
-        key 'bucket' not found". Nothing hit it until ``ohlcv`` was widened to
-        read ``channel=bar/`` too, because until then one channel directory had
-        one writer and one layout — and widening ``ohlcv`` unions precisely the
-        two tags that straddle the layout change, so a real legacy equity lake
-        (parts directly under ``date=``) lost its ``ohlcv`` view entirely.
+        key 'bucket' not found". One channel directory really can hold both
+        layouts, because ``migrate_lake`` renames the directory the equity fork
+        wrote flat and the sink keeps writing bucketed parts into it — which is
+        how a real legacy equity lake lost its view entirely, with no line in the
+        log, until this keyed on the tail.
 
         Empty partition directories are skipped: DuckDB ``read_parquet`` fails
         hard when a glob matches nothing.
         """
         grouped: dict[tuple[str, tuple[str, ...]], list[str]] = {}
         for tail in _PART_TAILS:
-            for name in channel_read_set(channel):
-                for prefix, pattern in self._source_globs(f"channel={name}", *tail).items():
-                    if _glob.glob(pattern):
-                        # One group per (prefix, layout): a predecessor's parts in
-                        # the *same* layout sit under the same hive keys, so they
-                        # join the same read_parquet call and ``union_by_name``
-                        # reconciles the two column sets.
-                        grouped.setdefault((prefix, tail), []).append(pattern)
+            for prefix, pattern in self._source_globs(f"channel={channel}", *tail).items():
+                if _glob.glob(pattern):
+                    grouped.setdefault((prefix, tail), []).append(pattern)
         return [(prefix, patterns) for (prefix, _tail), patterns in grouped.items()]
-
-    @staticmethod
-    def _spans_a_retired_tag(channel: str, groups: list[tuple[str, list[str]]]) -> bool:
-        """Return whether ``groups`` read both ``channel`` and a tag it retired.
-
-        One tag alone needs no reconciliation: a lake holding only ``channel=bar/``
-        has one recording of each instant, whatever the directory is called.
-        """
-        predecessors = channel_predecessors(channel)
-        if not predecessors:
-            return False
-        patterns = [p for _prefix, group in groups for p in group]
-        return any(f"channel={channel}{os.sep}" in p for p in patterns) and any(
-            f"channel={old}{os.sep}" in p for p in patterns for old in predecessors
-        )
-
-    def _dedup_clause(self, columns: set[str], channel: str) -> str:
-        """Return a ``QUALIFY`` that keeps one row per instant, successor tag winning.
-
-        **The decision this encodes.** When a channel and a tag it retired both
-        hold a row for one instrument at one instant, they are two recordings of
-        the same observation, not two observations — a post-merge backfill of a
-        date already collected writes ``channel=ohlcv/`` beside the
-        ``channel=bar/`` the first collection left, because
-        ``alpaca.connector`` maps ``bar`` and ``ohlcv`` onto one tag. The
-        surviving tag wins, because it is what the current writer produced and
-        the retired one is by definition the older recording.
-
-        Unioning them instead is not a harmless over-count. It doubles ``volume``
-        and ``num_trades``, and — through ``ohlcv_from_ohlcv``'s coverage sum — it
-        *raises* the reported ``prov_confidence`` of the derived bar. A duplicated
-        day making a derivation look better sampled is the one direction a
-        confidence number must never move.
-
-        ``symbol`` and ``local_ts`` alone are too coarse: the same symbol carries
-        1m and 1d bars at the same instant, and one option contract carries
-        several strikes. Every discriminator in
-        :data:`_ROW_IDENTITY_DISCRIMINATORS` the view actually exposes joins the
-        key, so a narrower reading can only ever keep *more* rows.
-
-        Returns an empty string when the view lacks the header columns the key
-        needs, so a malformed view degrades to the un-deduplicated union rather
-        than to a query that will not parse.
-        """
-        if not {"symbol", "local_ts", "channel"}.issubset(columns):
-            return ""
-        key = ["symbol", "local_ts", *(c for c in _ROW_IDENTITY_DISCRIMINATORS if c in columns)]
-        partition = ", ".join(f'"{c}"' for c in key)
-        # ``channel`` here is a Channel member resolved from a directory name that
-        # ``_is_safe_hive_suffix`` has already vetted; quotes are doubled anyway.
-        survivor = channel.replace("'", "''")
-        return (
-            f"QUALIFY row_number() OVER (\n"
-            f"    PARTITION BY {partition}\n"
-            f"    ORDER BY CASE WHEN \"channel\" = '{survivor}' THEN 0 ELSE 1 END\n"
-            f") = 1"
-        )
-
-    def _columns_of(self, relation_sql: str) -> set[str] | None:
-        """Return the column names ``relation_sql`` produces, or None if it will not run."""
-        try:
-            return set(
-                self._conn.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
-                    f"SELECT * FROM ({relation_sql}) LIMIT 0"
-                )
-                .pl()
-                .columns
-            )
-        except Exception:
-            return None
 
     def _create_view(self, channel: str) -> None:
         """Register a DuckDB VIEW named after the channel.
 
-        The globs cover every source prefix, every predecessor tag, and all dates
-        for that channel so that ``query("SELECT … FROM trade")`` works without
-        extra parameters, including on a lake that is half-migrated.
+        The globs cover every source prefix and all dates for that channel so that
+        ``query("SELECT … FROM trade")`` works without extra parameters, including
+        on a lake that is half-migrated between prefixes.
 
         Empty partition directories (no ``part-*.parquet`` yet) are skipped
         without raising: DuckDB ``read_parquet`` fails hard when the glob
@@ -1033,10 +943,6 @@ class Catalog:
             return
 
         body = self._read_expr(groups)
-        if self._spans_a_retired_tag(channel, groups):
-            columns = self._columns_of(body)
-            if columns:
-                body = f"SELECT * FROM (\n{body}\n)\n{self._dedup_clause(columns, channel)}"
 
         # Escape embedded single quotes in the path so the SQL string literal
         # is valid even when data_dir or channel contains a single quote.
@@ -1087,13 +993,12 @@ class Catalog:
         """
         channel_dirs: list[tuple[str, Path]] = []
         for source_dir, _value in self._iter_source_dirs():
-            for name in channel_read_set(channel):
-                chan_dir = source_dir / f"channel={name}"
-                if not chan_dir.is_dir():
-                    continue
-                split = _split_source_prefix(source_dir.name)
-                assert split is not None  # _iter_source_dirs only yields matches
-                channel_dirs.append((split[0], chan_dir))
+            chan_dir = source_dir / f"channel={channel}"
+            if not chan_dir.is_dir():
+                continue
+            split = _split_source_prefix(source_dir.name)
+            assert split is not None  # _iter_source_dirs only yields matches
+            channel_dirs.append((split[0], chan_dir))
         if not channel_dirs:
             return []
 

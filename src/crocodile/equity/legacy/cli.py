@@ -50,10 +50,12 @@ VALID_PROVIDERS = ["alpaca", "finnhub", "google_finance", "stooq"]
 # Pull/backfill-only providers (no streaming run loop)
 BACKFILL_ONLY_PROVIDERS = ["msn_money", "tiingo"]
 # `ohlcv` is the surviving tag for a bar; `bar` is accepted because lakes and
-# scripts still spell it that way, and every read widens `ohlcv` to cover the old
-# partitions (see `crocodile.core.schema.enums.CHANNEL_SUCCESSORS`). Rejecting
-# `ohlcv` is what this list did before the two structs collapsed, which made
-# stooq — the one provider that always emitted `ohlcv` — unreachable from the CLI.
+# scripts still spell it that way and connectors that predate the struct collapse
+# still answer to it (see `crocodile.core.schema.enums.CHANNEL_SUCCESSORS`). This
+# is a *vocabulary* — which names a user may type — not a read widening: a
+# `channel=bar/` partition is read by asking for `bar`. Rejecting `ohlcv` is what
+# this list did before the two structs collapsed, which made stooq — the one
+# provider that always emitted `ohlcv` — unreachable from the CLI.
 VALID_CHANNELS = ["trade", "quote", "bar", "ohlcv"]
 
 

@@ -12,11 +12,22 @@ What that produced before the family dispatch:
 * ``replay(["trade"])`` returned ``Trade(amount=None, side=None)`` for the
   pre-migration half — no exception, and the caller's ``sum(amount)`` raised
   ``TypeError`` several frames away.
-* ``replay(["ohlcv"])`` returned the post-migration bars only, because the glob
-  matched ``channel=ohlcv`` literally and the older bars are under ``channel=bar``.
+* ``replay(["bar"])`` raised ``ValueError: Unknown channel tag: 'bar'``, so the rows
+  under the retired tag were unreachable through the record API at all. *That* was
+  the loss. ``replay(["ohlcv"])`` returning only ``channel=ohlcv/`` was never the
+  bug — a retired tag is its own channel and is read by asking for it.
 * the bars that did come back reported ``num_trades=None`` — the encoding reserved
   for "the source did not publish one" — because the column is spelled
   ``trade_count`` on the older files.
+
+**Reachability, not transparency.** Three review rounds tried to make ``ohlcv``
+silently cover ``channel=bar/`` and each one broke something new: duplicated rows,
+then a dedup key on ``(symbol, local_ts, interval)`` that discarded 249 of a 250-bar
+Yahoo history, because a provider stamps a whole fetched history with one
+``local_ts`` and the key carries no ``source``. So the tests below assert the
+property that actually matters — every row on disk is reachable through the record
+API under some channel name, and the counts add up — and never that one name answers
+for two directories. Rewriting the tag is ``migrate-lake``'s job.
 
 **The layout is the point, and the first version of this file got it wrong.** It
 wrote its legacy half *with* a ``bucket=`` level, which is not the layout the equity
@@ -346,52 +357,64 @@ def test_the_third_dialect_in_the_same_lake_is_read_as_the_market_it_came_from(
     assert {t.prov for t in trades} == {Provenance.NATIVE}
 
 
-def test_replaying_ohlcv_returns_the_bars_written_under_the_retired_tag_too(
+def test_every_bar_on_disk_is_reachable_and_each_tag_answers_for_its_own_partition(
     spanning_lake: Path,
 ) -> None:
-    """The C6 reproduction: three bars live under ``channel=bar/`` and two under ``ohlcv/``."""
-    bars = _replay(spanning_lake, "ohlcv")
+    """The C6 reproduction, stated as reachability: three under ``bar/``, two under ``ohlcv/``.
 
-    assert len(bars) == 5
-    assert [b.close for b in bars] == [179.0, 180.0, 181.0, 181.0, 182.0]
-    assert all(isinstance(b, OHLCV) for b in bars)
+    ``replay(["bar"])`` used to raise ``Unknown channel tag: 'bar'``, which made those
+    three rows unreachable through the record API however they were asked for. It now
+    answers, so all five bars are reachable — three under the name the directory
+    carries and two under the other, and five in total with nothing counted twice.
+    """
+    retired = _replay(spanning_lake, "bar")
+    surviving = _replay(spanning_lake, "ohlcv")
+
+    assert [b.close for b in retired] == [179.0, 180.0, 181.0]
+    assert [b.close for b in surviving] == [181.0, 182.0]
+    assert len(retired) + len(surviving) == 5
+    assert all(type(b) is OHLCV for b in (*retired, *surviving))
 
 
 def test_a_bar_written_under_the_retired_tag_keeps_its_print_count(spanning_lake: Path) -> None:
     """The C8 reproduction: ``trade_count`` on disk must not read back as "not published"."""
-    bars = _replay(spanning_lake, "ohlcv")
-
-    assert [b.num_trades for b in bars] == [77, 78, 79, 900, 901]
-
-
-def test_asking_for_the_retired_tag_reads_the_old_partition_and_decodes_it(
-    spanning_lake: Path,
-) -> None:
-    """``replay(["bar"])`` used to raise ``Unknown channel tag: 'bar'``.
-
-    The widening is one-directional on purpose: naming a retired tag asks about the
-    old files, so this returns three bars rather than all five.
-    """
-    bars = _replay(spanning_lake, "bar")
-
-    assert len(bars) == 3
-    assert [b.num_trades for b in bars] == [77, 78, 79]
-    assert all(type(b) is OHLCV for b in bars)
+    assert [b.num_trades for b in _replay(spanning_lake, "bar")] == [77, 78, 79]
+    assert [b.num_trades for b in _replay(spanning_lake, "ohlcv")] == [900, 901]
 
 
-def test_the_ohlcv_view_spans_both_tags_so_sql_sees_one_channel(spanning_lake: Path) -> None:
-    """``SELECT * FROM ohlcv`` on a lake with legacy bars returned two rows of five.
+def test_each_tag_gets_its_own_view_and_the_two_counts_add_up(spanning_lake: Path) -> None:
+    """A retired tag is a channel of its own in SQL too, and the lake reports its real shape.
 
-    On the *real* legacy layout it did worse than that: the two tags straddle the
-    ``bucket=`` change, both ``_PART_TAILS`` entries start ``date=*``, and grouping on
-    that first element alone put both layouts in one ``read_parquet`` call — which
-    DuckDB refuses with ``Hive partition mismatch``, swallowed, leaving no ``ohlcv``
-    view at all.
+    On the *real* legacy layout the ``ohlcv`` view once vanished entirely: the two tags
+    straddle the ``bucket=`` change, both ``_PART_TAILS`` entries start ``date=*``, and
+    grouping on that first element alone put both layouts in one ``read_parquet`` call —
+    which DuckDB refuses with ``Hive partition mismatch``, swallowed, leaving no view at
+    all. That grouping fix is what this still guards; the union it was written for is
+    gone.
     """
     client = StockodileClient(spanning_lake)
-    df = client.query("SELECT count(*) AS n FROM ohlcv")
 
-    assert df.row(0, named=True)["n"] == 5
+    assert client.query("SELECT count(*) AS n FROM bar").row(0, named=True)["n"] == 3
+    assert client.query("SELECT count(*) AS n FROM ohlcv").row(0, named=True)["n"] == 2
+
+
+def test_the_lake_lists_the_tags_that_are_on_disk_rather_than_one_that_is_not(
+    spanning_lake: Path,
+) -> None:
+    """A lake holding both directories holds both channels, and says so.
+
+    Reporting ``bar`` as ``ohlcv`` was how a caller was told to ask for a name whose
+    read then had to reconcile two directories. Discovery answers what is there; the
+    rename is ``migrate-lake``'s job.
+    """
+    with Catalog(spanning_lake) as catalog:
+        channels = catalog.list_channels()
+        bar_dates = catalog.list_dates("bar")
+        ohlcv_dates = catalog.list_dates("ohlcv")
+
+    assert {"bar", "ohlcv"} <= set(channels)
+    assert bar_dates and ohlcv_dates
+    assert not set(bar_dates) & set(ohlcv_dates), "the two tags hold different days here"
 
 
 def test_both_on_disk_layouts_sit_under_one_channel_directory_and_are_both_read(
@@ -420,21 +443,29 @@ def test_both_on_disk_layouts_sit_under_one_channel_directory_and_are_both_read(
     assert dict(counts.iter_rows()) == {_SYMBOL: 5, _CRYPTO_SYMBOL: 2}
 
 
-def test_the_inventory_counts_a_five_row_channel_once(spanning_lake: Path) -> None:
-    """``bar`` and ``ohlcv`` are one channel; counting both reported eight rows of five."""
+def test_the_inventory_reports_each_directory_with_its_own_true_row_count(
+    spanning_lake: Path,
+) -> None:
+    """Two directories, two rows, three bars and two bars — the lake's actual shape.
+
+    Folding them into one entry meant the count had to reconcile two partitions, and
+    every reconciliation tried so far either double-counted the overlap or deleted it.
+    Reporting them separately needs no reconciliation and loses nothing: the caller can
+    add.
+    """
     with Catalog(spanning_lake) as catalog:
-        rows = catalog.inventory(channel="ohlcv")
+        asked = catalog.inventory(channel="ohlcv")
         every = catalog.inventory()
 
-    assert len(rows) == 1
-    row = rows.row(0, named=True)
-    assert row["channel"] == "ohlcv", "asking for ohlcv must not answer with the retired tag"
-    assert row["row_count"] == 5
+    assert len(asked) == 1
+    row = asked.row(0, named=True)
+    assert row["channel"] == "ohlcv"
+    assert row["row_count"] == 2
     assert row["exchange"] == _SOURCE
 
     counted = {(r["channel"], r["symbol"]): r["row_count"] for r in every.iter_rows(named=True)}
-    assert counted[("ohlcv", _SYMBOL)] == 5
-    assert ("bar", _SYMBOL) not in counted, "the retired tag is not a second channel"
+    assert counted[("ohlcv", _SYMBOL)] == 2
+    assert counted[("bar", _SYMBOL)] == 3
     assert counted[("trade", _CRYPTO_SYMBOL)] == 2
 
 
@@ -492,14 +523,19 @@ def test_a_legacy_depth_profile_says_it_was_modelled_rather_than_reading_back_na
 def test_a_legacy_option_quote_becomes_a_contract_with_a_nanosecond_expiry(
     spanning_lake: Path,
 ) -> None:
-    """``option_quote`` → ``options_chain``, ``type`` → ``opt_type``, ``YYYY-MM-DD`` → ns.
+    """``option_quote`` → ``OptionsChain``, ``type`` → ``opt_type``, ``YYYY-MM-DD`` → ns.
+
+    The second half of the struct collapse, and the other retired tag: the partition is
+    named for the tag the fork wrote, so it is read by asking for ``option_quote``, and
+    what comes back is the record that absorbed it. Reachable as itself, decoded as its
+    successor — the same contract ``bar`` has.
 
     Converting a date to nanoseconds is total; converting back is not, which is the
     direction that must not lose anything. ``underlying_price`` is required with no
     default and the legacy row has no column for it, so it has to be passed explicitly
     as ``None`` — "the source published none" — rather than left to a missing argument.
     """
-    contracts = _replay(spanning_lake, "options_chain")
+    contracts = _replay(spanning_lake, "option_quote")
 
     assert [type(c) for c in contracts] == [OptionsChain]
     (contract,) = contracts
@@ -577,67 +613,123 @@ def backfilled_lake(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_a_backfilled_day_is_one_recording_of_an_instant_not_two(
+def test_the_overlapping_day_is_reachable_from_both_tags_and_duplicated_under_neither(
     backfilled_lake: Path,
 ) -> None:
-    """C3: the widened read unioned overlapping tags with no deduplication.
+    """The round-2 finding: a widened ``ohlcv`` unioned the two tags and returned day 0 twice.
 
-    Five distinct days sit under the two tags and day 0 is under both, so the union
-    returned six bars — doubling that day's ``volume`` and ``num_trades``, and, through
-    ``ohlcv_from_ohlcv``'s coverage sum, *raising* the reported confidence of anything
-    derived from it. The successor tag wins: it is what the current writer produced, and
-    the retired one is by definition the older recording of the same observation.
+    Six distinct recordings sit on disk — three under ``bar/`` and three under
+    ``ohlcv/`` — and day 0 has one on each side. Under the union that day came back
+    twice from a single call, doubling its ``volume`` and ``num_trades`` and, through
+    ``ohlcv_from_ohlcv``'s coverage sum, *raising* the confidence of anything derived
+    from it. Each tag now answers for its own directory: every row is reachable, no call
+    repeats an instant, and 3 + 3 is the lake.
     """
-    bars = _replay(backfilled_lake, "ohlcv")
+    retired = _replay(backfilled_lake, "bar")
+    surviving = _replay(backfilled_lake, "ohlcv")
 
-    timestamps = [b.local_ts for b in bars]
-    assert len(bars) == 5
-    assert len(set(timestamps)) == 5, f"duplicated instants: {timestamps}"
-    # Day 0 is served by the canonical row, not the pre-migration one.
-    assert bars[0].close == 200.0
-    assert bars[0].num_trades == 900
-    # Days 1 and 2 exist only under the retired tag and are still there.
-    assert [b.close for b in bars[1:3]] == [180.0, 181.0]
+    assert len(retired) == 3
+    assert len(surviving) == 3
+    assert len({b.local_ts for b in retired}) == 3, "the retired tag repeated an instant"
+    assert len({b.local_ts for b in surviving}) == 3, "the surviving tag repeated an instant"
+    assert [b.close for b in retired] == [179.0, 180.0, 181.0]
+    assert [b.close for b in surviving] == [200.0, 203.0, 204.0]
+    # Day 0 is the overlap: one recording under each tag, each reachable by name.
+    assert [b.close for b in retired if b.local_ts == _TS] == [179.0]
+    assert [b.close for b in surviving if b.local_ts == _TS] == [200.0]
 
 
-def test_the_view_deduplicates_the_backfilled_day_too(backfilled_lake: Path) -> None:
+def test_sql_and_the_record_api_agree_about_which_rows_each_tag_holds(
+    backfilled_lake: Path,
+) -> None:
     """``replay`` reads through ``scan``; SQL reads through the view. Both, or neither."""
     client = StockodileClient(backfilled_lake)
 
-    assert client.query("SELECT count(*) AS n FROM ohlcv").row(0, named=True)["n"] == 5
+    assert client.query("SELECT count(*) AS n FROM ohlcv").row(0, named=True)["n"] == 3
     assert client.query("SELECT count(*) AS n FROM bar").row(0, named=True)["n"] == 3
 
 
-def test_a_narrower_reading_keeps_more_rows_rather_than_fewer(backfilled_lake: Path) -> None:
-    """``symbol`` + ``local_ts`` alone would collapse two intervals of one instant.
+@pytest.fixture
+def fetched_history_lake(tmp_path: Path) -> Path:
+    """A Yahoo-shaped EOD history: one fetch clock on 250 daily bars, beside a ``bar/`` dir.
 
-    One symbol carries a 1m and a 1d bar at the same timestamp, so ``interval`` joins the
-    identity key; every discriminator the view exposes does.
+    ``yahoo.client`` takes ``local_ts = time.time_ns()`` once per fetch and stamps every
+    bar of the returned history with it; ``stooq.connector`` does the same. The bar's own
+    instant is ``source_ts``. Any lake with a ``channel=bar/`` directory beside this is
+    the whole target population of the widening that used to reconcile the two.
     """
+
+    async def build() -> None:
+        sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=100_000, flush_interval_seconds=9999)
+        for i in range(250):
+            await sink.put(
+                OHLCV(
+                    source="yahoo",
+                    symbol=_SYMBOL,
+                    symbol_raw=_SYMBOL,
+                    local_ts=_TS,
+                    asset_class=AssetClass.EQUITY,
+                    source_ts=_TS - (250 - i) * _DAY,
+                    interval="1d",
+                    open=100.0 + i,
+                    high=101.0 + i,
+                    low=99.0 + i,
+                    close=100.5 + i,
+                    volume=1_000_000.0,
+                    num_trades=10,
+                )
+            )
+        await sink.flush()
+
+    asyncio.run(build())
+
     _write_part(
-        backfilled_lake,
+        tmp_path,
         _SOURCE,
         "bar",
         FAMILY_EQUITY,
         [
             _legacy_equity_row(
                 "bar",
-                _TS,
-                interval="1m",
-                open=1.0,
-                high=2.0,
-                low=0.5,
-                close=1.5,
+                _TS + _DAY,
+                interval="1d",
+                open=178.0,
+                high=180.0,
+                low=177.0,
+                close=179.0,
                 volume=1.0,
-                vwap=1.2,
-                trade_count=3,
+                vwap=178.5,
+                trade_count=77,
             )
         ],
         bucketed=False,
-        name="part-minute.parquet",
     )
+    return tmp_path
 
-    bars = _replay(backfilled_lake, "ohlcv")
 
-    assert len(bars) == 6
-    assert sorted(b.interval for b in bars if b.local_ts == _TS) == ["1d", "1m"]
+def test_a_fetched_daily_history_keeps_all_of_its_bars_next_to_a_retired_tag(
+    fetched_history_lake: Path,
+) -> None:
+    """C1: ``(symbol, local_ts, interval)`` is not an identity for an equity bar.
+
+    The key carried no ``source`` — equity providers write bare tickers, so two
+    providers' ``AAPL`` collide — and ``local_ts`` is not the bar's instant but the clock
+    of the fetch that returned the whole history. Every one of these 250 bars shares one
+    ``local_ts``, so the moment a ``channel=bar/`` directory made the read "span a retired
+    tag", the ``QUALIFY row_number() = 1`` kept one of them: 250 bars became 1, 250 000 000
+    shares of volume became 1 000 000, and the same one row came back through ``scan``,
+    ``replay`` and ``inventory`` alike.
+    """
+    client = StockodileClient(fetched_history_lake)
+    replayed = list(client.replay(["ohlcv"], [_SYMBOL], _TS - 400 * _DAY, _TS + 400 * _DAY))
+
+    assert len(replayed) == 250
+    assert client.query("SELECT count(*) AS n FROM ohlcv").row(0, named=True)["n"] == 250
+    assert client.query("SELECT sum(volume) AS v FROM ohlcv").row(0, named=True)["v"] == (
+        pytest.approx(250_000_000.0)
+    )
+    assert {b.source_ts for b in replayed} == {_TS - (250 - i) * _DAY for i in range(250)}
+
+    with Catalog(fetched_history_lake) as catalog:
+        inventory = catalog.inventory(channel="ohlcv")
+    assert inventory.row(0, named=True)["row_count"] == 250

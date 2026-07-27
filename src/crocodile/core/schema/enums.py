@@ -22,7 +22,6 @@ __all__ = [
     "Side",
     "Tape",
     "channel_predecessors",
-    "channel_read_set",
     "successor_channel",
 ]
 
@@ -173,36 +172,46 @@ CHANNEL_SUCCESSORS: Final[dict[str, str]] = {
     Channel.BAR.value: Channel.OHLCV.value,
     Channel.OPTION_QUOTE.value: Channel.OPTIONS_CHAIN.value,
 }
-"""Retired tag → the tag whose record absorbed it.
+"""Retired tag → the tag whose *record* absorbed it.
 
-Keeping the retired member declared prevents nothing on its own. ``channel=bar/``
-directories exist in equity lakes on disk, and a reader that only globs the literal
-string it was handed returns the ``ohlcv`` half of such a lake and calls it all of it —
-no exception, no warning, a short answer. This table is what turns the member into a
-read path: every glob widens a request for the surviving tag to cover its predecessors,
-and :mod:`crocodile.core.store.rows` decodes a row carrying the retired tag into the
-record that absorbed it.
+This maps structs, not directories. ``Bar`` collapsed into ``OHLCV`` and ``OptionQuote``
+into ``OptionsChain``, so a row on disk carrying ``channel='bar'`` has to decode into
+something, and :mod:`crocodile.core.store.rows` uses this table to decide what. Without
+it ``replay(["bar"])`` raised ``ValueError: Unknown channel tag: 'bar'`` and every row in
+a ``channel=bar/`` directory was unreachable through the record API — which is the loss
+this exists to prevent.
 
-The mapping is deliberately one-directional. Asking for ``bar`` reads ``channel=bar/``
-alone, because a caller naming a retired tag is asking about the old files; asking for
-``ohlcv`` reads both, because that is the whole of what the channel now means.
+**A retired tag stays its own channel on disk.** ``channel=bar/`` is read by asking for
+``bar``; ``channel=ohlcv/`` by asking for ``ohlcv``. Three review rounds tried instead to
+make ``ohlcv`` silently cover both directories, and every one of them broke: first
+duplicate rows and an inventory that reported eight of five, then a
+``(symbol, local_ts, interval)`` dedup key that discarded 249 bars of a 250-bar Yahoo
+history — that provider stamps a whole fetched history with one ``local_ts``, and the key
+carried no ``source``. Transparency is what forces the deduplication, and deduplication
+needs a cross-provider row identity this data does not support.
+
+Rewriting the directory name is :mod:`crocodile.core.store.migrate`'s job — ``crocodile
+migrate-lake`` renames partitions and rewrites no Parquet byte, and it is where the
+design puts the tag rename (Phase 4). Reads report the tags that are on disk, honestly:
+a lake holding both directories holds both channels, with the true row count for each.
 """
 
 
 def successor_channel(channel: str) -> str:
-    """Return the surviving tag for ``channel``, or ``channel`` if it is not retired."""
+    """Return the surviving tag for ``channel``, or ``channel`` if it is not retired.
+
+    Answers "which record decodes a row under this tag", which is the only question
+    :data:`CHANNEL_SUCCESSORS` is for. It is emphatically not "which directories does a
+    read of this channel cover"; see that table for what happened when it was.
+    """
     return CHANNEL_SUCCESSORS.get(channel, channel)
 
 
 def channel_predecessors(channel: str) -> tuple[str, ...]:
-    """Return the retired tags whose partitions belong to ``channel``."""
-    return tuple(old for old, new in CHANNEL_SUCCESSORS.items() if new == channel)
+    """Return the retired tags whose rows decode into ``channel``'s record.
 
-
-def channel_read_set(channel: str) -> tuple[str, ...]:
-    """Return every ``channel=`` partition name a read of ``channel`` must cover.
-
-    The surviving tag first, then its predecessors. A caller naming a retired tag gets
-    that tag alone; see :data:`CHANNEL_SUCCESSORS` for why the widening is one-way.
+    Used to widen a *vocabulary* — the channel names a CLI accepts from a user, where
+    ``bar`` and ``ohlcv`` are two spellings a connector answers to. Never to widen a
+    glob: partitions under a retired tag are read by naming that tag.
     """
-    return (channel, *channel_predecessors(channel))
+    return tuple(old for old, new in CHANNEL_SUCCESSORS.items() if new == channel)
