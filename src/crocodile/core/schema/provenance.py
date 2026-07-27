@@ -467,11 +467,14 @@ def _ohlcv_from_ohlcv(inputs: Mapping[str, Any]) -> float:
     complete session can ever be. A consumer thresholding ``>= 0.5`` dropped every
     complete equity daily bar there is. ``yahoo_1m_vap`` in this same registry already
     divides by 390 for exactly this market and exactly this reason; wall-clock was never
-    the reference, it was the reference for a market that never closes. The caller
-    declares the tradeable window because only the caller knows the calendar: a crypto
-    resampler passes the bucket width unchanged, and the equity one passes regular
-    sessions. Over-declaring it (a holiday nobody modelled) lowers the score and never
-    raises it, which is the safe direction for a number consumers filter on.
+    the reference, it was the reference for a market that never closes. So the caller
+    declares the tradeable window, because only the caller knows the calendar. Today the
+    only caller is the equity resampler and it passes regular sessions
+    (``crocodile.equity.resample.ohlcv._tradeable_ns``); a market that never closes would
+    pass the bucket width unchanged, which is what the old formula assumed of every
+    market. Over-declaring the window — a holiday nobody modelled — lowers the score and
+    never raises it, which is the safe direction for a number consumers filter on and the
+    reason a full calendar is not a prerequisite for measuring at all.
 
     **Why the two terms are separate, and multiplied.** They used to be one: the width of
     each input was multiplied by its own confidence and the products summed, so 390 bars
