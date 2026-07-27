@@ -15,7 +15,10 @@ import polars as pl
 import pyarrow.ipc as pa_ipc
 import pytest
 
+import msgspec.structs
+
 from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
@@ -334,3 +337,88 @@ async def test_export_multi_symbol_sorted_and_no_null_leakage(
     for col in ("source", "symbol", "price", "amount", "side"):
         null_count = df[col].null_count()
         assert null_count == 0, f"Column {col!r} has {null_count} unexpected nulls"
+
+
+# ---------------------------------------------------------------------------
+# CSV nested-column encoding — the two promises _write_csv's docstring makes
+# ---------------------------------------------------------------------------
+
+
+async def _write_a_trade_with_a_nested_tail(data_dir: pathlib.Path) -> None:
+    """One trade whose ``prov_inputs`` has two entries.
+
+    Two entries, not zero: ``str([])`` and ``json.dumps([])`` are both ``"[]"``,
+    so an empty list cannot tell JSON text from a stringified Python repr.
+    """
+    sink = ParquetSink(data_dir=data_dir, max_buffer_rows=100, flush_interval_seconds=9999)
+    await sink.put(
+        msgspec.structs.replace(
+            _trade(_BASE_TS),
+            prov=Provenance.DERIVED,
+            prov_basis="native",
+            prov_inputs=["bar", "trade"],
+        )
+    )
+    await sink.flush()
+
+
+async def test_csv_writes_a_nested_column_as_json_text(tmp_path: pathlib.Path) -> None:
+    """JSON, not ``str(value)``.
+
+    Every canonical record carries ``prov_inputs``, a ``list[str]``, and Polars
+    refuses to guess a CSV encoding for a list — so the choice is JSON, a Python
+    repr, or dropping the column. A repr is the trap: it looks like JSON until
+    something tries to parse it and meets single quotes, ``None`` or ``True``.
+    """
+    from crocodile.crypto.client.client import CrypcodileClient
+
+    await _write_a_trade_with_a_nested_tail(tmp_path)
+    dest = tmp_path / "out" / "trades.csv"
+    CrypcodileClient(data_dir=tmp_path).export(
+        "trade", [_SYMBOL], _FRM, _TO, fmt="csv", dest=dest
+    )
+
+    cell = pl.read_csv(dest)["prov_inputs"][0]
+    assert cell == '["bar", "trade"]'
+    assert json.loads(cell) == ["bar", "trade"]
+
+
+async def test_csv_leaves_a_null_nested_column_empty(tmp_path: pathlib.Path) -> None:
+    """An empty cell, not the four characters ``null``.
+
+    A crypto trade has no ``conditions``, and the column is nested, so it goes
+    through the same JSON encoding as a populated one. ``json.dumps(None)``
+    returns the *string* ``"null"``, which re-reads as a value rather than as a
+    missing cell — a null that has quietly become data.
+    """
+    from crocodile.crypto.client.client import CrypcodileClient
+
+    await _write_a_trade_with_a_nested_tail(tmp_path)
+    dest = tmp_path / "out" / "trades.csv"
+    CrypcodileClient(data_dir=tmp_path).export(
+        "trade", [_SYMBOL], _FRM, _TO, fmt="csv", dest=dest
+    )
+
+    assert pl.read_csv(dest)["conditions"][0] is None
+    assert "null" not in dest.read_text()
+
+
+async def test_csv_exports_a_book_channel(tmp_path: pathlib.Path) -> None:
+    """The case CSV export never handled at all.
+
+    ``bids``/``asks`` are lists of structs, so this channel raised
+    ``ComputeError: CSV format does not support nested data`` outright — the
+    export produced no file rather than a wrong one. Nothing verified the fix.
+    """
+    from crocodile.crypto.client.client import CrypcodileClient
+
+    await _write_fixtures(tmp_path)
+    dest = tmp_path / "out" / "book.csv"
+    CrypcodileClient(data_dir=tmp_path).export(
+        "book_snapshot", [_SYMBOL], _FRM, _TO, fmt="csv", dest=dest
+    )
+
+    df = pl.read_csv(dest)
+    assert len(df) == 1
+    assert json.loads(df["bids"][0]) == [{"price": 100.0, "amount": 5.0}]
+    assert json.loads(df["asks"][0]) == [{"price": 101.0, "amount": 4.0}]
