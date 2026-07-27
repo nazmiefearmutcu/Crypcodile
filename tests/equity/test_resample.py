@@ -660,12 +660,46 @@ def test_a_re_bucketed_bar_measures_its_coverage_instead_of_claiming_a_full_one(
     Three 1-minute bars do not make a day. ``yahoo_1m_vap`` scores the same three inputs
     0.0077 and this scored 1.0, on the argument that a resampler cannot observe a stream
     it was not given — true of trades, false here, where every input declares its width.
+
+    The denominator is a regular session rather than a calendar day (see I1), and the
+    score is extent times adequacy, so three fully-sampled minutes of a 390-minute
+    session score ``(3/390)²``.
     """
     bars = list(resample_bars_to_bars([_minute_bar(i) for i in range(3)], "1d"))
 
     assert len(bars) == 1
     assert bars[0].prov_basis == "ohlcv_from_ohlcv"
-    assert bars[0].prov_confidence == pytest.approx(3 / 1440)
+    assert bars[0].prov_confidence == pytest.approx((3 / 390) ** 2)
+
+
+def test_a_complete_session_re_bucketed_to_a_day_no_longer_scores_a_quarter() -> None:
+    """I1: 390 fully-sampled minutes are a complete US trading day, and now say so.
+
+    Against a 1440-minute calendar denominator this scored 0.2708 — every complete
+    equity daily bar there is, dropped by any consumer thresholding at 0.5.
+    """
+    bars = list(resample_bars_to_bars([_minute_bar(i) for i in range(390)], "1d"))
+
+    assert len(bars) == 1
+    assert bars[0].prov_confidence == 1.0
+
+
+def test_the_same_bar_arriving_twice_does_not_raise_the_confidence() -> None:
+    """C3: coverage is a union of intervals, not a sum of widths.
+
+    A lake spanning the migration holds one day under ``channel=bar/`` and again under
+    ``channel=ohlcv/`` after a backfill. Summed widths counted it twice, so a *duplicate*
+    made the derived bar look better sampled — the one direction a confidence number
+    must never move.
+    """
+    once = [_minute_bar(i) for i in range(30)]
+    twice = [bar for i in range(30) for bar in (_minute_bar(i), _minute_bar(i))]
+
+    single = list(resample_bars_to_bars(once, "1h"))
+    doubled = list(resample_bars_to_bars(twice, "1h"))
+
+    assert single[0].prov_confidence == pytest.approx(0.25)
+    assert doubled[0].prov_confidence == pytest.approx(single[0].prov_confidence)
 
 
 def test_a_fully_covered_bucket_still_scores_one() -> None:

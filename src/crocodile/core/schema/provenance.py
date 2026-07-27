@@ -47,6 +47,7 @@ __all__ = [
     "provenance_fields",
     "register_basis",
     "registered_bases",
+    "trust_rank",
     "worst_provenance",
 ]
 
@@ -449,37 +450,71 @@ register_basis(
 
 @register_basis("ohlcv_from_ohlcv", level=Provenance.DERIVED, inputs=["ohlcv"])
 def _ohlcv_from_ohlcv(inputs: Mapping[str, Any]) -> float:
-    """Re-bucketed bars: confidence is how much of the wider bucket the inputs cover.
+    """Re-bucketed bars: extent times adequacy, both against the tradeable window.
 
-    ``min(covered_ns / interval_ns, 1.0)``, where ``interval_ns`` is the width of the
-    emitted bar and ``covered_ns`` is the summed width of the input bars that fell in it,
-    each weighted by its own ``prov_confidence``.
+    ``min(covered_ns / tradeable_ns, 1.0) * min(sampled_ns / tradeable_ns, 1.0)``, where
 
-    The denominator is observable, which is the whole reason this basis measures where
-    ``ohlcv_from_trades`` does not. The resampler holds ``interval_ns`` from parsing the
-    interval it was asked for, and every input bar declares its own ``interval``, so the
-    duration a complete bucket would hold is exactly as computable as ``yahoo_1m_vap``'s
-    390. It was reported as 1.0 while holding both numbers: a 1d bar built from three 1m
-    bars scored 1.0, where ``yahoo_1m_vap`` on the same three scored 0.0077.
+    * ``covered_ns`` is the **union** of the input bars' declared spans inside the
+      emitted bucket — *extent*, how much of the window has any input at all;
+    * ``sampled_ns`` is that same union with each instant weighted by the best
+      ``prov_confidence`` covering it — *adequacy*, how well the covered part was
+      sampled;
+    * ``tradeable_ns`` is how much of the bucket the market could fill.
 
-    Weighting by the input's own confidence is what keeps the derivation from outranking
-    what it derives from. Twenty-four 1h bars each covering half their hour re-bucket into
-    a day that is half covered, not a whole one; summing declared widths alone would have
-    reported 1.0 for it. The same rule in the other dimension is ``prov``'s: the emitted
-    bar carries the worst level among its inputs, so re-bucketing synthetic bars yields
-    synthetic ones rather than laundering them into DERIVED.
+    **Why the denominator is not the bucket's width.** It was, and a *complete* regular
+    US session — 390 one-minute bars, every one of them at confidence 1.0 — re-bucketed
+    to 1d scored 0.2708, because 390 minutes of a 1440-minute calendar day is all a
+    complete session can ever be. A consumer thresholding ``>= 0.5`` dropped every
+    complete equity daily bar there is. ``yahoo_1m_vap`` in this same registry already
+    divides by 390 for exactly this market and exactly this reason; wall-clock was never
+    the reference, it was the reference for a market that never closes. The caller
+    declares the tradeable window because only the caller knows the calendar: a crypto
+    resampler passes the bucket width unchanged, and the equity one passes regular
+    sessions. Over-declaring it (a holiday nobody modelled) lowers the score and never
+    raises it, which is the safe direction for a number consumers filter on.
 
-    Saturating at 1.0 says the bucket is as covered as this method can make it. A caller
-    re-bucketing wide bars into narrower ones passes more coverage than the bucket holds,
-    and that is a full bucket, not an over-full one.
+    **Why the two terms are separate, and multiplied.** They used to be one: the width of
+    each input was multiplied by its own confidence and the products summed, so 390 bars
+    at 0.5 and 195 bars at 1.0 produced the identical number from different states. They
+    are not the same state. Half-sampled inputs across a whole session still observed
+    every minute's own high and low; a missing half-session observed nothing there, and
+    the day's high may be absent from the bar entirely. A gap therefore fails both tests
+    — the bar does not span the window, *and* the instants it does not span contribute no
+    sampling — while dilution fails only the second. Multiplying charges it twice, which
+    is the asymmetry the two states differ by: 390 at 0.5 scores 0.5, 195 at 1.0 scores
+    0.25.
+
+    **Why a union and not a sum.** ``covered_ns`` is a union of intervals because a lake
+    spanning the migration holds the same day under two channel tags, and a summed width
+    counted it twice — *raising* the confidence of a bar because one of its inputs was
+    duplicated. A duplicate is the one thing that must never make a derivation look better
+    sampled. Overlapping inputs contribute their instant once, at the best confidence
+    covering it.
+
+    Saturating at 1.0 in each term says the bucket is as covered, and as well sampled, as
+    this method can make it. A caller re-bucketing wide bars into narrower ones passes
+    more coverage than the bucket holds, and that is a full bucket, not an over-full one.
+    The claim that the bar was not reported by a venue is ``prov``'s, and the emitted bar
+    carries the worst level among its inputs (see :func:`worst_provenance`), so
+    re-bucketing synthetic bars yields synthetic ones rather than laundering them.
     """
     covered_ns = _require_int(inputs, "covered_ns")
-    interval_ns = _require_int(inputs, "interval_ns")
-    if interval_ns <= 0:
-        raise ConfidenceInputError(f"input 'interval_ns' must be positive, got {interval_ns}")
+    sampled_ns = _require_int(inputs, "sampled_ns")
+    tradeable_ns = _require_int(inputs, "tradeable_ns")
+    if tradeable_ns <= 0:
+        raise ConfidenceInputError(f"input 'tradeable_ns' must be positive, got {tradeable_ns}")
     if covered_ns < 0:
         raise ConfidenceInputError(f"input 'covered_ns' must be non-negative, got {covered_ns}")
-    return min(covered_ns / interval_ns, 1.0)
+    if sampled_ns < 0:
+        raise ConfidenceInputError(f"input 'sampled_ns' must be non-negative, got {sampled_ns}")
+    if sampled_ns > covered_ns:
+        raise ConfidenceInputError(
+            f"input 'sampled_ns' ({sampled_ns}) exceeds 'covered_ns' ({covered_ns}); "
+            f"an instant cannot be sampled better than it is covered"
+        )
+    extent = min(covered_ns / tradeable_ns, 1.0)
+    adequacy = min(sampled_ns / tradeable_ns, 1.0)
+    return extent * adequacy
 
 
 @register_basis("scraped_last_price", level=Provenance.SYNTHETIC, inputs=[])
@@ -510,6 +545,18 @@ _TRUST_ORDER: Final[tuple[Provenance, ...]] = (
     Provenance.UNAVAILABLE,
 )
 """The levels from most to least trustworthy, which is what makes "worst" well defined."""
+
+
+def trust_rank(level: Provenance) -> int:
+    """Return ``level``'s position in the trust order — higher is less trustworthy.
+
+    The same ordering :func:`worst_provenance` reduces over, exposed for the callers that
+    have to express "the worst of these" somewhere a Python ``max()`` cannot reach: a
+    Polars aggregation over a bar frame takes a numeric column, not a list of enums. A
+    second copy of the order written out at such a call site is a second place for it to
+    disagree with this one.
+    """
+    return _TRUST_ORDER.index(level)
 
 
 def worst_provenance(levels: Iterable[Provenance]) -> Provenance:

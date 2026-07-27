@@ -324,7 +324,13 @@ def test_none_of_the_bar_aggregations_claims_a_venue_reported_it():
         assert describe(basis).strip(), f"{basis} has to argue for its number"
 
 
-_FULL_BUCKET = {"covered_ns": 3_600_000_000_000, "interval_ns": 3_600_000_000_000}
+_HOUR_NS = 3_600_000_000_000
+_MINUTE_NS = 60_000_000_000
+_FULL_BUCKET = {
+    "covered_ns": _HOUR_NS,
+    "sampled_ns": _HOUR_NS,
+    "tradeable_ns": _HOUR_NS,
+}
 
 
 def test_re_bucketing_bars_measures_coverage_instead_of_asserting_it():
@@ -335,23 +341,85 @@ def test_re_bucketing_bars_measures_coverage_instead_of_asserting_it():
     computable as ``yahoo_1m_vap``'s 390 — and a 1d bar built from three 1m bars used to
     score 1.0 while the same three bars scored 0.0077 through the vap formula.
     """
-    hour = 3_600_000_000_000
-    minute = 60_000_000_000
-
     assert confidence_for("ohlcv_from_ohlcv", _FULL_BUCKET) == 1.0
-    assert confidence_for(
-        "ohlcv_from_ohlcv", {"covered_ns": 3 * minute, "interval_ns": hour}
-    ) == pytest.approx(0.05)
-    assert confidence_for("ohlcv_from_ohlcv", {"covered_ns": 0, "interval_ns": hour}) == 0.0
+    three_minutes = {
+        "covered_ns": 3 * _MINUTE_NS,
+        "sampled_ns": 3 * _MINUTE_NS,
+        "tradeable_ns": _HOUR_NS,
+    }
+    assert confidence_for("ohlcv_from_ohlcv", three_minutes) == pytest.approx(0.05 * 0.05)
+    empty = {"covered_ns": 0, "sampled_ns": 0, "tradeable_ns": _HOUR_NS}
+    assert confidence_for("ohlcv_from_ohlcv", empty) == 0.0
     # Re-bucketing wide bars into narrow ones is a full bucket, not an over-full one.
-    assert confidence_for("ohlcv_from_ohlcv", {"covered_ns": 4 * hour, "interval_ns": hour}) == 1.0
+    overfull = {
+        "covered_ns": 4 * _HOUR_NS,
+        "sampled_ns": 4 * _HOUR_NS,
+        "tradeable_ns": _HOUR_NS,
+    }
+    assert confidence_for("ohlcv_from_ohlcv", overfull) == 1.0
+
+
+def test_a_complete_us_session_re_bucketed_to_a_day_is_fully_covered():
+    """I1: the denominator was wall-clock, so a complete session scored 0.2708.
+
+    390 one-minute bars *are* a regular US trading day. Dividing them by a 1440-minute
+    calendar day made every complete equity daily bar fail a ``prov_confidence >= 0.5``
+    filter, while ``yahoo_1m_vap`` in the same registry already treats 390 as the
+    session reference for this market.
+    """
+    session_ns = _SESSION_BARS * _MINUTE_NS
+    complete = {
+        "covered_ns": session_ns,
+        "sampled_ns": session_ns,
+        "tradeable_ns": session_ns,
+    }
+
+    assert confidence_for("ohlcv_from_ohlcv", complete) == 1.0
+    assert session_ns / (24 * 60 * _MINUTE_NS) == pytest.approx(0.2708, abs=1e-4)
+
+
+def test_coverage_and_adequacy_are_not_interchangeable():
+    """I1: 390 bars at 0.5 and 195 bars at 1.0 used to return the identical number.
+
+    They are different states. Half-sampled inputs across a whole session still observed
+    every minute's own high and low; a missing half-session observed nothing there, so
+    the day's high may be absent from the bar entirely. A gap fails both terms — extent
+    and adequacy — where dilution fails only the second.
+    """
+    session_ns = _SESSION_BARS * _MINUTE_NS
+    diluted = {
+        "covered_ns": session_ns,
+        "sampled_ns": session_ns // 2,
+        "tradeable_ns": session_ns,
+    }
+    truncated = {
+        "covered_ns": session_ns // 2,
+        "sampled_ns": session_ns // 2,
+        "tradeable_ns": session_ns,
+    }
+
+    assert confidence_for("ohlcv_from_ohlcv", diluted) == pytest.approx(0.5)
+    assert confidence_for("ohlcv_from_ohlcv", truncated) == pytest.approx(0.25)
 
 
 def test_re_bucketing_rejects_a_bucket_with_no_width():
     with pytest.raises(ConfidenceInputError):
-        confidence_for("ohlcv_from_ohlcv", {"covered_ns": 1, "interval_ns": 0})
+        confidence_for(
+            "ohlcv_from_ohlcv", {"covered_ns": 1, "sampled_ns": 1, "tradeable_ns": 0}
+        )
     with pytest.raises(ConfidenceInputError):
-        confidence_for("ohlcv_from_ohlcv", {"covered_ns": -1, "interval_ns": 1})
+        confidence_for(
+            "ohlcv_from_ohlcv", {"covered_ns": -1, "sampled_ns": 0, "tradeable_ns": 1}
+        )
+
+
+def test_re_bucketing_rejects_an_instant_sampled_better_than_it_is_covered():
+    """``sampled_ns`` weights the union ``covered_ns`` measures; it cannot exceed it."""
+    with pytest.raises(ConfidenceInputError, match="exceeds"):
+        confidence_for(
+            "ohlcv_from_ohlcv",
+            {"covered_ns": _MINUTE_NS, "sampled_ns": _HOUR_NS, "tradeable_ns": _HOUR_NS},
+        )
 
 
 def test_worst_provenance_orders_the_levels_by_trust():

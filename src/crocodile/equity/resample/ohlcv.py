@@ -50,7 +50,10 @@ Choose by asset class, not by which one is easier to import.
 
 from __future__ import annotations
 
+import heapq
 from collections.abc import Iterable, Iterator
+from itertools import pairwise
+from typing import Final
 
 import duckdb
 import polars as pl
@@ -59,7 +62,9 @@ from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.provenance import (
     Provenance,
     ProvenanceFields,
+    level_for,
     provenance_fields,
+    trust_rank,
     worst_provenance,
 )
 from crocodile.core.schema.records import OHLCV, Quote, Trade
@@ -310,6 +315,108 @@ def _detect_scale_and_adjust_interval(ts: int, interval_ns: int) -> int:
         return max(1, interval_ns // 1_000_000)
 
 
+def _ts_unit_ns(ts: int) -> int:
+    """Return how many nanoseconds one unit of ``ts``'s own clock is worth.
+
+    The mirror of :func:`_detect_scale_and_adjust_interval`, which converts a duration
+    *into* the stream's unit. Coverage arithmetic needs the conversion back out: bucket
+    boundaries and record timestamps are in the stream's unit, and a confidence formula's
+    inputs are in nanoseconds. Mixing the two silently scaled a millisecond stream's
+    coverage by a million.
+    """
+    if ts < 1e11 or ts > 1e17:
+        return 1
+    if ts > 1e14:
+        return 1_000
+    return 1_000_000
+
+
+_MINUTE_NS: Final = 60 * 1_000_000_000
+_DAY_NS: Final = 24 * 60 * _MINUTE_NS
+_WEEK_NS: Final = 7 * _DAY_NS
+_REGULAR_SESSION_NS: Final = 390 * _MINUTE_NS
+"""One regular US trading session, the same 390 one-minute bars ``yahoo_1m_vap`` divides by.
+
+Stated here rather than imported from the registry because it is the same *fact* about the
+same market reached for a different reason, and the registry scopes its copy to that one
+basis deliberately: a crypto volume-at-price day has 1440 minutes and no session at all.
+"""
+
+_SESSIONS_PER_WEEK: Final = 5
+
+
+def _tradeable_ns(interval_ns: int) -> int:
+    """Return how much of a bucket ``interval_ns`` wide a US regular session can fill.
+
+    The denominator ``ohlcv_from_ohlcv`` measures against. A bucket no wider than one
+    session is entirely inside trading hours and is its own denominator; wider ones are
+    counted in whole weeks, whole days and a remainder, so a complete session re-bucketed
+    to ``1d`` scores 1.0 instead of the 390/1440 = 0.2708 that made every complete equity
+    daily bar fail a ``>= 0.5`` filter.
+
+    Holidays and half-days are not modelled. That biases the denominator *up*, which
+    lowers the score and never raises it — the safe direction for a number consumers
+    filter on, and the reason a calendar is not a prerequisite for measuring at all.
+    """
+    if interval_ns <= _REGULAR_SESSION_NS:
+        return interval_ns
+    weeks, rest = divmod(interval_ns, _WEEK_NS)
+    days, remainder = divmod(rest, _DAY_NS)
+    sessions = weeks * _SESSIONS_PER_WEEK + min(days, _SESSIONS_PER_WEEK)
+    return sessions * _REGULAR_SESSION_NS + min(remainder, _REGULAR_SESSION_NS)
+
+
+def _union_coverage(
+    segments: list[tuple[int, int, float]], lo: int, hi: int
+) -> tuple[int, float]:
+    """Return ``(covered, sampled)`` over the union of ``segments`` clipped to ``[lo, hi)``.
+
+    ``segments`` are ``(start, end, confidence)`` in the stream's own timestamp unit.
+    ``covered`` is the measure of the union — every instant counted once however many
+    inputs cover it — and ``sampled`` weights each instant by the *best* confidence
+    covering it.
+
+    A union rather than a sum of widths because a lake spanning the migration holds the
+    same day under ``channel=bar/`` and ``channel=ohlcv/`` at once, and summing counted it
+    twice: the duplicated day doubled ``volume``, doubled ``num_trades``, and *raised* the
+    emitted bar's ``prov_confidence``. A duplicate making a derivation look better sampled
+    is the one direction a confidence number must never move.
+
+    Overlapping instants take the best rather than the worst confidence because the
+    observation really was made that well by at least one input; the worst level among the
+    inputs is a separate claim and ``worst_provenance`` carries it.
+    """
+    clipped = [
+        (max(start, lo), min(end, hi), confidence)
+        for start, end, confidence in segments
+        if min(end, hi) > max(start, lo)
+    ]
+    if not clipped:
+        return 0, 0.0
+    clipped.sort()
+    boundaries = sorted({point for start, end, _ in clipped for point in (start, end)})
+
+    # (-confidence, end): a max-heap on confidence with lazy expiry. An entry whose end
+    # has passed is discarded when it reaches the top, which is enough — it can only hide
+    # entries with a *lower* confidence, and those are still live below it.
+    active: list[tuple[float, int]] = []
+    index = 0
+    covered = 0
+    sampled = 0.0
+    for left, right in pairwise(boundaries):
+        while index < len(clipped) and clipped[index][0] <= left:
+            heapq.heappush(active, (-clipped[index][2], clipped[index][1]))
+            index += 1
+        while active and active[0][1] <= left:
+            heapq.heappop(active)
+        if not active:
+            continue
+        width = right - left
+        covered += width
+        sampled += width * -active[0][0]
+    return covered, sampled
+
+
 def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[OHLCV]:
     """Resample an iterable of Trade records into OHLCV records.
 
@@ -321,7 +428,25 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
     # A bar is not something a venue published. Stated once here and spread onto every
     # record below: a resampled record with no `prov=` inherits the header default, which
     # says NATIVE — the claim that the venue reported this bar directly.
-    tail = provenance_fields("ohlcv_from_trades")
+    basis = provenance_fields("ohlcv_from_trades")
+    input_levels: list[Provenance] = []
+
+    def _tail_for_bucket() -> ProvenanceFields:
+        """The bucket's tail: the basis level floored by the worst input's level.
+
+        The level a basis registers is a ceiling, not a measurement, and the fix that
+        introduced :func:`worst_provenance` applied it to one of this module's three
+        record paths. ``google_finance`` emits ``Trade(prov=SYNTHETIC,
+        prov_basis='scraped_last_price')`` — a last price lifted off a rendered page —
+        and bars aggregated from those prints came back ``prov=derived``, so a consumer
+        filtering ``WHERE prov != 'synthetic'`` got them with nothing to notice.
+
+        ``prov_confidence`` stays the registered constant, which is the separation this
+        registry states outright: confidence measures sampling adequacy *within* a level,
+        and the bar really is the whole of the prints it was handed. Which level it is at
+        is ``prov``'s answer, and that is what moves here.
+        """
+        return basis._replace(prov=worst_provenance([basis.prov, *input_levels]))
 
     current_bucket: int | None = None
     open_px = 0.0
@@ -365,6 +490,7 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             volume = trade.amount
             vwap_sum = trade.price * trade.amount
             trade_count = 1
+            input_levels = [trade.prov]
         elif bucket == current_bucket:
             high_px = max(high_px, trade.price)
             low_px = min(low_px, trade.price)
@@ -372,8 +498,10 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             volume += trade.amount
             vwap_sum += trade.price * trade.amount
             trade_count += 1
+            input_levels.append(trade.prov)
         else:
             vwap = (vwap_sum / volume) if volume > 0 else None
+            tail = _tail_for_bucket()
             yield OHLCV(
                 source=source,
                 symbol=symbol,
@@ -402,9 +530,11 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             volume = trade.amount
             vwap_sum = trade.price * trade.amount
             trade_count = 1
+            input_levels = [trade.prov]
 
     if current_bucket is not None:
         vwap = (vwap_sum / volume) if volume > 0 else None
+        tail = _tail_for_bucket()
         yield OHLCV(
             source=source,
             symbol=symbol,
@@ -439,7 +569,18 @@ def resample_quotes_to_bars(
 
     # SYNTHETIC, not DERIVED: these prices are quotes, nothing here was transacted, and
     # the `volume` below is a structural zero rather than a measured one.
-    tail = provenance_fields("ohlcv_from_quotes")
+    basis = provenance_fields("ohlcv_from_quotes")
+    input_levels: list[Provenance] = []
+
+    def _tail_for_bucket() -> ProvenanceFields:
+        """The bucket's tail, floored by the worst input quote's level.
+
+        SYNTHETIC is already the floor for most inputs, but not for all of them:
+        UNAVAILABLE is worse, and a quote reconstructed from something worse than a
+        venue reading must not be re-labelled by the aggregation. Same rule, same
+        reason, as the trade path — the level a basis registers is a ceiling.
+        """
+        return basis._replace(prov=worst_provenance([basis.prov, *input_levels]))
 
     current_bucket: int | None = None
     open_px = 0.0
@@ -492,14 +633,17 @@ def resample_quotes_to_bars(
             volume = 0.0
             price_sum = price
             quote_count = 1
+            input_levels = [quote.prov]
         elif bucket == current_bucket:
             high_px = max(high_px, price)
             low_px = min(low_px, price)
             close_px = price
             price_sum += price
             quote_count += 1
+            input_levels.append(quote.prov)
         else:
             vwap = (price_sum / quote_count) if quote_count > 0 else None
+            tail = _tail_for_bucket()
             yield OHLCV(
                 source=source,
                 symbol=symbol,
@@ -528,9 +672,11 @@ def resample_quotes_to_bars(
             volume = 0.0
             price_sum = price
             quote_count = 1
+            input_levels = [quote.prov]
 
     if current_bucket is not None:
         vwap = (price_sum / quote_count) if quote_count > 0 else None
+        tail = _tail_for_bucket()
         yield OHLCV(
             source=source,
             symbol=symbol,
@@ -582,17 +728,33 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
     """
     interval_ns, _, interval_label = _parse_interval(interval)
     adjusted_interval: int | None = None
+    unit_ns = 1
     width_cache: dict[str, int] = {}
+    tradeable_ns = _tradeable_ns(interval_ns)
 
-    # Coverage of the bucket being accumulated, each input weighted by its own
-    # confidence, and the worst level seen in it.
-    covered_ns = 0.0
+    # The spans the inputs of the bucket being accumulated declare, in the stream's own
+    # timestamp unit, and the worst level seen among them. Spans rather than a running
+    # total because coverage is the *union* of them: the same day arrives twice from a
+    # lake that holds it under both channel tags, and a sum counted it twice.
+    segments: list[tuple[int, int, float]] = []
     input_levels: list[Provenance] = []
 
     def _tail_for_bucket() -> ProvenanceFields:
+        assert current_bucket is not None and adjusted_interval is not None
+        covered, sampled = _union_coverage(
+            segments, current_bucket, current_bucket + adjusted_interval
+        )
+        covered_ns = covered * unit_ns
         fields = provenance_fields(
             "ohlcv_from_ohlcv",
-            {"covered_ns": round(covered_ns), "interval_ns": interval_ns},
+            {
+                "covered_ns": covered_ns,
+                # Clamped, not merely rounded: a float weighting can round to one
+                # nanosecond above the span it weights, and the formula refuses an
+                # instant sampled better than it is covered.
+                "sampled_ns": min(round(sampled * unit_ns), covered_ns),
+                "tradeable_ns": tradeable_ns,
+            },
         )
         return fields._replace(prov=worst_provenance([fields.prov, *input_levels]))
 
@@ -627,8 +789,11 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(bar.local_ts, interval_ns)
+            unit_ns = _ts_unit_ns(bar.local_ts)
 
         bucket = (bar.local_ts // adjusted_interval) * adjusted_interval
+        width = max(1, _bar_width_ns(bar.interval, width_cache) // unit_ns)
+        segment = (bar.local_ts, bar.local_ts + width, bar.prov_confidence)
 
         if current_bucket is None:
             current_bucket = bucket
@@ -639,7 +804,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             volume = bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
-            covered_ns = _bar_width_ns(bar.interval, width_cache) * bar.prov_confidence
+            segments = [segment]
             input_levels = [bar.prov]
             if bar.num_trades is not None:
                 trade_count_sum = bar.num_trades
@@ -654,7 +819,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             volume += bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum += vwap_val * bar.volume
-            covered_ns += _bar_width_ns(bar.interval, width_cache) * bar.prov_confidence
+            segments.append(segment)
             input_levels.append(bar.prov)
             if bar.num_trades is not None:
                 trade_count_sum += bar.num_trades
@@ -696,7 +861,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             volume = bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
-            covered_ns = _bar_width_ns(bar.interval, width_cache) * bar.prov_confidence
+            segments = [segment]
             input_levels = [bar.prov]
             if bar.num_trades is not None:
                 trade_count_sum = bar.num_trades
@@ -748,6 +913,9 @@ _EMPTY_BAR_SCHEMA: dict[str, pl.DataType] = {
     "volume": pl.Float64(),
     "vwap": pl.Float64(),
     "trade_count": pl.Int64(),
+    "prov": pl.String(),
+    "prov_basis": pl.String(),
+    "prov_confidence": pl.Float64(),
 }
 
 _DESIRED_COLS = [
@@ -761,7 +929,57 @@ _DESIRED_COLS = [
     "volume",
     "vwap",
     "trade_count",
+    "prov",
+    "prov_basis",
+    "prov_confidence",
 ]
+
+
+# ---------------------------------------------------------------------------
+# The provenance tail, in frame form
+# ---------------------------------------------------------------------------
+# The three functions above build records and state their tail on each one. The
+# three below build frames and used to state nothing at all — a bar frame came
+# back with no ``prov`` column, so a caller writing those rows to the lake, or
+# comparing them against records, had the header default applied for them: NATIVE
+# at confidence 1.0, the claim that a venue reported this bar. Same laundering,
+# one type further out.
+
+_TRUST_RANKS: dict[str, int] = {level.value: trust_rank(level) for level in Provenance}
+_LEVEL_BY_RANK: dict[int, str] = {rank: value for value, rank in _TRUST_RANKS.items()}
+_PROV_RANK = "_prov_rank"
+
+
+def _rank_inputs(df: pl.DataFrame, floor: Provenance) -> tuple[pl.DataFrame, bool]:
+    """Attach the numeric trust rank of each input row's ``prov``, if it declares one.
+
+    Returns the frame and whether the rank column was added. A frame with no ``prov``
+    column makes no provenance claim at all, and the emitted level then rests on the
+    basis alone — which is the same reading the record paths give a default-constructed
+    input.
+    """
+    if "prov" not in df.columns:
+        return df, False
+    return (
+        df.with_columns(
+            pl.col("prov")
+            .replace_strict(_TRUST_RANKS, default=trust_rank(floor), return_dtype=pl.Int32)
+            .fill_null(trust_rank(floor))
+            .alias(_PROV_RANK)
+        ),
+        True,
+    )
+
+
+def _emitted_prov(has_rank: bool, floor: Provenance) -> pl.Expr:
+    """Return the emitted ``prov`` for a bucket: the basis level, floored by its inputs."""
+    if not has_rank:
+        return pl.lit(floor.value).alias("prov")
+    return (
+        pl.max_horizontal(pl.col(_PROV_RANK), pl.lit(trust_rank(floor), dtype=pl.Int32))
+        .replace_strict(_LEVEL_BY_RANK, return_dtype=pl.String)
+        .alias("prov")
+    )
 
 
 def _order_columns(resampled: pl.DataFrame) -> pl.DataFrame:
@@ -775,13 +993,23 @@ def _order_columns(resampled: pl.DataFrame) -> pl.DataFrame:
 def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     """Resample trades DataFrame using Polars.
 
-    Expects columns: local_ts, price, amount, and optionally symbol, source, symbol_raw.
+    Expects columns: local_ts, price, amount, and optionally symbol, source, symbol_raw,
+    and the provenance tail a lake-read frame carries.
+
+    The output carries ``prov``, ``prov_basis`` and ``prov_confidence``, the same tail
+    :func:`resample_trades_to_bars` puts on its records and for the same reason: a bar is
+    not something a venue published, and a frame that says nothing gets the header default
+    said for it. ``prov`` is floored by the worst input's level, so bars built from
+    ``google_finance``'s scraped last prices come back SYNTHETIC rather than DERIVED.
     """
     if len(df) == 0:
         return pl.DataFrame(schema=_EMPTY_BAR_SCHEMA)
 
     _ns, _sql, polars_str = _parse_interval(interval)
     interval_label = interval.strip().lower()
+
+    tail = provenance_fields("ohlcv_from_trades")
+    df, has_rank = _rank_inputs(df, tail.prov)
 
     df_dt = df.with_columns(pl.from_epoch("local_ts", time_unit="ns").alias("datetime")).sort(
         "datetime"
@@ -789,30 +1017,37 @@ def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
 
     group_keys = [k for k in ["symbol", "source", "symbol_raw"] if k in df.columns]
 
+    aggregates = [
+        pl.col("price").first().alias("open"),
+        pl.col("price").max().alias("high"),
+        pl.col("price").min().alias("low"),
+        pl.col("price").last().alias("close"),
+        pl.col("amount").sum().alias("volume"),
+        pl.when(pl.col("amount").sum() > 0.0)
+        .then((pl.col("price") * pl.col("amount")).sum() / pl.col("amount").sum())
+        .otherwise(None)
+        .alias("vwap"),
+        pl.len().cast(pl.Int64).alias("trade_count"),
+    ]
+    if has_rank:
+        aggregates.append(pl.col(_PROV_RANK).max().alias(_PROV_RANK))
+
     resampled = df_dt.group_by_dynamic(
         "datetime",
         every=polars_str,
         group_by=group_keys,
         closed="left",
-    ).agg(
-        [
-            pl.col("price").first().alias("open"),
-            pl.col("price").max().alias("high"),
-            pl.col("price").min().alias("low"),
-            pl.col("price").last().alias("close"),
-            pl.col("amount").sum().alias("volume"),
-            pl.when(pl.col("amount").sum() > 0.0)
-            .then((pl.col("price") * pl.col("amount")).sum() / pl.col("amount").sum())
-            .otherwise(None)
-            .alias("vwap"),
-            pl.len().cast(pl.Int64).alias("trade_count"),
-        ]
-    )
+    ).agg(aggregates)
 
     resampled = resampled.with_columns(
         pl.col("datetime").dt.epoch("ns").alias("bar"),
         pl.lit(interval_label).alias("interval"),
+        _emitted_prov(has_rank, tail.prov),
+        pl.lit(tail.prov_basis).alias("prov_basis"),
+        pl.lit(tail.prov_confidence).alias("prov_confidence"),
     ).drop("datetime")
+    if has_rank:
+        resampled = resampled.drop(_PROV_RANK)
 
     return _order_columns(resampled)
 
@@ -820,13 +1055,21 @@ def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
 def resample_quotes_df(df: pl.DataFrame, interval: str, price_type: str = "mid") -> pl.DataFrame:
     """Resample quotes DataFrame using Polars.
 
-    Expects columns: local_ts, bid_px, ask_px, and optionally symbol, source, symbol_raw.
+    Expects columns: local_ts, bid_px, ask_px, and optionally symbol, source, symbol_raw,
+    and the provenance tail a lake-read frame carries.
+
+    The output carries the ``ohlcv_from_quotes`` tail, floored by the worst input's level;
+    see :func:`resample_trades_df` for why a frame that states nothing is worse than a
+    record that states nothing.
     """
     if len(df) == 0:
         return pl.DataFrame(schema=_EMPTY_BAR_SCHEMA)
 
     _ns, _sql, polars_str = _parse_interval(interval)
     interval_label = interval.strip().lower()
+
+    tail = provenance_fields("ohlcv_from_quotes")
+    df, has_rank = _rank_inputs(df, tail.prov)
 
     if price_type == "mid":
         df = df.with_columns(((pl.col("bid_px") + pl.col("ask_px")) / 2.0).alias("price"))
@@ -843,27 +1086,34 @@ def resample_quotes_df(df: pl.DataFrame, interval: str, price_type: str = "mid")
 
     group_keys = [k for k in ["symbol", "source", "symbol_raw"] if k in df.columns]
 
+    aggregates = [
+        pl.col("price").first().alias("open"),
+        pl.col("price").max().alias("high"),
+        pl.col("price").min().alias("low"),
+        pl.col("price").last().alias("close"),
+        pl.lit(0.0).alias("volume"),
+        pl.col("price").mean().alias("vwap"),
+        pl.len().cast(pl.Int64).alias("trade_count"),
+    ]
+    if has_rank:
+        aggregates.append(pl.col(_PROV_RANK).max().alias(_PROV_RANK))
+
     resampled = df_dt.group_by_dynamic(
         "datetime",
         every=polars_str,
         group_by=group_keys,
         closed="left",
-    ).agg(
-        [
-            pl.col("price").first().alias("open"),
-            pl.col("price").max().alias("high"),
-            pl.col("price").min().alias("low"),
-            pl.col("price").last().alias("close"),
-            pl.lit(0.0).alias("volume"),
-            pl.col("price").mean().alias("vwap"),
-            pl.len().cast(pl.Int64).alias("trade_count"),
-        ]
-    )
+    ).agg(aggregates)
 
     resampled = resampled.with_columns(
         pl.col("datetime").dt.epoch("ns").alias("bar"),
         pl.lit(interval_label).alias("interval"),
+        _emitted_prov(has_rank, tail.prov),
+        pl.lit(tail.prov_basis).alias("prov_basis"),
+        pl.lit(tail.prov_confidence).alias("prov_confidence"),
     ).drop("datetime")
+    if has_rank:
+        resampled = resampled.drop(_PROV_RANK)
 
     return _order_columns(resampled)
 
@@ -880,24 +1130,96 @@ column whose whole job is to report how many there were.
 """
 
 
+_COVERED = "_covered_ns"
+_SAMPLED = "_sampled_ns"
+
+
+def _measure_coverage(
+    df_dt: pl.DataFrame, group_keys: list[str], polars_str: str
+) -> tuple[pl.DataFrame, bool]:
+    """Attach each input bar's *non-overlapping* contribution to its bucket's coverage.
+
+    The frame form of what :func:`_union_coverage` does for records, expressed as the
+    classic merge-intervals sweep: sort by start within the bucket, and let each bar
+    contribute only the part of its declared span that no earlier bar already covered.
+    A day that arrives twice — which is what a lake holding it under both channel tags
+    hands back — contributes its width once, so the duplicate cannot raise the emitted
+    bar's confidence. Ties are broken by confidence descending, so the instant is scored
+    at the best sampling that observed it.
+
+    Returns ``(frame, measurable)``. A frame that declares no ``interval`` states no
+    width for its inputs, and there is nothing to divide; the caller emits a null
+    confidence rather than the 1.0 that would claim a full bucket.
+    """
+    if "interval" not in df_dt.columns:
+        return df_dt, False
+    labels = [str(v) for v in df_dt["interval"].unique().drop_nulls().to_list()]
+    if not labels:
+        return df_dt, False
+    widths = {label: _parse_interval(label)[0] for label in labels}
+
+    # A frame with no prov_confidence makes no sampling claim, and the level fallback in
+    # ``_emitted_prov`` reads such a frame as venue-reported; this reads it the same way
+    # rather than inventing a second, quieter answer to the same question.
+    confidence = (
+        pl.col("prov_confidence").fill_null(1.0)
+        if "prov_confidence" in df_dt.columns
+        else pl.lit(1.0, dtype=pl.Float64)
+    )
+    df_dt = df_dt.with_columns(
+        pl.col("interval").replace_strict(widths, return_dtype=pl.Int64).alias("_width_ns"),
+        confidence.cast(pl.Float64).alias("_conf"),
+        pl.col("datetime").dt.truncate(polars_str).alias("_bucket"),
+    ).with_columns((pl.col("local_ts") + pl.col("_width_ns")).alias("_end_ns"))
+
+    partition = [*group_keys, "_bucket"]
+    df_dt = df_dt.sort(
+        [*partition, "local_ts", "_conf"],
+        descending=[*([False] * len(partition)), False, True],
+    ).with_columns(pl.col("_end_ns").cum_max().shift(1).over(partition).alias("_prev_end"))
+    return (
+        df_dt.with_columns(
+            pl.max_horizontal(
+                pl.col("_end_ns")
+                - pl.max_horizontal(
+                    pl.col("local_ts"), pl.col("_prev_end").fill_null(pl.col("local_ts"))
+                ),
+                pl.lit(0, dtype=pl.Int64),
+            ).alias(_COVERED)
+        ).with_columns((pl.col(_COVERED) * pl.col("_conf")).alias(_SAMPLED)),
+        True,
+    )
+
+
 def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     """Resample lower-resolution bars DataFrame into higher-resolution bars using Polars.
 
     Expects columns: local_ts (or bar), open, high, low, close, volume, and optionally
-    vwap, symbol, and a print count under either spelling in :data:`_BAR_COUNT_COLUMNS`.
+    vwap, symbol, a print count under either spelling in :data:`_BAR_COUNT_COLUMNS`, and
+    the ``interval`` / ``prov`` / ``prov_confidence`` a lake-read bar frame carries.
 
     A frame carrying neither count column produces a null ``trade_count`` rather than a
     fabricated one: the input did not say how many prints made each bar, and summing
     invented ones answers the question with the bar count instead.
+
+    The output carries the ``ohlcv_from_ohlcv`` tail: ``prov`` floored by the worst
+    input's level, and ``prov_confidence`` measured the same way
+    :func:`resample_bars_to_bars` measures it — extent times adequacy against the
+    tradeable window, over the *union* of the input spans. A frame that declares no
+    ``interval`` gets a null confidence, because the width of its inputs is the numerator
+    and nothing on the frame supplies it.
     """
     if len(df) == 0:
         return pl.DataFrame(schema=_EMPTY_BAR_SCHEMA)
 
-    _ns, _sql, polars_str = _parse_interval(interval)
+    interval_ns, _sql, polars_str = _parse_interval(interval)
     interval_label = interval.strip().lower()
 
     if "local_ts" not in df.columns and "bar" in df.columns:
         df = df.with_columns(pl.col("bar").alias("local_ts"))
+
+    floor = level_for("ohlcv_from_ohlcv")
+    df, has_rank = _rank_inputs(df, floor)
 
     df_dt = df.with_columns(pl.from_epoch("local_ts", time_unit="ns").alias("datetime")).sort(
         "datetime"
@@ -914,36 +1236,57 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     elif count_column != "trade_count":
         df_dt = df_dt.with_columns(pl.col(count_column).alias("trade_count"))
 
+    df_dt, measurable = _measure_coverage(df_dt, group_keys, polars_str)
+
+    aggregates = [
+        pl.col("open").first().alias("open"),
+        pl.col("high").max().alias("high"),
+        pl.col("low").min().alias("low"),
+        pl.col("close").last().alias("close"),
+        pl.col("volume").sum().alias("volume"),
+        pl.when(pl.col("volume").sum() > 0.0)
+        .then((pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum())
+        .otherwise(None)
+        .alias("vwap"),
+        # A bucket in which no input bar published a count reports none. Polars sums
+        # all-null to 0, and "zero prints made this bar" is a different false claim
+        # from the fabricated 1-per-bar this replaced. Matches what
+        # ``resample_bars_to_bars`` does with the same input.
+        pl.when(pl.col("trade_count").null_count() == pl.len())
+        .then(pl.lit(None, dtype=pl.Int64))
+        .otherwise(pl.col("trade_count").sum().cast(pl.Int64))
+        .alias("trade_count"),
+    ]
+    if has_rank:
+        aggregates.append(pl.col(_PROV_RANK).max().alias(_PROV_RANK))
+    if measurable:
+        aggregates.append(pl.col(_COVERED).sum().alias(_COVERED))
+        aggregates.append(pl.col(_SAMPLED).sum().alias(_SAMPLED))
+
     resampled = df_dt.group_by_dynamic(
         "datetime",
         every=polars_str,
         group_by=group_keys,
         closed="left",
-    ).agg(
-        [
-            pl.col("open").first().alias("open"),
-            pl.col("high").max().alias("high"),
-            pl.col("low").min().alias("low"),
-            pl.col("close").last().alias("close"),
-            pl.col("volume").sum().alias("volume"),
-            pl.when(pl.col("volume").sum() > 0.0)
-            .then((pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum())
-            .otherwise(None)
-            .alias("vwap"),
-            # A bucket in which no input bar published a count reports none. Polars sums
-            # all-null to 0, and "zero prints made this bar" is a different false claim
-            # from the fabricated 1-per-bar this replaced. Matches what
-            # ``resample_bars_to_bars`` does with the same input.
-            pl.when(pl.col("trade_count").null_count() == pl.len())
-            .then(pl.lit(None, dtype=pl.Int64))
-            .otherwise(pl.col("trade_count").sum().cast(pl.Int64))
-            .alias("trade_count"),
-        ]
-    )
+    ).agg(aggregates)
+
+    tradeable_ns = _tradeable_ns(interval_ns)
+    if measurable:
+        confidence = pl.min_horizontal(
+            pl.col(_COVERED) / tradeable_ns, pl.lit(1.0)
+        ) * pl.min_horizontal(pl.col(_SAMPLED) / tradeable_ns, pl.lit(1.0))
+    else:
+        confidence = pl.lit(None, dtype=pl.Float64)
 
     resampled = resampled.with_columns(
         pl.col("datetime").dt.epoch("ns").alias("bar"),
         pl.lit(interval_label).alias("interval"),
+        _emitted_prov(has_rank, floor),
+        pl.lit("ohlcv_from_ohlcv").alias("prov_basis"),
+        confidence.cast(pl.Float64).alias("prov_confidence"),
     ).drop("datetime")
+    resampled = resampled.drop(
+        [c for c in (_PROV_RANK, _COVERED, _SAMPLED) if c in resampled.columns]
+    )
 
     return _order_columns(resampled)
