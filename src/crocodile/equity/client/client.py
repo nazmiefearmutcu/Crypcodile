@@ -29,12 +29,14 @@ def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
     The reader is ``core``'s, not ``crocodile.equity.store.rows``': the equity providers
     write canonical records now, so an equity lake's new files carry ``source`` and
     ``asset_class`` and no ``provider`` column at all — the equity reader would have
-    raised ``KeyError('provider')`` on every one of them. What ``core``'s reader does with
-    a *pre-migration* equity file is partial and loud rather than silent: ``quote``,
-    ``instrument`` and the reference channels reconstruct, ``trade`` and ``depth`` raise
-    (equity spelled a size ``size`` and a level ``{price, size}``), and ``bar`` /
-    ``option_quote`` raise ``Unknown channel tag``. Teaching one reader both dialects is
-    the merge task that follows this one.
+    raised ``KeyError('provider')`` on every one of them.
+
+    What ``core``'s reader does with a *pre-migration* equity file is partial, and it is
+    measured rather than described here: ``tests/store/test_premerge_equity_rows.py``
+    walks every channel. Five raise, which is the safe half. Two reconstruct with a
+    column silently dropped — a legacy ``ohlcv`` row's ``trade_count`` and a legacy
+    ``instrument``'s ``exchange_name``, neither of which the canonical reader looks for.
+    Teaching one reader both dialects is the merge task that follows this one.
     """
     for row_dict in df.to_dicts():
         yield from_row(row_dict)
