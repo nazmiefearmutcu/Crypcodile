@@ -357,7 +357,15 @@ async def test_t2_timestamp_drift() -> None:
         "pool": "cbBTC-USDC",
         "pool_type": "uniswap_v3",
         "timestamp": 9999999999, # Far in the future
-        "state": {"price": 100.0, "reserve0": 1.0, "reserve1": 100.0},
+        # Carries tick liquidity so the book is reconstructed at all; this test is about
+        # the timestamp, not about the ladder.
+        "state": {
+            "price": 100.0,
+            "reserve0": 1.0,
+            "reserve1": 100.0,
+            "liquidity": 100000,
+            "tick": 0,
+        },
         "swaps": []
     }
     records = list(normalize_onchain_update(msg, 123456789))
@@ -465,7 +473,12 @@ async def test_t2_aerodrome_flipped_address_edge() -> None:
         "type": "onchain_update",
         "block": 1000,
         "pool": "AERO-USDC",
-        "pool_type": "aerodrome_v2",
+        # A tick-curve pool, because that is the only arm that reconstructs a book now.
+        # Aerodrome V2 used to reach a fallback that invented the price ladder as
+        # `price * (1 +/- 0.0005 * i)`, so `avg(ask_px - bid_px) / avg(price)` returned
+        # exactly 0.001 on every row. is_flipped is what this test is about and it is
+        # read on both arms.
+        "pool_type": "uniswap_v3",
         "timestamp": 1700000000,
         "state": {
             "price": 0.1,
@@ -473,7 +486,9 @@ async def test_t2_aerodrome_flipped_address_edge() -> None:
             "reserve1": 1000.0,
             "is_flipped": True,
             "decimals0": 18,
-            "decimals1": 6
+            "decimals1": 6,
+            "liquidity": 100000,
+            "tick": 0
         },
         "swaps": []
     }

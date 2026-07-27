@@ -405,6 +405,10 @@ def test_connector_normalization_and_records() -> None:
             "price": 40000.0,
             "reserve0": 10.0,
             "reserve1": 400000.0,
+            # This test is about the connector emitting all three record kinds; a pool that
+            # reports no tick curve now emits only the trade, which would not exercise that.
+            "liquidity": 100000,
+            "tick": 0,
         },
         "swaps": [
             {
@@ -417,29 +421,28 @@ def test_connector_normalization_and_records() -> None:
             }
         ]
     }
-    
+
     records = list(connector.normalize(update_msg, local_ts=9999))
-    
+
     assert len(records) == 3
-    
+
     trades = [r for r in records if isinstance(r, Trade)]
     tickers = [r for r in records if isinstance(r, BookTicker)]
     snapshots = [r for r in records if isinstance(r, BookSnapshot)]
-    
+
     assert len(trades) == 1
     assert trades[0].symbol == "base_onchain:cbBTC-USDC"
     assert trades[0].price == 40100.0
     assert trades[0].amount == 0.5
     assert trades[0].side == Side.BUY
-    
+
     assert len(tickers) == 1
-    assert tickers[0].bid_px == 40000.0 * 0.9995
-    assert tickers[0].ask_px == 40000.0 * 1.0005
+    assert tickers[0].bid_px < 40000.0 < tickers[0].ask_px
     assert tickers[0].update_id == 1000
-    
+
     assert len(snapshots) == 1
-    assert snapshots[0].bids[0][0] == 40000.0 * 0.9995
-    assert snapshots[0].asks[0][0] == 40000.0 * 1.0005
+    assert snapshots[0].bids[0] == (tickers[0].bid_px, tickers[0].bid_sz)
+    assert snapshots[0].asks[0] == (tickers[0].ask_px, tickers[0].ask_sz)
 
 
 @pytest.mark.asyncio
@@ -609,7 +612,10 @@ def test_realistic_multilevel_orderbook_normalization() -> None:
         assert snapshot_flipped.bids[i][0] > snapshot_flipped.bids[i+1][0]
         assert snapshot_flipped.asks[i][0] < snapshot_flipped.asks[i+1][0]
 
-    # 2. Aerodrome V2 Pool (5 levels reserve based)
+    # 2. Aerodrome V2 Pool: reserves only, so there is no multilevel book to normalize.
+    # Its levels used to be `price * (1 -/+ 0.0005 * i)`, which made
+    # `SELECT avg(ask_px - bid_px) / avg(price)` over every base_onchain book_ticker row
+    # return exactly 0.001 -- a constant 10bp spread presented as a measured top of book.
     aero_msg = {
         "type": "onchain_update",
         "block": 1000,
@@ -625,20 +631,10 @@ def test_realistic_multilevel_orderbook_normalization() -> None:
         },
         "swaps": []
     }
-    
+
     records_aero = list(normalize_onchain_update(aero_msg, local_ts=9999))
-    snapshot_aero = next(r for r in records_aero if isinstance(r, BookSnapshot))
-    
-    assert len(snapshot_aero.bids) == 5
-    assert len(snapshot_aero.asks) == 5
-    assert snapshot_aero.bids[0][0] == pytest.approx(2.0 * 0.9995)
-    assert snapshot_aero.bids[1][0] == pytest.approx(2.0 * 0.9990)
-    
-    for i in range(4):
-        assert snapshot_aero.bids[i][0] > snapshot_aero.bids[i+1][0]
-        assert snapshot_aero.asks[i][0] < snapshot_aero.asks[i+1][0]
-        assert snapshot_aero.bids[i][1] < snapshot_aero.bids[i+1][1]
-        assert snapshot_aero.asks[i][1] > snapshot_aero.asks[i+1][1]
+
+    assert records_aero == []
 
 
 @pytest.mark.asyncio
@@ -959,7 +955,14 @@ async def test_dynamic_listing_and_polling_validation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_aerodrome_real_fixture_normalization() -> None:
+async def test_aerodrome_real_fixture_yields_its_trade_and_no_book() -> None:
+    """A real Aerodrome payload normalizes to the swap it reported, and to nothing else.
+
+    This fixture used to produce a BookTicker and a BookSnapshot as well, built from
+    `price * (1 -/+ 0.0005 * i)`: `SELECT avg(ask_px - bid_px) / avg(price)` over every
+    base_onchain book_ticker row returned exactly 0.001, a constant 10bp spread presented
+    as a measured top of book. Aerodrome V2 reports reserves and never a tick curve.
+    """
     import json
     import os
 
@@ -1041,7 +1044,7 @@ async def test_aerodrome_real_fixture_normalization() -> None:
         assert msg["type"] == "onchain_update"
         assert msg["pool"] == "AERO-USDC"
         
-        # Verify normalization yields Trade, BookSnapshot, BookTicker without raising errors
+        # Verify normalization yields the Trade, and no book, without raising errors
         sink = MemorySink()
         registry = InstrumentRegistry()
         connector = BaseOnchainConnector(
@@ -1059,9 +1062,9 @@ async def test_aerodrome_real_fixture_normalization() -> None:
         tickers = [r for r in records if r.__class__.__name__ == "BookTicker"]
         
         assert len(trades) == 1
-        assert len(snapshots) == 1
-        assert len(tickers) == 1
-        
+        assert len(snapshots) == 0
+        assert len(tickers) == 0
+
         trade = trades[0]
         assert trade.symbol == "base_onchain:AERO-USDC"
         assert trade.id == f"{swap_log['transactionHash']}-{swap_log['logIndex']}"

@@ -5,11 +5,26 @@ from collections.abc import Iterable
 from typing import Any
 
 from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.provenance import provenance_fields
 from crocodile.core.schema.records import BookSnapshot, BookTicker, Record, Trade
 
 log = logging.getLogger(__name__)
 
 EXCHANGE = "base_onchain"
+
+AMM_TICK_CURVE = "amm_tick_curve"
+"""The registered basis for a book reconstructed from a concentrated-liquidity curve.
+
+Nothing in these records was ever an order. Liquidity in range is what the pool could
+fill; a BookSnapshot reports what somebody posted. Left silent they carried the header
+default — prov=native, prov_confidence=1.0 — so a consumer filtering `prov != 'native'`
+to exclude modelled depth got every base_onchain pool back.
+"""
+
+_LADDER_LEVELS = 5
+"""Levels a side asks for. The denominator of `amm_tick_curve`'s confidence, so the two
+have to agree; the registration owns the number and this is the loop bound that feeds it.
+"""
 
 def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str = EXCHANGE) -> Iterable[Record]:
     """Normalize on-chain pool updates.
@@ -187,16 +202,8 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
             except Exception:
                 return 0.0
         
-        def safe_cap(val: float) -> float:
-            try:
-                if math.isnan(val) or math.isinf(val):
-                    return val
-            except Exception:
-                pass
-            return max(val, 0.0001)
-
         # Calculate 5 levels of bids and asks
-        for i in range(1, 6):
+        for i in range(1, _LADDER_LEVELS + 1):
             if not is_flipped:
                 ask_t1 = tick + (i - 1) * tick_spacing
                 ask_t2 = tick + i * tick_spacing
@@ -246,49 +253,57 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
             if not (math.isfinite(ask_px) and math.isfinite(ask_sz) and math.isfinite(bid_px) and math.isfinite(bid_sz)):
                 return
             
-            bids.append((bid_px, safe_cap(bid_sz)))
-            asks.append((ask_px, safe_cap(ask_sz)))
-    else:
-        # Fallback for Uniswap V3 without liquidity OR Aerodrome V2
-        def safe_cap(val: float) -> float:
-            try:
-                if math.isnan(val) or math.isinf(val):
-                    return val
-            except Exception:
-                pass
-            return max(val, 0.0001)
+            # A level the curve supports no size at is not a level. It used to be floored
+            # to 0.0001, so `SELECT min(bid_sz) ... WHERE source='base_onchain'` returned a
+            # dust order and `WHERE bid_sz > 0` — "is there liquidity here" — answered yes
+            # for a drained pool. Dropping it is also what makes the ladder length an
+            # honest observable for `amm_tick_curve`'s confidence.
+            if bid_sz <= 0.0 or ask_sz <= 0.0:
+                continue
 
-        base_reserve = reserve_token1 if is_flipped else reserve_token0
-        
-        for i in range(1, 6):
-            spread_prev = 0.0005 * (i - 1)
-            spread_curr = 0.0005 * i
-            
-            bid_px = price * (1.0 - spread_curr)
-            ask_px = price * (1.0 + spread_curr)
-            
-            # Use constant product formulas
-            try:
-                ask_sz = base_reserve * (
-                    1.0 / math.sqrt(1.0 + spread_prev) - 1.0 / math.sqrt(1.0 + spread_curr)
-                )
-                bid_sz = base_reserve * (
-                    1.0 / math.sqrt(1.0 - spread_curr) - 1.0 / math.sqrt(1.0 - spread_prev)
-                )
-            except (ZeroDivisionError, ValueError):
-                return
-            
-            # Discard updates if calculated prices or sizes result in NaN or Inf
-            if not (math.isfinite(ask_px) and math.isfinite(ask_sz) and math.isfinite(bid_px) and math.isfinite(bid_sz)):
-                return
-            
-            bids.append((bid_px, safe_cap(bid_sz)))
-            asks.append((ask_px, safe_cap(ask_sz)))
-            
+            bids.append((bid_px, bid_sz))
+            asks.append((ask_px, ask_sz))
+    else:
+        # No tick curve to read, so there is no book to reconstruct. This arm — Aerodrome
+        # V2, and Uniswap V3 with no liquidity in the payload — used to invent the price
+        # ladder outright:
+        #
+        #     spread_curr = 0.0005 * i
+        #     bid_px = price * (1.0 - spread_curr)
+        #     ask_px = price * (1.0 + spread_curr)
+        #
+        # so `SELECT avg(ask_px - bid_px) / avg(price)` over every base_onchain book_ticker
+        # row returned exactly 0.001 — a 10bp spread on every row of every pool at every
+        # block, presented as a measured top of book, at prov=NATIVE. A slippage model
+        # calibrated on that lake is fitting the constant 0.0005. The sizes beside it were
+        # real constant-product arithmetic over real reserves, but they were sized to
+        # answer the invented spread rather than the curve, so they do not survive it.
+        #
+        # A constant-product pool does define both a price and a size at each level, from
+        # x*y=k over the reserves. Writing that is the right fix and it is not this one:
+        # it is financial arithmetic that needs a real payload to check against, and
+        # guessing at it is how the ladder above got here.
+        log.debug(
+            "%s: %s exposes no tick liquidity, so no book is reconstructed for it",
+            exchange,
+            pool_name,
+        )
+        return
+
+    if not bids or not asks:
+        log.debug(
+            "%s: %s has no tick level with a size behind it; no book emitted",
+            exchange,
+            pool_name,
+        )
+        return
+
     # Best levels
     bid_px, bid_sz = bids[0]
     ask_px, ask_sz = asks[0]
-    
+
+    tail = provenance_fields(AMM_TICK_CURVE, {"n_levels": len(bids)})
+
     yield BookTicker(
         source=exchange,
         symbol=f"{exchange}:{pool_name}",
@@ -300,9 +315,13 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
         bid_sz=bid_sz,
         ask_px=ask_px,
         ask_sz=ask_sz,
-        update_id=block
+        update_id=block,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
     )
-    
+
     yield BookSnapshot(
         source=exchange,
         symbol=f"{exchange}:{pool_name}",
@@ -314,5 +333,9 @@ def normalize_onchain_update(msg: dict[str, Any], local_ts: int, exchange: str =
         asks=asks,
         depth=len(bids),
         sequence_id=block,
-        is_snapshot=True
+        is_snapshot=True,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
     )

@@ -14,6 +14,7 @@ from web3 import AsyncHTTPProvider, AsyncWeb3
 # record classes, so the isinstance filters below have to name those. Importing
 # the equity classes here made every filter match nothing and every assertion
 # run over an empty list.
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import BookSnapshot, BookTicker
 from crocodile.crypto.exchanges.base_onchain.connector import (
     BaseOnchainTransport,
@@ -631,8 +632,16 @@ async def test_f4_orderbook_size_enforcement(mock_rpc) -> None:
             tickers = [r for r in records if isinstance(r, BookTicker)]
             assert len(tickers) > 0
             tick = tickers[0]
-            assert tick.bid_sz >= 0.0001
-            assert tick.ask_sz >= 0.0001
+            # The sizes are whatever the tick curve holds, and for `liquidity: 1` that is
+            # a fraction of a wei. They used to be floored to 0.0001, so
+            # `SELECT min(bid_sz) ... WHERE source='base_onchain'` returned a dust order
+            # and `WHERE bid_sz > 0` answered yes for a pool with nothing in it.
+            assert 0.0 < tick.bid_sz < 0.0001
+            assert 0.0 < tick.ask_sz < 0.0001
+            # Nothing here was ever an order: liquidity in range is what the pool could
+            # fill. Left silent the row claimed prov=native at confidence 1.0.
+            assert tick.prov is Provenance.SYNTHETIC
+            assert tick.prov_basis == "amm_tick_curve"
             break
     finally:
         await transport.close()
