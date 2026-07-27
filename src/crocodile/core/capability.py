@@ -13,22 +13,33 @@ data — where no free native equity source exists, a derived or synthetic metho
 it while saying so. :data:`REGISTRY` is what makes the first half checkable and
 :attr:`Impl.basis` is what makes the second half machine-readable.
 
-Phase 1 ships this with one real capability rather than empty on purpose: a symmetry gate
+This module holds the *machinery* and no declarations. The declarations live in
+:mod:`crocodile.capabilities`, one batch module per family, because four agents fill that
+package in parallel and a single file would serialise them. Keeping the two apart also
+keeps this module free of every analytics import a declaration drags in, which is what
+lets :class:`CapabilityContext` defer ``Catalog`` to ``TYPE_CHECKING``.
+
+The registry ships with real capabilities rather than empty on purpose: a symmetry gate
 over an empty registry is vacuously green, which is the same as not having one.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import msgspec
 
-from crocodile.core.analytics.indicators import apply_indicators
-from crocodile.core.analytics.slippage import estimate_slippage
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.provenance import Provenance
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    import polars as pl
+
+    from crocodile.core.config import Settings
+    from crocodile.core.store.catalog import Catalog
 
 __all__ = [
     "IRREDUCIBLE",
@@ -37,10 +48,11 @@ __all__ = [
     "SPEC_METHODS",
     "AssetClass",
     "Capability",
+    "CapabilityContext",
+    "CapabilityFn",
     "Impl",
-    "IndicatorParams",
     "ReturnKind",
-    "SlippageParams",
+    "declare",
     "register",
 ]
 
@@ -64,11 +76,122 @@ class ReturnKind(StrEnum):
     """An unbounded sequence a caller subscribes to rather than requests."""
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityContext:
+    """Everything a surface supplies to an implementation that a user cannot.
+
+    :attr:`Capability.params` describes what a *user* asks for. Everything else — which
+    lake to read, which credentials are configured, which market the request resolved to,
+    and how far a given surface is trusted — is the surface's to provide, and this is the
+    one object it provides it in.
+
+    Why not a :class:`msgspec.Struct`, which is the idiom of every other declaration in
+    this file: a Struct is this codebase's *wire* type. The defining operation of that
+    family is ``msgspec.json.encode``, Gate 2 already walks the registry calling
+    ``msgspec.json.schema`` over struct types, and a context is the one object that must
+    never cross a wire — it holds a live DuckDB connection and a :class:`Settings` whose
+    ``__repr__`` was written specifically to redact the credentials msgspec would encode
+    in the clear. ``Catalog`` is not encodable at all, so a Struct here would also mean a
+    ``TypeError`` raised deep inside whichever surface first tried. A frozen dataclass is
+    outside that family by construction.
+
+    ``Catalog``, ``Settings`` and ``polars`` are imported under ``TYPE_CHECKING``. There
+    is no import cycle today — checked: nothing under ``core.store`` or ``core.config``
+    imports this module, and ``crocodile/__init__`` imports this module before either of
+    them. They are deferred because this module is what every capability batch and all
+    three surfaces import for their *declarations*, and a runtime import of ``Catalog``
+    would make ``import crocodile.core.capability`` cost the whole DuckDB/Polars store
+    layer for callers that only wanted to read :data:`REGISTRY`.
+    """
+
+    catalog: Catalog
+    """The lake this invocation reads. Surfaces own its lifetime; implementations do not
+    close it."""
+
+    settings: Settings
+    """The resolved environment. An implementation that needs a key asks this, never
+    ``os.environ`` — that is the sixteen-scattered-reads problem
+    :mod:`crocodile.core.config` exists to end."""
+
+    asset_class: AssetClass
+    """Which of :attr:`Capability.impls` was selected. Present so an implementation shared
+    by both — ``apply_indicators`` is one — can tell which market it is serving without
+    re-deriving it from the symbol."""
+
+    readonly: bool = False
+    """Whether raw SQL from this surface must pass :func:`assert_readonly_sql`.
+
+    A property of the *surface*, never of a parameter: a local CLI and a public network
+    endpoint do not deserve the same trust, and the same ``query`` capability shipped
+    three different policies across the six legacy stacks precisely because each surface
+    decided for itself at the call site. Read it through :meth:`query`, which is what
+    makes the policy unforgettable rather than advisory.
+    """
+
+    row_limit: int | None = None
+    """Cap on rows a raw-SQL read may return, or ``None`` for no cap.
+
+    The other half of the legacy REST policy, and it belongs beside ``readonly`` for the
+    same reason. Surfaces that set it are expected to publish it, so a truncated answer is
+    a stated ceiling rather than a short result the caller reads as the whole lake.
+    """
+
+    def query(self, sql: str) -> pl.DataFrame:
+        """Run ``sql`` against the lake under *this surface's* policy.
+
+        The only way an implementation should reach :meth:`Catalog.query`. Calling the
+        catalog directly compiles and runs, and silently ignores both fields above — which
+        is exactly how the crypto CLI ended up with no SQL guard while REST and MCP each
+        grew their own.
+        """
+        from crocodile.core.store.catalog import assert_readonly_sql
+
+        if self.readonly:
+            assert_readonly_sql(sql)
+        if self.row_limit is not None:
+            stripped = sql.strip().rstrip(";").strip()
+            # Wrapping rather than truncating the frame: the point of the cap on a
+            # network surface is to not materialise the rows in the first place.
+            sql = f"SELECT * FROM ({stripped}) AS _q LIMIT {int(self.row_limit)}"
+        return self.catalog.query(sql, readonly=self.readonly)
+
+
+CapabilityFn = Callable[["CapabilityContext", Any], Any]
+"""The one calling convention: ``fn(ctx, params)``.
+
+Three shapes were on the table and two of them cannot work.
+
+*Call the underlying function with* ``**params``. No single ``params`` struct satisfies
+the bodies that exist: ``apply_indicators(df, indicator, period)`` wants *data*,
+``iv_surface(catalog, underlying, at_ns, …)`` wants a *dependency*, and neither of those
+is something a user supplies. Widening ``params`` until it covers them would put the lake
+handle in the schema the surfaces publish.
+
+*Let each implementation declare the dependencies it wants and inject them by name.* This
+works right up until a parameter is renamed, and then it fails **silently**: the projector
+introspects signatures, so a drifted name degrades into a ``TypeError`` at call time, on
+whichever of the three surfaces happens to call it first, and only for the asset class
+whose implementation drifted. Divergence hiding under a shared name is the failure this
+entire merge exists to end.
+
+So: two positional parameters, the same two for every implementation, checked by a gate
+rather than by convention. ``params`` is typed ``Any`` because each implementation narrows
+it to its own struct, and a per-capability generic buys nothing a declaration-site
+annotation does not already give.
+"""
+
+
 class Impl(msgspec.Struct, frozen=True):
     """How one asset class satisfies a capability."""
 
-    fn: Callable[..., Any]
-    """The callable that does the work."""
+    fn: CapabilityFn
+    """The callable that does the work, as ``fn(ctx, params)``. See :data:`CapabilityFn`.
+
+    An existing analytics function is almost never this shape, and should not be bent into
+    it — ``apply_indicators`` takes a frame because a frame is what it computes over. The
+    repeatable move is a small adapter beside the declaration that turns the context and
+    the params into that function's real arguments.
+    """
 
     prov: Provenance
     """The best level this implementation can produce.
@@ -134,7 +257,15 @@ class Capability(msgspec.Struct, frozen=True):
 
 
 REGISTRY: Final[dict[str, Capability]] = {}
-"""Every declared capability, keyed by name. Populated at import time; see :func:`register`."""
+"""Every declared capability, keyed by name.
+
+Populated when a batch module is imported, so it reflects only what has been imported so
+far. Anything that treats it as the complete list — a surface projection, a symmetry gate
+— calls :func:`crocodile.capabilities.load_all` first, on exactly the discipline
+:func:`crocodile.core.schema.provenance.registered_bases` documents for bases. Importing
+the world from here instead would make reading a dict pull in every analytics dependency
+in the tree.
+"""
 
 
 IRREDUCIBLE: Final[dict[str, str]] = {
@@ -218,102 +349,24 @@ def register(cap: Capability) -> Capability:
     return cap
 
 
-_BUILTIN_NAMES: Final[set[str]] = set()
+_DECLARED_NAMES: Final[set[str]] = set()
 
 
-def _install(cap: Capability) -> Capability:
-    """Register a built-in declared by this module, tolerating a second call.
+def declare(cap: Capability) -> Capability:
+    """Register ``cap`` from a batch module, tolerating that module's body running twice.
 
-    :func:`register` is strict, and it has to be. But the seeding below runs at import
+    This is what the four batch modules in :mod:`crocodile.capabilities` call.
+    :func:`register` is strict, and it has to be. But a batch module registers at import
     time, and ``load_all_bases()`` walks the whole package catching ``Exception`` into a
-    ``RuntimeWarning`` — so a ``ValueError`` raised here would not fail loudly, it would
-    degrade into a registry that is quietly missing whatever came after it. Re-installing
-    a name this module already owns therefore replaces it instead of raising, while a
-    *different* module claiming the same name still goes through :func:`register` and
-    still fails hard.
+    ``RuntimeWarning`` — so a ``ValueError`` raised from a re-executed module body would
+    not fail loudly, it would degrade into a registry quietly missing whatever came after
+    it. Re-declaring a name the *same* declaring path already owns therefore replaces it
+    instead of raising, while a *different* module claiming an existing name still goes
+    through :func:`register` and still fails hard. That distinction is the whole point: an
+    idempotent re-import is a mechanical fact, two modules claiming one name is a bug.
     """
-    if cap.name in _BUILTIN_NAMES:
+    if cap.name in _DECLARED_NAMES:
         REGISTRY[cap.name] = cap
         return cap
-    _BUILTIN_NAMES.add(cap.name)
+    _DECLARED_NAMES.add(cap.name)
     return register(cap)
-
-
-class IndicatorParams(msgspec.Struct, frozen=True):
-    """Parameters for ``indicators``, identical for both asset classes."""
-
-    symbol: str
-    start_ns: int
-    end_ns: int
-    interval: str = "1d"
-    indicator: str | None = None
-    period: int = 14
-
-
-class SlippageParams(msgspec.Struct, frozen=True):
-    """Parameters for ``slippage``, identical for both asset classes.
-
-    ``size_unit`` is the crypto half of a collision: the crypto implementation took
-    ``size: float | str`` plus a unit and could walk the book denominated in either asset,
-    the equity one took a bare ``float``. One struct has to cover both, so the unit is
-    either equity-ignored or crypto-lost, and it is equity-ignored — an optional parameter
-    costs a caller that omits it nothing, while dropping it deletes a measured, tested book
-    walk. Left unset, the walk is by quantity, which is what sizing in shares means.
-    """
-
-    symbol: str
-    side: str
-    size: float | str
-    size_unit: str | None = None
-
-
-_install(
-    Capability(
-        name="slippage",
-        summary="Expected execution price and slippage for a size, against the stored book.",
-        params=SlippageParams,
-        returns=ReturnKind.SCALAR,
-        # One capability, two wire names. `slippage` is the crypto CLI command, the crypto
-        # REST GET route and (as `estimate_slippage`) the MCP tool; `simulate-price-impact`
-        # is a REST POST on both sides and the only spelling equity ever exposed. The name
-        # is `slippage` because it names the measurement rather than an action performed on
-        # a UI, and because one name here becomes a command, a path segment and a tool name
-        # at once — an imperative reads wrong as two of those three.
-        #
-        # That equity exposes only the other spelling is not evidence for it: equity has no
-        # CLI and no MCP at all, so the "shared" name is an artefact of equity having almost
-        # nothing rather than of the name being the better one.
-        aliases=("simulate-price-impact",),
-        impls={
-            AssetClass.CRYPTO: Impl(
-                fn=estimate_slippage, prov=Provenance.DERIVED, basis="native"
-            ),
-            # An equity book is modelled from volume bars unless an Alpaca key upgrades it
-            # to L1, so an estimate walked over it is SYNTHETIC on its best day. Declaring
-            # the keyed ceiling here would let a keyless deployment report a level it never
-            # reaches; which of the two a given snapshot actually was is on the snapshot's
-            # own tail, where it can be measured rather than promised.
-            AssetClass.EQUITY: Impl(
-                fn=estimate_slippage, prov=Provenance.SYNTHETIC, basis="yahoo_1m_vap"
-            ),
-        },
-    )
-)
-
-
-_install(
-    Capability(
-        name="indicators",
-        summary="Moving averages, RSI, MACD and Bollinger bands over stored OHLCV.",
-        params=IndicatorParams,
-        returns=ReturnKind.TABLE,
-        impls={
-            # One function serves both: its input is OHLCV, which both asset classes
-            # produce natively. This is the walking skeleton that keeps the symmetry gate
-            # honest before the real work of Phase 3 — a gate whose only subject is a
-            # capability contrived to satisfy it proves nothing.
-            AssetClass.CRYPTO: Impl(fn=apply_indicators, prov=Provenance.DERIVED, basis="native"),
-            AssetClass.EQUITY: Impl(fn=apply_indicators, prov=Provenance.DERIVED, basis="native"),
-        },
-    )
-)

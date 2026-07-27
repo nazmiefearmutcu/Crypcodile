@@ -38,7 +38,7 @@ class _Params(msgspec.Struct, frozen=True):
 def _isolate() -> Iterator[None]:
     """Both the registry and the ledger are module state; a leak would order-couple gates."""
     registry, pending = dict(REGISTRY), dict(PENDING_SYMMETRY)
-    builtins = set(capability._BUILTIN_NAMES)
+    builtins = set(capability._DECLARED_NAMES)
     try:
         yield
     finally:
@@ -46,8 +46,8 @@ def _isolate() -> Iterator[None]:
         REGISTRY.update(registry)
         PENDING_SYMMETRY.clear()
         PENDING_SYMMETRY.update(pending)
-        capability._BUILTIN_NAMES.clear()
-        capability._BUILTIN_NAMES.update(builtins)
+        capability._DECLARED_NAMES.clear()
+        capability._DECLARED_NAMES.update(builtins)
 
 
 def _crypto_only(name: str) -> Capability:
