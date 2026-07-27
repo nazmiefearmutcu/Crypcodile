@@ -26,6 +26,7 @@ from typing import Any, Final
 import msgspec
 
 from crocodile.core.analytics.indicators import apply_indicators
+from crocodile.core.analytics.slippage import estimate_slippage
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.provenance import Provenance
 
@@ -39,6 +40,7 @@ __all__ = [
     "Impl",
     "IndicatorParams",
     "ReturnKind",
+    "SlippageParams",
     "register",
 ]
 
@@ -114,6 +116,20 @@ class Capability(msgspec.Struct, frozen=True):
 
     Missing an asset class is a build failure unless the name appears in
     :data:`IRREDUCIBLE`.
+    """
+
+    aliases: tuple[str, ...] = ()
+    """Retired spellings that must keep resolving to :attr:`name`.
+
+    A capability has exactly one name, because the three surfaces derive their command,
+    route and tool from it and a second name is a second thing to keep in step. But the
+    forks shipped some capabilities under two, and a caller wired to the losing spelling
+    is a caller the rename breaks. Listing it here is how the projection can keep
+    answering on it while there is still only one declaration behind it.
+
+    This is not a place to add a synonym somebody prefers. Every entry is a name that was
+    already on the wire, and the ledger only shrinks — an alias leaves when the surfaces
+    stop honouring it, which is a deprecation with its own decision.
     """
 
 
@@ -232,6 +248,57 @@ class IndicatorParams(msgspec.Struct, frozen=True):
     interval: str = "1d"
     indicator: str | None = None
     period: int = 14
+
+
+class SlippageParams(msgspec.Struct, frozen=True):
+    """Parameters for ``slippage``, identical for both asset classes.
+
+    ``size_unit`` is the crypto half of a collision: the crypto implementation took
+    ``size: float | str`` plus a unit and could walk the book denominated in either asset,
+    the equity one took a bare ``float``. One struct has to cover both, so the unit is
+    either equity-ignored or crypto-lost, and it is equity-ignored — an optional parameter
+    costs a caller that omits it nothing, while dropping it deletes a measured, tested book
+    walk. Left unset, the walk is by quantity, which is what sizing in shares means.
+    """
+
+    symbol: str
+    side: str
+    size: float | str
+    size_unit: str | None = None
+
+
+_install(
+    Capability(
+        name="slippage",
+        summary="Expected execution price and slippage for a size, against the stored book.",
+        params=SlippageParams,
+        returns=ReturnKind.SCALAR,
+        # One capability, two wire names. `slippage` is the crypto CLI command, the crypto
+        # REST GET route and (as `estimate_slippage`) the MCP tool; `simulate-price-impact`
+        # is a REST POST on both sides and the only spelling equity ever exposed. The name
+        # is `slippage` because it names the measurement rather than an action performed on
+        # a UI, and because one name here becomes a command, a path segment and a tool name
+        # at once — an imperative reads wrong as two of those three.
+        #
+        # That equity exposes only the other spelling is not evidence for it: equity has no
+        # CLI and no MCP at all, so the "shared" name is an artefact of equity having almost
+        # nothing rather than of the name being the better one.
+        aliases=("simulate-price-impact",),
+        impls={
+            AssetClass.CRYPTO: Impl(
+                fn=estimate_slippage, prov=Provenance.DERIVED, basis="native"
+            ),
+            # An equity book is modelled from volume bars unless an Alpaca key upgrades it
+            # to L1, so an estimate walked over it is SYNTHETIC on its best day. Declaring
+            # the keyed ceiling here would let a keyless deployment report a level it never
+            # reaches; which of the two a given snapshot actually was is on the snapshot's
+            # own tail, where it can be measured rather than promised.
+            AssetClass.EQUITY: Impl(
+                fn=estimate_slippage, prov=Provenance.SYNTHETIC, basis="yahoo_1m_vap"
+            ),
+        },
+    )
+)
 
 
 _install(

@@ -1,4 +1,4 @@
-"""The registry's own mechanics, and the one capability Phase 1 declares.
+"""The registry's own mechanics, and the capabilities declared so far.
 
 The gates in ``test_gates.py`` ask whether the *contents* of the registry are symmetric
 and provenanced. These ask whether the registry itself behaves: that a duplicate name is
@@ -20,6 +20,7 @@ from crocodile.core.analytics.indicators import (
     calculate_rsi,
     calculate_sma,
 )
+from crocodile.core.analytics.slippage import estimate_slippage
 from crocodile.core.capability import (
     REGISTRY,
     AssetClass,
@@ -114,6 +115,62 @@ def test_the_seeded_registry_holds_indicators() -> None:
     assert cap.returns is ReturnKind.TABLE
     assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
     assert all(impl.fn is apply_indicators for impl in cap.impls.values())
+
+
+def test_the_seeded_registry_holds_slippage_under_one_name() -> None:
+    """One capability was on the wire under two names; the registry may only hold one.
+
+    ``slippage`` (crypto CLI, crypto REST GET, MCP ``estimate_slippage``) and
+    ``simulate-price-impact`` (REST POST, both asset classes) both called the same
+    estimator. The measurement is the name; the retired spelling is an alias.
+    """
+    cap = REGISTRY["slippage"]
+    assert cap.returns is ReturnKind.SCALAR
+    assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+    assert all(impl.fn is estimate_slippage for impl in cap.impls.values())
+    assert cap.aliases == ("simulate-price-impact",)
+    assert "simulate-price-impact" not in REGISTRY, (
+        "an alias that is also a registered name is two capabilities again"
+    )
+
+
+def test_slippage_carries_size_unit_so_one_struct_covers_both_arities() -> None:
+    """The crypto estimator took a unit and the equity one did not; the struct keeps it.
+
+    Optional, so an equity caller sizing in shares omits it and gets a walk by quantity.
+    Dropping it would have deleted the only path that can size an order by notional.
+    """
+    fields = {f.name: f for f in msgspec.structs.fields(REGISTRY["slippage"].params)}
+    assert set(fields) == {"symbol", "side", "size", "size_unit"}
+    assert fields["size_unit"].default is None
+
+
+def test_no_alias_collides_with_a_capability_name_or_another_alias() -> None:
+    """An alias is a redirect. Two things answering to one string is the original bug."""
+    seen: dict[str, str] = {}
+    for cap in REGISTRY.values():
+        for alias in cap.aliases:
+            assert alias not in REGISTRY, f"{alias!r} is both an alias and a capability name"
+            assert alias not in seen, f"{alias!r} aliases both {seen[alias]!r} and {cap.name!r}"
+            seen[alias] = cap.name
+
+
+def test_slippage_rests_on_a_modelled_book_for_equities_and_a_native_one_for_crypto() -> None:
+    """``basis`` names the inputs, and the two asset classes genuinely differ here.
+
+    A crypto venue streams its book. An equity book is modelled from volume bars unless an
+    Alpaca key upgrades it to L1, so the estimate is SYNTHETIC on its best day — declaring
+    the keyed ceiling would let a keyless deployment claim a level it never reaches.
+    """
+    crypto = REGISTRY["slippage"].impls[AssetClass.CRYPTO]
+    assert crypto.basis == "native"
+    assert level_for(crypto.basis) is Provenance.NATIVE
+    assert crypto.prov is Provenance.DERIVED
+
+    equity = REGISTRY["slippage"].impls[AssetClass.EQUITY]
+    assert equity.basis == "yahoo_1m_vap"
+    assert level_for(equity.basis) is Provenance.SYNTHETIC
+    assert equity.prov is Provenance.SYNTHETIC
 
 
 def test_indicators_declares_a_native_input_basis() -> None:
