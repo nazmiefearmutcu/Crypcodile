@@ -640,9 +640,9 @@ def test_gate3b_every_resampler_that_builds_a_record_is_declared():
 # ``Quote.bid_sz``, ``OHLCV.volume``, ``DepthProfile.reference_price``. An adapter
 # reading one off a payload writes an expression; only a fabricated one writes ``1.0``.
 
-FABRICATES_MEASUREMENTS: dict[str, tuple[tuple[float, ...], str]] = {
+FABRICATES_MEASUREMENTS: dict[str, tuple[tuple[tuple[str, float], ...], str]] = {
     "equity/providers/google_finance/connector.py": (
-        (0.0,),
+        (("amount", 0.0),),
         "Trade.amount = _UNPUBLISHED_SIZE, a structural 0.0. The quote page publishes a "
         "last price and no per-print size, for any symbol at any time, and Trade.amount "
         "is required — a trade cannot exist without a quantity. 0.0 sums to nothing, "
@@ -652,7 +652,7 @@ FABRICATES_MEASUREMENTS: dict[str, tuple[tuple[float, ...], str]] = {
         "and scraped_last_price scores it 0.0, so nothing here reads as measured."
     ),
     "equity/resample/ohlcv.py": (
-        (0.0,),
+        (("volume", 0.0),),
         "OHLCV.volume = 0.0 on every bar resample_quotes_to_bars emits. A quote carries "
         "no size that belongs in a bar — nothing in one of these bars was transacted — so "
         "the zero is structural rather than a measurement of nothing traded, and the "
@@ -663,12 +663,20 @@ FABRICATES_MEASUREMENTS: dict[str, tuple[tuple[float, ...], str]] = {
 }
 """Modules that write a constant number into a required measurement field: which, and why.
 
-The value is declared beside the argument and asserted against the tree, on the same
-discipline :data:`CONSTANT_BY_DEFINITION` carries — an exemption is a licence for a
-*number*, not for a file. ``_UNPUBLISHED_SIZE = 0.0`` and ``_ASSUMED_SIZE = 1.0`` are
-the same syntax and opposite claims: the first says a scrape contributes no volume, the
-second reported the poll count as share volume. A file-keyed licence carries over from
-one to the other in silence.
+The **field and the value** are declared beside the argument and asserted against the
+tree, on the same discipline :data:`CONSTANT_BY_DEFINITION` carries — an exemption is a
+licence for one number in one field, not for a file. ``_UNPUBLISHED_SIZE = 0.0`` and
+``_ASSUMED_SIZE = 1.0`` are the same syntax and opposite claims: the first says a scrape
+contributes no volume, the second reported the poll count as share volume. A file-keyed
+licence carries over from one to the other in silence.
+
+Keying on the value alone had the same hole one axis over, and the docstring above said
+so while the code did not: this module is licensed for ``0.0`` because a quote bar's
+``volume`` is a structural zero, and that licence silently covered ``Trade(amount=0.0)``
+and ``DepthProfile(reference_price=0.0, …)`` added anywhere in the same file — which is
+exactly where new resamplers get added. A zero volume on a quote bar and a zero
+reference price on a depth profile are different claims about different quantities, and
+only one of them has an argument.
 
 
 Every entry is a record asserting a quantity nobody measured. Adding one is allowed
@@ -743,6 +751,43 @@ def _canonical_record_calls_by_class(
 
 _NUMERIC_COERCIONS = frozenset({"float", "int"})
 """Calls that turn a constant into a constant of another type, and nothing else."""
+
+_CONSTANT_BUILTINS: dict[str, Callable[..., float]] = {
+    "min": min,
+    "max": max,
+    "abs": abs,
+}
+"""Builtins that are a constant when every argument is. ``min(1.0, 2.0)`` is ``1.0``."""
+
+FABRICATION_BLIND_SPOTS = (
+    "a class attribute — `class C: SIZE = 1.0` then `Trade(amount=C.SIZE)`. Class "
+    "bodies are separate scopes and are not descended into, so the attribute never "
+    "becomes a binding.",
+    "a default argument — `def f(size=1.0): return Trade(amount=size)`. Parameters "
+    "are deliberately recorded as non-constant, because a caller may pass a real "
+    "measurement; folding the default would flag every honest reader with a fallback.",
+    "a helper's return value — `def _size(): return 1.0` then "
+    "`Trade(amount=_size())`. Only `float`/`int` and the builtins in "
+    "`_CONSTANT_BUILTINS` are folded through; user calls are opaque.",
+    "a constant imported from another module — `from .sizes import ASSUMED` then "
+    "`Trade(amount=ASSUMED)`. The scanner parses one file at a time and has no "
+    "cross-module binding table.",
+    "a constant reached through a container the scanner cannot see into — an "
+    "attribute of a dataclass, a `NamedTuple` field, a dict built by a function.",
+)
+"""What this scanner does **not** see, listed because a gate that hides its limits
+teaches false confidence.
+
+Every entry is a way to write a fabricated measurement that reads green. They are here
+rather than closed because each would cost either a cross-module analysis or a false
+positive on an honest reading — a default argument is the clearest case, since
+`def f(size=1.0)` is what a real adapter writes when the payload may omit the field.
+
+Closing one is welcome; deleting the entry without closing it is not. The last review
+found the plain `from msgspec.structs import replace` spelling evading a guard whose
+own evasion set covered only the aliased form, which is the same failure as an
+undocumented blind spot with extra steps: the gate looked complete.
+"""
 
 
 def _scope_bindings(scope: ast.AST) -> dict[str, list[ast.expr | None]]:
@@ -857,8 +902,37 @@ def _fold_constant(
             return True, float(fold(left, right))
         except (ArithmeticError, ValueError, OverflowError):
             return True, None
+    if isinstance(node, ast.IfExp):
+        # ``1.0 if x else 1.0`` is 1.0 whichever way the test goes, and a branch that
+        # reads a payload on one side is not constant, so this cannot swallow a reader.
+        for branch in (node.body, node.orelse):
+            ok, _ = _fold_constant(branch, bindings, seen)
+            if not ok:
+                return False, None
+        _, left = _fold_constant(node.body, bindings, seen)
+        _, right = _fold_constant(node.orelse, bindings, seen)
+        return True, left if left == right else None
+    if isinstance(node, ast.NamedExpr):
+        # ``Trade(amount=(size := 1.0))`` binds and passes in one expression.
+        return _fold_constant(node.value, bindings, seen)
+    if isinstance(node, ast.Subscript):
+        # ``_KW["amount"]`` / ``_SIZES[0]`` over a container written out in the source.
+        return _fold_subscript(node, bindings, seen)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        if node.func.id not in _NUMERIC_COERCIONS or node.keywords:
+        if node.keywords:
+            return False, None
+        if node.func.id in _CONSTANT_BUILTINS:
+            folded = [_fold_constant(arg, bindings, seen) for arg in node.args]
+            if not folded or not all(ok for ok, _ in folded):
+                return False, None
+            values = [value for _, value in folded]
+            if any(value is None for value in values):
+                return True, None
+            try:
+                return True, float(_CONSTANT_BUILTINS[node.func.id](*values))
+            except (ArithmeticError, TypeError, ValueError):
+                return True, None
+        if node.func.id not in _NUMERIC_COERCIONS:
             return False, None
         if not node.args:
             return True, 0.0
@@ -879,6 +953,51 @@ def _fold_constant(
     return False, None
 
 
+def _resolve_container(
+    node: ast.expr | None, bindings: dict[str, list[ast.expr | None]]
+) -> ast.expr | None:
+    """Return the literal container ``node`` names, or ``None``.
+
+    A name counts only when every assignment to it in scope is the *same* kind of
+    literal container, for the reason :func:`_fold_constant` folds names at all: a
+    container rebound to something read off a payload is not a constant.
+    """
+    if isinstance(node, ast.Dict | ast.Tuple | ast.List):
+        return node
+    if not isinstance(node, ast.Name):
+        return None
+    values = bindings.get(node.id)
+    if not values or len(values) != 1:
+        return None
+    inner = values[0]
+    return inner if isinstance(inner, ast.Dict | ast.Tuple | ast.List) else None
+
+
+def _fold_subscript(
+    node: ast.Subscript, bindings: dict[str, list[ast.expr | None]], seen: frozenset[str]
+) -> tuple[bool, float | None]:
+    """Fold ``_KW["amount"]`` and ``_SIZES[0]`` when the container is written in the source.
+
+    A module-level table of assumed values is the tidiest way to write a fabrication —
+    it looks like configuration — and reading one element of it is the same claim as
+    writing the number inline.
+    """
+    container = _resolve_container(node.value, bindings)
+    if container is None or not isinstance(node.slice, ast.Constant):
+        return False, None
+    key = node.slice.value
+    if isinstance(container, ast.Dict):
+        for dict_key, dict_value in zip(container.keys, container.values, strict=True):
+            if isinstance(dict_key, ast.Constant) and dict_key.value == key:
+                return _fold_constant(dict_value, bindings, seen)
+        return False, None
+    if isinstance(key, int) and not isinstance(key, bool) and -len(container.elts) <= key < len(
+        container.elts
+    ):
+        return _fold_constant(container.elts[key], bindings, seen)
+    return False, None
+
+
 def _replace_calls(tree: ast.AST) -> list[ast.Call]:
     """Every ``msgspec.structs.replace(...)`` call, however it was imported.
 
@@ -887,8 +1006,16 @@ def _replace_calls(tree: ast.AST) -> list[ast.Call]:
     makes it the same fabrication surface. The class being replaced is not knowable
     from the call, so the caller checks these against the union of every
     measurement field rather than one record's.
+
+    ``aliases`` is seeded empty and filled from the module's own imports, so a bare
+    ``replace(...)`` counts exactly when ``from msgspec.structs import replace`` is
+    what put the name there. It used to be seeded with ``{"replace"}`` and then
+    guarded with ``func.id != "replace"`` — excluding the one name it was seeded
+    with, so the plainest spelling in the family was the one that evaded. The
+    suite's own evasion case used ``as swap``, which *is* caught, so a parametrised
+    test reported green over a hole in the middle of what it claimed to cover.
     """
-    aliases = {"replace"}
+    aliases: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "msgspec.structs":
             aliases.update(alias.asname or alias.name for alias in node.names)
@@ -904,26 +1031,34 @@ def _replace_calls(tree: ast.AST) -> list[ast.Call]:
             }
             if "structs" in names or "msgspec" in names:
                 calls.append(node)
-        elif isinstance(func, ast.Name) and func.id in aliases and func.id != "replace":
+        elif isinstance(func, ast.Name) and func.id in aliases:
             calls.append(node)
     return calls
 
 
-def _keyword_values(call: ast.Call) -> list[tuple[str, ast.expr]]:
+def _keyword_values(
+    call: ast.Call, bindings: dict[str, list[ast.expr | None]]
+) -> list[tuple[str, ast.expr]]:
     """Return ``(field, value)`` for every keyword the call sets, ``**{...}`` included.
 
     ``Trade(**{"amount": 1.0})`` is the same construction as ``Trade(amount=1.0)``
     with the keyword one layer of syntax away, and a scanner reading only
-    ``kw.arg`` sees no field name at all.
+    ``kw.arg`` sees no field name at all. ``Trade(**_KW)`` is the same again with the
+    dict given a name, which is how a fabrication comes to look like configuration;
+    the name is resolved through the scope on the same rule
+    :func:`_resolve_container` states.
     """
     pairs: list[tuple[str, ast.expr]] = []
     for kw in call.keywords:
         if kw.arg is not None:
             pairs.append((kw.arg, kw.value))
-        elif isinstance(kw.value, ast.Dict):
-            for key, value in zip(kw.value.keys, kw.value.values, strict=True):
-                if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                    pairs.append((key.value, value))
+            continue
+        unpacked = _resolve_container(kw.value, bindings)
+        if not isinstance(unpacked, ast.Dict):
+            continue
+        for key, value in zip(unpacked.keys, unpacked.values, strict=True):
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                pairs.append((key.value, value))
     return pairs
 
 
@@ -975,7 +1110,7 @@ def _fabrications_in(
     offences: list[_Fabrication] = []
     for label, measurements, call in subjects:
         bindings = bindings_for(call)
-        for field, value in _keyword_values(call):
+        for field, value in _keyword_values(call, bindings):
             if field not in measurements:
                 continue
             constant, folded = _fold_constant(value, bindings)
@@ -1011,12 +1146,14 @@ def test_gate3b_no_module_fabricates_a_measurement_without_declaring_it():
         str(offence)
         for module, offences in _fabricated_measurements().items()
         for offence in offences
-        if offence.value not in FABRICATES_MEASUREMENTS.get(module, ((), ""))[0]
+        if (offence.field, offence.value)
+        not in FABRICATES_MEASUREMENTS.get(module, ((), ""))[0]
     ]
     assert not offenders, (
         f"constant numbers in required measurement fields: {sorted(offenders)}. "
         f"Read the value from the source, or declare it in FABRICATES_MEASUREMENTS "
-        f"with the argument for why that constant is the honest encoding."
+        f"as (field, value) with the argument for why that constant is the honest "
+        f"encoding of that quantity."
     )
 
 
@@ -1037,13 +1174,33 @@ _EVASIONS: dict[str, str] = {
     "msgspec replace, imported": (
         "from msgspec.structs import replace as swap\nswap(t, amount=1.0)"
     ),
+    "msgspec replace, imported under its own name": (
+        "from msgspec.structs import replace\nreplace(t, amount=1.0)"
+    ),
+    "a conditional with two constant branches": (
+        "def f(x):\n    return Trade(amount=1.0 if x else 1.0)"
+    ),
+    "a constant builtin": "Trade(amount=min(1.0, 2.0))",
+    "a walrus": "Trade(amount=(size := 1.0))",
+    "a module-level table of assumed values": '_KW = {"amount": 1.0}\nTrade(amount=_KW["amount"])',
+    "a tuple of assumed values": "_SIZES = (1.0, 2.0)\nTrade(amount=_SIZES[0])",
+    "that table unpacked whole": '_KW = {"amount": 1.0}\nTrade(**_KW)',
 }
 """Every spelling of one fabrication the scanner has to read as the same thing.
 
-The list is the review's, verbatim, plus the two chained forms it implies. The
-scanner that shipped caught the first row and missed every other one — which is
-exactly how ``_UNPUBLISHED_SIZE = 0.0`` came to satisfy a gate whose whole subject
-it is, and why restoring ``_ASSUMED_SIZE = 1.0`` would also have satisfied it.
+The list is the review's, verbatim, plus the chained forms it implies. The scanner
+that shipped caught the first row and missed every other one — which is exactly how
+``_UNPUBLISHED_SIZE = 0.0`` came to satisfy a gate whose whole subject it is, and why
+restoring ``_ASSUMED_SIZE = 1.0`` would also have satisfied it.
+
+The plain ``from msgspec.structs import replace`` row is the later one. ``_replace_calls``
+seeded its alias set with ``{"replace"}`` and then excluded that exact name, so the
+plainest spelling in the family evaded — and this list covered only the ``as swap``
+form, the single spelling that *was* caught, so the parametrised test reported green
+over a hole in the middle of what it claimed to cover. A probe set that only holds the
+cases the implementation already handles is not a probe set.
+
+What is still not seen is in :data:`FABRICATION_BLIND_SPOTS`, out loud.
 """
 
 _HONEST_READINGS: dict[str, str] = {
@@ -1055,6 +1212,13 @@ _HONEST_READINGS: dict[str, str] = {
         "return Trade(amount=size)"
     ),
     "a loop variable": "def f(sizes):\n    for size in sizes:\n        yield Trade(amount=size)",
+    "a conditional with one measured branch": (
+        "def f(x, msg):\n    return Trade(amount=1.0 if x else msg.size)"
+    ),
+    "a builtin over a measurement": "def f(msg):\n    return Trade(amount=min(1.0, msg.size))",
+    "a table rebound to a payload": (
+        "def f(payload):\n    kw = {'amount': 1.0}\n    kw = payload\n    return Trade(**kw)"
+    ),
 }
 """Readings the scanner must *not* flag, so the gate is a filter and not a ban.
 
@@ -1086,18 +1250,47 @@ def test_gate3b_the_fabrication_scanner_leaves_a_real_reading_alone(form: str) -
 def test_gate3b_the_fabrication_list_cannot_hold_a_stale_or_silent_entry():
     """Self-cleaning, on the same discipline as DERIVES_RECORDS and IRREDUCIBLE."""
     fabricated = _fabricated_measurements()
-    for relative, (values, why) in FABRICATES_MEASUREMENTS.items():
+    for relative, (licensed, why) in FABRICATES_MEASUREMENTS.items():
         assert why.strip(), f"{relative} is on FABRICATES_MEASUREMENTS with no justification"
         assert relative in fabricated, (
             f"FABRICATES_MEASUREMENTS names {relative}, which fabricates nothing any more; "
             f"drop the entry rather than leave a licence lying around"
         )
-        found = {offence.value for offence in fabricated[relative]}
-        stale = sorted(v for v in values if v not in found)
+        found = {(offence.field, offence.value) for offence in fabricated[relative]}
+        stale = sorted(pair for pair in licensed if pair not in found)
         assert not stale, (
             f"FABRICATES_MEASUREMENTS licenses {stale} in {relative}, which no longer "
-            f"writes it; drop the value rather than leave a licence lying around"
+            f"writes it; drop the entry rather than leave a licence lying around"
         )
+
+
+def test_gate3b_a_licence_for_one_field_does_not_cover_another_in_the_same_module() -> None:
+    """A licence is for a number in a *field*, not for a file.
+
+    ``equity/resample/ohlcv.py`` is licensed for a structural ``volume = 0.0`` on quote
+    bars. Keyed on the value alone, that licence silently covered ``Trade(amount=0.0)``
+    and ``DepthProfile(reference_price=0.0, …)`` added anywhere in the same module — and
+    that module is exactly where new resamplers get added. Three different quantities,
+    one argument between them.
+    """
+    licensed = FABRICATES_MEASUREMENTS["equity/resample/ohlcv.py"][0]
+    module = _source_root() / "equity" / "resample" / "ohlcv.py"
+    sneaked = (
+        "\n\nfrom crocodile.core.schema.records import Trade as _T, DepthProfile as _D\n"
+        "def _sneak():\n"
+        "    return _T(amount=0.0), _D(reference_price=0.0)\n"
+    )
+
+    offences = _fabrications_in(
+        ast.parse(module.read_text() + sneaked),
+        _measurement_fields(),
+        "equity/resample/ohlcv.py",
+    )
+    exempt = {o.field for o in offences if (o.field, o.value) in licensed}
+    caught = {o.field for o in offences if (o.field, o.value) not in licensed}
+
+    assert exempt == {"volume"}, "the licensed quantity is the only one that stays exempt"
+    assert caught == {"amount", "reference_price"}
 
 
 # ---------------------------------------------------------------------------
