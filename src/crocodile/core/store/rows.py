@@ -53,18 +53,52 @@ canonical union because that is the only family ``core`` may depend on by name.
 """
 
 
-# What each record family calls the place the data came from, most canonical
-# first. The canonical header says ``source``; the legacy equity union, which is
-# still live, says ``provider``, and the retired crypto union said ``exchange``.
+# ---------------------------------------------------------------------------
+# Which record union a row came from
+# ---------------------------------------------------------------------------
+FAMILY_CRYPTO = "crypto"
+FAMILY_EQUITY = "equity"
+FAMILY_CANONICAL = "canonical"
+
+# Row field → family, most specific first. One table, read by three callers:
+# ``to_row``'s partition key, ``_header``'s asset class, and
+# ``parquet_sink._row_family``'s schema selection. They are the same question
+# — which fork wrote this — and a second copy of this order is a second place
+# for it to be got wrong.
 #
 # ``provider`` is checked before ``exchange`` and the order is load-bearing.
 # Equity's ``Instrument`` carries BOTH: ``provider`` is who served the data,
 # ``exchange`` is where the security is *listed*. Matching ``exchange`` first
 # filed an Alpaca-sourced instrument under ``source=NASDAQ`` — no error, just
 # the wrong directory. The canonical ``Instrument`` inherited that ``exchange``
-# field, so the hazard did not retire with the crypto union: it is only ``source``
-# leading the tuple that keeps a canonical record off the listing venue.
-_ORIGIN_FIELDS = ("source", "provider", "exchange")
+# field, so the hazard did not retire with the crypto union.
+_FAMILY_MARKERS: tuple[tuple[str, str], ...] = (
+    ("asset_class", FAMILY_CANONICAL),
+    ("provider", FAMILY_EQUITY),
+    ("exchange", FAMILY_CRYPTO),
+)
+
+_LEGACY_FAMILY_ASSET_CLASS: dict[str, AssetClass] = {
+    FAMILY_EQUITY: AssetClass.EQUITY,
+    FAMILY_CRYPTO: AssetClass.CRYPTO,
+}
+"""The market each *legacy* family wrote, for rows that carry no ``asset_class``.
+
+Only the two retired unions appear: a canonical row states its market outright,
+so ``FAMILY_CANONICAL`` has no entry and its absence is what makes
+:func:`_asset_class_from_legacy_marker` refuse to answer for one.
+"""
+
+# What each record family calls the place the data came from, most canonical
+# first. The canonical header says ``source``; the legacy equity union, which is
+# still live, says ``provider``, and the retired crypto union said ``exchange``.
+# Derived from the marker table above so the precedence lives in one place;
+# ``source`` leads because the canonical header names its origin outright while
+# its *family* marker is ``asset_class``, which is the one row the two differ on.
+_ORIGIN_FIELDS: tuple[str, ...] = (
+    "source",
+    *(marker for marker, family in _FAMILY_MARKERS if family != FAMILY_CANONICAL),
+)
 
 # Partition columns computed from the record rather than read off it. A record
 # field sharing one of these names loses to it, so it is moved to ``<name>_val``
@@ -191,6 +225,40 @@ def _coerce_levels_from_row(raw: Any) -> list[tuple[float, float]]:
     return result
 
 
+def _asset_class_from_legacy_marker(d: dict[str, Any]) -> AssetClass:
+    """Read the market off a row that predates the canonical ``asset_class`` field.
+
+    Walks :data:`_FAMILY_MARKERS` in its declared order and tests the marker's
+    **value**, not its presence. Both halves matter and each fixes a real misread:
+
+    * *Order.* ``provider`` is consulted first. The equity file schema declares
+      an ``exchange`` column, so matching ``exchange`` first stamped every
+      equity row ``CRYPTO`` — silently, because an ``ohlcv`` row's field names
+      overlap enough between the two forks that nothing else raised.
+    * *Value, not key.* That equity ``exchange`` column is vestigial and always
+      null; it exists only so new parts match the parts already beside them.
+      ``ParquetSink`` materialises every schema key as a column, so the key is
+      present on every equity file ever written and presence discriminates
+      nothing. The same is true in reverse for a lake holding pre- and
+      post-merge files under one source: ``read_parquet`` unions the schemas, so
+      the pre-merge rows arrive carrying ``asset_class`` as a null and the
+      canonical rows carrying ``exchange`` as one. Only the values separate them.
+
+    Raises:
+        KeyError: if no marker carries a value. An asset class invented here is
+            indistinguishable from one that was recorded.
+    """
+    for marker, family in _FAMILY_MARKERS:
+        asset_class = _LEGACY_FAMILY_ASSET_CLASS.get(family)
+        if asset_class is not None and d.get(marker) is not None:
+            return asset_class
+    raise KeyError(
+        f"row carries no 'asset_class' and none of the pre-migration origin "
+        f"columns {sorted(_LEGACY_FAMILY_ASSET_CLASS)} hold a value; "
+        f"its market cannot be established"
+    )
+
+
 def _header(d: dict[str, Any]) -> dict[str, Any]:
     """Rebuild the ten canonical header fields from one flattened row.
 
@@ -202,25 +270,24 @@ def _header(d: dict[str, Any]) -> dict[str, Any]:
     reading a Parquet byte, so those files keep their columns forever and this
     is the only place the two spellings can be reconciled.
 
-    Defaulting such a row to :attr:`AssetClass.CRYPTO` is not a guess:
-    ``exchange`` was the crypto union's word for the origin and the equity fork
-    said ``provider``, so the column itself identifies the market. A row with
-    neither column raises rather than picking a market, since an asset class
-    invented here is indistinguishable from one that was recorded.
+    The market comes from :func:`_asset_class_from_legacy_marker`, which reads
+    the same marker table the sink picks a file schema with. ``source`` is
+    resolved the same way, by value: on a bare Parquet read there is no
+    ``source`` column at all — it is a path component — and the previous
+    key-presence fallback turned an equity file's null ``exchange`` into the
+    literal string ``'None'``.
     """
-    if (source := d.get("source")) is None:
-        source = d["exchange"]
+    source = next((d[f] for f in _ORIGIN_FIELDS if d.get(f) is not None), None)
+    if source is None:
+        raise KeyError(
+            f"row names its origin under none of {_ORIGIN_FIELDS}; "
+            f"it cannot say where it came from"
+        )
 
     raw_class = d.get("asset_class")
-    if raw_class is not None:
-        asset_class = AssetClass(raw_class)
-    elif "exchange" in d:
-        asset_class = AssetClass.CRYPTO
-    else:
-        raise KeyError(
-            "row carries neither 'asset_class' nor the pre-migration 'exchange' "
-            "column; its market cannot be established"
-        )
+    asset_class = (
+        AssetClass(raw_class) if raw_class is not None else _asset_class_from_legacy_marker(d)
+    )
 
     source_ts = d.get("source_ts")
     if source_ts is None:

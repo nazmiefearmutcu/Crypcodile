@@ -79,28 +79,29 @@ import polars as pl
 
 from crocodile.core.schema.records import Record, _Header
 from crocodile.core.sink.base import Sink
-from crocodile.core.store.rows import _DERIVED_PARTITION_COLS, to_row
+from crocodile.core.store.rows import (
+    _DERIVED_PARTITION_COLS,
+    _FAMILY_MARKERS,
+    FAMILY_CANONICAL,
+    FAMILY_CRYPTO,
+    FAMILY_EQUITY,
+    to_row,
+)
 
 # ---------------------------------------------------------------------------
 # Record families
 # ---------------------------------------------------------------------------
 # Which legacy union a flattened row came from. See the module docstring for
 # why this, and not ``channel``, selects the file schema.
-FAMILY_CRYPTO = "crypto"
-FAMILY_EQUITY = "equity"
-FAMILY_CANONICAL = "canonical"
-
-# Row field → family, most specific first. Order is load-bearing twice over:
-# the canonical ``Instrument`` and the equity ``Instrument`` both carry an
-# ``exchange`` field (the listing venue), so matching ``exchange`` first would
-# file either one as crypto. This mirrors the ``_ORIGIN_FIELDS`` precedence in
-# ``crocodile.core.store.rows`` — same asymmetry, same order, one notion of
-# "which fork wrote this".
-_FAMILY_MARKERS: tuple[tuple[str, str], ...] = (
-    ("asset_class", FAMILY_CANONICAL),
-    ("provider", FAMILY_EQUITY),
-    ("exchange", FAMILY_CRYPTO),
-)
+#
+# The names and the marker table are imported rather than declared: the same
+# asymmetry decides the partition key in ``to_row``, the asset class in
+# ``from_row`` and the file schema here, and it used to be written out three
+# times. Two of the three then disagreed — ``rows._header`` matched ``exchange``
+# before ``provider`` and stamped every equity row ``CRYPTO``. ``rows`` owns the
+# table because it is the module both directions of the flattening go through;
+# these re-exports keep ``parquet_sink.FAMILY_CRYPTO`` importable where it
+# always was.
 
 # ``source`` names the top-level partition directory and is deliberately kept
 # out of every file schema (see ``crocodile.core.store.rows``), so it is the one

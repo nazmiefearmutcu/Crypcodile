@@ -1,3 +1,7 @@
+import pathlib
+
+import polars as pl
+
 from crocodile.core.schema.enums import AssetClass, OptType, Side
 from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import (
@@ -12,6 +16,7 @@ from crocodile.core.schema.records import (
     OptionsChain,
     Trade,
 )
+from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.core.store.rows import from_row, to_row
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
@@ -493,6 +498,49 @@ def test_a_premerge_row_reads_back_as_crypto():
         }
     )
     assert rec.asset_class is AssetClass.CRYPTO
+
+
+async def test_an_equity_row_does_not_read_back_as_crypto(tmp_path: pathlib.Path) -> None:
+    """The equity file schema *has* an ``exchange`` column, and it is always null.
+
+    ``_EQUITY_COMMON_FIELDS`` declares it for compatibility with equity lakes
+    written before the merge, nothing populates it, and the sink materialises
+    every schema key as a column — so ``polars.to_dicts()`` on any equity file
+    yields ``"exchange": None``. Testing for the *key* therefore matched equity
+    rows too and stamped them ``CRYPTO``: no exception, an ``ohlcv`` row whose
+    field names overlap enough that nothing else raised, and a lake query that
+    answers with the wrong market. The row is written through the real sink
+    rather than hand-built because the null column is the whole point.
+    """
+    from crocodile.equity.schema.records import OHLCV as EquityOHLCV
+
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=1000, flush_interval_seconds=9999)
+    await sink.put(
+        EquityOHLCV(  # type: ignore[arg-type]
+            provider="alpaca",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=_BASE_TS,
+            source_ts=_BASE_TS,
+            interval="1m",
+            open=10.0,
+            high=20.0,
+            low=5.0,
+            close=15.0,
+            volume=100.0,
+            vwap=15.0,
+        )
+    )
+    await sink.flush()
+
+    (row,) = pl.read_parquet(sorted(tmp_path.rglob("part-*.parquet"))).to_dicts()
+    assert "exchange" in row and row["exchange"] is None, (
+        "the premise of this test: the column is present and null on every equity file"
+    )
+
+    rec = from_row(row)
+    assert rec.asset_class is AssetClass.EQUITY
+    assert rec.source == "alpaca"
 
 
 def test_a_premerge_row_reads_back_as_natively_reported():
