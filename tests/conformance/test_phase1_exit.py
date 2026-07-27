@@ -263,6 +263,7 @@ _CLEAN_PACKAGES = (
     "src/crocodile/core",
     "src/crocodile/contrib",
     "src/crocodile/capabilities",
+    "src/crocodile/surfaces",
 )
 
 
