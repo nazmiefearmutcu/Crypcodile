@@ -181,7 +181,7 @@ async def test_google_finance_scrape_symbol() -> None:
 
     records = await provider._scrape_symbol("AAPL")
 
-    assert len(records) == 4
+    assert len(records) == 3
 
     # Verify Trade
     trades = [r for r in records if isinstance(r, Trade)]
@@ -203,7 +203,7 @@ async def test_google_finance_scrape_symbol() -> None:
 
     # Verify Fundamentals
     fundamentals = [r for r in records if isinstance(r, Fundamental)]
-    assert len(fundamentals) == 3
+    assert len(fundamentals) == 2
 
     open_fund = next(f for f in fundamentals if f.tag == "open")
     assert open_fund.val == 150.0
@@ -213,10 +213,12 @@ async def test_google_finance_scrape_symbol() -> None:
     assert mcap_fund.val == 2.5e9
     assert mcap_fund.unit == "USD"
 
-    exdiv_fund = next(f for f in fundamentals if f.tag == "ex_dividend_date")
-    assert exdiv_fund.val == 0.0
-    assert exdiv_fund.unit == "date"
-    assert exdiv_fund.end == "2026-06-21"
+    # No ex-dividend-date fundamental. The page renders a date and no number, and
+    # `Fundamental.val` is required, so the row shipped `val=0.0` under `unit="date"` —
+    # one column admitting what `prov=native` denied in another. `SELECT avg(val) …
+    # WHERE source='google_finance'` averaged that sentinel in with real facts. There is
+    # no record type for a date-valued fact, so nothing is emitted rather than a zero.
+    assert [f for f in fundamentals if f.tag == "ex_dividend_date"] == []
 
 
 @pytest.mark.asyncio
