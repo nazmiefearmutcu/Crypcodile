@@ -519,8 +519,16 @@ no longer exists, or that no longer builds a canonical record, fails its own gat
 rather than sitting here as decoration.
 
 The limit is worth stating: this list is a declaration, and a synthesiser written
-somewhere no rule below looks would go undeclared. The discovery rule covers the
-``resample`` packages, which is where every derivation in the tree lives today.
+somewhere no rule below looks would go undeclared. The discovery rule here covers the
+``resample`` packages, and it used to be the *only* discovery rule — which is how
+``google_finance`` came to put a synthesiser in ``providers/`` and sit outside every
+gate by construction. It is no longer alone: the fabrication scanner further down
+covers the whole tree, and
+:func:`test_gate3b_a_record_carrying_a_fabricated_measurement_states_prov` makes what
+it finds carry the same ``prov=`` obligation this list imposes. What that second rule
+does *not* cover is a module that derives records without writing a constant into a
+required measurement field — a resampler is exactly that, which is why this list did
+not become redundant.
 """
 
 
@@ -760,6 +768,19 @@ _CONSTANT_BUILTINS: dict[str, Callable[..., float]] = {
 """Builtins that are a constant when every argument is. ``min(1.0, 2.0)`` is ``1.0``."""
 
 FABRICATION_BLIND_SPOTS = (
+    "a constant that reaches the field through a *name* rather than through the "
+    "expression at the call site — `val = 0.0` on one branch, `val = read(payload)` on "
+    "another, then `Fundamental(val=val)`. The guard rule below reads the call-site "
+    "expression only, and deliberately: chasing names was measured over this tree and "
+    "flagged 27 sites in `equity/resample/ohlcv.py` alone, where `open_px = 0.0` is an "
+    "accumulator initialiser and not a substitute for anything. Every one of the 13 it "
+    "found outside the resamplers was real, so the noise is not evenly spread — but a "
+    "gate that is two-thirds false positives on its largest subject is a gate that gets "
+    "turned off, which is worse than one that says what it misses.",
+    "a clamp — `Trade(amount=max(msg.size, 0.0001))`. `min`/`max`/`abs` over a "
+    "measurement are folded only when *every* argument is constant, so a floor applied "
+    "to a real reading passes. It fabricates when the reading is zero, and flagging it "
+    "would flag every legitimate clamp in the tree.",
     "a class attribute — `class C: SIZE = 1.0` then `Trade(amount=C.SIZE)`. Class "
     "bodies are separate scopes and are not descended into, so the attribute never "
     "becomes a binding.",
@@ -998,6 +1019,46 @@ def _fold_subscript(
     return False, None
 
 
+def _substituted_constant(
+    node: ast.expr, bindings: dict[str, list[ast.expr | None]], seen: frozenset[str] = frozenset()
+) -> tuple[bool, float | None]:
+    """Return ``(a guard here can substitute a constant, its value)`` for ``node``.
+
+    :func:`_fold_constant` answers whether an expression *is* a constant. That misses the
+    shape the ``msn_money`` bars were written in, where the constant sits on one branch of
+    a guard and a payload read on the other::
+
+        open=safe_float(open_p[idx]) if idx < len(open_p) else 0.0,
+        bid_sz=_f(ticker.get("bidVolume")) or 0.0,
+
+    A required measurement is not a field with a sensible default. When the guard takes
+    the constant branch the payload supplied no measurement, so the number written there
+    is invented on exactly the rows where it matters, and the record still claims
+    ``prov=NATIVE`` — the ragged-array tail of an MSN chart went into the lake as a run of
+    zero-priced bars nothing could tell from real ones.
+
+    Only the expression written at the call site is read; a constant reached through a
+    name is not, and :data:`FABRICATION_BLIND_SPOTS` carries the measurement that decided
+    that. ``and``/``or`` are treated together with the conditional because ``x or 0.0`` is
+    the same guard with the test elided.
+    """
+    branches: list[ast.expr]
+    if isinstance(node, ast.IfExp):
+        branches = [node.body, node.orelse]
+    elif isinstance(node, ast.BoolOp):
+        branches = list(node.values)
+    else:
+        return False, None
+    for branch in branches:
+        constant, value = _fold_constant(branch, bindings, seen)
+        if constant:
+            return True, value
+        nested, value = _substituted_constant(branch, bindings, seen)
+        if nested:
+            return True, value
+    return False, None
+
+
 def _replace_calls(tree: ast.AST) -> list[ast.Call]:
     """Every ``msgspec.structs.replace(...)`` call, however it was imported.
 
@@ -1071,6 +1132,13 @@ class _Fabrication(NamedTuple):
     field: str
     source: str
     value: float | None
+    states_prov: bool = True
+    """Whether the construction carrying this offence passes ``prov=``.
+
+    Recorded at scan time because the call is not reachable from the offence otherwise,
+    and :func:`test_gate3b_a_record_carrying_a_fabricated_measurement_states_prov` is the
+    rule that makes a licensed fabrication say so on the row as well as in the list.
+    """
 
     def __str__(self) -> str:
         shown = self.source if self.value is None else f"{self.source} == {self.value!r}"
@@ -1110,14 +1178,19 @@ def _fabrications_in(
     offences: list[_Fabrication] = []
     for label, measurements, call in subjects:
         bindings = bindings_for(call)
+        states_prov = any(kw.arg == "prov" for kw in call.keywords)
         for field, value in _keyword_values(call, bindings):
             if field not in measurements:
                 continue
             constant, folded = _fold_constant(value, bindings)
             if not constant:
+                constant, folded = _substituted_constant(value, bindings)
+            if not constant:
                 continue
             offences.append(
-                _Fabrication(relative, value.lineno, label, field, ast.unparse(value), folded)
+                _Fabrication(
+                    relative, value.lineno, label, field, ast.unparse(value), folded, states_prov
+                )
             )
     return offences
 
@@ -1157,6 +1230,42 @@ def test_gate3b_no_module_fabricates_a_measurement_without_declaring_it():
     )
 
 
+def test_gate3b_a_record_carrying_a_fabricated_measurement_states_prov():
+    """The ``prov=`` obligation, discovered by evidence rather than by directory.
+
+    ``DERIVES_RECORDS`` above finds its subjects by looking in ``resample`` packages,
+    and said so in its own docstring — so ``google_finance``, which built a ``Trade``
+    with an invented size in ``providers/``, was outside it by construction and outside
+    every other gate with it. The scanner in this section already reads the whole tree.
+    This joins the two: whatever it finds must also *say* it is not a venue reading,
+    because ``prov`` is what the REST and MCP surfaces turn into a warning, and a
+    fabrication left silent is served as though a venue had published it.
+
+    The obligation is per **record**, not per module, and that is a deliberate
+    difference from the resample rule. A resampler derives everything it emits, so the
+    module is the right unit there. A provider mixes: ``google_finance`` scrapes one
+    page and writes a real index level beside a ``Trade`` whose size the page never
+    published. Demanding ``prov=Provenance.NATIVE, prov_basis="native"`` boilerplate on
+    the honest records would be noise, and noise is how a gate gets turned off.
+
+    Being on ``FABRICATES_MEASUREMENTS`` does not exempt a record from this. The list
+    licenses a number in a field; it does not license the row claiming a venue reported
+    it. A structural zero is honest *and* declared, or it is neither.
+    """
+    silent = [
+        str(offence)
+        for offences in _fabricated_measurements().values()
+        for offence in offences
+        if not offence.states_prov
+    ]
+    assert not silent, (
+        f"records built with a fabricated measurement and no explicit prov=: {silent}. "
+        f"No prov= means prov=NATIVE, prov_basis='native', prov_confidence=1.0 — the "
+        f"claim that a venue reported this value directly. Build the tail with "
+        f"provenance_fields(basis, inputs) and pass all four fields."
+    )
+
+
 _FABRICATION_HEADER = "import msgspec.structs\nfrom crocodile.core.schema.records import Trade\n"
 
 _EVASIONS: dict[str, str] = {
@@ -1185,6 +1294,16 @@ _EVASIONS: dict[str, str] = {
     "a module-level table of assumed values": '_KW = {"amount": 1.0}\nTrade(amount=_KW["amount"])',
     "a tuple of assumed values": "_SIZES = (1.0, 2.0)\nTrade(amount=_SIZES[0])",
     "that table unpacked whole": '_KW = {"amount": 1.0}\nTrade(**_KW)',
+    "an index guard over a short array": (
+        "def f(sizes, i):\n    return Trade(amount=sizes[i] if i < len(sizes) else 0.0)"
+    ),
+    "a presence guard": (
+        "def f(msg):\n    return Trade(amount=float(msg['s']) if 's' in msg else 0.0)"
+    ),
+    "an or-pad": "def f(msg):\n    return Trade(amount=msg.get('size') or 0.0)",
+    "a guard nested inside a guard": (
+        "def f(msg, x):\n    return Trade(amount=msg.size if x else (msg.alt or 1.0))"
+    ),
 }
 """Every spelling of one fabrication the scanner has to read as the same thing.
 
@@ -1200,6 +1319,15 @@ form, the single spelling that *was* caught, so the parametrised test reported g
 over a hole in the middle of what it claimed to cover. A probe set that only holds the
 cases the implementation already handles is not a probe set.
 
+The four guard rows are the latest, and one of them used to sit in
+:data:`_HONEST_READINGS` as "a conditional with one measured branch" — declared
+acceptable on the argument that a real adapter writes a fallback. ``msn_money`` is what
+that argument looked like in production: ``safe_float(open_p[idx]) if idx <
+len(open_p) else 0.0`` on all five of a bar's measurements, so the tail of every ragged
+chart payload became zero-priced bars at ``prov=NATIVE``. A required measurement is not
+a field with a sensible default. Where the guard takes the constant branch the payload
+supplied nothing, and the honest move is to skip the record.
+
 What is still not seen is in :data:`FABRICATION_BLIND_SPOTS`, out loud.
 """
 
@@ -1212,20 +1340,26 @@ _HONEST_READINGS: dict[str, str] = {
         "return Trade(amount=size)"
     ),
     "a loop variable": "def f(sizes):\n    for size in sizes:\n        yield Trade(amount=size)",
-    "a conditional with one measured branch": (
-        "def f(x, msg):\n    return Trade(amount=1.0 if x else msg.size)"
-    ),
     "a builtin over a measurement": "def f(msg):\n    return Trade(amount=min(1.0, msg.size))",
+    "a guard between two measurements": (
+        "def f(x, msg):\n    return Trade(amount=msg.size if x else msg.alt_size)"
+    ),
     "a table rebound to a payload": (
         "def f(payload):\n    kw = {'amount': 1.0}\n    kw = payload\n    return Trade(**kw)"
     ),
 }
 """Readings the scanner must *not* flag, so the gate is a filter and not a ban.
 
-The last one is the discrimination that matters: a name assigned ``0.0`` on one
-branch and a payload value on another is not a constant, and treating it as one
-would flag ``resample_trades_to_bars``'s ``volume`` beside
-``resample_quotes_to_bars``'s.
+``a name that is not always constant`` is the discrimination that matters, and it is
+also the price of the guard rule: a name assigned ``0.0`` on one branch and a payload
+value on another is exactly the same fabrication as the conditional form, and it is
+deliberately not flagged, because chasing names was measured over this tree and read
+``resample_trades_to_bars``'s accumulator as a constant. That trade-off is written down
+in :data:`FABRICATION_BLIND_SPOTS` rather than left for someone to discover.
+
+``a guard between two measurements`` is the shape the guard rule must stay clear of: a
+conditional whose branches are both readings is a choice between sources, not a
+substitute for one.
 """
 
 
@@ -1245,6 +1379,43 @@ def test_gate3b_the_fabrication_scanner_leaves_a_real_reading_alone(form: str) -
     tree = ast.parse(_FABRICATION_HEADER + _HONEST_READINGS[form])
 
     assert _fabrications_in(tree, _measurement_fields(), "<probe>") == []
+
+
+def test_gate3b_the_scanner_records_whether_the_fabricating_record_states_prov() -> None:
+    """A licence in FABRICATES_MEASUREMENTS does not carry the row's provenance claim.
+
+    The list argues that one number in one field is the honest encoding of a quantity.
+    It says nothing about whether a venue reported it, and `prov` is the field the REST
+    and MCP surfaces turn into a warning — so a declared fabrication that stays silent
+    on `prov` is served exactly as a venue reading, which is the whole failure.
+    """
+    fields = _measurement_fields()
+
+    silent = _fabrications_in(
+        ast.parse(_FABRICATION_HEADER + "Trade(amount=1.0)"), fields, "<probe>"
+    )
+    declared = _fabrications_in(
+        ast.parse(_FABRICATION_HEADER + "Trade(amount=1.0, prov='synthetic')"), fields, "<probe>"
+    )
+
+    assert [offence.states_prov for offence in silent] == [False]
+    assert [offence.states_prov for offence in declared] == [True]
+
+
+def test_gate3b_a_guard_reports_the_constant_it_would_substitute() -> None:
+    """The licence is keyed on ``(field, value)``, so a guard has to yield its value too.
+
+    Reporting the whole expression and no number would make every padded guard
+    unlicensable, which is the pressure that gets a gate deleted rather than satisfied.
+    """
+    tree = ast.parse(
+        _FABRICATION_HEADER
+        + "def f(sizes, i):\n    return Trade(amount=sizes[i] if i < len(sizes) else 0.0)"
+    )
+
+    offences = _fabrications_in(tree, _measurement_fields(), "<probe>")
+
+    assert [(offence.field, offence.value) for offence in offences] == [("amount", 0.0)]
 
 
 def test_gate3b_the_fabrication_list_cannot_hold_a_stale_or_silent_entry():
