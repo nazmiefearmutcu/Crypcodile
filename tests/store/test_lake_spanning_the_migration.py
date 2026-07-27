@@ -528,3 +528,116 @@ def test_a_legacy_instrument_keeps_its_listing_venue_and_does_not_become_its_sou
     assert instrument.source == _SOURCE
     assert instrument.name == "Apple Inc."
     assert instrument.cusip == "037833100"
+
+
+# ---------------------------------------------------------------------------
+# When both tags hold a row for the same instant
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def backfilled_lake(tmp_path: Path) -> Path:
+    """A lake where a date collected before the merge was backfilled after it.
+
+    ``alpaca.connector`` maps ``ch in ("bar", "ohlcv")`` onto ``ohlcv``, so any
+    post-merge backfill of an already-collected date writes ``channel=ohlcv/`` beside
+    the ``channel=bar/`` the first collection left. Day 0 is in both halves.
+    """
+
+    async def build() -> None:
+        sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for day in (0, 3, 4):
+            await sink.put(_canonical_bar(_TS + day * _DAY, 200.0 + day, 5_000.0, 900))
+        await sink.flush()
+
+    asyncio.run(build())
+
+    _write_part(
+        tmp_path,
+        _SOURCE,
+        "bar",
+        FAMILY_EQUITY,
+        [
+            _legacy_equity_row(
+                "bar",
+                _TS + i * _DAY,
+                interval="1d",
+                open=178.0,
+                high=180.0,
+                low=177.0,
+                close=179.0 + i,
+                volume=1_000.0,
+                vwap=178.5,
+                trade_count=77,
+            )
+            for i in range(3)
+        ],
+        bucketed=False,
+    )
+    return tmp_path
+
+
+def test_a_backfilled_day_is_one_recording_of_an_instant_not_two(
+    backfilled_lake: Path,
+) -> None:
+    """C3: the widened read unioned overlapping tags with no deduplication.
+
+    Five distinct days sit under the two tags and day 0 is under both, so the union
+    returned six bars — doubling that day's ``volume`` and ``num_trades``, and, through
+    ``ohlcv_from_ohlcv``'s coverage sum, *raising* the reported confidence of anything
+    derived from it. The successor tag wins: it is what the current writer produced, and
+    the retired one is by definition the older recording of the same observation.
+    """
+    bars = _replay(backfilled_lake, "ohlcv")
+
+    timestamps = [b.local_ts for b in bars]
+    assert len(bars) == 5
+    assert len(set(timestamps)) == 5, f"duplicated instants: {timestamps}"
+    # Day 0 is served by the canonical row, not the pre-migration one.
+    assert bars[0].close == 200.0
+    assert bars[0].num_trades == 900
+    # Days 1 and 2 exist only under the retired tag and are still there.
+    assert [b.close for b in bars[1:3]] == [180.0, 181.0]
+
+
+def test_the_view_deduplicates_the_backfilled_day_too(backfilled_lake: Path) -> None:
+    """``replay`` reads through ``scan``; SQL reads through the view. Both, or neither."""
+    client = StockodileClient(backfilled_lake)
+
+    assert client.query("SELECT count(*) AS n FROM ohlcv").row(0, named=True)["n"] == 5
+    assert client.query("SELECT count(*) AS n FROM bar").row(0, named=True)["n"] == 3
+
+
+def test_a_narrower_reading_keeps_more_rows_rather_than_fewer(backfilled_lake: Path) -> None:
+    """``symbol`` + ``local_ts`` alone would collapse two intervals of one instant.
+
+    One symbol carries a 1m and a 1d bar at the same timestamp, so ``interval`` joins the
+    identity key; every discriminator the view exposes does.
+    """
+    _write_part(
+        backfilled_lake,
+        _SOURCE,
+        "bar",
+        FAMILY_EQUITY,
+        [
+            _legacy_equity_row(
+                "bar",
+                _TS,
+                interval="1m",
+                open=1.0,
+                high=2.0,
+                low=0.5,
+                close=1.5,
+                volume=1.0,
+                vwap=1.2,
+                trade_count=3,
+            )
+        ],
+        bucketed=False,
+        name="part-minute.parquet",
+    )
+
+    bars = _replay(backfilled_lake, "ohlcv")
+
+    assert len(bars) == 6
+    assert sorted(b.interval for b in bars if b.local_ts == _TS) == ["1d", "1m"]

@@ -10,7 +10,7 @@ import pytest
 
 from crocodile.core.replay.orderbook import BookGap
 from crocodile.core.schema.enums import AssetClass, Side
-from crocodile.core.schema.provenance import Provenance
+from crocodile.core.schema.provenance import Provenance, provenance_fields
 from crocodile.core.schema.records import OHLCV, BookDelta, BookSnapshot, Quote, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.equity.resample import (
@@ -758,3 +758,204 @@ def test_re_bucketing_venue_bars_stays_derived_rather_than_inheriting_native() -
 
     assert all(b.prov is Provenance.NATIVE for b in [_minute_bar(0)])
     assert bars[0].prov is Provenance.DERIVED
+
+
+# ---------------------------------------------------------------------------
+# The three record paths, and the three frame paths, all state the same claim
+# ---------------------------------------------------------------------------
+
+
+def _scraped_trade(index: int) -> Trade:
+    """One ``google_finance`` print: a last price lifted off a rendered page.
+
+    ``prov=SYNTHETIC, prov_basis='scraped_last_price', prov_confidence=0.0`` is exactly
+    what that connector emits today, so this is the live input, not a contrived one.
+    """
+    tail = provenance_fields("scraped_last_price")
+    return Trade(
+        source="google_finance",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        local_ts=index * _MINUTE_NS,
+        asset_class=AssetClass.EQUITY,
+        source_ts=None,
+        id="",
+        price=190.0 + index,
+        amount=0.0,
+        side=Side.UNKNOWN,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
+    )
+
+
+def test_bars_aggregated_from_scraped_prices_are_not_labelled_derived() -> None:
+    """C2: ``worst_provenance`` was applied on one of the three record paths.
+
+    The claim was "at every emitted bar". ``resample_bars_to_bars`` had it and the trade
+    and quote paths did not, so a consumer filtering ``WHERE prov != 'synthetic'`` got
+    back bars built entirely from prices scraped off a web page.
+    """
+    bars = list(resample_trades_to_bars([_scraped_trade(i) for i in range(3)], "1h"))
+
+    assert len(bars) == 1
+    assert bars[0].prov is Provenance.SYNTHETIC
+    assert bars[0].prov_basis == "ohlcv_from_trades"
+
+
+def test_a_venue_reported_trade_stream_still_aggregates_to_derived() -> None:
+    """The propagation is a floor on distrust, not a copy of the input's level."""
+    trades = [
+        Trade(
+            source="alpaca",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=i * _MINUTE_NS,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            id=str(i),
+            price=100.0 + i,
+            amount=1.0,
+            side=Side.UNKNOWN,
+        )
+        for i in range(3)
+    ]
+
+    bars = list(resample_trades_to_bars(trades, "1h"))
+
+    assert [t.prov for t in trades] == [Provenance.NATIVE] * 3
+    assert bars[0].prov is Provenance.DERIVED
+
+
+def test_a_quote_bar_cannot_be_more_trustworthy_than_the_quotes_under_it() -> None:
+    """SYNTHETIC is already the floor for most inputs — but not for all of them."""
+    tail = provenance_fields("unavailable")
+    quotes = [
+        Quote(
+            source="x",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=i * _MINUTE_NS,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            bid_px=99.0,
+            bid_sz=1.0,
+            ask_px=101.0,
+            ask_sz=1.0,
+            prov=tail.prov,
+            prov_basis=tail.prov_basis,
+            prov_confidence=tail.prov_confidence,
+            prov_inputs=tail.prov_inputs,
+        )
+        for i in range(3)
+    ]
+
+    bars = list(resample_quotes_to_bars(quotes, "1h"))
+
+    assert bars[0].prov is Provenance.UNAVAILABLE
+    assert bars[0].prov_basis == "ohlcv_from_quotes"
+
+
+def test_the_frame_paths_state_a_tail_instead_of_leaving_the_header_default() -> None:
+    """A bar frame with no ``prov`` column has NATIVE at 1.0 applied for it downstream."""
+    trades = pl.DataFrame(
+        {
+            "local_ts": [i * _MINUTE_NS for i in range(3)],
+            "price": [100.0, 101.0, 102.0],
+            "amount": [1.0, 1.0, 1.0],
+            "symbol": ["AAPL"] * 3,
+        }
+    )
+
+    bars = resample_trades_df(trades, "1h")
+
+    assert bars.row(0, named=True)["prov"] == Provenance.DERIVED.value
+    assert bars.row(0, named=True)["prov_basis"] == "ohlcv_from_trades"
+    assert bars.row(0, named=True)["prov_confidence"] == 1.0
+
+
+def test_a_frame_of_scraped_prints_resamples_to_a_synthetic_frame() -> None:
+    """C2 on the frame path: same laundering, one type further out."""
+    scraped = pl.DataFrame(
+        {
+            "local_ts": [i * _MINUTE_NS for i in range(3)],
+            "price": [190.0, 191.0, 192.0],
+            "amount": [0.0, 0.0, 0.0],
+            "symbol": ["AAPL"] * 3,
+            "prov": [Provenance.SYNTHETIC.value] * 3,
+        }
+    )
+
+    bars = resample_trades_df(scraped, "1h")
+
+    assert bars.row(0, named=True)["prov"] == Provenance.SYNTHETIC.value
+
+
+def test_a_quote_frame_resamples_to_a_synthetic_frame() -> None:
+    quotes = pl.DataFrame(
+        {
+            "local_ts": [i * _MINUTE_NS for i in range(3)],
+            "bid_px": [99.0, 99.5, 100.0],
+            "ask_px": [101.0, 101.5, 102.0],
+            "symbol": ["AAPL"] * 3,
+        }
+    )
+
+    bars = resample_quotes_df(quotes, "1h")
+
+    assert bars.row(0, named=True)["prov"] == Provenance.SYNTHETIC.value
+    assert bars.row(0, named=True)["prov_basis"] == "ohlcv_from_quotes"
+
+
+def test_a_bar_frame_measures_its_coverage_and_a_duplicate_does_not_raise_it() -> None:
+    """The frame path does the same union arithmetic the record path does.
+
+    Thirty of a session's 390 minutes is a fraction of a day either way; sending each
+    of them twice is the shape a lake holding one date under both channel tags produces,
+    and a summed width would have reported the duplicate as better coverage.
+    """
+    once = pl.DataFrame(
+        {
+            "local_ts": [i * _MINUTE_NS for i in range(30)],
+            "open": [1.0] * 30,
+            "high": [2.0] * 30,
+            "low": [0.5] * 30,
+            "close": [1.5] * 30,
+            "volume": [10.0] * 30,
+            "interval": ["1m"] * 30,
+            "prov": [Provenance.DERIVED.value] * 30,
+            "prov_confidence": [1.0] * 30,
+        }
+    )
+    twice = pl.concat([once, once]).sort("local_ts")
+
+    single = resample_bars_df(once, "1h")
+    doubled = resample_bars_df(twice, "1h")
+
+    assert single.row(0, named=True)["prov_basis"] == "ohlcv_from_ohlcv"
+    assert single.row(0, named=True)["prov_confidence"] == pytest.approx(0.25)
+    assert doubled.row(0, named=True)["prov_confidence"] == pytest.approx(0.25)
+
+
+def test_a_bar_frame_that_declares_no_width_reports_no_confidence() -> None:
+    """The numerator is the inputs' declared widths; nothing on the frame supplies one.
+
+    A null says so. 1.0 would claim a full bucket, which is the constant this whole
+    round is about.
+    """
+    frame = pl.DataFrame(
+        {
+            "local_ts": [i * _MINUTE_NS for i in range(3)],
+            "open": [1.0] * 3,
+            "high": [2.0] * 3,
+            "low": [0.5] * 3,
+            "close": [1.5] * 3,
+            "volume": [10.0] * 3,
+        }
+    )
+
+    bars = resample_bars_df(frame, "1h")
+
+    assert bars.row(0, named=True)["prov_confidence"] is None
+    assert bars.row(0, named=True)["prov"] == Provenance.DERIVED.value
