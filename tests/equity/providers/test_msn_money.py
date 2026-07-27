@@ -373,6 +373,115 @@ async def test_msn_money_split_parsing_ratios() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_split_factor_that_will_not_divide_is_dropped_not_read_as_its_numerator() -> None:
+    """`"3:for-2"` used to become a 3.0 split factor instead of 1.5.
+
+    A price series back-adjusted by 3.0 where the real factor was 1.5 carries a permanent
+    2x step through every pre-split bar, and the row said `prov=native`, so the adjusted
+    series was indistinguishable from a correctly adjusted one.
+    """
+    registry = InstrumentRegistry()
+    sink = MemorySink()
+    provider = MsnMoneyProvider(
+        symbols=["AAPL"],
+        channels=["corp_actions"],
+        out=sink,
+        registry=registry,
+        apikey="test-key",
+    )
+
+    def mock_get(url: str, *args: Any, **kwargs: Any) -> MagicMock:
+        resp = MagicMock()
+        resp.status = 200
+        if "Query" in url:
+            stock_aapl = '{"RT00S": "AAPL", "SecId": "12345"}'
+            resp.json = AsyncMock(return_value={"data": {"stocks": [stock_aapl]}})
+        elif "QuoteSummary" in url:
+            resp.json = AsyncMock(
+                return_value=[
+                    {
+                        "equity": {
+                            "shareStatistics": {
+                                "lastSplitFactor": "3:for-2",
+                                "lastSplitDate": "2026-06-21T00:00:00Z",
+                            }
+                        }
+                    }
+                ]
+            )
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=None)
+        return resp
+
+    mock_session = MagicMock()
+    mock_session.get.side_effect = mock_get
+    provider.session = mock_session
+
+    actions = [
+        rec
+        async for rec in provider.backfill(
+            "corp_action", "AAPL", 1781913600000000000, 1782086400000000000
+        )
+    ]
+
+    assert actions == []
+
+
+@pytest.mark.asyncio
+async def test_a_dividend_the_page_spelled_na_is_not_reported_as_paying_zero() -> None:
+    """`"N/A"` is truthy, so the presence guard passed it and the 0.0 default did the rest.
+
+    `SELECT value FROM corp_action WHERE type='dividend_cash'` returned a declared $0.00
+    dividend on a real ex-date, at `prov=native`.
+    """
+    registry = InstrumentRegistry()
+    sink = MemorySink()
+    provider = MsnMoneyProvider(
+        symbols=["AAPL"],
+        channels=["corp_actions"],
+        out=sink,
+        registry=registry,
+        apikey="test-key",
+    )
+
+    def mock_get(url: str, *args: Any, **kwargs: Any) -> MagicMock:
+        resp = MagicMock()
+        resp.status = 200
+        if "Query" in url:
+            stock_aapl = '{"RT00S": "AAPL", "SecId": "12345"}'
+            resp.json = AsyncMock(return_value={"data": {"stocks": [stock_aapl]}})
+        elif "QuoteSummary" in url:
+            resp.json = AsyncMock(
+                return_value=[
+                    {
+                        "equity": {
+                            "shareStatistics": {
+                                "exDividendAmount": "N/A",
+                                "exDividendDate": "2026-06-20T00:00:00Z",
+                            }
+                        }
+                    }
+                ]
+            )
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=None)
+        return resp
+
+    mock_session = MagicMock()
+    mock_session.get.side_effect = mock_get
+    provider.session = mock_session
+
+    actions = [
+        rec
+        async for rec in provider.backfill(
+            "corp_action", "AAPL", 1781913600000000000, 1782086400000000000
+        )
+    ]
+
+    assert actions == []
+
+
+@pytest.mark.asyncio
 async def test_msn_money_autosuggest_class_suffixes() -> None:
     registry = InstrumentRegistry()
     sink = MemorySink()
@@ -407,21 +516,10 @@ async def test_msn_money_autosuggest_class_suffixes() -> None:
     assert sec_id == "12345"
 
 
-@pytest.mark.asyncio
-async def test_msn_money_float_conversion_vulnerability() -> None:
-    registry = InstrumentRegistry()
-    sink = MemorySink()
-    provider = MsnMoneyProvider(
-        symbols=["AAPL"],
-        channels=["bar"],
-        out=sink,
-        registry=registry,
-        apikey="test-key",
-    )
-
+def _msn_chart_session(series: dict[str, Any]) -> MagicMock:
+    """A session answering the SecId lookup and then one chart payload of ``series``."""
     mock_session = MagicMock()
 
-    # Mock data returning None, "N/A", empty string for price arrays
     def mock_get(url: str, *args: Any, **kwargs: Any) -> MagicMock:
         resp = MagicMock()
         resp.status = 200
@@ -429,41 +527,119 @@ async def test_msn_money_float_conversion_vulnerability() -> None:
             stock_aapl = '{"RT00S": "AAPL", "SecId": "12345"}'
             resp.json = AsyncMock(return_value={"data": {"stocks": [stock_aapl]}})
         elif "Charts" in url:
-            resp.json = AsyncMock(
-                return_value=[
-                    {
-                        "series": {
-                            "openPrices": [None],
-                            "prices": ["N/A"],
-                            "pricesHigh": [""],
-                            "pricesLow": ["150.0"],
-                            "volumes": ["10,000"],
-                            "timeStamps": ["2026-06-20T12:00:00Z"],
-                        }
-                    }
-                ]
-            )
+            resp.json = AsyncMock(return_value=[{"series": series}])
         resp.__aenter__ = AsyncMock(return_value=resp)
         resp.__aexit__ = AsyncMock(return_value=None)
         return resp
 
     mock_session.get.side_effect = mock_get
-    provider.session = mock_session
+    return mock_session
 
-    start_ns = 1781913600000000000
-    end_ns = 1782000000000000000
 
-    bars = []
-    async for rec in provider.backfill("bar", "AAPL", start_ns, end_ns):
-        bars.append(rec)
+async def _msn_bars(series: dict[str, Any]) -> list[OHLCV]:
+    """Every bar the provider yields for one chart payload, over a one-day window."""
+    provider = MsnMoneyProvider(
+        symbols=["AAPL"],
+        channels=["bar"],
+        out=MemorySink(),
+        registry=InstrumentRegistry(),
+        apikey="test-key",
+    )
+    provider.session = _msn_chart_session(series)
+    return [
+        rec
+        async for rec in provider.backfill(
+            "bar", "AAPL", 1781913600000000000, 1782000000000000000
+        )
+        if isinstance(rec, OHLCV)
+    ]
 
-    bar = bars[0]
-    assert isinstance(bar, OHLCV)
-    assert bar.open == 0.0
-    assert bar.close == 0.0
-    assert bar.high == 0.0
-    assert bar.low == 150.0
-    assert bar.volume == 10000.0
+
+@pytest.mark.asyncio
+async def test_a_bar_whose_prices_the_page_left_null_is_skipped_not_zero_filled() -> None:
+    """The payload shape this pinned as `open == 0.0` beside `low == 150.0`.
+
+    MSN writes `null` and `"N/A"` into its chart arrays across halts and holidays. Zero
+    filling them put a bar with a high below its low into the lake under the header's
+    default `prov=NATIVE`, so `SELECT min(close) WHERE source='msn_money'` returned a
+    price no share ever traded at with nothing on the row to tell it from a real one.
+    """
+    bars = await _msn_bars(
+        {
+            "openPrices": [None],
+            "prices": ["N/A"],
+            "pricesHigh": [""],
+            "pricesLow": ["150.0"],
+            "volumes": ["10,000"],
+            "timeStamps": ["2026-06-20T12:00:00Z"],
+        }
+    )
+
+    assert bars == []
+
+
+@pytest.mark.asyncio
+async def test_only_the_bars_every_series_reaches_survive_a_ragged_payload() -> None:
+    """MSN does not guarantee its five arrays are as long as `timeStamps`.
+
+    The index guard used to pad the short ones with 0.0, so the tail of a ragged payload
+    became a run of zero-priced bars. The bars the page did publish in full are still
+    emitted — a short array is a reason to drop the rows it does not reach, not the fetch.
+    """
+    bars = await _msn_bars(
+        {
+            "openPrices": [150.0, 151.0],
+            "prices": [151.5],  # one short
+            "pricesHigh": [152.0, 153.0],
+            "pricesLow": [149.5, 150.5],
+            "volumes": [1000000.0, 1100000.0],
+            "timeStamps": ["2026-06-20T12:00:00Z", "2026-06-20T13:00:00Z"],
+        }
+    )
+
+    assert len(bars) == 1
+    assert bars[0].close == 151.5
+
+
+@pytest.mark.asyncio
+async def test_a_bar_the_page_gave_no_volume_for_is_skipped_rather_than_declared_flat() -> None:
+    """A structural zero would need evidence the omission is structural, and there is none.
+
+    Nothing in the payload separates "this instrument does not trade" from "this array is
+    short", so a zero volume here would be an unargued claim that no shares changed hands.
+    """
+    bars = await _msn_bars(
+        {
+            "openPrices": [150.0],
+            "prices": [151.5],
+            "pricesHigh": [152.0],
+            "pricesLow": [149.5],
+            "timeStamps": ["2026-06-20T12:00:00Z"],
+        }
+    )
+
+    assert bars == []
+
+
+@pytest.mark.asyncio
+async def test_a_bar_with_an_unreadable_timestamp_cannot_escape_the_requested_window() -> None:
+    """It used to be emitted with `source_ts=None`, which the window filter then skipped.
+
+    A backfill for one June day returned a bar it could not place in time and had not
+    asked for.
+    """
+    bars = await _msn_bars(
+        {
+            "openPrices": [150.0],
+            "prices": [151.5],
+            "pricesHigh": [152.0],
+            "pricesLow": [149.5],
+            "volumes": [1000000.0],
+            "timeStamps": ["not-a-timestamp"],
+        }
+    )
+
+    assert bars == []
 
 
 @pytest.mark.asyncio
