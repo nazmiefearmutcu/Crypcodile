@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from unittest.mock import MagicMock
 
 import polars as pl
 import pytest
@@ -202,18 +203,29 @@ def test_catalog_stats_counts_every_channel(
     They now project ``Catalog.channel_row_counts``, which counts through DuckDB's
     relation API, so there is no ``FROM "..."`` string left to assert on. What the method
     promises a caller is unchanged and is what this pins.
+
+    It pins the delegation too, not just the answer: a reimplemented loop that happened
+    to return the same numbers would satisfy the assertion below while reintroducing the
+    disagreement, so ``query`` is wired to fail if anything builds its own ``COUNT(*)``.
     """
     from crocodile.crypto.client.client import CrypcodileClient
 
     client = CrypcodileClient(data_dir=tmp_path)
+    counts = MagicMock(return_value={"book_snapshot": 42, "trade": 7})
+    monkeypatch.setattr(client._catalog, "channel_row_counts", counts)
     monkeypatch.setattr(
-        client._catalog, "channel_row_counts", lambda: {"book_snapshot": 42, "trade": 7}
+        client,
+        "query",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("catalog_stats must not build its own COUNT(*) SQL")
+        ),
     )
 
     assert client.catalog_stats() == {
         "row_counts": {"book_snapshot": 42, "trade": 7},
         "channel_count": 2,
     }
+    counts.assert_called_once_with()
 
 
 def test_catalog_stats_reports_minus_one_only_for_a_count_it_could_not_take(
