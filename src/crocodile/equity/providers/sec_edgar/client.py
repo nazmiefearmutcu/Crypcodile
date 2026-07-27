@@ -13,8 +13,8 @@ import aiohttp
 import msgspec
 
 from crocodile.core.ratelimit import TokenBucketLimiter
-from crocodile.equity.schema.enums import FundPeriod
-from crocodile.equity.schema.records import Filing, Fundamental
+from crocodile.core.schema.enums import AssetClass, FundPeriod
+from crocodile.core.schema.records import Filing, Fundamental
 
 
 def _safe_float(val: Any) -> float:
@@ -206,7 +206,7 @@ class SecEdgarClient:
 
             filings.append(
                 Filing(
-                    provider="sec_edgar",
+                    source="sec_edgar",
                     symbol=symbol,
                     symbol_raw=symbol,
                     source_ts=None,
@@ -218,6 +218,7 @@ class SecEdgarClient:
                     primary_document=doc,
                     document_url=doc_url,
                     is_xbrl=bool(is_xbrl_list[i]) if i < len(is_xbrl_list) else None,
+                    asset_class=AssetClass.EQUITY,
                 )
             )
         return filings
@@ -275,7 +276,7 @@ class SecEdgarClient:
                             except ValueError:
                                 pass
                         yield Fundamental(
-                            provider="sec_edgar",
+                            source="sec_edgar",
                             symbol=symbol,
                             symbol_raw=symbol,
                             source_ts=None,
@@ -292,6 +293,7 @@ class SecEdgarClient:
                             filed=val_obj.get("filed"),
                             accn=val_obj.get("accn"),
                             frame=val_obj.get("frame"),
+                            asset_class=AssetClass.EQUITY,
                         )
 
     def _deduplicate_facts(self, facts: Iterable[Fundamental]) -> list[Fundamental]:

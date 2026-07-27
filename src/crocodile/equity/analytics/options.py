@@ -2,7 +2,7 @@
 
 import math
 
-from crocodile.equity.schema.enums import OptType
+from crocodile.core.schema.enums import OptType
 
 
 def _n_pdf(x: float) -> float:

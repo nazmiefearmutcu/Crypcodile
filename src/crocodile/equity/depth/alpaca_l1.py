@@ -6,7 +6,9 @@ from typing import Any
 
 import aiohttp
 
-from crocodile.equity.schema.records import DepthProfile, Level
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.records import DepthProfile, Level
 
 _LATEST_QUOTE_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest"
 
@@ -43,8 +45,15 @@ class AlpacaL1DepthSource:
         ref = (bid_px + ask_px) / 2.0 if bid_px and ask_px else (bid_px or ask_px)
         bids: list[Level] = [(bid_px, bid_sz)] if bid_px else []
         asks: list[Level] = [(ask_px, ask_sz)] if ask_px else []
+        # A one-sided or empty latest quote is a state this endpoint really returns, and it
+        # is the only thing about this method that varies — so it is what the registered
+        # formula is a function of. Writing the number here instead is the bypass the
+        # registry exists to refuse.
+        tail = provenance_fields("alpaca_l1", {"n_quoted_sides": len(bids) + len(asks)})
         return DepthProfile(
-            provider="alpaca", symbol=f"alpaca:{symbol.upper()}", symbol_raw=symbol.upper(),
-            local_ts=time.time_ns(), bids=bids, asks=asks, reference_price=ref,
-            basis="alpaca_l1", is_synthetic=False, depth=len(bids) + len(asks),
+            source="alpaca", symbol=f"alpaca:{symbol.upper()}", symbol_raw=symbol.upper(),
+            local_ts=time.time_ns(), asset_class=AssetClass.EQUITY, source_ts=None,
+            bids=bids, asks=asks, reference_price=ref, depth=len(bids) + len(asks),
+            prov=tail.prov, prov_basis=tail.prov_basis,
+            prov_confidence=tail.prov_confidence, prov_inputs=tail.prov_inputs,
         )

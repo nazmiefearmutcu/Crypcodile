@@ -670,7 +670,7 @@ async def serve_stdio(data_dir: Path = Path("data")) -> None:
                         profile = await source.snapshot(sym)
                         depth_result: dict[str, Any] = {
                             "symbol": profile.symbol,
-                            "basis": profile.basis,
+                            "basis": profile.prov_basis,
                             "is_synthetic": profile.is_synthetic,
                             "reference_price": profile.reference_price,
                             "bids": [list(lv) for lv in profile.bids],

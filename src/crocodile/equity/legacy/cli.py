@@ -48,7 +48,11 @@ COMMON_DEFAULT_SYMBOLS = [
 VALID_PROVIDERS = ["alpaca", "finnhub", "google_finance", "stooq"]
 # Pull/backfill-only providers (no streaming run loop)
 BACKFILL_ONLY_PROVIDERS = ["msn_money", "tiingo"]
-VALID_CHANNELS = ["trade", "quote", "bar"]
+# `ohlcv` is the surviving tag for a bar; `bar` is accepted because lakes and
+# scripts still spell it that way. Rejecting `ohlcv` is what this list did before
+# the two structs collapsed, which made stooq — the one provider that always
+# emitted `ohlcv` — unreachable from the CLI.
+VALID_CHANNELS = ["trade", "quote", "bar", "ohlcv"]
 
 SUGGESTED_SYMBOLS = {
     "alpaca": ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"],
@@ -868,7 +872,9 @@ def get_record_value(rec: Any) -> float | None:
             return float(rec.price)
         elif tag == "quote":
             return (float(rec.bid_px) + float(rec.ask_px)) / 2.0
-        elif tag == "bar":
+        elif tag in ("bar", "ohlcv"):
+            # `ohlcv` had no arm, so the sparkline read `None` for every stooq record and
+            # drew an empty line rather than reporting that it could not read the value.
             return float(rec.close)
     except Exception:
         pass
@@ -1160,8 +1166,8 @@ def catalog(
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """List channels present in the data lake with their row counts."""
-    from crocodile.equity.client.client import StockodileClient
     from crocodile.core.store.catalog import Catalog
+    from crocodile.equity.client.client import StockodileClient
 
     data_dir = resolve_data_dir(data_dir)
     cat: Catalog = StockodileClient(data_dir=data_dir)._catalog
@@ -1396,11 +1402,11 @@ def collect(
     data_dir: _DataDirOpt = Path("data"),
 ) -> None:
     """Collect live market data from a provider and write to the Parquet data lake."""
-    from crocodile.equity.client.collect import collect as collect_live
     from crocodile.core.ingest.transport import AiohttpWsTransport
+    from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.equity.client.collect import collect as collect_live
     from crocodile.equity.providers.factory import make_provider
     from crocodile.equity.reference.registry import InstrumentRegistry
-    from crocodile.core.store.parquet_sink import ParquetSink
 
     if not is_interactive_stdin():
         if not provider or not symbols or not channels:
@@ -1731,7 +1737,7 @@ def depth(
         typer.echo("  ⚠️  SYNTHETIC DEPTH — relative volume-at-price (Yahoo 1m bars).")
         typer.echo("      NOT real resting liquidity. Set ALPACA_API_KEY/SECRET for real L1.")
         typer.echo("=" * 64)
-    typer.echo(f"{profile.symbol}  basis={profile.basis}  ref={profile.reference_price:.4f}")
+    typer.echo(f"{profile.symbol}  basis={profile.prov_basis}  ref={profile.reference_price:.4f}")
     typer.echo(f"{'ASK price':>14} {'size':>16}")
     for px, sz in reversed(profile.asks):
         typer.echo(f"{px:>14.4f} {sz:>16.2f}")

@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from crocodile.core.schema.enums import OptType
 from crocodile.equity.analytics import (
     bsm_delta,
     bsm_gamma,
@@ -26,7 +27,6 @@ from crocodile.equity.analytics import (
     calculate_roe,
     calculate_simple_returns,
 )
-from crocodile.equity.schema.enums import OptType
 
 
 def test_returns_simple() -> None:
@@ -115,7 +115,7 @@ def test_bsm_pricing_and_greeks() -> None:
     c_price = bsm_price(s, k, t, r, sigma, q, "call")
     assert c_price > 0.0
 
-    c_greeks = bsm_greeks(s, k, t, r, sigma, q, OptType.C)
+    c_greeks = bsm_greeks(s, k, t, r, sigma, q, OptType.CALL)
     assert pytest.approx(c_greeks["delta"]) == bsm_delta(s, k, t, r, sigma, q, "call")
     assert pytest.approx(c_greeks["gamma"]) == bsm_gamma(s, k, t, r, sigma, q, "call")
     assert pytest.approx(c_greeks["theta"]) == bsm_theta(s, k, t, r, sigma, q, "call")
@@ -124,7 +124,7 @@ def test_bsm_pricing_and_greeks() -> None:
 
     # Put price and Greeks
     p_price = bsm_price(s, k, t, r, sigma, q, "put")
-    p_greeks = bsm_greeks(s, k, t, r, sigma, q, OptType.P)
+    p_greeks = bsm_greeks(s, k, t, r, sigma, q, OptType.PUT)
     assert p_price > 0.0
     assert p_greeks["delta"] < 0.0
 

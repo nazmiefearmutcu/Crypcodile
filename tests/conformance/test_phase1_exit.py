@@ -214,7 +214,8 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 #
 # 476 → 444: Track A rewrote the import block of 44 crypto modules, and ruff's
 # isort rule was already unhappy with 32 of them.
-_LEGACY_RUFF_BUDGET = 444
+# 444 → 431: the same for 23 equity modules on the other half of Track A.
+_LEGACY_RUFF_BUDGET = 431
 
 
 def _ruff(*paths: str) -> list[str]:

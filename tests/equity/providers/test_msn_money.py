@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from crocodile.core.schema.enums import CorpActionType, SecurityType
+from crocodile.core.schema.records import OHLCV, CorporateAction
+from crocodile.core.sink.memory import MemorySink
 from crocodile.equity.providers.msn_money.connector import MsnMoneyProvider, get_spoofed_headers
 from crocodile.equity.reference.registry import InstrumentRegistry
-from crocodile.equity.schema.enums import CorpActionType, SecurityType
-from crocodile.equity.schema.records import Bar, CorporateAction
-from crocodile.core.sink.memory import MemorySink
 
 
 def test_msn_money_helpers() -> None:
@@ -176,19 +176,24 @@ async def test_msn_money_backfill_bar() -> None:
     start_ns = 1781913600000000000  # 2026-06-20T00:00:00Z
     end_ns = 1782000000000000000  # 2026-06-21T00:00:00Z
 
-    bars = []
-    async for rec in provider.backfill("bar", "AAPL", start_ns, end_ns):
-        bars.append(rec)
+    for channel in ("bar", "ohlcv"):
+        bars = []
+        async for rec in provider.backfill(channel, "AAPL", start_ns, end_ns):
+            bars.append(rec)
 
-    assert len(bars) == 1
-    bar = bars[0]
-    assert isinstance(bar, Bar)
-    assert bar.symbol == "AAPL"
-    assert bar.open == 150.0
-    assert bar.high == 152.0
-    assert bar.low == 149.5
-    assert bar.close == 151.5
-    assert bar.volume == 1000000.0
+        assert len(bars) == 1
+        bar = bars[0]
+        assert isinstance(bar, OHLCV)
+        # Both request spellings must produce a record tagged `ohlcv`. They used to take
+        # two arms that each built a `Bar`, so asking for `ohlcv` wrote `channel=bar`
+        # partitions — the wrong directory, with nothing raised.
+        assert type(bar).__struct_config__.tag == "ohlcv"
+        assert bar.symbol == "AAPL"
+        assert bar.open == 150.0
+        assert bar.high == 152.0
+        assert bar.low == 149.5
+        assert bar.close == 151.5
+        assert bar.volume == 1000000.0
 
 
 @pytest.mark.asyncio
@@ -453,7 +458,7 @@ async def test_msn_money_float_conversion_vulnerability() -> None:
         bars.append(rec)
 
     bar = bars[0]
-    assert isinstance(bar, Bar)
+    assert isinstance(bar, OHLCV)
     assert bar.open == 0.0
     assert bar.close == 0.0
     assert bar.high == 0.0

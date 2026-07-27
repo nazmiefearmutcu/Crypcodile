@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from crocodile.core.schema.enums import SecurityType
+from crocodile.core.schema.records import OHLCV, IndexValue
+from crocodile.core.sink.memory import MemorySink
 from crocodile.equity.providers.stooq.connector import StooqProvider
 from crocodile.equity.reference.registry import InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType
-from crocodile.equity.schema.records import OHLCV, IndexValue
-from crocodile.core.sink.memory import MemorySink
 
 
 def test_stooq_provider_init() -> None:
@@ -234,8 +234,8 @@ async def test_stooq_captcha_api_solvers() -> None:
 
 def test_parse_csv_rest_format_yyyy_mm_dd() -> None:
     """REST downloads use Date,Open,... with yyyy-MM-dd (not bulk ZIP layout)."""
+    from crocodile.core.schema.records import OHLCV
     from crocodile.equity.providers.stooq.connector import StooqProvider
-    from crocodile.equity.schema.records import OHLCV
 
     p = object.__new__(StooqProvider)
     p.name = "stooq"
@@ -248,8 +248,8 @@ def test_parse_csv_rest_format_yyyy_mm_dd() -> None:
 
 
 def test_parse_csv_bulk_zip_angle_headers() -> None:
+    from crocodile.core.schema.records import OHLCV
     from crocodile.equity.providers.stooq.connector import StooqProvider
-    from crocodile.equity.schema.records import OHLCV
 
     p = object.__new__(StooqProvider)
     p.name = "stooq"

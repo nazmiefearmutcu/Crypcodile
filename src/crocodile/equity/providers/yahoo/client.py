@@ -5,7 +5,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Self
 
 import pandas as pd
@@ -16,13 +16,13 @@ from urllib3.util import Retry
 from yfinance.exceptions import YFRateLimitError
 
 from crocodile.core.ratelimit.token_bucket import TokenBucket
-from crocodile.equity.schema.enums import CorpActionType, FundPeriod, OptType
-from crocodile.equity.schema.records import (
-    Bar,
+from crocodile.core.schema.enums import AssetClass, CorpActionType, FundPeriod, OptType
+from crocodile.core.schema.records import (
+    OHLCV,
     CorporateAction,
     Fundamental,
     InsiderTransaction,
-    OptionQuote,
+    OptionsChain,
     Record,
 )
 
@@ -66,6 +66,35 @@ def _clean_str(val: Any) -> str | None:
     if pd.isna(val) or val is None:
         return None
     return str(val)
+
+
+def _expiry_to_ns(expiry: str) -> int:
+    """Widen Yahoo's ``YYYY-MM-DD`` expiry to the UTC epoch nanoseconds the record wants.
+
+    Yahoo publishes a date and nothing more, so the instant has to be chosen here.
+    **Midnight UTC on that date.** Two reasons, and the second is the binding one:
+
+    * It is the only instant from which the original date comes back. Every other
+      timestamp in this product is UTC epoch nanoseconds and every date is derived from
+      one by UTC truncation (``store.rows._date_from_ns``), so midnight UTC round-trips
+      through the same arithmetic the lake partitions with. 21:00 UTC — the 16:00 ET
+      close — would round-trip too, but only by accident of the offset, and not in
+      summer.
+    * Any market-hours instant would be an invention. A US listed option settles at a
+      time this payload never states, and it differs between a PM-settled weekly and an
+      AM-settled index option. Stating 00:00 UTC says "Yahoo gave a date"; stating a
+      close time says "Yahoo gave a settlement instant", which is false.
+
+    The direction that must not lose anything is nanoseconds → date, and it does not.
+    ``OptionsChain.expiry`` is an ``int`` precisely so a venue that *does* report an
+    intraday expiry can say so; this converter is for the venues that do not.
+
+    Raises:
+        ValueError: if ``expiry`` is not an ISO date. Guessing an expiry would put an
+            option on the wrong day of a term structure with nothing to show for it.
+    """
+    day = datetime.strptime(expiry, "%Y-%m-%d").replace(tzinfo=UTC)
+    return int(day.timestamp()) * 1_000_000_000
 
 
 class YahooClient:
@@ -279,7 +308,7 @@ class YahooClient:
             end: End date string (YYYY-MM-DD)
 
         Returns:
-            A list of Bar and CorporateAction records.
+            A list of OHLCV and CorporateAction records.
         """
 
         def _call(session: requests.Session) -> pd.DataFrame:
@@ -348,9 +377,9 @@ class YahooClient:
                 )
                 continue
 
-            # Map the Bar record
-            bar = Bar(
-                provider="yahoo",
+            # Map the OHLCV record
+            bar = OHLCV(
+                source="yahoo",
                 symbol=symbol,
                 symbol_raw=symbol,
                 source_ts=source_ts,
@@ -362,7 +391,8 @@ class YahooClient:
                 close=close_val,
                 volume=volume_val,
                 vwap=None,
-                trade_count=None,
+                num_trades=None,
+                asset_class=AssetClass.EQUITY,
             )
             records.append(bar)
 
@@ -371,7 +401,7 @@ class YahooClient:
                 div_val = _clean_float(row.get("Dividends"))
                 if div_val is not None and div_val > 0.0:
                     div = CorporateAction(
-                        provider="yahoo",
+                        source="yahoo",
                         symbol=symbol,
                         symbol_raw=symbol,
                         source_ts=source_ts,
@@ -379,6 +409,7 @@ class YahooClient:
                         ex_date=date_str,
                         type=CorpActionType.DIVIDEND_CASH,
                         value=div_val,
+                        asset_class=AssetClass.EQUITY,
                     )
                     records.append(div)
 
@@ -387,7 +418,7 @@ class YahooClient:
                 split_val = _clean_float(row.get("Stock Splits"))
                 if split_val is not None and split_val > 0.0:
                     split = CorporateAction(
-                        provider="yahoo",
+                        source="yahoo",
                         symbol=symbol,
                         symbol_raw=symbol,
                         source_ts=source_ts,
@@ -395,6 +426,7 @@ class YahooClient:
                         ex_date=date_str,
                         type=CorpActionType.SPLIT,
                         value=split_val,
+                        asset_class=AssetClass.EQUITY,
                     )
                     records.append(split)
 
@@ -406,7 +438,7 @@ class YahooClient:
         interval: str,
         start: str | None = None,
         end: str | None = None,
-    ) -> list[Bar]:
+    ) -> list[OHLCV]:
         """Fetch intraday historical bars.
 
         Args:
@@ -416,7 +448,7 @@ class YahooClient:
             end: End date string (YYYY-MM-DD)
 
         Returns:
-            A list of Bar records.
+            A list of OHLCV records.
         """
 
         def _call(session: requests.Session) -> pd.DataFrame:
@@ -449,7 +481,7 @@ class YahooClient:
                 )
             return []
 
-        records: list[Bar] = []
+        records: list[OHLCV] = []
         local_ts = time.time_ns()
 
         for idx, row in df.iterrows():
@@ -484,8 +516,8 @@ class YahooClient:
                 )
                 continue
 
-            bar = Bar(
-                provider="yahoo",
+            bar = OHLCV(
+                source="yahoo",
                 symbol=symbol,
                 symbol_raw=symbol,
                 source_ts=source_ts,
@@ -497,7 +529,8 @@ class YahooClient:
                 close=close_val,
                 volume=volume_val,
                 vwap=None,
-                trade_count=None,
+                num_trades=None,
+                asset_class=AssetClass.EQUITY,
             )
             records.append(bar)
 
@@ -507,7 +540,7 @@ class YahooClient:
         self,
         symbol: str,
         expiry: str | None = None,
-    ) -> list[OptionQuote]:
+    ) -> list[OptionsChain]:
         """Fetch option chain quotes.
 
         Args:
@@ -516,7 +549,7 @@ class YahooClient:
                     If None, fetches options for all available expirations.
 
         Returns:
-            A list of OptionQuote records.
+            A list of OptionsChain records.
         """
         if expiry:
             expirations = (expiry,)
@@ -542,11 +575,11 @@ class YahooClient:
                 )
             return []
 
-        records: list[OptionQuote] = []
+        records: list[OptionsChain] = []
         local_ts = time.time_ns()
 
         # Fetch option chains concurrently
-        async def _fetch_single_chain(exp: str) -> list[OptionQuote]:
+        async def _fetch_single_chain(exp: str) -> list[OptionsChain]:
             def _get_chain(session: requests.Session, current_exp: str = exp) -> Any:
                 return yf.Ticker(symbol, session=session).option_chain(current_exp)
 
@@ -556,11 +589,11 @@ class YahooClient:
                 logger.error("Failed to fetch option chain for %s expiry %s: %s", symbol, exp, e)
                 return []
 
-            single_records: list[OptionQuote] = []
+            single_records: list[OptionsChain] = []
             for opt_type, df in (("calls", chain.calls), ("puts", chain.puts)):
                 if df is None or getattr(df, "empty", True):
                     continue
-                opt_enum = OptType.C if opt_type == "calls" else OptType.P
+                opt_enum = OptType.CALL if opt_type == "calls" else OptType.PUT
                 for _, row in df.iterrows():
                     contract_symbol = str(row["contractSymbol"])
 
@@ -581,22 +614,28 @@ class YahooClient:
                     except Exception:
                         continue
 
-                    quote = OptionQuote(
-                        provider="yahoo",
+                    quote = OptionsChain(
+                        source="yahoo",
                         symbol=contract_symbol,
                         symbol_raw=contract_symbol,
                         source_ts=source_ts,
                         local_ts=local_ts,
+                        asset_class=AssetClass.EQUITY,
                         underlying=symbol,
-                        expiry=exp,
+                        # Yahoo's option payload carries no spot for the underlying, and
+                        # this endpoint is not asked for one. Said out loud rather than
+                        # left to a default: `None` here means the feed did not publish
+                        # it, which is a different fact from a price of zero.
+                        underlying_price=None,
+                        expiry=_expiry_to_ns(exp),
                         strike=strike_val,
-                        type=opt_enum,
-                        bid=_clean_float(row.get("bid")),
-                        ask=_clean_float(row.get("ask")),
-                        last=_clean_float(row.get("lastPrice")),
+                        opt_type=opt_enum,
+                        bid_px=_clean_float(row.get("bid")),
+                        ask_px=_clean_float(row.get("ask")),
+                        last_price=_clean_float(row.get("lastPrice")),
                         volume=_clean_float(row.get("volume")),
                         open_interest=_clean_float(row.get("openInterest")),
-                        implied_volatility=_clean_float(row.get("impliedVolatility")),
+                        mark_iv=_clean_float(row.get("impliedVolatility")),
                         delta=None,
                         gamma=None,
                         vega=None,
@@ -699,7 +738,7 @@ class YahooClient:
                             start_str = (ts - pd.DateOffset(months=3)).strftime("%Y-%m-%d")
 
                     fundamental = Fundamental(
-                        provider="yahoo",
+                        source="yahoo",
                         symbol=symbol,
                         symbol_raw=symbol,
                         source_ts=source_ts,
@@ -716,6 +755,7 @@ class YahooClient:
                         filed=None,
                         accn=None,
                         frame=None,
+                        asset_class=AssetClass.EQUITY,
                     )
                     records.append(fundamental)
 
@@ -764,7 +804,7 @@ class YahooClient:
                 price = value / shares
 
             txn = InsiderTransaction(
-                provider="yahoo",
+                source="yahoo",
                 symbol=symbol,
                 symbol_raw=symbol,
                 source_ts=None,
@@ -777,6 +817,7 @@ class YahooClient:
                 price=price,
                 value=value,
                 ownership=ownership,
+                asset_class=AssetClass.EQUITY,
             )
             records.append(txn)
 

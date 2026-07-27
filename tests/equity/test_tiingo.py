@@ -9,14 +9,14 @@ import aiohttp
 import msgspec
 import pytest
 
+from crocodile.core.schema.enums import CorpActionType
+from crocodile.core.schema.records import OHLCV, CorporateAction
 from crocodile.equity.providers.tiingo.client import (
     TiingoClient,
     TiingoError,
     TiingoQuotaError,
     TiingoRateLimitError,
 )
-from crocodile.equity.schema.enums import CorpActionType
-from crocodile.equity.schema.records import Bar, CorporateAction
 
 
 @pytest.fixture
@@ -121,19 +121,19 @@ async def test_get_eod_prices(mock_session: MagicMock, temp_tracker_path: Path) 
             "AAPL", start_date="2026-06-19", end_date="2026-06-20"
         )
 
-    # Expecting: 2 Bar records, 1 Dividend action (date 19), 1 Split action (date 20)
+    # Expecting: 2 OHLCV records, 1 Dividend action (date 19), 1 Split action (date 20)
     # Total = 4 records
     assert len(records) == 4
 
-    bars = [r for r in records if isinstance(r, Bar)]
+    bars = [r for r in records if isinstance(r, OHLCV)]
     corp_actions = [r for r in records if isinstance(r, CorporateAction)]
 
     assert len(bars) == 2
     assert len(corp_actions) == 2
 
-    # Verify Bar
+    # Verify OHLCV
     assert bars[0].symbol == "AAPL"
-    assert bars[0].provider == "tiingo"
+    assert bars[0].source == "tiingo"
     assert bars[0].interval == "1d"
     assert bars[0].open == 180.0
     assert bars[0].close == 180.2

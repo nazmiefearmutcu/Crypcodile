@@ -1,7 +1,7 @@
 import msgspec
 
+from crocodile.core.schema.enums import SecurityType
 from crocodile.equity.reference.master import SecurityMaster
-from crocodile.equity.schema.enums import SecurityType
 
 
 class Instrument(msgspec.Struct, frozen=True):

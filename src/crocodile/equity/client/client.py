@@ -12,12 +12,12 @@ from pathlib import Path
 
 import polars as pl
 
+from crocodile.core.replay.merge import replay as _kway_merge
+from crocodile.core.schema.records import Record
+from crocodile.core.store.catalog import Catalog
+from crocodile.core.store.rows import from_row
 from crocodile.equity.client.export import ExportFmt
 from crocodile.equity.client.export import export as _export
-from crocodile.core.replay.merge import replay as _kway_merge
-from crocodile.equity.schema.records import Record
-from crocodile.core.store.catalog import Catalog
-from crocodile.equity.store.rows import from_row
 
 
 def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
@@ -25,6 +25,16 @@ def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
 
     The DataFrame must contain a ``channel`` column so that ``from_row``
     can reconstruct the correct Record type.
+
+    The reader is ``core``'s, not ``crocodile.equity.store.rows``': the equity providers
+    write canonical records now, so an equity lake's new files carry ``source`` and
+    ``asset_class`` and no ``provider`` column at all — the equity reader would have
+    raised ``KeyError('provider')`` on every one of them. What ``core``'s reader does with
+    a *pre-migration* equity file is partial and loud rather than silent: ``quote``,
+    ``instrument`` and the reference channels reconstruct, ``trade`` and ``depth`` raise
+    (equity spelled a size ``size`` and a level ``{price, size}``), and ``bar`` /
+    ``option_quote`` raise ``Unknown channel tag``. Teaching one reader both dialects is
+    the merge task that follows this one.
     """
     for row_dict in df.to_dicts():
         yield from_row(row_dict)
@@ -123,11 +133,11 @@ class StockodileClient:
     ) -> pl.DataFrame:
         """Resample trade data in the DuckDB Catalog into OHLCV bars.
 
-        Uses the *equity* resampler: ``volume`` is ``sum(size)`` and the extra
-        columns are ``vwap``/``trade_count``. The identically named
-        ``crocodile.core.resample.ohlcv.resample_ohlcv`` aggregates the crypto
-        ``amount``/``side`` columns instead and returns zero rows on an equity
-        lake — see ``crocodile.equity.resample.ohlcv``'s module docstring.
+        Uses the *equity* resampler: the extra columns are ``vwap``/``trade_count``.
+        The identically named ``crocodile.core.resample.ohlcv.resample_ohlcv`` splits
+        the same ``amount`` column by ``side`` instead, which on an equity lake credits
+        every print to ``sell_volume`` rather than returning nothing — see
+        ``crocodile.equity.resample.ohlcv``'s module docstring.
         """
         from crocodile.equity.resample.ohlcv import resample_ohlcv
 

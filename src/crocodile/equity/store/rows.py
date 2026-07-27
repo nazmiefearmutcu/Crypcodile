@@ -1,68 +1,52 @@
-"""Flatten and reconstruct the legacy **equity** record union.
+"""Read the legacy **equity** record union back off disk.
 
-Why a second ``from_row`` exists
---------------------------------
-``crocodile.core.store.rows.from_row`` reconstructs the legacy *crypto* union;
-this one reconstructs the legacy *equity* union. They cannot merge today,
-because the two forks reused the same ``channel`` tags for different structs:
-``trade``, ``ohlcv``, ``book_snapshot``, ``book_delta``, ``liquidation_call``
-and ``reserve_data_updated`` all exist in both unions with different fields
-(crypto ``trade`` carries ``exchange``/``amount``/``side``; equity ``trade``
-carries ``provider``/``size``/``tape``/``venue``). A single ``from_row`` would
-therefore need a second discriminator beyond ``channel`` to pick a class.
+What this module is for now
+---------------------------
+Nothing constructs these structs any more. Every equity producer builds the
+canonical :mod:`crocodile.core.schema.records` union, ``ParquetSink`` flattens
+with ``crocodile.core.store.rows.to_row``, and ``StockodileClient`` reads with
+``crocodile.core.store.rows.from_row``. What is left here is :func:`from_row`
+for Parquet files written **before** that migration — files ``migrate_lake``
+renames the directory of and never rewrites a byte of, so their column sets do
+not age out — and :func:`to_row` as its inverse.
 
-``to_row`` needs no such discriminator — it reads the tag and the struct fields
-off the record it is handed — which is why the core one was generalised over
-both families and this one is only a thin specialisation of it.
-
-The real fix is to stop reconstructing legacy classes at all: have ``from_row``
-build the canonical :mod:`crocodile.core.schema.records` structs, which carry a
-``source``/``asset_class`` header instead of a fork-specific one. That means
-porting every connector's ``normalize()`` onto the canonical records — the same
-work Task 9 deferred — so the duplication is deliberate and temporary. The
-layering rule holds meanwhile: ``core`` must not import from ``equity``, so the
-equity channels live here rather than being bolted onto the core ``from_row``.
+Why it is still a second ``from_row``
+-------------------------------------
+Core's ``from_row`` builds canonical structs keyed on ``channel`` alone, and the
+two forks reused nine tags for different shapes: ``trade``, ``ohlcv``,
+``book_snapshot``, ``book_delta``, ``liquidation_call``,
+``reserve_data_updated``, ``limit_order_fill``, ``balance_correction``,
+``por_update``. A legacy equity ``trade`` row carries ``provider``/``size`` and
+a level spelled ``{price, size}``; the canonical reader wants ``amount`` and
+``{price, amount}``. Pointed at those rows it raises rather than guessing, which
+is the right failure but not a reader. Teaching one reader both dialects is the
+merge that deletes this file; it is not done here.
 
 How this ``to_row`` differs from the core one
 ---------------------------------------------
-Not a re-export: :func:`to_row` here differs from
-``crocodile.core.store.rows.to_row`` in two ways, both of which are silent data
-corruption rather than a raised error when the core one is used on an equity
-record.
+It used to differ in three ways. Two have been fixed in core and re-measured:
 
 1. **Origin field.** Core picks the first of ``source``/``provider``/
-   ``exchange`` the record carries. Every equity record's origin is its
-   ``provider``, and :class:`~crocodile.equity.schema.records.Instrument` also
-   has an ``exchange`` field — the *listing venue*. Core used to match
-   ``exchange`` first and file an Alpaca-sourced Instrument under
-   ``source=NASDAQ``; the ordering was fixed with the ``source=`` unification,
-   so core and this one now agree for every equity record. This one still never
-   consults anything but ``provider``, which makes the guarantee structural
-   rather than a property of core's tuple order.
+   ``exchange`` a record carries, and it used to match ``exchange`` first — the
+   *listing venue* — filing an Alpaca-sourced ``Instrument`` under
+   ``source=NASDAQ``. **Fixed:** core orders ``source, provider, exchange``, so
+   the two agree for every equity record. This one still consults nothing but
+   ``provider``, which makes the guarantee structural rather than a property of
+   core's tuple order.
 
 2. **Field/partition name collisions.** ``ShortVolume`` and ``MacroSeries``
-   have their own ``date`` field (the business date, "2026-06-18"), and core's
-   ``row["date"] = _date_from_ns(...)`` overwrites it with the partition date
-   derived from ``local_ts``. The business date is then gone from the row, not
-   merely unreadable. This one moves it to ``date_val`` first. The same guard
-   moves ``Instrument.exchange`` to ``exchange_name``; that name is what legacy
-   equity lakes have on disk, so the rename is kept for read compatibility even
-   though the partition key is no longer called ``exchange``.
+   carry their own ``date`` — a settlement day, not the capture day the
+   partition column holds — and core's ``row["date"] = _date_from_ns(...)`` used
+   to overwrite it, destroying the value rather than merely hiding it.
+   **Fixed:** core moves any record field colliding with a partition column to
+   ``<name>_val`` first, as a family-agnostic rule. The two outputs are now
+   byte-identical dicts for both structs.
 
-   This divergence is still live and it is load-bearing:
-   :class:`~crocodile.core.store.parquet_sink.ParquetSink` flattens with the
-   *core* ``to_row``, so ``ShortVolume``, ``MacroSeries`` and ``Instrument``
-   written through the sink land with a null ``date_val`` / ``exchange_name``
-   and do not round-trip. The other 23 equity channels do. The fix belongs in
-   core's ``to_row`` (move any record field that collides with a partition
-   column aside before writing the partition columns — a family-agnostic rule);
-   the sink cannot recover a value that was already overwritten by the time it
-   sees the row.
-
-The partition key itself is ``source``, per the Task 14 unification — the fork
-wrote ``exchange={provider}``, and ``migrate_lake`` renames those directories.
-Date and bucket arithmetic is imported from core rather than reimplemented, so
-the two flatteners cannot drift on the values that decide file placement.
+3. **``Instrument.exchange`` → ``exchange_name``.** Still divergent, and the
+   only one left. That is the column name legacy equity lakes hold, and core
+   writes ``exchange``. It is a null column rather than data loss:
+   :func:`from_row` below reads either spelling, so a lake written through the
+   core flattener still reconstructs the listing venue.
 """
 
 from __future__ import annotations

@@ -6,8 +6,8 @@ import pathlib
 
 import pytest
 
-from crocodile.equity.analytics.slippage import estimate_slippage
 from crocodile.core.store.catalog import Catalog
+from crocodile.equity.analytics.slippage import estimate_slippage
 from tests.equity.store.test_catalog import write_parquet_fixture
 
 

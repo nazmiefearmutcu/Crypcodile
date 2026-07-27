@@ -13,6 +13,7 @@ import logging
 import os
 import pathlib
 
+import msgspec
 import pytest
 
 from crocodile.core.schema.enums import AssetClass, Side
@@ -68,19 +69,36 @@ async def test_the_writer_emits_only_the_unified_key(tmp_path: pathlib.Path) -> 
     assert os.listdir(tmp_path) == ["source=deribit"]
 
 
+class _PreMergeEquityInstrument(msgspec.Struct, frozen=True, tag="instrument", tag_field="channel"):
+    """The equity fork's ``Instrument``, frozen here as the historical shape it is.
+
+    It is the only record that ever named *both* ``provider`` (who served the data) and
+    ``exchange`` (where the security lists), which is what makes it the one subject that
+    can tell ``_ORIGIN_FIELDS``' two orders apart. Nothing constructs the retired union
+    any more, so the shape lives at the one test that needs it rather than keeping an
+    import of a module scheduled for deletion.
+    """
+
+    provider: str
+    symbol: str
+    symbol_raw: str
+    local_ts: int
+    source_ts: int | None = None
+    name: str | None = None
+    exchange: str | None = None
+
+
 def test_the_data_provider_wins_over_the_listing_venue() -> None:
     """A record naming both must partition by who served it, not where it lists.
 
-    Equity's ``Instrument`` carries ``provider`` (the data source) *and*
-    ``exchange`` (the listing venue). Reading ``exchange`` first filed an
-    Alpaca-sourced instrument under ``source=NASDAQ`` — the wrong partition, and
-    silently so, because both fields are populated strings.
+    Reading ``exchange`` first filed an Alpaca-sourced instrument under
+    ``source=NASDAQ`` — the wrong partition, and silently so, because both fields are
+    populated strings.
     """
     from crocodile.core.store.rows import to_row
-    from crocodile.equity.schema.records import Instrument
 
     row = to_row(
-        Instrument(
+        _PreMergeEquityInstrument(  # type: ignore[arg-type]
             provider="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
@@ -92,6 +110,33 @@ def test_the_data_provider_wins_over_the_listing_venue() -> None:
     )
 
     assert row["source"] == "alpaca"
+
+
+def test_a_canonical_instrument_partitions_by_source_not_its_listing_venue() -> None:
+    """The same hazard, on the record that is live today.
+
+    The canonical ``Instrument`` inherited ``exchange`` as the listing venue, so the
+    confusion did not retire with the fork: it is only ``source`` leading
+    ``_ORIGIN_FIELDS`` that keeps a canonical instrument out of ``source=NASDAQ``.
+    """
+    from crocodile.core.schema.records import Instrument
+    from crocodile.core.store.rows import to_row
+
+    row = to_row(
+        Instrument(
+            source="alpaca",
+            symbol="AAPL",
+            symbol_raw="AAPL",
+            local_ts=_TS,
+            source_ts=_TS,
+            asset_class=AssetClass.EQUITY,
+            name="Apple Inc.",
+            exchange="NASDAQ",
+        )
+    )
+
+    assert row["source"] == "alpaca"
+    assert row["exchange"] == "NASDAQ"
 
 
 @pytest.mark.parametrize("prefix", ["exchange=", "provider="])

@@ -434,11 +434,18 @@ DERIVES_RECORDS: dict[str, str] = {
         "nothing it emits was reported by a venue."
     ),
     "equity/resample/book.py": (
-        "Same resampler for equity input. Its emitted snapshot is a legacy equity "
-        "struct with no provenance tail at all, so this gate reaches only the "
-        "canonical records `_to_core_record` builds to hand the shared OrderBook — "
-        "re-typed venue snapshots, never yielded and never persisted, which is why "
-        "they say NATIVE and say it out loud."
+        "The same reconstruction for equity input, under the boundary rule that emits "
+        "before it applies. It used to fall outside this gate: its snapshot was a legacy "
+        "equity struct with no provenance tail, and the only canonical records the "
+        "scanner could see were the re-typed inputs `_to_core_record` handed the shared "
+        "OrderBook. Both of those are gone — the snapshot it yields is canonical and is "
+        "a reconstruction, so it carries `book_resample` with a measured lookahead."
+    ),
+    "equity/resample/ohlcv.py": (
+        "Aggregates bars out of trades, quotes or narrower bars. None of the three was "
+        "published by a venue, and the quote one is not even a traded price: its `volume` "
+        "is a structural zero. Left silent they would all have inherited the header "
+        "default and claimed NATIVE."
     ),
 }
 """Modules that build records out of other records, and why each one counts as derived.

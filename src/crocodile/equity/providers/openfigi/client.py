@@ -7,6 +7,7 @@ from typing import Any, Self
 import aiohttp
 import msgspec
 
+from crocodile.core.ratelimit.token_bucket import TokenBucketLimiter
 from crocodile.equity.providers.openfigi.cache import InMemoryCache, OpenFigiCache
 from crocodile.equity.providers.openfigi.models import (
     FigiRecord,
@@ -14,7 +15,6 @@ from crocodile.equity.providers.openfigi.models import (
     OpenFigiResponseItem,
     map_raw_to_record,
 )
-from crocodile.core.ratelimit.token_bucket import TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 

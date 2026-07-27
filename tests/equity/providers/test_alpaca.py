@@ -5,10 +5,10 @@ import os
 
 import pytest
 
+from crocodile.core.schema.records import OHLCV, Quote, Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.equity.providers.alpaca.connector import AlpacaProvider
 from crocodile.equity.reference.registry import InstrumentRegistry
-from crocodile.equity.schema.records import Bar, Quote, Trade
-from crocodile.core.sink.memory import MemorySink
 
 
 class MockTransport:
@@ -134,6 +134,32 @@ async def test_alpaca_provider_subscribe() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_subscribing_with_ohlcv_still_asks_for_bars() -> None:
+    """``bar`` and ``ohlcv`` are one struct, so they must be one subscription.
+
+    Before the collapse this arm matched ``bar`` alone. Asking for ``ohlcv`` sent a
+    subscribe frame with no ``bars`` key: Alpaca accepted it, the connection stayed up,
+    and no bar ever arrived. Nothing failed — the stream was simply empty.
+    """
+    provider = AlpacaProvider(
+        symbols=["AAPL"],
+        channels=["ohlcv"],
+        out=MemorySink(),
+        registry=InstrumentRegistry(),
+        key="test_key",
+        secret="test_secret",
+    )
+    transport = MockTransport(
+        [b'[{"T":"success","msg":"connected"}]', b'[{"T":"success","msg":"authenticated"}]']
+    )
+    provider.transport = transport
+
+    await provider._subscribe(transport)
+
+    assert json.loads(transport.sent[1]) == {"action": "subscribe", "bars": ["AAPL"]}
+
+
 def test_alpaca_normalize_trade() -> None:
     registry = InstrumentRegistry()
     sink = MemorySink()
@@ -164,11 +190,11 @@ def test_alpaca_normalize_trade() -> None:
     assert len(records) == 1
     trade = records[0]
     assert isinstance(trade, Trade)
-    assert trade.provider == "alpaca"
+    assert trade.source == "alpaca"
     assert trade.symbol == "AAPL"
     assert trade.symbol_raw == "AAPL"
     assert trade.price == 150.25
-    assert trade.size == 100.0
+    assert trade.amount == 100.0
     assert trade.venue == "V"
     assert trade.conditions == ["@", "I"]
     assert trade.id == "123456"
@@ -207,7 +233,7 @@ def test_alpaca_normalize_quote() -> None:
     assert len(records) == 1
     quote = records[0]
     assert isinstance(quote, Quote)
-    assert quote.provider == "alpaca"
+    assert quote.source == "alpaca"
     assert quote.symbol == "AAPL"
     assert quote.bid_px == 150.20
     assert quote.bid_sz == 5.0
@@ -249,8 +275,8 @@ def test_alpaca_normalize_bar() -> None:
     records = list(provider.normalize(raw_msg, local_ts=999))
     assert len(records) == 1
     bar = records[0]
-    assert isinstance(bar, Bar)
-    assert bar.provider == "alpaca"
+    assert isinstance(bar, OHLCV)
+    assert bar.source == "alpaca"
     assert bar.symbol == "AAPL"
     assert bar.open == 150.0
     assert bar.high == 151.0
@@ -258,7 +284,7 @@ def test_alpaca_normalize_bar() -> None:
     assert bar.close == 150.5
     assert bar.volume == 10000.0
     assert bar.vwap == 150.25
-    assert bar.trade_count == 50
+    assert bar.num_trades == 50
 
 
 @pytest.mark.asyncio
@@ -316,9 +342,9 @@ def test_alpaca_normalize_bar_nulls() -> None:
     records = list(provider.normalize(raw_msg, local_ts=999))
     assert len(records) == 1
     bar = records[0]
-    assert isinstance(bar, Bar)
+    assert isinstance(bar, OHLCV)
     assert bar.vwap is None
-    assert bar.trade_count is None
+    assert bar.num_trades is None
 
 
 def test_alpaca_normalize_item_error_recovery() -> None:

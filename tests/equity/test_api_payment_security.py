@@ -229,8 +229,9 @@ async def test_concurrent_double_redeem_one_wins(
     Uses httpx.AsyncClient so both ASGI requests share one event loop (TestClient
     serializes portal.call across threads and cannot exercise asyncio.Lock races).
     """
-    import crocodile.equity.legacy.api_server as api
     from httpx import ASGITransport, AsyncClient
+
+    import crocodile.equity.legacy.api_server as api
 
     r = client.get("/api/v1/market-data", params={"symbol": "cbBTC-USDC"})
     assert r.status_code == 402

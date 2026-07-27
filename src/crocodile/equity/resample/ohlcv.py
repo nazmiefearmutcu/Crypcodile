@@ -1,9 +1,8 @@
 """OHLCV resampling from equity trades, quotes, or lower-resolution bars.
 
-These public resamplers are typed against the *equity* canonical records
-(``crocodile.equity.schema.records``: ``Bar``, ``Quote``, ``Trade``), which is
-why they live under ``crocodile.equity`` rather than ``crocodile.core``:
-``core`` must never import from ``equity``.
+These resamplers build canonical records (``crocodile.core.schema.records``)
+stamped ``AssetClass.EQUITY``. They stay under ``crocodile.equity`` because the
+aggregation is an equity one, not because the record types are: see below.
 
 Interval parsing here uses ``crocodile.equity.resample._interval.parse_interval``,
 which returns a 3-tuple and is a *different function* from the identically named
@@ -16,27 +15,29 @@ Two functions named ``resample_ohlcv``
 :func:`resample_ohlcv` here and ``crocodile.core.resample.ohlcv.resample_ohlcv``
 have the same name and the same signature, aggregate the same ``trade`` view,
 and return different schemas. They are not interchangeable and neither is a
-superset of the other — the two forks' ``trade`` rows describe different market
-microstructure:
+superset of the other:
 
 ==================  ===============================  =========================
                     ``core`` (crypto)                 ``equity`` (this module)
 ==================  ===============================  =========================
-volume column       ``sum(amount)``                   ``sum(size)``
-taker side          ``side`` ∈ {buy, sell}            no ``side`` column at all
+taker side          ``side`` ∈ {buy, sell}            ``side`` = ``unknown``
 extra outputs       ``buy_volume``, ``sell_volume``   ``vwap``
 trade count         ``num_trades``                    ``trade_count``
 ==================  ===============================  =========================
 
 A crypto trade carries an aggressor ``side``, so splitting volume into
 ``buy_volume``/``sell_volume`` is meaningful and ``vwap`` is not carried on the
-record. A consolidated-tape equity print carries neither an aggressor side nor
-a reliable buy/sell classification, so the crypto ``CASE WHEN side = 'buy'``
-would silently bucket every print into ``sell_volume``; what equities do want,
-and what :class:`~crocodile.equity.schema.records.Bar` carries as a field, is
-``vwap``. Calling the crypto one on an equity lake does not raise — it returns
-zero rows, because its ``amount IS NOT NULL`` guard filters out every row whose
-volume lives in ``size``.
+record. A consolidated-tape equity print carries no aggressor side, so an equity
+``Trade`` states ``Side.UNKNOWN``; what equities do want, and what
+:class:`~crocodile.core.schema.records.OHLCV` carries as a field, is ``vwap``.
+
+**The way to get this wrong changed with the union merge.** Both now read
+``sum(amount)`` — the volume column that used to separate them was equity's
+``size``, and there is one spelling now. So calling the crypto one on an equity
+lake no longer returns zero rows: it returns bars whose ``buy_volume`` is 0.0 and
+whose ``sell_volume`` is the whole session, because ``CASE WHEN side = 'buy'``
+puts every ``unknown`` print on the sell side. An empty result announces itself;
+a plausible one does not.
 
 Choose by asset class, not by which one is easier to import.
 """
@@ -48,9 +49,11 @@ from collections.abc import Iterable, Iterator
 import duckdb
 import polars as pl
 
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.records import OHLCV, Quote, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.equity.resample._interval import parse_interval as _parse_interval
-from crocodile.equity.schema.records import Bar, Quote, Trade
 
 __all__ = [
     "resample_bars_df",
@@ -84,15 +87,15 @@ def _build_no_fill_sql(interval_sql: str, interval_label: str) -> str:
         "    max(price)                              AS high,\n"
         "    min(price)                              AS low,\n"
         "    last(price ORDER BY local_ts)           AS close,\n"
-        "    sum(size)                               AS volume,\n"
-        "    sum(price * size) / nullif(sum(size), 0.0) AS vwap,\n"
+        "    sum(amount)                             AS volume,\n"
+        "    sum(price * amount) / nullif(sum(amount), 0.0) AS vwap,\n"
         "    count(*)::BIGINT                        AS trade_count\n"
         "FROM trade\n"
         "WHERE symbol = ?\n"
         "  AND local_ts >= ?\n"
         "  AND local_ts <= ?\n"
         "  AND price IS NOT NULL AND NOT isnan(price)\n"
-        "  AND size IS NOT NULL AND NOT isnan(size)\n"
+        "  AND amount IS NOT NULL AND NOT isnan(amount)\n"
         "GROUP BY 1, 2, 3\n"
         "ORDER BY 1"
     )
@@ -115,15 +118,15 @@ def _build_fill_sql(interval_sql: str, interval_label: str, start_ns: int, end_n
         "        max(price)                              AS high,\n"
         "        min(price)                              AS low,\n"
         "        last(price ORDER BY local_ts)           AS close,\n"
-        "        sum(size)                               AS volume,\n"
-        "        sum(price * size) / nullif(sum(size), 0.0) AS vwap,\n"
+        "        sum(amount)                             AS volume,\n"
+        "        sum(price * amount) / nullif(sum(amount), 0.0) AS vwap,\n"
         "        count(*)::BIGINT                        AS trade_count\n"
         "    FROM trade\n"
         "    WHERE symbol = ?\n"
         "      AND local_ts >= ?\n"
         "      AND local_ts <= ?\n"
         "      AND price IS NOT NULL AND NOT isnan(price)\n"
-        "      AND size IS NOT NULL AND NOT isnan(size)\n"
+        "      AND amount IS NOT NULL AND NOT isnan(amount)\n"
         "    GROUP BY 1, 2\n"
         "),\n"
         "grid AS (\n"
@@ -187,7 +190,7 @@ def resample_ohlcv(
             low          Float64
             close        Float64
             volume       Float64  (0.0 for empty fill bars)
-            vwap         Float64  sum(price*size)/sum(size), NULL at zero volume
+            vwap         Float64  sum(price*amount)/sum(amount), NULL at zero volume
             trade_count  Int64    (0 for empty fill bars)
 
         An empty DataFrame (0 rows, 0 columns) if the ``trade`` view does not
@@ -249,13 +252,18 @@ def _detect_scale_and_adjust_interval(ts: int, interval_ns: int) -> int:
         return max(1, interval_ns // 1_000_000)
 
 
-def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[Bar]:
-    """Resample an iterable of Trade records into Bar records.
+def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[OHLCV]:
+    """Resample an iterable of Trade records into OHLCV records.
 
     Assumes Trade records are ordered by local_ts.
     """
     interval_ns, _, interval_label = _parse_interval(interval)
     adjusted_interval: int | None = None
+
+    # A bar is not something a venue published. Stated once here and spread onto every
+    # record below: a resampled record with no `prov=` inherits the header default, which
+    # says NATIVE — the claim that the venue reported this bar directly.
+    tail = provenance_fields("ohlcv_from_trades")
 
     current_bucket: int | None = None
     open_px = 0.0
@@ -266,7 +274,7 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
     vwap_sum = 0.0
     trade_count = 0
 
-    provider = ""
+    source = ""
     symbol = ""
     symbol_raw = ""
 
@@ -280,8 +288,8 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             )
         previous_ts = trade.local_ts
 
-        if not provider:
-            provider = trade.provider
+        if not source:
+            source = trade.source
             symbol = trade.symbol
             symbol_raw = trade.symbol_raw
 
@@ -296,20 +304,20 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             high_px = trade.price
             low_px = trade.price
             close_px = trade.price
-            volume = trade.size
-            vwap_sum = trade.price * trade.size
+            volume = trade.amount
+            vwap_sum = trade.price * trade.amount
             trade_count = 1
         elif bucket == current_bucket:
             high_px = max(high_px, trade.price)
             low_px = min(low_px, trade.price)
             close_px = trade.price
-            volume += trade.size
-            vwap_sum += trade.price * trade.size
+            volume += trade.amount
+            vwap_sum += trade.price * trade.amount
             trade_count += 1
         else:
             vwap = (vwap_sum / volume) if volume > 0 else None
-            yield Bar(
-                provider=provider,
+            yield OHLCV(
+                source=source,
                 symbol=symbol,
                 symbol_raw=symbol_raw,
                 source_ts=None,
@@ -321,21 +329,26 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
                 close=close_px,
                 volume=volume,
                 vwap=vwap,
-                trade_count=trade_count,
+                num_trades=trade_count,
+                asset_class=AssetClass.EQUITY,
+                prov=tail.prov,
+                prov_basis=tail.prov_basis,
+                prov_confidence=tail.prov_confidence,
+                prov_inputs=tail.prov_inputs,
             )
             current_bucket = bucket
             open_px = trade.price
             high_px = trade.price
             low_px = trade.price
             close_px = trade.price
-            volume = trade.size
-            vwap_sum = trade.price * trade.size
+            volume = trade.amount
+            vwap_sum = trade.price * trade.amount
             trade_count = 1
 
     if current_bucket is not None:
         vwap = (vwap_sum / volume) if volume > 0 else None
-        yield Bar(
-            provider=provider,
+        yield OHLCV(
+            source=source,
             symbol=symbol,
             symbol_raw=symbol_raw,
             source_ts=None,
@@ -347,19 +360,28 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             close=close_px,
             volume=volume,
             vwap=vwap,
-            trade_count=trade_count,
+            num_trades=trade_count,
+            asset_class=AssetClass.EQUITY,
+            prov=tail.prov,
+            prov_basis=tail.prov_basis,
+            prov_confidence=tail.prov_confidence,
+            prov_inputs=tail.prov_inputs,
         )
 
 
 def resample_quotes_to_bars(
     quotes: Iterable[Quote], interval: str, price_type: str = "mid"
-) -> Iterator[Bar]:
-    """Resample Quote records into Bar records based on bid, ask, or mid-price.
+) -> Iterator[OHLCV]:
+    """Resample Quote records into OHLCV records based on bid, ask, or mid-price.
 
     Assumes Quote records are ordered by local_ts.
     """
     interval_ns, _, interval_label = _parse_interval(interval)
     adjusted_interval: int | None = None
+
+    # SYNTHETIC, not DERIVED: these prices are quotes, nothing here was transacted, and
+    # the `volume` below is a structural zero rather than a measured one.
+    tail = provenance_fields("ohlcv_from_quotes")
 
     current_bucket: int | None = None
     open_px = 0.0
@@ -370,7 +392,7 @@ def resample_quotes_to_bars(
     quote_count = 0
     price_sum = 0.0
 
-    provider = ""
+    source = ""
     symbol = ""
     symbol_raw = ""
 
@@ -384,8 +406,8 @@ def resample_quotes_to_bars(
             )
         previous_ts = quote.local_ts
 
-        if not provider:
-            provider = quote.provider
+        if not source:
+            source = quote.source
             symbol = quote.symbol
             symbol_raw = quote.symbol_raw
 
@@ -420,8 +442,8 @@ def resample_quotes_to_bars(
             quote_count += 1
         else:
             vwap = (price_sum / quote_count) if quote_count > 0 else None
-            yield Bar(
-                provider=provider,
+            yield OHLCV(
+                source=source,
                 symbol=symbol,
                 symbol_raw=symbol_raw,
                 source_ts=None,
@@ -433,7 +455,12 @@ def resample_quotes_to_bars(
                 close=close_px,
                 volume=volume,
                 vwap=vwap,
-                trade_count=quote_count,
+                num_trades=quote_count,
+                asset_class=AssetClass.EQUITY,
+                prov=tail.prov,
+                prov_basis=tail.prov_basis,
+                prov_confidence=tail.prov_confidence,
+                prov_inputs=tail.prov_inputs,
             )
             current_bucket = bucket
             open_px = price
@@ -446,8 +473,8 @@ def resample_quotes_to_bars(
 
     if current_bucket is not None:
         vwap = (price_sum / quote_count) if quote_count > 0 else None
-        yield Bar(
-            provider=provider,
+        yield OHLCV(
+            source=source,
             symbol=symbol,
             symbol_raw=symbol_raw,
             source_ts=None,
@@ -459,17 +486,27 @@ def resample_quotes_to_bars(
             close=close_px,
             volume=volume,
             vwap=vwap,
-            trade_count=quote_count,
+            num_trades=quote_count,
+            asset_class=AssetClass.EQUITY,
+            prov=tail.prov,
+            prov_basis=tail.prov_basis,
+            prov_confidence=tail.prov_confidence,
+            prov_inputs=tail.prov_inputs,
         )
 
 
-def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
-    """Resample lower-resolution Bar records into higher-resolution Bar records.
+def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLCV]:
+    """Resample lower-resolution OHLCV records into higher-resolution OHLCV records.
 
-    Assumes Bar records are ordered by local_ts.
+    Assumes OHLCV records are ordered by local_ts.
     """
     interval_ns, _, interval_label = _parse_interval(interval)
     adjusted_interval: int | None = None
+
+    # Re-bucketing bars is exact, but the wider bar is still not a venue's bar. Note this
+    # does not carry its inputs' provenance forward: a bar built from synthetic bars
+    # reports DERIVED, which the basis' registration says out loud.
+    tail = provenance_fields("ohlcv_from_ohlcv")
 
     current_bucket: int | None = None
     open_px = 0.0
@@ -481,7 +518,7 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
     trade_count_sum = 0
     has_trade_count = False
 
-    provider = ""
+    source = ""
     symbol = ""
     symbol_raw = ""
 
@@ -495,8 +532,8 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
             )
         previous_ts = bar.local_ts
 
-        if not provider:
-            provider = bar.provider
+        if not source:
+            source = bar.source
             symbol = bar.symbol
             symbol_raw = bar.symbol_raw
 
@@ -514,8 +551,8 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
             volume = bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
-            if bar.trade_count is not None:
-                trade_count_sum = bar.trade_count
+            if bar.num_trades is not None:
+                trade_count_sum = bar.num_trades
                 has_trade_count = True
             else:
                 trade_count_sum = 1
@@ -527,8 +564,8 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
             volume += bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum += vwap_val * bar.volume
-            if bar.trade_count is not None:
-                trade_count_sum += bar.trade_count
+            if bar.num_trades is not None:
+                trade_count_sum += bar.num_trades
                 has_trade_count = True
             else:
                 trade_count_sum += 1
@@ -538,8 +575,8 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
                 if volume > 0
                 else (vwap_vol_sum if vwap_vol_sum > 0 else None)
             )
-            yield Bar(
-                provider=provider,
+            yield OHLCV(
+                source=source,
                 symbol=symbol,
                 symbol_raw=symbol_raw,
                 source_ts=None,
@@ -551,7 +588,12 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
                 close=close_px,
                 volume=volume,
                 vwap=vwap,
-                trade_count=trade_count_sum if has_trade_count else None,
+                num_trades=trade_count_sum if has_trade_count else None,
+                asset_class=AssetClass.EQUITY,
+                prov=tail.prov,
+                prov_basis=tail.prov_basis,
+                prov_confidence=tail.prov_confidence,
+                prov_inputs=tail.prov_inputs,
             )
             current_bucket = bucket
             open_px = bar.open
@@ -561,8 +603,8 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
             volume = bar.volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
-            if bar.trade_count is not None:
-                trade_count_sum = bar.trade_count
+            if bar.num_trades is not None:
+                trade_count_sum = bar.num_trades
                 has_trade_count = True
             else:
                 trade_count_sum = 1
@@ -572,8 +614,8 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
         vwap = (
             (vwap_vol_sum / volume) if volume > 0 else (vwap_vol_sum if vwap_vol_sum > 0 else None)
         )
-        yield Bar(
-            provider=provider,
+        yield OHLCV(
+            source=source,
             symbol=symbol,
             symbol_raw=symbol_raw,
             source_ts=None,
@@ -585,7 +627,12 @@ def resample_bars_to_bars(bars: Iterable[Bar], interval: str) -> Iterator[Bar]:
             close=close_px,
             volume=volume,
             vwap=vwap,
-            trade_count=trade_count_sum if has_trade_count else None,
+            num_trades=trade_count_sum if has_trade_count else None,
+            asset_class=AssetClass.EQUITY,
+            prov=tail.prov,
+            prov_basis=tail.prov_basis,
+            prov_confidence=tail.prov_confidence,
+            prov_inputs=tail.prov_inputs,
         )
 
 
@@ -632,7 +679,7 @@ def _order_columns(resampled: pl.DataFrame) -> pl.DataFrame:
 def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     """Resample trades DataFrame using Polars.
 
-    Expects columns: local_ts, price, size, and optionally symbol, provider, symbol_raw.
+    Expects columns: local_ts, price, amount, and optionally symbol, source, symbol_raw.
     """
     if len(df) == 0:
         return pl.DataFrame(schema=_EMPTY_BAR_SCHEMA)
@@ -644,7 +691,7 @@ def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
         "datetime"
     )
 
-    group_keys = [k for k in ["symbol", "provider", "symbol_raw"] if k in df.columns]
+    group_keys = [k for k in ["symbol", "source", "symbol_raw"] if k in df.columns]
 
     resampled = df_dt.group_by_dynamic(
         "datetime",
@@ -657,9 +704,9 @@ def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
             pl.col("price").max().alias("high"),
             pl.col("price").min().alias("low"),
             pl.col("price").last().alias("close"),
-            pl.col("size").sum().alias("volume"),
-            pl.when(pl.col("size").sum() > 0.0)
-            .then((pl.col("price") * pl.col("size")).sum() / pl.col("size").sum())
+            pl.col("amount").sum().alias("volume"),
+            pl.when(pl.col("amount").sum() > 0.0)
+            .then((pl.col("price") * pl.col("amount")).sum() / pl.col("amount").sum())
             .otherwise(None)
             .alias("vwap"),
             pl.len().cast(pl.Int64).alias("trade_count"),
@@ -677,7 +724,7 @@ def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
 def resample_quotes_df(df: pl.DataFrame, interval: str, price_type: str = "mid") -> pl.DataFrame:
     """Resample quotes DataFrame using Polars.
 
-    Expects columns: local_ts, bid_px, ask_px, and optionally symbol, provider, symbol_raw.
+    Expects columns: local_ts, bid_px, ask_px, and optionally symbol, source, symbol_raw.
     """
     if len(df) == 0:
         return pl.DataFrame(schema=_EMPTY_BAR_SCHEMA)
@@ -698,7 +745,7 @@ def resample_quotes_df(df: pl.DataFrame, interval: str, price_type: str = "mid")
         "datetime"
     )
 
-    group_keys = [k for k in ["symbol", "provider", "symbol_raw"] if k in df.columns]
+    group_keys = [k for k in ["symbol", "source", "symbol_raw"] if k in df.columns]
 
     resampled = df_dt.group_by_dynamic(
         "datetime",
@@ -744,7 +791,7 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
         "datetime"
     )
 
-    group_keys = [k for k in ["symbol", "provider", "symbol_raw"] if k in df.columns]
+    group_keys = [k for k in ["symbol", "source", "symbol_raw"] if k in df.columns]
 
     if "vwap" not in df.columns:
         df_dt = df_dt.with_columns(pl.col("close").alias("vwap"))

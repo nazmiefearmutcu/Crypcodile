@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from crocodile.core.schema.enums import SecurityType
 from crocodile.equity.reference.master import SecurityMaster
 from crocodile.equity.reference.models import Security
-from crocodile.equity.schema.enums import SecurityType
 
 
 def test_register_and_get_by_symbol() -> None:

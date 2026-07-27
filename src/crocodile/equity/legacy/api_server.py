@@ -31,8 +31,8 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 from crocodile import __version__
-from crocodile.equity.legacy.mcp_server import AsyncWeb3, get_onchain_price
 from crocodile.core.store.catalog import Catalog
+from crocodile.equity.legacy.mcp_server import AsyncWeb3, get_onchain_price
 
 log = logging.getLogger(__name__)
 
@@ -1270,7 +1270,7 @@ async def get_depth(
 
     result: dict[str, Any] = {
         "symbol": profile.symbol,
-        "basis": profile.basis,
+        "basis": profile.prov_basis,
         "is_synthetic": profile.is_synthetic,
         "reference_price": profile.reference_price,
         "bids": [list(lv) for lv in profile.bids],

@@ -11,11 +11,11 @@ from typing import Any
 
 import aiohttp
 
+from crocodile.core.schema.enums import AssetClass, CorpActionType, SecurityType
+from crocodile.core.schema.records import OHLCV, CorporateAction, Record
+from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.base import Provider
 from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
-from crocodile.equity.schema.enums import CorpActionType, SecurityType
-from crocodile.equity.schema.records import Bar, CorporateAction, Record
-from crocodile.core.sink.base import Sink
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +120,9 @@ class MsnMoneyProvider(Provider):
             sec_id = await self._resolve_sec_id(symbol)
             local_ts = time.time_ns()
 
+            # One struct now, so both request spellings get the same record. They used
+            # to take two arms that both built a `Bar`: asking for `ohlcv` wrote records
+            # tagged `bar`, into the wrong partition, with no error.
             if channel in ("bar", "ohlcv"):
                 duration_ns = end_ns - start_ns
                 one_day_ns = 24 * 60 * 60 * 1_000_000_000
@@ -233,8 +236,8 @@ class MsnMoneyProvider(Provider):
                                 if source_ts is not None and not (start_ns <= source_ts <= end_ns):
                                     continue
 
-                                bar = Bar(
-                                    provider=self.name,
+                                bar = OHLCV(
+                                    source=self.name,
                                     symbol=symbol.upper(),
                                     symbol_raw=symbol,
                                     source_ts=source_ts,
@@ -245,6 +248,7 @@ class MsnMoneyProvider(Provider):
                                     low=safe_float(low_p[idx]) if idx < len(low_p) else 0.0,
                                     close=safe_float(close_p[idx]) if idx < len(close_p) else 0.0,
                                     volume=safe_float(volumes[idx]) if idx < len(volumes) else 0.0,
+                                    asset_class=AssetClass.EQUITY,
                                 )
                                 yield bar
 
@@ -277,7 +281,7 @@ class MsnMoneyProvider(Provider):
                                     ts = int(dt.timestamp() * 1e9)
                                     if start_ns <= ts <= end_ns:
                                         yield CorporateAction(
-                                            provider=self.name,
+                                            source=self.name,
                                             symbol=symbol.upper(),
                                             symbol_raw=symbol,
                                             source_ts=ts,
@@ -285,6 +289,7 @@ class MsnMoneyProvider(Provider):
                                             ex_date=ex_date,
                                             type=CorpActionType.DIVIDEND_CASH,
                                             value=safe_float(ex_div_amt),
+                                            asset_class=AssetClass.EQUITY,
                                         )
                                 except Exception as e:
                                     log.debug(
@@ -312,7 +317,7 @@ class MsnMoneyProvider(Provider):
                                         else:
                                             val = float(split_str)
                                         yield CorporateAction(
-                                            provider=self.name,
+                                            source=self.name,
                                             symbol=symbol.upper(),
                                             symbol_raw=symbol,
                                             source_ts=ts,
@@ -320,6 +325,7 @@ class MsnMoneyProvider(Provider):
                                             ex_date=ex_date,
                                             type=CorpActionType.SPLIT,
                                             value=val,
+                                            asset_class=AssetClass.EQUITY,
                                         )
                                 except Exception as e:
                                     log.debug(

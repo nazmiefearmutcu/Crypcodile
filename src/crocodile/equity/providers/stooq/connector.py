@@ -16,12 +16,12 @@ import aiohttp
 import polars as pl
 from yarl import URL
 
-from crocodile.equity.providers.base import Provider
-from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType
-from crocodile.equity.schema.records import OHLCV, IndexValue, Record
+from crocodile.core.schema.enums import AssetClass, SecurityType
+from crocodile.core.schema.records import OHLCV, IndexValue, Record
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import now_ns
+from crocodile.equity.providers.base import Provider
+from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -575,18 +575,19 @@ class StooqProvider(Provider):
             if is_index:
                 records.append(
                     IndexValue(
-                        provider=provider,
+                        source=provider,
                         symbol=symbol,
                         symbol_raw=symbol,
                         source_ts=source_ts,
                         local_ts=local_ts,
                         value=close_px,
+                        asset_class=AssetClass.EQUITY,
                     )
                 )
             else:
                 records.append(
                     OHLCV(
-                        provider=provider,
+                        source=provider,
                         symbol=symbol,
                         symbol_raw=symbol,
                         source_ts=source_ts,
@@ -598,7 +599,8 @@ class StooqProvider(Provider):
                         close=close_px,
                         volume=float(volumes[i]),
                         vwap=None,
-                        trade_count=None,
+                        num_trades=None,
+                        asset_class=AssetClass.EQUITY,
                     )
                 )
         return records

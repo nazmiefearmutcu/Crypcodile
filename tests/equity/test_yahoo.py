@@ -1,6 +1,6 @@
 """Unit tests for the Yahoo Finance provider client."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,15 +8,15 @@ import pandas as pd
 import pytest
 from yfinance.exceptions import YFRateLimitError
 
-from crocodile.equity.providers.yahoo.client import YahooClient
-from crocodile.equity.schema.enums import CorpActionType, OptType
-from crocodile.equity.schema.records import (
-    Bar,
+from crocodile.core.schema.enums import CorpActionType, OptType
+from crocodile.core.schema.records import (
+    OHLCV,
     CorporateAction,
     Fundamental,
     InsiderTransaction,
-    OptionQuote,
+    OptionsChain,
 )
+from crocodile.equity.providers.yahoo.client import YahooClient
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def mock_insider_df() -> pd.DataFrame:
 
 @pytest.mark.asyncio
 async def test_fetch_eod_history(mock_history_df: pd.DataFrame) -> None:
-    """Test fetching EOD history produces correct Bar and CorporateAction records."""
+    """Test fetching EOD history produces correct OHLCV and CorporateAction records."""
     client = YahooClient()
 
     with patch("yfinance.Ticker") as mock_ticker_cls:
@@ -109,7 +109,7 @@ async def test_fetch_eod_history(mock_history_df: pd.DataFrame) -> None:
         # Two days of history -> 2 Bars, 1 Dividend, 1 Split = 4 records
         assert len(records) == 4
 
-        bars = [r for r in records if isinstance(r, Bar)]
+        bars = [r for r in records if isinstance(r, OHLCV)]
         corp_actions = [r for r in records if isinstance(r, CorporateAction)]
 
         assert len(bars) == 2
@@ -133,7 +133,7 @@ async def test_fetch_eod_history(mock_history_df: pd.DataFrame) -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_intraday_bars(mock_history_df: pd.DataFrame) -> None:
-    """Test fetching intraday bars produces correct Bar records."""
+    """Test fetching intraday bars produces correct OHLCV records."""
     client = YahooClient()
 
     with patch("yfinance.Ticker") as mock_ticker_cls:
@@ -144,7 +144,7 @@ async def test_fetch_intraday_bars(mock_history_df: pd.DataFrame) -> None:
         records = await client.fetch_intraday_bars("AAPL", interval="1m")
 
         assert len(records) == 2
-        assert all(isinstance(r, Bar) for r in records)
+        assert all(isinstance(r, OHLCV) for r in records)
         assert records[0].open == 100.0
         assert records[1].close == 102.5
 
@@ -153,7 +153,7 @@ async def test_fetch_intraday_bars(mock_history_df: pd.DataFrame) -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_option_chain(mock_option_chain: MagicMock) -> None:
-    """Test fetching option chains produces correct OptionQuote records."""
+    """Test fetching option chains produces correct OptionsChain records."""
     client = YahooClient()
 
     with patch("yfinance.Ticker") as mock_ticker_cls:
@@ -165,22 +165,53 @@ async def test_fetch_option_chain(mock_option_chain: MagicMock) -> None:
         records = await client.fetch_option_chain("AAPL")
 
         assert len(records) == 2
-        assert all(isinstance(r, OptionQuote) for r in records)
+        assert all(isinstance(r, OptionsChain) for r in records)
 
-        call = next(r for r in records if r.type == OptType.C)
+        call = next(r for r in records if r.opt_type == OptType.CALL)
         assert call.symbol == "AAPL260626C00150000"
         assert call.strike == 150.0
-        assert call.last == 5.0
-        assert call.bid == 4.8
-        assert call.ask == 5.2
-        assert call.implied_volatility == 0.25
+        assert call.last_price == 5.0
+        assert call.bid_px == 4.8
+        assert call.ask_px == 5.2
+        assert call.mark_iv == 0.25
 
-        put = next(r for r in records if r.type == OptType.P)
+        # Yahoo publishes a date; the record wants UTC epoch nanoseconds. Midnight UTC
+        # is the instant, so the date the feed gave comes back by the same UTC
+        # truncation the lake partitions with — see `_expiry_to_ns` for why not a close.
+        assert call.expiry == 1782432000000000000
+        assert (
+            datetime.fromtimestamp(call.expiry / 1e9, tz=UTC).strftime("%Y-%m-%d")
+            == "2026-06-26"
+        )
+        # Yahoo's chain payload carries no underlying spot, and the record says so out
+        # loud rather than defaulting: `None` is "not published", not a price of zero.
+        assert call.underlying_price is None
+
+        put = next(r for r in records if r.opt_type == OptType.PUT)
         assert put.symbol == "AAPL260626P00150000"
-        assert put.last == 3.0
-        assert put.implied_volatility == 0.22
+        assert put.last_price == 3.0
+        assert put.mark_iv == 0.22
 
     await client.close()
+
+
+def test_an_expiry_date_widens_to_midnight_utc_and_back() -> None:
+    """The conversion is total in one direction only, so the other one is pinned.
+
+    A date has to become an instant to live in an `int` field, and the instant chosen is
+    the only one from which the date is recoverable by the UTC truncation everything else
+    here uses. A malformed date raises rather than landing an option on the wrong day of
+    a term structure.
+    """
+    from crocodile.equity.providers.yahoo.client import _expiry_to_ns
+
+    ns = _expiry_to_ns("2026-06-18")
+    assert ns == 1781740800000000000
+    assert ns % 86_400_000_000_000 == 0, "midnight UTC, so a UTC date truncation is exact"
+    assert datetime.fromtimestamp(ns / 1e9, tz=UTC).strftime("%Y-%m-%d") == "2026-06-18"
+
+    with pytest.raises(ValueError):
+        _expiry_to_ns("18/06/2026")
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,15 @@
 import pytest
 
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.records import OHLCV
 from crocodile.equity.depth.vap import reference_price, split_ladder, volume_at_price
-from crocodile.equity.schema.records import Bar
 
 
 def _bar(o, h, lo, c, v, ts=1):
-    return Bar(provider="yahoo", symbol="yahoo:X", symbol_raw="X", local_ts=ts,
-               interval="1m", open=o, high=h, low=lo, close=c, volume=v)
+    return OHLCV(source="yahoo", symbol="yahoo:X", symbol_raw="X", local_ts=ts,
+               interval="1m", open=o, high=h, low=lo, close=c, volume=v,
+               asset_class=AssetClass.EQUITY,
+               source_ts=None,)
 
 
 def test_reference_price_is_last_close():

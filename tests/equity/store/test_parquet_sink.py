@@ -9,9 +9,9 @@ import time
 import polars as pl
 import pytest
 
+from crocodile.core.schema.enums import AssetClass, Side, Tape
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
-from crocodile.equity.schema.enums import Tape
-from crocodile.equity.schema.records import BookSnapshot, Trade
 
 
 def _trade(
@@ -21,23 +21,25 @@ def _trade(
     provider: str = "alpaca",
 ) -> Trade:
     return Trade(
-        provider=provider,
+        source=provider,
         symbol="AAPL",
         symbol_raw="AAPL",
         source_ts=local_ts,
         local_ts=local_ts,
         id=str(price),
         price=price,
-        size=10.0,
+        amount=10.0,
         conditions=["@"],
         tape=Tape.A,
         venue="NASDAQ",
+        asset_class=AssetClass.EQUITY,
+        side=Side.UNKNOWN,
     )
 
 
 def _snap(local_ts: int = 1700000000000000000) -> BookSnapshot:
     return BookSnapshot(
-        provider="alpaca",
+        source="alpaca",
         symbol="AAPL",
         symbol_raw="AAPL",
         source_ts=local_ts,
@@ -47,6 +49,7 @@ def _snap(local_ts: int = 1700000000000000000) -> BookSnapshot:
         depth=2,
         sequence_id=42,
         is_snapshot=True,
+        asset_class=AssetClass.EQUITY,
     )
 
 
@@ -129,9 +132,12 @@ async def test_parquet_sink_book_removal_level_round_trips(tmp_path: pathlib.Pat
     assert snap_files, "No book_snapshot parquet files found"
     df = pl.read_parquet(snap_files)
     assert len(df) == 1
-    # bids col is stored as list[struct{price,size}]
+    # The canonical family spells a level ``{price, amount}``. The equity fork wrote
+    # ``{price, size}`` and legacy equity files keep that spelling forever, which is why
+    # ``_EQUITY_LEVEL_STRUCT`` still exists — but nothing produces equity records in that
+    # shape any more, so what an equity connector writes today is the canonical one.
     bids = df["bids"][0]
-    price_size_pairs = [(b["price"], b["size"]) for b in bids]
+    price_size_pairs = [(b["price"], b["amount"]) for b in bids]
     assert (149.0, 0.0) in price_size_pairs
 
 

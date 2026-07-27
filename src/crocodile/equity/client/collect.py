@@ -10,8 +10,8 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from crocodile.equity.providers.base import Provider
 from crocodile.core.sink.base import Sink
+from crocodile.equity.providers.base import Provider
 
 log = logging.getLogger(__name__)
 

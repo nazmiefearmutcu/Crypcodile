@@ -5,10 +5,10 @@ import os
 
 import pytest
 
+from crocodile.core.schema.records import Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.equity.providers.finnhub.connector import FinnhubProvider
 from crocodile.equity.reference.registry import InstrumentRegistry
-from crocodile.equity.schema.records import Trade
-from crocodile.core.sink.memory import MemorySink
 
 
 class MockTransport:
@@ -126,11 +126,11 @@ def test_finnhub_normalize_trade() -> None:
     assert len(records) == 1
     trade = records[0]
     assert isinstance(trade, Trade)
-    assert trade.provider == "finnhub"
+    assert trade.source == "finnhub"
     assert trade.symbol == "AAPL"
     assert trade.symbol_raw == "AAPL"
     assert trade.price == 150.25
-    assert trade.size == 100.0
+    assert trade.amount == 100.0
     assert trade.source_ts == 1770000000123 * 1_000_000
     assert trade.local_ts == 999
     assert trade.venue is None

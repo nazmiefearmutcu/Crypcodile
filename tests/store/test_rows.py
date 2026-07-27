@@ -1,5 +1,6 @@
 import pathlib
 
+import msgspec
 import polars as pl
 
 from crocodile.core.schema.enums import AssetClass, OptType, Side
@@ -511,12 +512,32 @@ async def test_an_equity_row_does_not_read_back_as_crypto(tmp_path: pathlib.Path
     field names overlap enough that nothing else raised, and a lake query that
     answers with the wrong market. The row is written through the real sink
     rather than hand-built because the null column is the whole point.
+
+    The record class is stated here rather than imported: the equity connectors emit
+    canonical records now, so the fork's ``OHLCV`` has no producer and the shape below is
+    frozen history — which is also what the pre-migration files it stands in for are.
+    ``ParquetSink`` reads the tag and the fields off whatever it is handed, so this goes
+    through the real writer and picks the real equity file schema.
     """
-    from crocodile.equity.schema.records import OHLCV as EquityOHLCV
+
+    class _PreMergeEquityOHLCV(msgspec.Struct, frozen=True, tag="ohlcv", tag_field="channel"):
+        provider: str
+        symbol: str
+        symbol_raw: str
+        local_ts: int
+        interval: str
+        open: float
+        high: float
+        low: float
+        close: float
+        volume: float
+        source_ts: int | None = None
+        vwap: float | None = None
+        trade_count: int | None = None
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=1000, flush_interval_seconds=9999)
     await sink.put(
-        EquityOHLCV(  # type: ignore[arg-type]
+        _PreMergeEquityOHLCV(  # type: ignore[arg-type]
             provider="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",

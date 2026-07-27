@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from crocodile.core.schema.enums import AssetClass, SecurityType, Side
+from crocodile.core.schema.records import Fundamental, IndexValue, Quote, Record, Trade
+from crocodile.core.sink.memory import MemorySink
 from crocodile.equity.providers.google_finance.connector import (
     GoogleFinanceProvider,
     get_possible_google_symbols,
@@ -13,9 +16,6 @@ from crocodile.equity.providers.google_finance.connector import (
     parse_val_and_unit,
 )
 from crocodile.equity.reference.registry import InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType
-from crocodile.equity.schema.records import Fundamental, IndexValue, Quote, Record, Trade
-from crocodile.core.sink.memory import MemorySink
 
 
 def test_google_finance_helpers() -> None:
@@ -187,7 +187,7 @@ async def test_google_finance_scrape_symbol() -> None:
     assert len(trades) == 1
     assert trades[0].symbol == "AAPL"
     assert trades[0].price == 150.25
-    assert trades[0].size == 1.0
+    assert trades[0].amount == 1.0
 
     # Verify Quote
     quotes = [r for r in records if isinstance(r, Quote)]
@@ -292,14 +292,16 @@ async def test_google_finance_run() -> None:
     )
 
     trade_rec = Trade(
-        provider="google_finance",
+        source="google_finance",
         symbol="AAPL",
         symbol_raw="AAPL",
         source_ts=None,
         local_ts=123,
         id="",
         price=150.0,
-        size=1.0,
+        amount=1.0,
+        asset_class=AssetClass.EQUITY,
+        side=Side.UNKNOWN,
     )
 
     async def mock_scrape(sym: str) -> list[Record]:

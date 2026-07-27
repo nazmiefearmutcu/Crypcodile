@@ -6,12 +6,12 @@ import os
 from collections.abc import AsyncIterator, Iterable
 
 from crocodile.core.ingest.transport import AiohttpWsTransport, Transport
-from crocodile.equity.providers.base import FatalProviderError, Provider
-from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType
-from crocodile.equity.schema.records import Record, Trade
+from crocodile.core.schema.enums import AssetClass, SecurityType, Side
+from crocodile.core.schema.records import Record, Trade
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import ms_to_ns
+from crocodile.equity.providers.base import FatalProviderError, Provider
+from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -189,17 +189,19 @@ class FinnhubProvider(Provider):
                 try:
                     source_ts = ms_to_ns(item["t"]) if "t" in item else None
                     yield Trade(
-                        provider=self.name,
+                        source=self.name,
                         symbol=item["s"],
                         symbol_raw=item["s"],
                         source_ts=source_ts,
                         local_ts=local_ts,
                         id="",
                         price=float(item["p"]),
-                        size=float(item["v"]),
+                        amount=float(item["v"]),
                         venue=None,
                         conditions=item.get("c"),
                         tape=None,
+                        asset_class=AssetClass.EQUITY,
+                        side=Side.UNKNOWN,
                     )
                 except Exception as exc:
                     log.error("Finnhub normalize item error: %s (item: %s)", exc, item)

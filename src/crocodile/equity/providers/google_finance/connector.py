@@ -11,11 +11,11 @@ from typing import Any
 import aiohttp
 from bs4 import BeautifulSoup, Tag
 
+from crocodile.core.schema.enums import AssetClass, SecurityType, Side
+from crocodile.core.schema.records import Fundamental, IndexValue, Quote, Record, Trade
+from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.base import Provider
 from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType
-from crocodile.equity.schema.records import Fundamental, IndexValue, Quote, Record, Trade
-from crocodile.core.sink.base import Sink
 
 log = logging.getLogger(__name__)
 
@@ -327,12 +327,13 @@ class GoogleFinanceProvider(Provider):
                     if "index_value" in self.channels:
                         records.append(
                             IndexValue(
-                                provider=self.name,
+                                source=self.name,
                                 symbol=symbol.upper(),
                                 symbol_raw=symbol,
                                 source_ts=source_ts,
                                 local_ts=local_ts,
                                 value=price,
+                                asset_class=AssetClass.EQUITY,
                             )
                         )
                 else:
@@ -340,21 +341,23 @@ class GoogleFinanceProvider(Provider):
                     if "trade" in self.channels:
                         records.append(
                             Trade(
-                                provider=self.name,
+                                source=self.name,
                                 symbol=symbol.upper(),
                                 symbol_raw=symbol,
                                 source_ts=source_ts,
                                 local_ts=local_ts,
                                 id="",
                                 price=price,
-                                size=1.0,
+                                amount=1.0,
                                 conditions=["synthetic", "last_price"],
+                                asset_class=AssetClass.EQUITY,
+                                side=Side.UNKNOWN,
                             )
                         )
                     if "quote" in self.channels:
                         records.append(
                             Quote(
-                                provider=self.name,
+                                source=self.name,
                                 symbol=symbol.upper(),
                                 symbol_raw=symbol,
                                 source_ts=source_ts,
@@ -366,6 +369,7 @@ class GoogleFinanceProvider(Provider):
                                 is_nbbo=False,
                                 is_consolidated=False,
                                 conditions=["synthetic", "last_price"],
+                                asset_class=AssetClass.EQUITY,
                             )
                         )
 
@@ -413,7 +417,7 @@ class GoogleFinanceProvider(Provider):
                                         continue
                                 records.append(
                                     Fundamental(
-                                        provider=self.name,
+                                        source=self.name,
                                         symbol=symbol.upper(),
                                         symbol_raw=symbol,
                                         source_ts=source_ts,
@@ -423,6 +427,7 @@ class GoogleFinanceProvider(Provider):
                                         unit=unit,
                                         val=val,
                                         end=end_str,
+                                        asset_class=AssetClass.EQUITY,
                                     )
                                 )
                 return records

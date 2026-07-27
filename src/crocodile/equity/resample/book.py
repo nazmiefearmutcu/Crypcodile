@@ -4,25 +4,22 @@ Why this is not just ``crocodile.core.resample.book``
 =====================================================
 
 ``crocodile.core.resample.book.resample_book_snapshots`` survived the merge,
-but it is the CRYPTO copy and it does not work on equity input. Three
-independent reasons, each verified against this tree:
+but it is the CRYPTO copy and it does not do the same thing to a stream. Two of
+the three reasons this module used to give have expired, and saying which is
+the point of keeping them written down:
 
-1. **Record construction.** ``core``'s ``_capture_snapshot`` emits
-   ``crocodile.core.schema.records.BookSnapshot`` and reads
-   ``trigger_record.source`` and ``trigger_record.asset_class``. Equity records
-   (``crocodile.equity.schema.records``) still say ``provider`` and carry no
-   ``asset_class`` at all, so the call raises ``AttributeError``. That stops
-   being true the day the equity union moves onto the canonical one too.
+1. ``core``'s ``_capture_snapshot`` read ``trigger_record.source`` and
+   ``trigger_record.asset_class``, which the equity records did not have.
+   **Expired:** equity emits canonical records now, so both are there.
 
-2. **Nominal dispatch.** ``core``'s loop tests ``isinstance(record,
-   BookSnapshot)`` against the crypto struct. An equity ``BookSnapshot`` is a
-   different ``msgspec.Struct``, so the test is False, the snapshot is never
-   treated as one, and the resampler never initialises — it yields nothing and
-   raises nothing. Silent empty output, which is the worst failure mode of the
-   three.
+2. ``core``'s loop tested ``isinstance(record, BookSnapshot)`` against a
+   *different* ``msgspec.Struct``, so an equity snapshot never matched, the
+   resampler never initialised, and it yielded nothing while raising nothing.
+   **Expired for the same reason**, and it is worth recording that it was the
+   worst of the three while it lasted: silent empty output.
 
-3. **Different boundary arithmetic.** This is the interesting one and it is a
-   genuine behavioural fork, not an accident of typing:
+3. **Different boundary arithmetic.** This one is live, and it was always the
+   real reason — a genuine behavioural fork, not an accident of typing:
 
    * ``core`` (crypto) applies the incoming record to the book **first**, then
      emits every boundary at or below that record's ``local_ts``. The snapshot
@@ -47,21 +44,18 @@ independent reasons, each verified against this tree:
    backtest the equity rule is the defensible one, but changing crypto's
    behaviour is out of scope for a merge that has to preserve both.
 
-So the *resampling* logic is deliberately duplicated here, in the equity layer,
-where the equity record types live (``core`` must not import from ``equity``).
+So the *resampling* logic is deliberately duplicated here — one boundary rule
+each — and nothing else about this module is a duplicate any more.
 
 What is NOT duplicated: the order-book engine
 ----------------------------------------------
 
 The reconstruction state machine is **not** forked. This module drives the
-shared ``crocodile.core.replay.orderbook.OrderBook``. Because that engine
-dispatches nominally on the crypto record classes (point 2 above), equity
-records are translated into the core canonical structs at the engine boundary
-by ``_to_core_record``. The translation is lossless with respect to everything
-the engine reads — it only ever touches ``bids``, ``asks``, ``sequence_id``,
-``seq_id`` and ``prev_seq_id``. Emitted snapshots are built from the engine's
-public ``bids`` / ``asks`` dicts and are equity records throughout; no crypto
-record ever escapes this module.
+shared ``crocodile.core.replay.orderbook.OrderBook`` and hands it the records it
+was given, unchanged. It used to re-type them first, through a ``_to_core_record``
+that existed only to satisfy the ``isinstance`` dispatch in point 2; with one
+record union that translation had become a copy of a struct into itself, and a
+copy is a place for a field to be dropped on the way past.
 
 One consequence worth recording: the equity fork had its **own** ``OrderBook``
 with different gap rules (it tolerated a repeated ``seq_id`` when the delta
@@ -77,62 +71,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from crocodile.core.replay.orderbook import OrderBook
-from crocodile.core.schema.enums import AssetClass
-from crocodile.core.schema.provenance import Provenance
-from crocodile.core.schema.records import BookDelta as CoreBookDelta
-from crocodile.core.schema.records import BookSnapshot as CoreBookSnapshot
-from crocodile.equity.schema.records import BookDelta, BookSnapshot
+from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.records import BookDelta, BookSnapshot
 
 __all__ = ["resample_book_snapshots"]
-
-
-def _to_core_record(record: BookSnapshot | BookDelta) -> CoreBookSnapshot | CoreBookDelta:
-    """Re-type an equity book record as the core canonical struct.
-
-    ``OrderBook`` dispatches with ``isinstance`` against the core records, so an
-    equity struct has to be presented in those terms. Only the fields the engine
-    actually reads are carried across; ``source`` and ``asset_class`` are filled
-    from ``provider`` and from the fact that this module only ever sees equity
-    input, purely to satisfy the constructor. They are never read back out —
-    emitted snapshots are rebuilt from the engine's ``bids`` / ``asks`` dicts
-    and the original equity record.
-
-    ``prov`` is stated rather than left to the default even though the default is
-    the same value. A canonical record built inside a resampler with no ``prov``
-    argument is how ``core.resample.book`` came to write ``NATIVE`` on a
-    reconstruction, so the conformance gate requires the claim to be made out
-    loud here; and out loud it is true — the input is a venue-reported equity
-    record and re-typing it for the engine reconstructs nothing.
-    """
-    if isinstance(record, BookSnapshot):
-        return CoreBookSnapshot(
-            source=record.provider,
-            symbol=record.symbol,
-            symbol_raw=record.symbol_raw,
-            source_ts=record.source_ts,
-            local_ts=record.local_ts,
-            asset_class=AssetClass.EQUITY,
-            prov=Provenance.NATIVE,
-            bids=record.bids,
-            asks=record.asks,
-            depth=record.depth,
-            sequence_id=record.sequence_id,
-            is_snapshot=True,
-        )
-    return CoreBookDelta(
-        source=record.provider,
-        symbol=record.symbol,
-        symbol_raw=record.symbol_raw,
-        source_ts=record.source_ts,
-        local_ts=record.local_ts,
-        asset_class=AssetClass.EQUITY,
-        prov=Provenance.NATIVE,
-        bids=record.bids,
-        asks=record.asks,
-        seq_id=record.seq_id,
-        prev_seq_id=record.prev_seq_id,
-        is_snapshot=False,
-    )
 
 
 def resample_book_snapshots(
@@ -171,6 +113,11 @@ def resample_book_snapshots(
     book = OrderBook()
     next_boundary_ns: int | None = None  # set when first snapshot is applied
     initialized = False  # True once the engine has seen its first BookSnapshot
+    # The newest record folded into the book, which is what the `book_resample`
+    # confidence formula is a function of. Tracked rather than assumed: this rule emits
+    # before it applies, so the answer is structurally zero lookahead — and the day
+    # somebody reorders those two statements into the crypto rule, the number moves.
+    applied_ts: int | None = None
 
     for record in records:
         ts = record.local_ts
@@ -180,26 +127,29 @@ def resample_book_snapshots(
         # engine's own rule.
         if not initialized:
             if isinstance(record, BookSnapshot):
-                book.apply(_to_core_record(record))
+                book.apply(record)
+                applied_ts = ts
                 initialized = True
                 # First boundary is the end of the interval containing this snapshot.
                 next_boundary_ns = (ts // interval_ns) * interval_ns + interval_ns
             continue
 
         assert next_boundary_ns is not None  # guaranteed once initialized is True
+        assert applied_ts is not None  # set with `initialized`
 
         # Flush every boundary strictly before this record, using the book state
         # as it stood before the record — this is what prevents lookahead bias.
         while ts > next_boundary_ns:
-            yield _capture_snapshot(book, record, next_boundary_ns, top_n)
+            yield _capture_snapshot(book, record, next_boundary_ns, applied_ts, interval_ns, top_n)
             next_boundary_ns += interval_ns
 
         # Apply the record to the book (may raise BookGap — propagates to caller).
-        book.apply(_to_core_record(record))
+        book.apply(record)
+        applied_ts = ts
 
         # A record landing exactly on a boundary belongs to that boundary's bar.
         while ts >= next_boundary_ns:
-            yield _capture_snapshot(book, record, next_boundary_ns, top_n)
+            yield _capture_snapshot(book, record, next_boundary_ns, applied_ts, interval_ns, top_n)
             next_boundary_ns += interval_ns
 
 
@@ -207,6 +157,8 @@ def _capture_snapshot(
     book: OrderBook,
     trigger_record: BookSnapshot | BookDelta,
     boundary_ns: int,
+    applied_ts: int,
+    interval_ns: int,
     top_n: int | None,
 ) -> BookSnapshot:
     """Build an equity ``BookSnapshot`` from the current ``OrderBook`` state.
@@ -214,15 +166,24 @@ def _capture_snapshot(
     Args:
         book:           The live ``OrderBook`` instance.
         trigger_record: The record whose ``local_ts`` crossed the boundary.
-                        Used to copy ``provider``, ``symbol`` and ``symbol_raw``.
+                        Used to copy ``source``, ``symbol`` and ``symbol_raw``.
         boundary_ns:    The nanosecond timestamp of the bucket boundary; used as
                         ``local_ts`` for the emitted snapshot.
+        applied_ts:     ``local_ts`` of the newest record already folded into the book.
+        interval_ns:    The emit interval, the denominator of the confidence formula.
         top_n:          Maximum bid/ask levels on each side; ``None`` = all.
 
     Returns:
         A ``BookSnapshot`` representing the book at ``boundary_ns``.  We cannot
         know a source timestamp for a synthesised snapshot, so ``source_ts`` is
         ``None``.
+
+    This snapshot is a reconstruction: no venue ever published it, and a record built in
+    a resampler with no ``prov=`` argument says the opposite. ``lookahead_ns`` is how far
+    past the emitted boundary the newest applied update lies, so a book that is *behind*
+    the boundary lies zero past it — this rule always takes that branch, because it
+    flushes boundaries before applying the record that crossed them. Clamping is the
+    correct evaluation of "how far past", not a floor hiding a negative.
     """
     bids_sorted = sorted(book.bids.items(), reverse=True)
     asks_sorted = sorted(book.asks.items())
@@ -236,12 +197,24 @@ def _capture_snapshot(
 
     depth = len(bids) + len(asks)
 
+    tail = provenance_fields(
+        "book_resample",
+        {"lookahead_ns": max(applied_ts - boundary_ns, 0), "interval_ns": interval_ns},
+    )
+
     return BookSnapshot(
-        provider=trigger_record.provider,
+        source=trigger_record.source,
         symbol=trigger_record.symbol,
         symbol_raw=trigger_record.symbol_raw,
         source_ts=None,
         local_ts=boundary_ns,
+        # Carried from the trigger rather than pinned: this resampler is reached with
+        # equity input today, and the record it is handed knows its own market.
+        asset_class=trigger_record.asset_class,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
         bids=bids,
         asks=asks,
         depth=depth,

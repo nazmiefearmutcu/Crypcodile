@@ -27,8 +27,8 @@ from crocodile.core.ratelimit.token_bucket import TokenBucketLimiter
 
 if TYPE_CHECKING:
     from crocodile.contrib.evasion.api_key import ApiKeyPool
-from crocodile.equity.schema.enums import CorpActionType
-from crocodile.equity.schema.records import Bar, CorporateAction, OptionQuote, Record
+from crocodile.core.schema.enums import AssetClass, CorpActionType
+from crocodile.core.schema.records import OHLCV, CorporateAction, OptionsChain, Record
 
 
 class TiingoError(Exception):
@@ -350,8 +350,8 @@ class TiingoClient:
             source_ts = parse_tiingo_date(item.date)
             local_ts = time.time_ns()
 
-            bar = Bar(
-                provider="tiingo",
+            bar = OHLCV(
+                source="tiingo",
                 symbol=ticker_upper,
                 symbol_raw=ticker,
                 source_ts=source_ts,
@@ -363,14 +363,15 @@ class TiingoClient:
                 close=item.close,
                 volume=item.volume,
                 vwap=None,
-                trade_count=None,
+                num_trades=None,
+                asset_class=AssetClass.EQUITY,
             )
             records.append(bar)
 
             if item.divCash > 0.0:
                 ex_date = item.date.split("T")[0]
                 div = CorporateAction(
-                    provider="tiingo",
+                    source="tiingo",
                     symbol=ticker_upper,
                     symbol_raw=ticker,
                     source_ts=source_ts,
@@ -378,13 +379,14 @@ class TiingoClient:
                     ex_date=ex_date,
                     type=CorpActionType.DIVIDEND_CASH,
                     value=item.divCash,
+                    asset_class=AssetClass.EQUITY,
                 )
                 records.append(div)
 
             if abs(item.splitFactor - 1.0) > 1e-9:
                 ex_date = item.date.split("T")[0]
                 split = CorporateAction(
-                    provider="tiingo",
+                    source="tiingo",
                     symbol=ticker_upper,
                     symbol_raw=ticker,
                     source_ts=source_ts,
@@ -392,6 +394,7 @@ class TiingoClient:
                     ex_date=ex_date,
                     type=CorpActionType.SPLIT,
                     value=item.splitFactor,
+                    asset_class=AssetClass.EQUITY,
                 )
                 records.append(split)
 
@@ -403,7 +406,7 @@ class TiingoClient:
         start_date: str | None = None,
         end_date: str | None = None,
         resample_freq: str = "1min",
-    ) -> list[Bar]:
+    ) -> list[OHLCV]:
         """Fetch intraday bars from the Tiingo IEX endpoint.
 
         Respects the 500 unique symbols/month limit and enforces rate limiting.
@@ -460,14 +463,14 @@ class TiingoClient:
             self.api_key_pool.report_success("tiingo", key)
         await self.tracker.register_symbol(ticker_upper)
 
-        bars: list[Bar] = []
+        bars: list[OHLCV] = []
 
         for item in raw_prices:
             source_ts = parse_tiingo_date(item.date)
             local_ts = time.time_ns()
 
-            bar = Bar(
-                provider="tiingo",
+            bar = OHLCV(
+                source="tiingo",
                 symbol=ticker_upper,
                 symbol_raw=ticker,
                 source_ts=source_ts,
@@ -479,7 +482,8 @@ class TiingoClient:
                 close=item.close,
                 volume=item.volume,
                 vwap=None,
-                trade_count=None,
+                num_trades=None,
+                asset_class=AssetClass.EQUITY,
             )
             bars.append(bar)
 
@@ -489,7 +493,7 @@ class TiingoClient:
         self,
         symbol: str,
         expiry: str | None = None,
-    ) -> list[OptionQuote]:
+    ) -> list[OptionsChain]:
         """Fetch option chain quotes.
 
         Not supported by TiingoClient.

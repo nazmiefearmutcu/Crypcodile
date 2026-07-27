@@ -17,11 +17,10 @@ import time
 import polars as pl
 import pytest
 
-from crocodile.equity.providers.yahoo.client import YahooClient
-from crocodile.equity.schema.records import Bar
+from crocodile.core.schema.records import OHLCV
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
-
+from crocodile.equity.providers.yahoo.client import YahooClient
 
 # Resolved at import time, not inside the async test: ``Path.resolve()`` touches
 # the filesystem, which ASYNC240 rightly flags in a coroutine.
@@ -64,9 +63,9 @@ async def test_live_end_to_end_proof(tmp_path: pathlib.Path) -> None:
     assert len(records) > 0, "No records retrieved from Yahoo Finance"
 
     # Separate bars and actions
-    bars = [r for r in records if isinstance(r, Bar)]
-    print(f"Result: Mapped {len(bars)} canonical Bar (OHLCV) records.")
-    assert len(bars) > 0, "No canonical Bar records mapped"
+    bars = [r for r in records if isinstance(r, OHLCV)]
+    print(f"Result: Mapped {len(bars)} canonical OHLCV records.")
+    assert len(bars) > 0, "No canonical OHLCV records mapped"
 
     # 2. Write the retrieved live records to a partitioned Parquet database via ParquetSink
     print(f"Step 2: Feeding records to ParquetSink writing to: {tmp_path}...")
@@ -106,7 +105,7 @@ async def test_live_end_to_end_proof(tmp_path: pathlib.Path) -> None:
         f"Target Stock Symbol: {symbol}\n"
         f"Dates Scraped: {start_date} to {end_date}\n"
         f"Total Mapped Records: {len(records)}\n"
-        f"Bar OHLCV Count: {len(bars)}\n"
+        f"OHLCV Count: {len(bars)}\n"
         f"Database Write Path: {tmp_path}\n"
         f"Catalog Query Result: {len(df)} rows found in DuckDB view.\n"
         "DataFrame Output Schema & Samples:\n"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from crocodile.equity.schema.records import DepthProfile
+from crocodile.core.schema.records import DepthProfile
 
 
 @runtime_checkable

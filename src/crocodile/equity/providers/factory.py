@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.alpaca.connector import AlpacaProvider
 from crocodile.equity.providers.base import Provider
 from crocodile.equity.providers.finnhub.connector import FinnhubProvider
@@ -9,7 +10,6 @@ from crocodile.equity.providers.google_finance.connector import GoogleFinancePro
 from crocodile.equity.providers.msn_money.connector import MsnMoneyProvider
 from crocodile.equity.providers.stooq.connector import StooqProvider
 from crocodile.equity.reference.registry import InstrumentRegistry
-from crocodile.core.sink.base import Sink
 
 _REGISTRY: dict[str, type[Provider]] = {
     "alpaca": AlpacaProvider,

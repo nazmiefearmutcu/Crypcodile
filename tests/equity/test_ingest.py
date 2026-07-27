@@ -13,11 +13,11 @@ from crocodile.core.ingest.gap_bridge import (
     TradeSeqGap,
 )
 from crocodile.core.ingest.transport import FakeTransport
+from crocodile.core.schema.enums import AssetClass, SecurityType
+from crocodile.core.schema.records import BookDelta, BookSnapshot
+from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.base import Provider, backoff_delays
 from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType
-from crocodile.equity.schema.records import BookDelta, BookSnapshot
-from crocodile.core.sink.base import Sink
 
 
 class DummySink(Sink):
@@ -174,7 +174,7 @@ async def test_book_resync_bridge() -> None:
 
     async def dummy_fetch(symbol: str) -> BookSnapshot:
         return BookSnapshot(
-            provider="dummy",
+            source="dummy",
             symbol=symbol,
             symbol_raw=symbol,
             source_ts=None,
@@ -183,13 +183,14 @@ async def test_book_resync_bridge() -> None:
             asks=[],
             depth=0,
             sequence_id=200,
+            asset_class=AssetClass.EQUITY,
         )
 
     bridge = BookResyncBridge(sync=sync, fetch_snapshot=dummy_fetch, symbol="AAPL")
 
     # Simulate a feed resulting in APPLY
     delta1 = BookDelta(
-        provider="dummy",
+        source="dummy",
         symbol="AAPL",
         symbol_raw="AAPL",
         source_ts=None,
@@ -198,6 +199,7 @@ async def test_book_resync_bridge() -> None:
         asks=[],
         seq_id=150,
         prev_seq_id=None,
+        asset_class=AssetClass.EQUITY,
     )
 
     # Not resyncing, first needs snapshot to decide
@@ -214,7 +216,7 @@ async def test_book_resync_bridge() -> None:
 
     # Subsequent delta is buffered
     delta2 = BookDelta(
-        provider="dummy",
+        source="dummy",
         symbol="AAPL",
         symbol_raw="AAPL",
         source_ts=None,
@@ -223,6 +225,7 @@ async def test_book_resync_bridge() -> None:
         asks=[],
         seq_id=201,
         prev_seq_id=None,
+        asset_class=AssetClass.EQUITY,
     )
     assert bridge.feed_sync_result(SyncResult.DROP, delta2) is None
 

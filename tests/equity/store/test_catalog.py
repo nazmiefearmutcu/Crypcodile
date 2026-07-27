@@ -311,8 +311,9 @@ async def test_catalog_scan_nobucket(tmp_path: pathlib.Path) -> None:
 
 
 def test_assert_readonly_sql_rejects_copy() -> None:
-    from crocodile.core.store.catalog import assert_readonly_sql
     import pytest
+
+    from crocodile.core.store.catalog import assert_readonly_sql
 
     with pytest.raises(ValueError, match="disallowed|Only SELECT|Multi-statement|Empty"):
         assert_readonly_sql("COPY (SELECT 1) TO '/tmp/x.csv'")

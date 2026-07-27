@@ -4,7 +4,7 @@ from datetime import datetime
 
 import msgspec
 
-from crocodile.equity.schema.enums import SecurityType
+from crocodile.core.schema.enums import SecurityType
 
 
 class Security(msgspec.Struct, frozen=True):

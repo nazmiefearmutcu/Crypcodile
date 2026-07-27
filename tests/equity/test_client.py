@@ -6,9 +6,10 @@ import pathlib
 
 import polars as pl
 
-from crocodile.equity.client.client import StockodileClient
-from crocodile.equity.schema.records import BookSnapshot, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.equity.client.client import StockodileClient
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -20,20 +21,22 @@ def _trade(
     symbol: str = "alpaca:AAPL",
 ) -> Trade:
     return Trade(
-        provider=provider,
+        source=provider,
         symbol=symbol,
         symbol_raw="AAPL",
         source_ts=local_ts,
         local_ts=local_ts,
         id=str(price),
         price=price,
-        size=2.0,
+        amount=2.0,
+        asset_class=AssetClass.EQUITY,
+        side=Side.UNKNOWN,
     )
 
 
 def _snap(local_ts: int = _BASE_TS) -> BookSnapshot:
     return BookSnapshot(
-        provider="alpaca",
+        source="alpaca",
         symbol="alpaca:AAPL",
         symbol_raw="AAPL",
         source_ts=local_ts,
@@ -43,6 +46,7 @@ def _snap(local_ts: int = _BASE_TS) -> BookSnapshot:
         depth=1,
         sequence_id=1,
         is_snapshot=True,
+        asset_class=AssetClass.EQUITY,
     )
 
 
@@ -87,14 +91,16 @@ async def test_client_scan_multi_symbol_unions_results(tmp_path: pathlib.Path) -
     await sink.put(_trade(1.0, local_ts=_BASE_TS, symbol="alpaca:AAPL"))
     await sink.put(
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="alpaca:MSFT",
             symbol_raw="MSFT",
             source_ts=_BASE_TS + 500_000_000,
             local_ts=_BASE_TS + 500_000_000,
             id="msft1",
             price=2000.0,
-            size=1.0,
+            amount=1.0,
+            asset_class=AssetClass.EQUITY,
+            side=Side.UNKNOWN,
         )
     )
     await sink.flush()

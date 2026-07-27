@@ -7,6 +7,7 @@ The plan specifies:
   - Outputs are globally non-decreasing in local_ts
 """
 
+import msgspec
 import msgspec.structs
 
 from crocodile.core.replay.merge import replay
@@ -142,10 +143,27 @@ def test_the_origin_tie_break_reads_the_provider_before_the_listing_venue() -> N
     record does.
     """
     from crocodile.core.replay.merge import _sort_key
-    from crocodile.equity.schema.records import Instrument
+
+    class _PreMergeEquityInstrument(
+        msgspec.Struct, frozen=True, tag="instrument", tag_field="channel"
+    ):
+        """The equity fork's ``Instrument``, frozen here as the historical shape it is.
+
+        The retired union has no live producer, so the shape is stated at the one test
+        that needs it rather than kept alive by an import. What matters is only that it
+        names both fields, which no canonical record does.
+        """
+
+        provider: str
+        symbol: str
+        symbol_raw: str
+        local_ts: int
+        source_ts: int | None = None
+        name: str | None = None
+        exchange: str | None = None
 
     key = _sort_key(
-        Instrument(  # type: ignore[arg-type]
+        _PreMergeEquityInstrument(  # type: ignore[arg-type]
             provider="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",

@@ -8,12 +8,32 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from crocodile.equity.schema.records import Bar, Level
+from crocodile.core.schema.records import OHLCV, Level
 
 Method = str  # "uniform" | "typical" | "close"
 
 
-def reference_price(bars: Sequence[Bar]) -> float:
+def _volume_bearing(bars: Sequence[OHLCV]) -> list[OHLCV]:
+    """The bars that can contribute to a profile: real volume, and a real range.
+
+    One predicate, read twice — by :func:`volume_at_price` to build the ladder and by
+    :func:`n_volume_bars` to say how many bars it rests on. A second copy of it would let
+    the confidence describe a different sample than the one that was actually binned.
+    """
+    return [b for b in bars if b.volume > 0 and b.high >= b.low]
+
+
+def n_volume_bars(bars: Sequence[OHLCV]) -> int:
+    """How many of ``bars`` carry volume into a profile.
+
+    This is the observable the ``yahoo_1m_vap`` confidence formula is a function of.
+    ``volume_at_price`` computed the same set and threw the count away, so every synthetic
+    depth record shipped a confidence that had never been measured.
+    """
+    return len(_volume_bearing(bars))
+
+
+def reference_price(bars: Sequence[OHLCV]) -> float:
     """Last bar close — the price the ladder is centered on."""
     if not bars:
         raise ValueError("no bars to derive reference price")
@@ -21,7 +41,7 @@ def reference_price(bars: Sequence[Bar]) -> float:
 
 
 def volume_at_price(
-    bars: Sequence[Bar], *, bins: int = 40, method: Method = "uniform"
+    bars: Sequence[OHLCV], *, bins: int = 40, method: Method = "uniform"
 ) -> list[Level]:
     """Accumulate bar volume into ``bins`` price buckets across the session range.
 
@@ -32,7 +52,7 @@ def volume_at_price(
     """
     if bins < 1:
         raise ValueError("bins must be >= 1")
-    usable = [b for b in bars if b.volume > 0 and b.high >= b.low]
+    usable = _volume_bearing(bars)
     if not usable:
         return []
     lo = min(b.low for b in usable)

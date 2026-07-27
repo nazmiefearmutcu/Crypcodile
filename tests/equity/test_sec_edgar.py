@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from crocodile.equity.providers.sec_edgar import SecEdgarClient
 from crocodile.core.ratelimit import TokenBucketLimiter
-from crocodile.equity.schema.records import Filing, Fundamental
+from crocodile.core.schema.records import Filing, Fundamental
+from crocodile.equity.providers.sec_edgar import SecEdgarClient
 
 
 def test_normalize_cik() -> None:

@@ -8,12 +8,12 @@ from collections.abc import Iterable
 from typing import Any
 
 from crocodile.core.ingest.transport import AiohttpWsTransport, Transport
-from crocodile.equity.providers.base import FatalProviderError, Provider
-from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
-from crocodile.equity.schema.enums import SecurityType, Tape
-from crocodile.equity.schema.records import Bar, Quote, Record, Trade
+from crocodile.core.schema.enums import AssetClass, SecurityType, Side, Tape
+from crocodile.core.schema.records import OHLCV, Quote, Record, Trade
 from crocodile.core.sink.base import Sink
 from crocodile.core.util.time import rfc3339_to_ns
+from crocodile.equity.providers.base import FatalProviderError, Provider
+from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
 
 log = logging.getLogger(__name__)
 
@@ -159,7 +159,11 @@ class AlpacaProvider(Provider):
                 sub_msg["trades"] = self.symbols
             elif ch == "quote":
                 sub_msg["quotes"] = self.symbols
-            elif ch == "bar":
+            # Both spellings map to Alpaca's `bars` stream. `bar` and `ohlcv` were two
+            # tags for one struct and collapsed into `ohlcv`; subscribing with `ohlcv`
+            # used to match no arm here and send no `bars` subscription at all — a
+            # connector that connected, stayed connected and delivered nothing.
+            elif ch in ("bar", "ohlcv"):
                 sub_msg["bars"] = self.symbols
 
         await transport.send(json.dumps(sub_msg).encode())
@@ -197,17 +201,19 @@ class AlpacaProvider(Provider):
                         tape = Tape.UNKNOWN
 
                     yield Trade(
-                        provider=self.name,
+                        source=self.name,
                         symbol=item["S"],
                         symbol_raw=item["S"],
                         source_ts=rfc3339_to_ns(item["t"]),
                         local_ts=local_ts,
                         id=str(item["i"]) if "i" in item else "",
                         price=float(item["p"]),
-                        size=float(item["s"]),
+                        amount=float(item["s"]),
                         venue=item.get("x"),
                         conditions=item.get("c"),
                         tape=tape,
+                        asset_class=AssetClass.EQUITY,
+                        side=Side.UNKNOWN,
                     )
                 elif t_type == "q":
                     tape_val = item.get("z")
@@ -218,7 +224,7 @@ class AlpacaProvider(Provider):
 
                     is_sip = getattr(self, "feed", "iex") == "sip"
                     yield Quote(
-                        provider=self.name,
+                        source=self.name,
                         symbol=item["S"],
                         symbol_raw=item["S"],
                         source_ts=rfc3339_to_ns(item["t"]),
@@ -231,10 +237,11 @@ class AlpacaProvider(Provider):
                         is_consolidated=is_sip,
                         conditions=item.get("c"),
                         tape=tape,
+                        asset_class=AssetClass.EQUITY,
                     )
                 elif t_type == "b":
-                    yield Bar(
-                        provider=self.name,
+                    yield OHLCV(
+                        source=self.name,
                         symbol=item["S"],
                         symbol_raw=item["S"],
                         source_ts=rfc3339_to_ns(item["t"]),
@@ -246,7 +253,8 @@ class AlpacaProvider(Provider):
                         close=float(item["c"]),
                         volume=float(item["v"]),
                         vwap=float(item["vw"]) if item.get("vw") is not None else None,
-                        trade_count=int(item["n"]) if item.get("n") is not None else None,
+                        num_trades=int(item["n"]) if item.get("n") is not None else None,
+                        asset_class=AssetClass.EQUITY,
                     )
             except (FatalProviderError, ValueError):
                 raise

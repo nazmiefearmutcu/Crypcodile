@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING
 
 from crocodile.core.ingest.deadletter import DeadLetterQueue
 from crocodile.core.ingest.transport import Transport
-from crocodile.equity.schema.records import Record
+from crocodile.core.schema.records import Record
 
 if TYPE_CHECKING:
-    from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
     from crocodile.core.sink.base import Sink
+    from crocodile.equity.reference.registry import Instrument, InstrumentRegistry
 
 log = logging.getLogger(__name__)
 

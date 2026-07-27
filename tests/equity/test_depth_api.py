@@ -16,24 +16,41 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
 
-from crocodile.equity.schema.records import DepthProfile
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.records import DepthProfile
 
 pytestmark = pytest.mark.timeout(120)
 
 
 def _profile(*, is_synthetic: bool) -> DepthProfile:
+    """A canned profile on either side of the synthetic/real line.
+
+    Built through ``provenance_fields`` rather than by stating a tail: ``is_synthetic``
+    is derived from ``prov`` now, so a hand-written tail could make the flag and the
+    basis disagree and the endpoint would report the disagreement as fact.
+    """
+    basis, inputs = (
+        ("yahoo_1m_vap", {"n_volume_bars": 195})
+        if is_synthetic
+        else ("alpaca_l1", {"n_quoted_sides": 2})
+    )
+    tail = provenance_fields(basis, inputs)
     return DepthProfile(
-        provider="synthetic-yahoo" if is_synthetic else "alpaca",
+        source="synthetic-yahoo" if is_synthetic else "alpaca",
         symbol="AAPL",
         symbol_raw="AAPL",
         local_ts=1_700_000_000_000_000_000,
+        asset_class=AssetClass.EQUITY,
+        source_ts=None,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
         bids=[(189.5, 120.0), (189.4, 80.0)],
         asks=[(190.5, 110.0), (190.6, 60.0)],
         reference_price=190.0,
-        basis="vap" if is_synthetic else "l1",
-        is_synthetic=is_synthetic,
         depth=2,
-        source_ts=None,
     )
 
 
@@ -72,7 +89,7 @@ def test_depth_synthetic_includes_warning(
     assert resp.status_code == 200
     body = resp.json()
     assert body["symbol"] == "AAPL"
-    assert body["basis"] == "vap"
+    assert body["basis"] == "yahoo_1m_vap"
     assert body["is_synthetic"] is True
     assert body["reference_price"] == 190.0
     assert body["depth"] == 2

@@ -16,7 +16,11 @@ sys.modules["yfinance"] = mock_yf
 from collections.abc import Generator  # noqa: E402
 from typing import Any  # noqa: E402
 
-from crocodile.equity.legacy.mcp_server import AsyncWeb3, get_base_market_data, get_onchain_price  # noqa: E402
+from crocodile.equity.legacy.mcp_server import (  # noqa: E402
+    AsyncWeb3,
+    get_base_market_data,
+    get_onchain_price,
+)
 
 if orig_yf is not None:
     sys.modules["yfinance"] = orig_yf

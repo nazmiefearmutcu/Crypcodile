@@ -9,6 +9,8 @@ import polars as pl
 import pytest
 
 from crocodile.core.replay.orderbook import BookGap
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import OHLCV, BookDelta, BookSnapshot, Quote, Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.equity.resample import (
     parse_interval,
@@ -21,7 +23,6 @@ from crocodile.equity.resample import (
     resample_trades_df,
     resample_trades_to_bars,
 )
-from crocodile.equity.schema.records import Bar, BookDelta, BookSnapshot, Quote, Trade
 
 
 def test_parse_interval() -> None:
@@ -39,34 +40,40 @@ def test_resample_trades_to_bars() -> None:
     """Test stream resampling of Trades to Bars."""
     trades = [
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
             local_ts=100_000_000,
             id="1",
             price=150.0,
-            size=10.0,
+            amount=10.0,
+            asset_class=AssetClass.EQUITY,
+            side=Side.UNKNOWN,
         ),
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
             local_ts=500_000_000,
             id="2",
             price=152.0,
-            size=20.0,
+            amount=20.0,
+            asset_class=AssetClass.EQUITY,
+            side=Side.UNKNOWN,
         ),
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
             local_ts=1_200_000_000,
             id="3",
             price=151.0,
-            size=15.0,
+            amount=15.0,
+            asset_class=AssetClass.EQUITY,
+            side=Side.UNKNOWN,
         ),
     ]
 
@@ -81,7 +88,7 @@ def test_resample_trades_to_bars() -> None:
     assert bars[0].close == 152.0
     assert bars[0].volume == 30.0
     assert bars[0].vwap == pytest.approx((150.0 * 10.0 + 152.0 * 20.0) / 30.0)
-    assert bars[0].trade_count == 2
+    assert bars[0].num_trades == 2
 
     # Second bar (1s to 2s bucket)
     assert bars[1].local_ts == 1_000_000_000
@@ -91,14 +98,14 @@ def test_resample_trades_to_bars() -> None:
     assert bars[1].close == 151.0
     assert bars[1].volume == 15.0
     assert bars[1].vwap == 151.0
-    assert bars[1].trade_count == 1
+    assert bars[1].num_trades == 1
 
 
 def test_resample_quotes_to_bars() -> None:
     """Test stream resampling of Quotes to Bars."""
     quotes = [
         Quote(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -107,9 +114,10 @@ def test_resample_quotes_to_bars() -> None:
             bid_sz=100.0,
             ask_px=151.0,
             ask_sz=200.0,
+            asset_class=AssetClass.EQUITY,
         ),
         Quote(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -118,6 +126,7 @@ def test_resample_quotes_to_bars() -> None:
             bid_sz=150.0,
             ask_px=152.0,
             ask_sz=250.0,
+            asset_class=AssetClass.EQUITY,
         ),
     ]
 
@@ -131,14 +140,14 @@ def test_resample_quotes_to_bars() -> None:
     assert bars[0].low == 150.0
     assert bars[0].volume == 0.0
     assert bars[0].vwap == 150.5
-    assert bars[0].trade_count == 2
+    assert bars[0].num_trades == 2
 
 
 def test_resample_bars_to_bars() -> None:
     """Test resampling of lower resolution bars to higher resolution bars."""
     bars_1s = [
-        Bar(
-            provider="alpaca",
+        OHLCV(
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -150,10 +159,11 @@ def test_resample_bars_to_bars() -> None:
             close=102.0,
             volume=1000.0,
             vwap=102.0,
-            trade_count=10,
+            num_trades=10,
+            asset_class=AssetClass.EQUITY,
         ),
-        Bar(
-            provider="alpaca",
+        OHLCV(
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -165,10 +175,11 @@ def test_resample_bars_to_bars() -> None:
             close=102.5,
             volume=2000.0,
             vwap=102.2,
-            trade_count=20,
+            num_trades=20,
+            asset_class=AssetClass.EQUITY,
         ),
-        Bar(
-            provider="alpaca",
+        OHLCV(
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -180,7 +191,8 @@ def test_resample_bars_to_bars() -> None:
             close=103.5,
             volume=1500.0,
             vwap=103.2,
-            trade_count=15,
+            num_trades=15,
+            asset_class=AssetClass.EQUITY,
         ),
     ]
 
@@ -196,7 +208,7 @@ def test_resample_bars_to_bars() -> None:
     assert bars_1m[0].close == 102.5
     assert bars_1m[0].volume == 3000.0
     assert bars_1m[0].vwap == pytest.approx((102.0 * 1000.0 + 102.2 * 2000.0) / 3000.0)
-    assert bars_1m[0].trade_count == 30
+    assert bars_1m[0].num_trades == 30
 
     # Second 1m bar (includes 60s bar)
     assert bars_1m[1].local_ts == 60_000_000_000
@@ -206,16 +218,16 @@ def test_resample_bars_to_bars() -> None:
     assert bars_1m[1].close == 103.5
     assert bars_1m[1].volume == 1500.0
     assert bars_1m[1].vwap == 103.2
-    assert bars_1m[1].trade_count == 15
+    assert bars_1m[1].num_trades == 15
 
 
 def test_resample_trades_df() -> None:
     """Test Polars-based trade resampling."""
     df = pl.DataFrame(
         [
-            {"local_ts": 100_000_000, "price": 150.0, "size": 10.0, "symbol": "AAPL"},
-            {"local_ts": 500_000_000, "price": 152.0, "size": 20.0, "symbol": "AAPL"},
-            {"local_ts": 1_200_000_000, "price": 151.0, "size": 15.0, "symbol": "AAPL"},
+            {"local_ts": 100_000_000, "price": 150.0, "amount": 10.0, "symbol": "AAPL"},
+            {"local_ts": 500_000_000, "price": 152.0, "amount": 20.0, "symbol": "AAPL"},
+            {"local_ts": 1_200_000_000, "price": 151.0, "amount": 15.0, "symbol": "AAPL"},
         ]
     )
     res = resample_trades_df(df, "1s")
@@ -297,7 +309,7 @@ def test_resample_book_snapshots() -> None:
     """Test generating order book snapshots from BookSnapshot and BookDelta stream."""
     records: list[BookSnapshot | BookDelta] = [
         BookSnapshot(
-            provider="iex",
+            source="iex",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -305,9 +317,10 @@ def test_resample_book_snapshots() -> None:
             bids=[(150.0, 10.0), (149.0, 20.0)],
             asks=[(151.0, 15.0), (152.0, 25.0)],
             depth=4,
+            asset_class=AssetClass.EQUITY,
         ),
         BookDelta(
-            provider="iex",
+            source="iex",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -315,9 +328,10 @@ def test_resample_book_snapshots() -> None:
             bids=[(150.0, 12.0)],  # update bid size
             asks=[(151.0, 0.0)],  # remove ask price 151
             seq_id=1,
+            asset_class=AssetClass.EQUITY,
         ),
         BookDelta(
-            provider="iex",
+            source="iex",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -325,9 +339,10 @@ def test_resample_book_snapshots() -> None:
             bids=[(149.0, 0.0)],  # remove bid price 149
             asks=[(153.0, 30.0)],  # add ask price 153
             seq_id=2,
+            asset_class=AssetClass.EQUITY,
         ),
         BookDelta(
-            provider="iex",
+            source="iex",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -335,6 +350,7 @@ def test_resample_book_snapshots() -> None:
             bids=[],
             asks=[],
             seq_id=3,
+            asset_class=AssetClass.EQUITY,
         ),
     ]
 
@@ -360,22 +376,28 @@ def test_resample_unsorted_streams() -> None:
     # Test that ValueError is raised for unsorted streams
     trades = [
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=500_000_000,
             id="1",
             price=150.0,
-            size=10.0,
+            amount=10.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            side=Side.UNKNOWN,
         ),
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=100_000_000,
             id="2",
             price=152.0,
-            size=20.0,
+            amount=20.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            side=Side.UNKNOWN,
         ),  # unsorted!
     ]
     with pytest.raises(ValueError):
@@ -383,7 +405,7 @@ def test_resample_unsorted_streams() -> None:
 
     quotes = [
         Quote(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=500_000_000,
@@ -391,9 +413,11 @@ def test_resample_unsorted_streams() -> None:
             bid_sz=10.0,
             ask_px=151.0,
             ask_sz=10.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
         ),
         Quote(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=100_000_000,
@@ -401,6 +425,8 @@ def test_resample_unsorted_streams() -> None:
             bid_sz=20.0,
             ask_px=153.0,
             ask_sz=10.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
         ),  # unsorted!
     ]
     with pytest.raises(ValueError):
@@ -413,31 +439,40 @@ def test_resample_timestamp_units() -> None:
     base_ms = 1782060000000
     trades = [
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=base_ms + 100_000,
             id="1",
             price=150.0,
-            size=10.0,
+            amount=10.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            side=Side.UNKNOWN,
         ),  # base + 100s
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=base_ms + 250_000,
             id="2",
             price=152.0,
-            size=20.0,
+            amount=20.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            side=Side.UNKNOWN,
         ),  # base + 250s
         Trade(
-            provider="alpaca",
+            source="alpaca",
             symbol="AAPL",
             symbol_raw="AAPL",
             local_ts=base_ms + 350_000,
             id="3",
             price=151.0,
-            size=15.0,
+            amount=15.0,
+            asset_class=AssetClass.EQUITY,
+            source_ts=None,
+            side=Side.UNKNOWN,
         ),  # base + 350s
     ]
     # interval "5m" = 300s. 300s in ms is 300,000 ms.
@@ -453,7 +488,7 @@ def test_resample_book_snapshots_gaps() -> None:
     """Test that BookGap is raised when L2 stream seq_id is discontinuous."""
     records: list[BookSnapshot | BookDelta] = [
         BookSnapshot(
-            provider="iex",
+            source="iex",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
@@ -462,16 +497,18 @@ def test_resample_book_snapshots_gaps() -> None:
             asks=[(151.0, 15.0)],
             depth=2,
             sequence_id=0,
+            asset_class=AssetClass.EQUITY,
         ),
         BookDelta(
-            provider="iex",
+            source="iex",
             symbol="AAPL",
             symbol_raw="AAPL",
             source_ts=None,
             local_ts=500_000_000,
             bids=[(150.0, 12.0)],
             asks=[],
-            seq_id=5,  # gap! expected 1
+            seq_id=5,
+            asset_class=AssetClass.EQUITY,  # gap! expected 1
         ),
     ]
 
@@ -483,15 +520,16 @@ def test_resample_ohlcv_catalog() -> None:
     """Test resampling from Catalog / DuckDB."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         # Create mock parquet files mimicking the hive partition layout:
-        # provider=alpaca/channel=trade/date=2026-06-21/bucket=42/part-0.parquet
-        data_path = Path(tmp_dir) / "provider=alpaca/channel=trade/date=2026-06-21/part-0.parquet"
+        # source=alpaca/channel=trade/date=2026-06-21/bucket=42/part-0.parquet
+        data_path = Path(tmp_dir) / "source=alpaca/channel=trade/date=2026-06-21/part-0.parquet"
         data_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Write trade records to parquet using Polars
         trade_df = pl.DataFrame(
             [
                 {
-                    "provider": "alpaca",
+                    "source": "alpaca",
+                    "asset_class": "equity",
                     "channel": "trade",
                     "symbol": "AAPL",
                     "symbol_raw": "AAPL",
@@ -499,10 +537,11 @@ def test_resample_ohlcv_catalog() -> None:
                     "local_ts": 1782060000000000000 + 100_000_000,  # 2026-06-21 + 0.1s
                     "id": "1",
                     "price": 150.0,
-                    "size": 10.0,
+                    "amount": 10.0,
                 },
                 {
-                    "provider": "alpaca",
+                    "source": "alpaca",
+                    "asset_class": "equity",
                     "channel": "trade",
                     "symbol": "AAPL",
                     "symbol_raw": "AAPL",
@@ -510,7 +549,7 @@ def test_resample_ohlcv_catalog() -> None:
                     "local_ts": 1782060000000000000 + 500_000_000,  # 2026-06-21 + 0.5s
                     "id": "2",
                     "price": 152.0,
-                    "size": 20.0,
+                    "amount": 20.0,
                 },
             ]
         )

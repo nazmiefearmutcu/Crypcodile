@@ -6,9 +6,10 @@ import pathlib
 
 from typer.testing import CliRunner
 
-from crocodile.equity.legacy.cli import app
-from crocodile.equity.schema.records import BookSnapshot, Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import OHLCV, BookSnapshot, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.equity.legacy.cli import app
 
 _BASE_TS = 1_700_000_000_000_000_000  # 2023-11-14
 
@@ -19,19 +20,21 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
     for price in [100.0, 200.0, 300.0]:
         await sink.put(
             Trade(
-                provider="alpaca",
+                source="alpaca",
                 symbol="alpaca:AAPL",
                 symbol_raw="AAPL",
                 source_ts=_BASE_TS,
                 local_ts=_BASE_TS,
                 id=str(price),
                 price=price,
-                size=1.0,
+                amount=1.0,
+                asset_class=AssetClass.EQUITY,
+                side=Side.UNKNOWN,
             )
         )
     await sink.put(
         BookSnapshot(
-            provider="alpaca",
+            source="alpaca",
             symbol="alpaca:AAPL",
             symbol_raw="AAPL",
             source_ts=_BASE_TS,
@@ -41,6 +44,7 @@ async def _write_fixtures(data_dir: pathlib.Path) -> None:
             depth=1,
             sequence_id=1,
             is_snapshot=True,
+            asset_class=AssetClass.EQUITY,
         )
     )
     await sink.flush()
@@ -207,3 +211,32 @@ async def test_cli_indicators_exits_zero(tmp_path: pathlib.Path) -> None:
     assert result.exit_code == 0, f"stdout:\n{result.output}"
     assert "sma" in result.output
 
+
+
+def test_the_sparkline_can_read_a_bar_under_either_tag() -> None:
+    """``get_record_value`` had an arm for ``bar`` and none for ``ohlcv``.
+
+    Stooq is the one provider that always emitted ``ohlcv``, so its records fell through
+    to ``return None`` and the live sparkline drew nothing — not an error, not a warning,
+    an empty line. The two tags are one struct now and both must read the close.
+    """
+    from crocodile.equity.legacy.cli import VALID_CHANNELS, get_record_value
+
+    bar = OHLCV(
+        source="stooq",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        local_ts=1_700_000_000_000_000_000,
+        source_ts=None,
+        asset_class=AssetClass.EQUITY,
+        interval="1d",
+        open=1.0,
+        high=3.0,
+        low=0.5,
+        close=2.5,
+        volume=10.0,
+    )
+
+    assert get_record_value(bar) == 2.5
+    assert type(bar).__struct_config__.tag == "ohlcv"
+    assert "ohlcv" in VALID_CHANNELS, "the channel a stooq collect run has to be able to name"

@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
+from crocodile.core.schema.enums import SecurityType
 from crocodile.equity.reference.models import Security, TickerMapping
-from crocodile.equity.schema.enums import SecurityType
 
 
 def _now_iso() -> str:

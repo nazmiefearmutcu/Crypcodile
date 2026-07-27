@@ -3,9 +3,16 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from crocodile.equity.depth.vap import reference_price, split_ladder, volume_at_price
+from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.provenance import provenance_fields
+from crocodile.core.schema.records import DepthProfile
+from crocodile.equity.depth.vap import (
+    n_volume_bars,
+    reference_price,
+    split_ladder,
+    volume_at_price,
+)
 from crocodile.equity.providers.yahoo import YahooClient
-from crocodile.equity.schema.records import DepthProfile
 
 
 class SyntheticYahooDepthSource:
@@ -34,9 +41,15 @@ class SyntheticYahooDepthSource:
         ref = reference_price(bars)
         profile = volume_at_price(bars, bins=self._bins, method=self._method)
         bids, asks = split_ladder(profile, ref, top_n=self._top_n)
+        # The tail is built rather than stated: `prov`, `prov_basis` and `prov_inputs` come
+        # from the registration and `prov_confidence` from the registered formula, so the
+        # number cannot drift from the sample the ladder was actually binned out of.
+        tail = provenance_fields("yahoo_1m_vap", {"n_volume_bars": n_volume_bars(bars)})
         return DepthProfile(
-            provider="synth", symbol=f"synth:{symbol.upper()}", symbol_raw=symbol.upper(),
-            local_ts=time.time_ns(), bids=bids, asks=asks, reference_price=ref,
-            basis="yahoo_1m_vap", is_synthetic=True, depth=len(bids) + len(asks),
-            source_ts=bars[-1].local_ts,
+            source="synth", symbol=f"synth:{symbol.upper()}", symbol_raw=symbol.upper(),
+            local_ts=time.time_ns(), asset_class=AssetClass.EQUITY,
+            bids=bids, asks=asks, reference_price=ref,
+            depth=len(bids) + len(asks), source_ts=bars[-1].local_ts,
+            prov=tail.prov, prov_basis=tail.prov_basis,
+            prov_confidence=tail.prov_confidence, prov_inputs=tail.prov_inputs,
         )
