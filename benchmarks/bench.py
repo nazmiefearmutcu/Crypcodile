@@ -16,6 +16,13 @@ A) NORMALIZE    feed a realistic raw Deribit trades message through the real
                 ``normalize_message`` entrypoint and count emitted records.
 B) WRITE        synthesize Trade records and write them through the real
                 ``ParquetSink`` (zstd-5); report on-disk size + compression.
+                Canonical records, not the retired crypto union: that union's
+                row is four columns narrower than the one the product writes,
+                so timing it measured a file the sink no longer produces — and
+                pointed at a real lake root it would have dropped a second file
+                schema into one partition, which the sink's own docstring says
+                must not happen. The JSON baseline below mirrors the same
+                columns for the same reason.
 C) QUERY        time representative DuckDB aggregates via ``CrypcodileClient``.
 D) RESAMPLE     resample stored trades to 1m OHLCV bars (``resample_ohlcv``).
 E) REPLAY       k-way replay of the stored trade partitions.
@@ -44,8 +51,8 @@ import pyarrow
 from crocodile.crypto.client.client import CrypcodileClient
 from crocodile.crypto.exchanges.deribit.normalize import normalize_message
 from crocodile.core.resample.ohlcv import resample_ohlcv
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 
@@ -130,11 +137,12 @@ def _make_trade(i: int, rng: random.Random, px_state: list[float]) -> Trade:
     # within one UTC date partition.
     ts = BASE_TS_NS + i * 5_000_000
     return Trade(
-        exchange=EXCHANGE,
+        source=EXCHANGE,
         symbol=SYMBOL,
         symbol_raw=SYMBOL_RAW,
-        exchange_ts=ts,
+        source_ts=ts,
         local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
         id=str(i),
         price=price,
         amount=amount,
@@ -212,11 +220,16 @@ def bench_write(data_dir: Path) -> tuple[dict, list[Trade]]:
         raw_bytes += len(
             enc(
                 {
-                    "exchange": t.exchange,
+                    "source": t.source,
                     "symbol": t.symbol,
                     "symbol_raw": t.symbol_raw,
-                    "exchange_ts": t.exchange_ts,
+                    "asset_class": t.asset_class.value,
+                    "source_ts": t.source_ts,
                     "local_ts": t.local_ts,
+                    "prov": t.prov.value,
+                    "prov_basis": t.prov_basis,
+                    "prov_confidence": t.prov_confidence,
+                    "prov_inputs": t.prov_inputs,
                     "id": t.id,
                     "price": t.price,
                     "amount": t.amount,

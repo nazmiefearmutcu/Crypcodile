@@ -23,7 +23,7 @@ from crocodile.crypto.exchanges.base_onchain.connector import (  # noqa: E402
     BaseOnchainConnector,
 )
 from crocodile.crypto.instruments.registry import InstrumentRegistry  # noqa: E402
-from crocodile.core.schema.legacy.records import Record  # noqa: E402
+from crocodile.core.schema.records import Record  # noqa: E402
 from crocodile.core.sink.base import Sink  # noqa: E402
 
 logging.basicConfig(

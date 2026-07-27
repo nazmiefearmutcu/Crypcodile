@@ -11,7 +11,7 @@ Usage::
 The data lake layout after collection::
 
     data/
-      exchange=deribit/
+      source=deribit/
         channel=trade/
           date=YYYY-MM-DD/
             bucket=<0-127>/

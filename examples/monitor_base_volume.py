@@ -16,8 +16,8 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from crocodile.core.schema.legacy.enums import Side
-from crocodile.core.schema.legacy.records import Trade
+from crocodile.core.schema.enums import AssetClass, Side
+from crocodile.core.schema.records import Trade
 
 def main():
     rpc_url = os.getenv("BASE_RPC_URL", "https://mainnet.base.org")
@@ -105,11 +105,12 @@ def main():
             ts = int(datetime.utcnow().timestamp())
             
         trade = Trade(
-            exchange="base_onchain",
+            source="base_onchain",
             symbol="base_onchain:WETH-USDC",
             symbol_raw="WETH-USDC",
-            exchange_ts=ts * 1_000_000_000,
+            source_ts=ts * 1_000_000_000,
             local_ts=int(datetime.utcnow().timestamp() * 1_000_000_000),
+            asset_class=AssetClass.CRYPTO,
             id=f"{lg['transactionHash'].hex()}-{lg['logIndex']}",
             price=price,
             amount=abs_base,
