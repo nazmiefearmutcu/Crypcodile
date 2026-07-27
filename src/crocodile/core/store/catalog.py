@@ -50,7 +50,7 @@ import datetime
 import glob as _glob
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -371,7 +371,9 @@ class Catalog:
     # Public API
     # ------------------------------------------------------------------
 
-    def query(self, sql: str, *, readonly: bool = False) -> pl.DataFrame:
+    def query(
+        self, sql: str, *, readonly: bool = False, params: Sequence[object] | None = None
+    ) -> pl.DataFrame:
         """Execute arbitrary SQL against registered channel views.
 
         Views available mirror the channel names (e.g. ``trade``,
@@ -383,6 +385,18 @@ class Catalog:
                 first. Off by default so local callers — the CLI, the GUI,
                 analytics — keep the unrestricted access both forks gave them;
                 network-facing surfaces such as the MCP server opt in.
+            params: Values bound to ``?`` placeholders in *sql*.
+
+                For any caller that puts a *value* into a query. Interpolating
+                one with an f-string is how a free-text REST parameter became
+                able to end a string literal and continue the statement — which
+                is what ``sequencer-latency`` did with its ``exchange``, on a
+                public route. A placeholder cannot be read as syntax, so the
+                value stays a value however it is spelled.
+
+                Not a defence for the ``query`` capability, whose whole SQL is
+                the caller's; that one is held by ``readonly`` instead. The two
+                guard different things and neither substitutes for the other.
 
         Returns:
             A Polars DataFrame with the query result.
@@ -394,7 +408,7 @@ class Catalog:
             assert_readonly_sql(sql)
         # Refresh views so newly written files are picked up.
         self._refresh_views()
-        result = self._conn.execute(sql)
+        result = self._conn.execute(sql, list(params)) if params else self._conn.execute(sql)
         return result.pl()
 
     def scan(

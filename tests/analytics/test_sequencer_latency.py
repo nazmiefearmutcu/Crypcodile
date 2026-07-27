@@ -100,6 +100,32 @@ async def test_sequencer_latency_calculations(tmp_path: pathlib.Path):
     assert df["max_seconds"][1] == pytest.approx(0.9)
 
 
+def test_a_crafted_exchange_cannot_end_the_string_it_sits_in(
+    latency_lake: pathlib.Path,
+) -> None:
+    """`exchange` is a free-text query parameter on the public REST route.
+
+    It used to be f-string-interpolated into ``WHERE source = '{exchange}'``, so a value
+    carrying a quote could close the literal and continue the statement. The lake here
+    holds rows for one exchange; a working injection would make the predicate true for
+    all of them, which is the one answer this must never give.
+
+    A failed injection and a placeholder both return nothing, so an empty result proves
+    little on its own — the assertion that separates them is that the *same* payload
+    passed as a plain name is also empty while the honest name still answers.
+    """
+    from crocodile.crypto.analytics.sequencer_latency import calculate_sequencer_latency
+
+    catalog = Catalog(latency_lake)
+    assert calculate_sequencer_latency(catalog, "' OR 1=1 --").is_empty()
+    assert calculate_sequencer_latency(catalog, "'; DROP TABLE book_ticker; --").is_empty()
+
+    # The table the injection tried to drop is still there, and the honest name still
+    # answers over it — an injection that silently emptied the lake would otherwise look
+    # exactly like a placeholder doing its job.
+    assert len(calculate_sequencer_latency(catalog, _EXCHANGE)) == 2
+
+
 def test_client_calculate_sequencer_latency(latency_lake: pathlib.Path) -> None:
     client = CrypcodileClient(latency_lake)
     df = client.calculate_sequencer_latency(_EXCHANGE)

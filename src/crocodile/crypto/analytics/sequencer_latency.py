@@ -31,8 +31,9 @@ def calculate_sequencer_latency(catalog: Catalog, exchange: str = "base_onchain"
         catalog.refresh_views()
         # Query source_ts and local_ts from book_ticker table
         df = catalog.query(
-            f"SELECT local_ts, source_ts FROM book_ticker "
-            f"WHERE source = '{exchange}' AND source_ts IS NOT NULL ORDER BY source_ts"
+            "SELECT local_ts, source_ts FROM book_ticker "
+            "WHERE source = ? AND source_ts IS NOT NULL ORDER BY source_ts",
+            params=(exchange,),
         )
     except Exception:
         df = pl.DataFrame()
@@ -41,8 +42,9 @@ def calculate_sequencer_latency(catalog: Catalog, exchange: str = "base_onchain"
         try:
             # Fallback to trade table
             df = catalog.query(
-                f"SELECT local_ts, source_ts FROM trade "
-                f"WHERE source = '{exchange}' AND source_ts IS NOT NULL ORDER BY source_ts"
+                "SELECT local_ts, source_ts FROM trade "
+                "WHERE source = ? AND source_ts IS NOT NULL ORDER BY source_ts",
+                params=(exchange,),
             )
         except Exception:
             df = pl.DataFrame()
