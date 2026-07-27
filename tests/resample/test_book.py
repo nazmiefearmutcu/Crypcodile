@@ -5,8 +5,13 @@ Acceptance criteria (from the plan):
     of BookSnapshot + BookDelta records, reconstructs the book via the M2
     OrderBook engine, and emits a BookSnapshot at fixed wall-clock intervals
     (keyed on ``local_ts``).
-  - Each emitted snapshot captures the book state at the *first* ``local_ts``
-    that reaches or exceeds the next bucket boundary.
+  - A snapshot stamped at boundary *B* reflects exactly the records with
+    ``local_ts <= B``. This criterion used to read "the book state at the *first*
+    ``local_ts`` that reaches or exceeds the next bucket boundary", which is the
+    lookahead-biased rule: it puts a record stamped after *B* into the bar
+    labelled *B*. The equity fork of this resampler emitted before applying and
+    the two were merged onto that ordering; see
+    ``test_a_boundary_holds_nothing_stamped_after_it`` for the measurement.
   - ``depth`` field equals min(len(bids) + len(asks), 2*top_n) up to the actual
     book depth.
   - Bids are ordered descending by price; asks ascending (canonical order).
@@ -23,7 +28,9 @@ import pathlib
 
 import pytest
 
-from crocodile.core.resample.book import resample_book_snapshots
+from crocodile.core.errors import ProvenanceError
+from crocodile.core.replay.orderbook import OrderBook
+from crocodile.core.resample.book import _capture_snapshot, resample_book_snapshots
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import BookDelta, BookSnapshot
@@ -378,14 +385,20 @@ def test_a_resampled_snapshot_does_not_claim_to_be_venue_reported() -> None:
     assert snap.prov_inputs == ["book_snapshot", "book_delta"]
 
 
-def test_a_resampled_snapshot_scores_its_own_lookahead() -> None:
-    """The confidence is the one thing about this record that is measured.
+def test_a_quiet_interval_reports_the_book_that_held_during_it() -> None:
+    """Migrated from ``test_a_resampled_snapshot_scores_its_own_lookahead``.
 
-    An emitted snapshot is stamped at a bucket boundary but is captured *after*
-    the triggering record has been applied, so it can contain updates that
-    happened after the timestamp it carries. The delta below lands exactly on
-    the 1s boundary — no lookahead — while the 10s one drags four earlier
-    boundaries along with it and each of those reports a book from the future.
+    Same stream, same subject — what a run of boundaries dragged along by one late
+    record contains — and the opposite answer, because the ordering changed. It used
+    to assert ``[0.0, 0.0, 0.0, 0.0, 1.0]``: four bars that each reported the book as
+    it stood *after* the 5s delta, labelled with the confidence that said so and
+    written to the lake anyway. A bar scoring its own wrongness is still a wrong bar.
+
+    Now the four quiet boundaries carry the state that actually held during them, so
+    the bid is 5.0 until the delta lands and 10.0 only from 5s on. The confidence went
+    with the formula: ``book_resample`` is a declared constant 1.0, argued in the
+    registry, because a capture that cannot contain the future is exact at its own
+    timestamp.
     """
     on_the_boundary = list(
         resample_book_snapshots(
@@ -395,15 +408,94 @@ def test_a_resampled_snapshot_scores_its_own_lookahead() -> None:
     )
     assert [s.prov_confidence for s in on_the_boundary] == [1.0]
 
-    stale = list(
+    quiet = list(
         resample_book_snapshots(
             [
                 _make_snapshot(local_ts=0, seq=1),
-                _make_delta(local_ts=5 * _1S_NS, seq_id=2),
+                _make_delta(local_ts=5 * _1S_NS, seq_id=2, bids=[(100.0, 10.0)]),
             ],
             interval_ns=_1S_NS,
         )
     )
-    # Boundaries 1s..5s, all captured from the state after the 5s delta.
-    assert [s.local_ts for s in stale] == [i * _1S_NS for i in range(1, 6)]
-    assert [s.prov_confidence for s in stale] == [0.0, 0.0, 0.0, 0.0, 1.0]
+
+    assert [s.local_ts for s in quiet] == [i * _1S_NS for i in range(1, 6)]
+    assert [dict(s.bids)[100.0] for s in quiet] == [5.0, 5.0, 5.0, 5.0, 10.0]
+    assert [s.prov_confidence for s in quiet] == [1.0] * 5
+
+
+def test_a_boundary_holds_nothing_stamped_after_it() -> None:
+    """The bar labelled 10:00:00 must not know what the book did at 10:00:00.200.
+
+    This is the whole collision, in one record. ``core`` applied the boundary-crossing
+    record and *then* emitted every boundary at or below it; ``equity`` emitted the
+    boundaries below the record first. On the stream below — a 120-lot bid at the touch,
+    pulled to 5 two hundred milliseconds into the next bucket — the 1s boundary reported:
+
+        apply-then-emit (was core)  bids=[(150.00, 5.0)]    prov_confidence=0.8
+        emit-then-apply (was equity) bids=[(150.00, 120.0)]  prov_confidence=1.0
+
+    24x the visible top-of-book depth, in the one direction that cannot be traded: a
+    strategy reading the 10:00:00 snapshot already knew the bid was about to be pulled.
+    That is lookahead bias, which is how a backtest reports a return nobody could have
+    earned, so this is not a stylistic difference between two forks — one was wrong.
+
+    Revert the two statements in ``resample_book_snapshots`` and this test reports the
+    5.0.
+    """
+    records: list[BookSnapshot | BookDelta] = [
+        _make_snapshot(
+            local_ts=200_000_000, seq=1, bids=[(150.00, 100.0)], asks=[(150.05, 100.0)]
+        ),
+        _make_delta(local_ts=900_000_000, seq_id=2, prev_seq_id=1, bids=[(150.00, 120.0)]),
+        # 200 ms past the 1s boundary: the bid is pulled from 120 to 5.
+        _make_delta(local_ts=1_200_000_000, seq_id=3, prev_seq_id=2, bids=[(150.00, 5.0)]),
+        _make_delta(local_ts=2_000_000_000, seq_id=4, prev_seq_id=3, asks=[(150.05, 90.0)]),
+    ]
+
+    at_one_second, at_two_seconds = list(
+        resample_book_snapshots(records, interval_ns=_1S_NS, top_n=None)
+    )
+
+    assert at_one_second.local_ts == _1S_NS
+    assert at_one_second.bids == [(150.00, 120.0)]
+    assert at_one_second.asks == [(150.05, 100.0)]
+    # The 1.2s pull belongs to the 2s bar, where it happened.
+    assert at_two_seconds.bids == [(150.00, 5.0)]
+    assert at_two_seconds.asks == [(150.05, 90.0)]
+
+
+def test_a_capture_refuses_to_stamp_a_boundary_over_a_later_update() -> None:
+    """The tripwire that replaced the ``lookahead_ns`` confidence term.
+
+    The old formula scored a biased capture and emitted it; four bars reporting a book
+    that would not exist for another five seconds went into the lake at
+    ``prov_confidence=0.0`` and nothing raised. Refusing to build the record is the loud
+    form of the same observation, and it is what stops a future reordering of
+    ``resample_book_snapshots`` from being a silent one.
+
+    Unreachable through the public function by construction, which is the point: the
+    guard is on the ordering, so it is exercised where the ordering is bypassed.
+    """
+    book = OrderBook()
+    snap = _make_snapshot(local_ts=0, seq=1)
+    book.apply(snap)
+
+    with pytest.raises(ProvenanceError, match="lookahead"):
+        _capture_snapshot(book, snap, _1S_NS, _1S_NS + 200_000_000, None)
+
+    on_time = _capture_snapshot(book, snap, _1S_NS, _1S_NS, None)
+    assert on_time.local_ts == _1S_NS
+    assert on_time.prov_confidence == 1.0
+
+
+def test_the_equity_import_path_reaches_this_exact_function() -> None:
+    """One rule, one function — asserted rather than left to a docstring.
+
+    ``crocodile.equity.resample`` re-exported a second ``resample_book_snapshots`` with
+    this signature and a different boundary rule. Two implementations of one algorithm
+    kept in two places, drifting, is the merge's origin story; an identity assertion is
+    the cheapest thing that notices a third copy arriving under the old name.
+    """
+    from crocodile.equity.resample import resample_book_snapshots as equity_entry
+
+    assert equity_entry is resample_book_snapshots

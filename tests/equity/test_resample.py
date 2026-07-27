@@ -370,7 +370,15 @@ def test_resample_bars_df_reports_no_count_rather_than_one_per_bar() -> None:
 
 
 def test_resample_book_snapshots() -> None:
-    """Test generating order book snapshots from BookSnapshot and BookDelta stream."""
+    """Test generating order book snapshots from BookSnapshot and BookDelta stream.
+
+    This fixture is the one that separated the two forked resamplers, and it survives
+    unchanged because its answer is the one that won. Against the crypto rule — apply the
+    boundary-crossing record, then emit every boundary at or below it — the 1s boundary
+    reported bids ``[(150, 12)]`` and asks ``[(152, 25), (153, 30)]``, having already folded
+    in the 1.2s delta. There is one ``resample_book_snapshots`` now, in
+    ``crocodile.core.resample.book``, and this import reaches it.
+    """
     records: list[BookSnapshot | BookDelta] = [
         BookSnapshot(
             source="iex",

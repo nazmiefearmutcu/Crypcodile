@@ -582,41 +582,45 @@ def worst_provenance(levels: Iterable[Provenance]) -> Provenance:
 
 
 @register_basis("book_resample", level=Provenance.DERIVED, inputs=["book_snapshot", "book_delta"])
-def _book_resample(inputs: Mapping[str, Any]) -> float:
-    """Resampled book depth: confidence is how much of its own timestamp the capture earns.
+def _book_resample(_: Mapping[str, Any]) -> float:
+    """Resampled book depth: 1.0, because the capture is exact at the instant it is stamped.
 
-    ``max(1 - lookahead_ns / interval_ns, 0.0)``, where ``lookahead_ns`` is how far past
-    the emitted boundary the newest applied update lies.
+    The reconstruction has nothing estimated in it. The engine replays absolute levels
+    from a real venue snapshot and raises ``BookGap`` rather than guessing across a
+    sequence break, so a capture at boundary *B* is the book as the stream reported it at
+    *B*, level for level.
 
-    A resampled snapshot claims to be the book at a bucket boundary, but the resampler
-    applies the boundary-crossing record *first* and captures afterwards — so the state it
-    reports can include updates stamped after the timestamp it carries. That distance is
-    the error, it is directly observable at the capture site, and it is the whole of what
-    can go wrong with this method: the reconstruction itself is exact, since the engine
-    replays absolute levels from a real venue snapshot and raises ``BookGap`` rather than
-    guessing across a sequence break.
+    **This was a formula, and the formula is why it stopped being one.** It read
+    ``max(1 - lookahead_ns / interval_ns, 0.0)``, and its whole observable was the crypto
+    resampler's own boundary rule: that rule applied the boundary-crossing record *before*
+    capturing, so a snapshot stamped 10:00:00 could contain an update from 10:00:00.200 and
+    scored itself 0.8 on the way into the lake. The two resamplers have been collapsed onto
+    the ordering that flushes boundaries below a record *before* applying it
+    (``crocodile.core.resample.book``), which makes ``lookahead_ns`` structurally zero at
+    every capture — so the formula could only ever return 1.0. A number that cannot move is
+    a constant, and a constant spelled as a division is a constant in the one place no
+    call-site gate looks. It is declared here instead, and
+    ``tests/conformance/test_gates.py::CONSTANT_BY_DEFINITION`` carries the same argument
+    where Gate 3c can check it.
 
-    ``1.0`` means the newest update landed on the boundary, so the capture describes the
-    instant it is stamped with. ``0.0`` means it is a whole interval or more ahead, which
-    is what a run of boundaries dragged along by one late record looks like: an interval
-    with no updates emits the state that arrives after it, not the state that held during
-    it. Between the two the score falls linearly, because the error is a duration and
-    nothing about a book makes half an interval of lookahead better than linear.
+    Nothing was silently dropped in the trade. What used to be scored is now refused:
+    ``_capture_snapshot`` raises :class:`~crocodile.core.errors.ProvenanceError` if it is
+    ever handed a book holding an update stamped after the boundary. Emitting a biased bar
+    at 0.0 is how they reached the lake; not building the record is the loud form.
 
-    A quiet interval is not penalised. If no update arrives between two boundaries the
-    lookahead is zero and the book genuinely did not change, so the reconstruction is
-    exact and says so — absence of updates is not absence of sampling.
+    **The tempting replacement, and why it is not taken.** Staleness — how long before the
+    boundary the last update landed — is observable and does vary. It is not a sampling
+    deficiency: if no update arrives between two boundaries the book genuinely did not
+    change, and absence of updates is not absence of sampling. Scoring it would need a
+    reference for how often a book *ought* to tick, and no such reference exists; it would
+    be a denominator invented to make a constant look measured, which is the move
+    ``_aggregate_of_an_undeclared_stream`` refuses one indirection out.
 
-    Saturating at zero says the capture has stopped earning its timestamp, not that the
-    book is unknown; ``prov`` stays :attr:`Provenance.DERIVED` at every value.
+    ``top_n`` truncation is not a deficiency either. A caller asking for five levels and
+    receiving the best five has been answered, not under-sampled; the emitted ``depth``
+    says how many levels the record carries.
+
+    1.0 is a claim about sampling within this level, not about the record being a venue
+    product. That claim is ``prov``'s, and it stays :attr:`Provenance.DERIVED`.
     """
-    lookahead_ns = _require_int(inputs, "lookahead_ns")
-    interval_ns = _require_int(inputs, "interval_ns")
-    if interval_ns <= 0:
-        raise ConfidenceInputError(f"input 'interval_ns' must be positive, got {interval_ns}")
-    if lookahead_ns < 0:
-        raise ConfidenceInputError(
-            f"input 'lookahead_ns' must be non-negative, got {lookahead_ns}; "
-            f"a capture cannot precede the record that triggered it"
-        )
-    return max(1.0 - lookahead_ns / interval_ns, 0.0)
+    return 1.0

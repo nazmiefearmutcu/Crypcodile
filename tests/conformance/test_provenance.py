@@ -227,29 +227,80 @@ def test_load_all_bases_is_idempotent_and_survives_bad_imports():
 # ---------------------------------------------------------------------------
 
 
-def test_book_resample_scores_a_capture_that_earns_its_timestamp():
-    """No lookahead means the capture describes the instant it is stamped with."""
-    assert confidence_for("book_resample", {"lookahead_ns": 0, "interval_ns": 1_000}) == 1.0
+def test_book_resample_is_certain_because_a_capture_cannot_contain_the_future():
+    """Migrated from ``test_book_resample_scores_a_capture_that_earns_its_timestamp``.
+
+    Same assertion, different reason, and the reason is the whole change. It used to be
+    the ``lookahead_ns = 0`` corner of a formula; the two book resamplers have since
+    collapsed onto the ordering that flushes every boundary below a record *before*
+    applying it, so zero lookahead is the only state a capture can be in and 1.0 is the
+    only answer the basis has. It is declared a constant in ``CONSTANT_BY_DEFINITION``
+    with the argument, which is what keeps Gate 3c green for the right reason.
+    """
+    assert confidence_for("book_resample", {}) == 1.0
     assert level_for("book_resample") is Provenance.DERIVED
+    assert provenance_fields("book_resample").prov_inputs == ["book_snapshot", "book_delta"]
 
 
-def test_book_resample_falls_off_linearly_and_saturates_at_zero():
-    assert confidence_for(
-        "book_resample", {"lookahead_ns": 250, "interval_ns": 1_000}
-    ) == pytest.approx(0.75)
-    assert confidence_for("book_resample", {"lookahead_ns": 1_000, "interval_ns": 1_000}) == 0.0
-    # A run of boundaries dragged along by one late record: still zero, never negative,
-    # so the formula cannot hand the registry a value it has to reject.
-    assert confidence_for("book_resample", {"lookahead_ns": 90_000, "interval_ns": 1_000}) == 0.0
+def test_book_resample_no_longer_falls_off_because_there_is_no_lookahead_to_score():
+    """Migrated from ``test_book_resample_falls_off_linearly_and_saturates_at_zero``.
+
+    The same three input maps, and the answers they used to produce are worth writing
+    down rather than deleting: 250ns into a 1µs bucket scored 0.75, a full bucket scored
+    0.0, and 90 buckets of drag — a run of boundaries pulled along by one late record —
+    also scored 0.0 and was emitted anyway. Every one of those states was reachable only
+    because the resampler applied before it emitted. None of them is reachable now, so
+    the ratio that described them is inert: a caller still passing the old measurement
+    map gets the constant.
+
+    That inertness is the point of the test. If the ordering is ever reverted, this stays
+    green while the lake silently refills with biased bars — which is precisely why the
+    refusal moved to the capture site instead, see below.
+    """
+    assert confidence_for("book_resample", {"lookahead_ns": 250, "interval_ns": 1_000}) == 1.0
+    assert confidence_for("book_resample", {"lookahead_ns": 1_000, "interval_ns": 1_000}) == 1.0
+    assert confidence_for("book_resample", {"lookahead_ns": 90_000, "interval_ns": 1_000}) == 1.0
 
 
-def test_book_resample_refuses_inputs_that_could_not_have_been_measured():
-    with pytest.raises(ConfidenceInputError, match="lookahead_ns"):
-        confidence_for("book_resample", {"lookahead_ns": -1, "interval_ns": 1_000})
-    with pytest.raises(ConfidenceInputError, match="interval_ns"):
-        confidence_for("book_resample", {"lookahead_ns": 0, "interval_ns": 0})
-    with pytest.raises(ConfidenceInputError, match="interval_ns"):
-        confidence_for("book_resample", {"lookahead_ns": 0})
+def test_the_book_resample_refusal_moved_from_the_formula_to_the_capture_site():
+    """Migrated from ``test_book_resample_refuses_inputs_that_could_not_have_been_measured``.
+
+    Its subject was that a lookahead nobody could have measured is refused rather than
+    turned into a plausible-looking number, and that subject outlived the formula that
+    used to enforce it. The registry cannot enforce it any more — with no inputs to read
+    there is nothing to validate, so the three maps that used to raise now return the
+    constant. The refusal lives where the quantity does: ``_capture_snapshot`` will not
+    build a ``BookSnapshot`` stamped at a boundary the book has already moved past.
+
+    Both halves are asserted here, because "we deleted the validation" and "we moved the
+    validation" look identical from the registry alone.
+    """
+    from crocodile.core.errors import ProvenanceError
+    from crocodile.core.replay.orderbook import OrderBook
+    from crocodile.core.resample.book import _capture_snapshot
+    from crocodile.core.schema.enums import AssetClass
+    from crocodile.core.schema.records import BookSnapshot
+
+    assert confidence_for("book_resample", {"lookahead_ns": -1, "interval_ns": 1_000}) == 1.0
+    assert confidence_for("book_resample", {"lookahead_ns": 0, "interval_ns": 0}) == 1.0
+    assert confidence_for("book_resample", {"lookahead_ns": 0}) == 1.0
+
+    snapshot = BookSnapshot(
+        source="test",
+        symbol="test:SYM",
+        symbol_raw="SYM",
+        source_ts=None,
+        local_ts=0,
+        asset_class=AssetClass.CRYPTO,
+        bids=[(100.0, 5.0)],
+        asks=[(101.0, 4.0)],
+        depth=2,
+    )
+    book = OrderBook()
+    book.apply(snapshot)
+
+    with pytest.raises(ProvenanceError, match="lookahead"):
+        _capture_snapshot(book, snapshot, 1_000, 1_250, None)
 
 
 # ---------------------------------------------------------------------------
