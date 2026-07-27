@@ -493,15 +493,10 @@ def test_gate3_no_source_file_hand_writes_a_confidence():
 DERIVES_RECORDS: dict[str, str] = {
     "core/resample/book.py": (
         "Reconstructs a BookSnapshot from an OrderBook replayed over other records; "
-        "nothing it emits was reported by a venue."
-    ),
-    "equity/resample/book.py": (
-        "The same reconstruction for equity input, under the boundary rule that emits "
-        "before it applies. It used to fall outside this gate: its snapshot was a legacy "
-        "equity struct with no provenance tail, and the only canonical records the "
-        "scanner could see were the re-typed inputs `_to_core_record` handed the shared "
-        "OrderBook. Both of those are gone — the snapshot it yields is canonical and is "
-        "a reconstruction, so it carries `book_resample` with a measured lookahead."
+        "nothing it emits was reported by a venue. This is now the only book resampler: "
+        "`equity/resample/book.py` held a second one under the boundary rule that emits "
+        "before it applies, and that rule won — the entry for it left this list with the "
+        "module."
     ),
     "equity/resample/ohlcv.py": (
         "Aggregates bars out of trades, quotes or narrower bars. None of the three was "
@@ -532,10 +527,12 @@ def _canonical_record_names() -> frozenset[str]:
 def _canonical_record_calls(tree: ast.AST, names: frozenset[str]) -> list[ast.Call]:
     """Every call in ``tree`` that constructs a canonical record.
 
-    Import aliases are resolved rather than ignored: ``equity.resample.book`` imports
+    Import aliases are resolved rather than ignored: ``equity.resample.book`` imported
     ``BookSnapshot as CoreBookSnapshot``, and a scanner matching bare class names would
     have read that module as building no records at all — a gate that passes because it
-    could not see its subject.
+    could not see its subject. That module has since been merged into
+    ``core.resample.book`` and the alias with it, so the resolution now guards the next
+    such import rather than a live one; it stays because the failure mode does.
     """
     local: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -1341,6 +1338,24 @@ CONSTANT_BY_DEFINITION: dict[str, tuple[float, str]] = {
         "The page publishes a price and never a size, for any symbol at any time, so the "
         "quantity that makes a Trade a trade is unsampled at every call. Nothing varies "
         "because nothing about the method varies.",
+    ),
+    "book_resample": (
+        1.0,
+        "A book capture is exact at the instant it is stamped: the engine replays absolute "
+        "levels from a real venue snapshot and raises BookGap rather than guessing across a "
+        "sequence break, so there is nothing estimated to score. This entry is the one on "
+        "this list that arrived by *losing* its formula. It was "
+        "max(1 - lookahead_ns / interval_ns, 0.0), whose only observable was the crypto "
+        "resampler's apply-then-emit ordering — a snapshot stamped 10:00:00 holding a "
+        "10:00:00.200 update, scored 0.8 and written to the lake. The two book resamplers "
+        "collapsed onto the ordering that flushes boundaries before applying, which makes "
+        "lookahead_ns structurally zero at every capture, and this gate is exactly what a "
+        "surviving `1 - 0/interval` would have walked past: probed with inputs the call "
+        "site can no longer produce, it varies; reached from the resampler, it cannot. "
+        "What used to be scored is now refused — _capture_snapshot raises ProvenanceError "
+        "rather than build a record whose tail would be a lie. Staleness is the tempting "
+        "replacement and is declined on purpose: a quiet interval is not an unsampled one, "
+        "and how often a book ought to tick has no reference to divide by.",
     ),
 }
 """Bases whose confidence is a constant, the value, and the argument for it.
