@@ -2,7 +2,7 @@ import polars as pl
 
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.records import LiquidationCall, ReserveDataUpdated
-from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.core.store.parquet_sink import FAMILY_CANONICAL, _channel_schema
 from crocodile.core.store.rows import from_row, to_row
 from crocodile.crypto.exchanges.base_onchain.connector import BaseOnchainConnector
 
@@ -65,12 +65,15 @@ def test_lending_records_row_conversions():
     assert reconstructed_liq.receive_a_token is True
 
 def test_lending_logs_parquet_schema():
-    rdu_schema = _channel_schema("reserve_data_updated")
+    # Both schemas come from the canonical family: `base_onchain` emits canonical
+    # records, so the crypto table `_channel_schema` defaults to describes no file
+    # this connector will ever write.
+    rdu_schema = _channel_schema("reserve_data_updated", FAMILY_CANONICAL)
     assert rdu_schema["reserve"] == pl.Utf8
     assert rdu_schema["liquidity_rate"] == pl.Float64
     assert rdu_schema["liquidity_index"] == pl.Int64
 
-    lc_schema = _channel_schema("liquidation_call")
+    lc_schema = _channel_schema("liquidation_call", FAMILY_CANONICAL)
     assert lc_schema["collateral_asset"] == pl.Utf8
     assert lc_schema["debt_to_cover"] == pl.Float64
     assert lc_schema["receive_a_token"] == pl.Boolean

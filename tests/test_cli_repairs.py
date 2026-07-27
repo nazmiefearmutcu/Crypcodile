@@ -99,15 +99,23 @@ def test_empty_dataframe_export_schema(tmp_path):
 
 
 def test_adversarial_timestamp_overflow(tmp_path):
-    # Testing extremely large timestamp overflow
-    from crocodile.core.store.parquet_sink import _channel_schema
-    schema = _channel_schema("trade")
+    # Testing extremely large timestamp overflow, against a file shaped the way
+    # the product writes one today. This built a crypto-family row under an
+    # `exchange=` partition — the retired union's file schema, which no live
+    # writer produces — by taking `_channel_schema`'s default family, so the
+    # bound it guards was being checked on a shape the CLI will not meet.
+    from crocodile.core.store.parquet_sink import FAMILY_CANONICAL, _channel_schema
+    schema = _channel_schema("trade", FAMILY_CANONICAL)
     df = pl.DataFrame([{
-        "exchange": "deribit",
         "symbol": "deribit:BTC-PERPETUAL",
         "symbol_raw": "BTC-PERPETUAL",
-        "exchange_ts": 1700000000000,
+        "asset_class": "crypto",
+        "source_ts": 1700000000000,
         "local_ts": 1700000000000,
+        "prov": "native",
+        "prov_basis": "native",
+        "prov_confidence": 1.0,
+        "prov_inputs": [],
         "channel": "trade",
         "date": "2023-11-14",
         "bucket": 0,
@@ -117,7 +125,7 @@ def test_adversarial_timestamp_overflow(tmp_path):
         "side": "buy",
         "liquidation": "false",
     }], schema=schema)
-    part_dir = tmp_path / "exchange=deribit" / "channel=trade" / "date=2023-11-14" / "bucket=0"
+    part_dir = tmp_path / "source=deribit" / "channel=trade" / "date=2023-11-14" / "bucket=0"
     part_dir.mkdir(parents=True, exist_ok=True)
     df.write_parquet(part_dir / "part-0.parquet")
 

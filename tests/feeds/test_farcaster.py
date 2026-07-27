@@ -4,7 +4,7 @@ import pytest
 
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.records import FarcasterCorrelation
-from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.core.store.parquet_sink import FAMILY_CANONICAL, _channel_schema
 from crocodile.core.store.rows import from_row, to_row
 from crocodile.crypto.feeds.farcaster import FarcasterSocialClient
 
@@ -56,7 +56,10 @@ def test_farcaster_correlation_row_conversions():
     assert reconstructed.trending_rank == 2
 
 def test_farcaster_parquet_schema():
-    schema = _channel_schema("farcaster_correlation")
+    # The farcaster feed emits canonical records, so the canonical table is the
+    # one describing its file. The default is the crypto table, which nothing
+    # writes any more.
+    schema = _channel_schema("farcaster_correlation", FAMILY_CANONICAL)
     assert "mentions_24h" in schema
     assert "dev_activity_score" in schema
     assert "trending_rank" in schema

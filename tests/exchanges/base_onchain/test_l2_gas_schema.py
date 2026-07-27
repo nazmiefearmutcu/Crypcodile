@@ -2,7 +2,7 @@ import polars as pl
 
 from crocodile.core.schema.enums import AssetClass, Side
 from crocodile.core.schema.records import Trade
-from crocodile.core.store.parquet_sink import _channel_schema
+from crocodile.core.store.parquet_sink import FAMILY_CANONICAL, _channel_schema
 from crocodile.core.store.rows import from_row, to_row
 
 
@@ -51,7 +51,12 @@ def test_l2_gas_schema_fields():
     assert reconstructed.is_smart_wallet is True
 
 def test_parquet_schema_inclusion():
-    schema = _channel_schema("trade")
+    # The canonical family, named rather than defaulted. `_channel_schema`
+    # defaults to the crypto family for callers that predate the merge, and this
+    # test took that default while claiming to guard the file `base_onchain`
+    # writes — a connector that emits canonical records, into a canonical file.
+    # It was asserting against a schema table no live writer uses.
+    schema = _channel_schema("trade", FAMILY_CANONICAL)
     assert "l1_gas_fee" in schema
     assert "l2_gas_fee" in schema
     assert "gas_price" in schema
