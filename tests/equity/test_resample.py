@@ -962,6 +962,221 @@ def test_a_bar_frame_that_declares_no_width_reports_no_confidence() -> None:
 
 
 # ---------------------------------------------------------------------------
+# One coverage rule, not two implementations of it
+# ---------------------------------------------------------------------------
+# The record path and the frame path each computed the ``ohlcv_from_ohlcv``
+# numerator, and they drifted on two independent axes before anything compared
+# them. The tests below feed identical inputs to both and require the same answer,
+# which is the property the collapse buys; the two that follow pin the numbers each
+# axis was wrong by, so a re-split cannot pass by agreeing on a new wrong answer.
+
+_DAY_NS = 24 * 60 * _MINUTE_NS
+_ALIGNED_DAY = (1_700_000_000_000_000_000 // _DAY_NS) * _DAY_NS
+
+
+def _bar_at(local_ts: int, interval: str, confidence: float) -> OHLCV:
+    return OHLCV(
+        source="alpaca",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        local_ts=local_ts,
+        asset_class=AssetClass.EQUITY,
+        source_ts=None,
+        interval=interval,
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.5,
+        volume=10.0,
+        vwap=100.2,
+        num_trades=7,
+        prov_confidence=confidence,
+    )
+
+
+def _as_frame(bars: list[OHLCV]) -> pl.DataFrame:
+    """The same bars a lake read would hand ``resample_bars_df``."""
+    return pl.DataFrame(
+        [
+            {
+                "local_ts": b.local_ts,
+                "symbol": b.symbol,
+                "interval": b.interval,
+                "open": b.open,
+                "high": b.high,
+                "low": b.low,
+                "close": b.close,
+                "volume": b.volume,
+                "vwap": b.vwap,
+                "num_trades": b.num_trades,
+                "prov": b.prov.value,
+                "prov_confidence": b.prov_confidence,
+            }
+            for b in bars
+        ]
+    )
+
+
+_SAME_INPUTS: dict[str, tuple[list[OHLCV], str]] = {
+    "a daily bar landing late in its own bucket": (
+        [_bar_at(1_700_000_000_000_000_000, "1d", 0.6)],
+        "1d",
+    ),
+    "a narrow well-sampled bar nested inside a wide poorly-sampled one": (
+        [_bar_at(_ALIGNED_DAY, "1h", 0.2), _bar_at(_ALIGNED_DAY + 30 * _MINUTE_NS, "1m", 1.0)],
+        "1d",
+    ),
+    "a complete session of minutes": (
+        [_bar_at(_ALIGNED_DAY + i * _MINUTE_NS, "1m", 1.0) for i in range(390)],
+        "1d",
+    ),
+    "half a session of minutes": (
+        [_bar_at(_ALIGNED_DAY + i * _MINUTE_NS, "1m", 1.0) for i in range(195)],
+        "1d",
+    ),
+    "the same minute twice": (
+        [_bar_at(_ALIGNED_DAY, "1m", 1.0), _bar_at(_ALIGNED_DAY, "1m", 1.0)],
+        "1h",
+    ),
+}
+"""Inputs both entry points must score the same, one case per axis they drifted on.
+
+No ``1w`` case, and the omission is not an oversight. The two paths anchor *weekly*
+buckets differently — the record path floors ``local_ts`` against the epoch, which fell
+on a Thursday, and ``group_by_dynamic`` anchors on Monday — so five daily bars land in
+one bucket on one side and two on the other. That is a disagreement about which rows
+share a bucket, not about how a bucket's coverage is scored, it predates this round, and
+folding it in here would hide a real difference behind a passing coverage test. Every
+other supported width (``s``/``m``/``h``/``d``) divides the epoch evenly and agrees.
+"""
+
+
+@pytest.mark.parametrize("case", sorted(_SAME_INPUTS), ids=lambda k: k.replace(" ", "_"))
+def test_the_record_path_and_the_frame_path_score_identical_inputs_identically(
+    case: str,
+) -> None:
+    """Two entry points, one coverage rule — asserted, not assumed.
+
+    They were two implementations and they disagreed by 22x on clipping and by 7% on
+    how an overlap is charged. Both now compute their bucket through ``_coverage_tail``,
+    so this is a regression test on the collapse itself rather than on any one number.
+    """
+    bars, interval = _SAME_INPUTS[case]
+
+    from_records = list(resample_bars_to_bars(bars, interval))
+    from_frame = resample_bars_df(_as_frame(bars), interval)
+
+    assert len(from_records) == len(from_frame)
+    assert [b.prov_confidence for b in from_records] == pytest.approx(
+        from_frame["prov_confidence"].to_list()
+    )
+
+
+def test_an_input_span_is_clipped_to_the_bucket_it_is_scored_against() -> None:
+    """C2: the frame path let a span run past the bucket's end and scored a full one.
+
+    One 1d bar at confidence 0.6 stamped 1_700_000_000_000_000_000 lands 6 400 s before
+    the end of its 1d bucket, so 6 400 s of a 23 400 s tradeable window is all it covers.
+    The frame path reported 1.0 against the record path's 0.0449 — a fully-sampled
+    bucket claimed for a bar that overlaps a fifth of it.
+    """
+    bars = [_bar_at(1_700_000_000_000_000_000, "1d", 0.6)]
+
+    from_records = list(resample_bars_to_bars(bars, "1d"))
+    from_frame = resample_bars_df(_as_frame(bars), "1d")
+
+    assert from_records[0].prov_confidence == pytest.approx(0.0448827, abs=1e-6)
+    assert from_frame.row(0, named=True)["prov_confidence"] == pytest.approx(
+        from_records[0].prov_confidence
+    )
+
+
+def test_an_overlapped_instant_is_scored_at_the_best_confidence_that_observed_it() -> None:
+    """I1: the frame path charged each instant to whoever owned the leftover span.
+
+    A 1h bar at 0.2 with a 1m bar at 1.0 nested half an hour in: the overlapping minute
+    really was observed at 1.0 by one input, so it is worth 1.0. Charging it to the 1h
+    bar because that bar owned the non-overlapping remainder gave 0.004734 against the
+    record path's 0.005049 — two answers to one question, neither arguable alone.
+    """
+    bars = [_bar_at(_ALIGNED_DAY, "1h", 0.2), _bar_at(_ALIGNED_DAY + 30 * _MINUTE_NS, "1m", 1.0)]
+
+    from_records = list(resample_bars_to_bars(bars, "1d"))
+    from_frame = resample_bars_df(_as_frame(bars), "1d")
+
+    assert from_records[0].prov_confidence == pytest.approx(0.00504931, abs=1e-8)
+    assert from_frame.row(0, named=True)["prov_confidence"] == pytest.approx(
+        from_records[0].prov_confidence
+    )
+
+
+# ---------------------------------------------------------------------------
+# The numerator is measured in the denominator's units
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("confidence", [0.1, 0.3, 0.5, 1.0])
+def test_a_daily_bar_re_read_at_its_own_interval_keeps_its_confidence(
+    confidence: float,
+) -> None:
+    """A confidence must never move up, and re-reading a bar at its own width moved it.
+
+    ``_tradeable_ns`` measures the emitted 1d bucket as one 390-minute session, while
+    ``_parse_interval`` gave the input bar a declared width of 1440 minutes — a 3.69x
+    inflation of the numerator alone. 0.3, 0.5 and 1.0 all came back 1.0, and 0.1 came
+    back 0.3692: a half-sampled daily bar re-read as a daily bar claimed a fully sampled
+    bucket. Passing the input width through the same map puts both in session units.
+    """
+    bars = [_bar_at(_ALIGNED_DAY, "1d", confidence)]
+
+    from_records = list(resample_bars_to_bars(bars, "1d"))
+    from_frame = resample_bars_df(_as_frame(bars), "1d")
+
+    assert from_records[0].prov_confidence == pytest.approx(confidence)
+    assert from_frame.row(0, named=True)["prov_confidence"] == pytest.approx(confidence)
+
+
+def test_five_daily_bars_fill_a_week_and_two_do_not() -> None:
+    """The units reconcile in the other direction too: a week is five sessions.
+
+    Against wall-clock widths two daily bars covered 172 800 s of a 117 000 s tradeable
+    week and saturated at 1.0 — two of five sessions reported as a full week.
+
+    Record path only: the two paths do not agree on where a *weekly* bucket starts, which
+    is a separate pre-existing divergence — see :data:`_SAME_INPUTS`.
+    """
+    week_ns = 7 * _DAY_NS
+    start = (1_700_000_000_000_000_000 // week_ns) * week_ns
+    full = [_bar_at(start + i * _DAY_NS, "1d", 1.0) for i in range(5)]
+    partial = [_bar_at(start + i * _DAY_NS, "1d", 1.0) for i in range(2)]
+
+    scored_full = list(resample_bars_to_bars(full, "1w"))
+    scored_partial = list(resample_bars_to_bars(partial, "1w"))
+
+    assert scored_full[0].prov_confidence == pytest.approx(1.0)
+    assert scored_partial[0].prov_confidence == pytest.approx(0.16)
+
+
+def test_a_bar_frame_that_declares_a_width_for_only_some_of_its_rows_raises() -> None:
+    """M2: a null ``interval`` became a zero-width input and quietly lowered the score.
+
+    Three 1-minute bars beside one null-interval bar scored 5.9e-05 through the frame
+    path while the record path raised on the same input — a silent answer where the
+    other entry point refuses to guess.
+    """
+    bars = [_bar_at(_ALIGNED_DAY + i * _MINUTE_NS, "1m", 1.0) for i in range(3)]
+    frame = _as_frame(bars).with_columns(
+        pl.when(pl.col("local_ts") == _ALIGNED_DAY)
+        .then(None)
+        .otherwise(pl.col("interval"))
+        .alias("interval")
+    )
+
+    with pytest.raises(ValueError, match="declared width"):
+        resample_bars_df(frame, "1d")
+
+
+# ---------------------------------------------------------------------------
 # The fourth frame builder — the one the client actually exposes
 # ---------------------------------------------------------------------------
 

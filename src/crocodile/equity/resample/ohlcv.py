@@ -430,6 +430,37 @@ def _tradeable_ns(interval_ns: int) -> int:
     return sessions * _REGULAR_SESSION_NS + min(remainder, _REGULAR_SESSION_NS)
 
 
+def _tradeable_span_ns(interval_label: str, cache: dict[str, int]) -> int:
+    """Return how much of a bucket one input bar of width ``interval_label`` can fill.
+
+    The numerator of :func:`_ohlcv_from_ohlcv`, and it has to be in the units its
+    denominator is in. ``_tradeable_ns`` measures the emitted bucket in tradeable
+    nanoseconds; an input's *declared* width is wall clock, so a ``1d`` bar announced
+    1440 minutes against a 390-minute denominator — a 3.69x inflation of the numerator
+    alone. A half-sampled daily bar re-read at its own interval came back claiming a
+    fully sampled bucket, and 0.3 and 0.5 and 1.0 all scored 1.0: the direction
+    ``ohlcv_from_ohlcv``'s own docstring says a confidence must never move. Passing the
+    width through the same map fixes the units — a ``1d`` bar contributes one session,
+    five of them fill a ``1w`` bucket exactly, and a ``1m`` bar is unchanged because a
+    minute is inside trading hours whatever else is.
+
+    The span is placed at the bar's own timestamp rather than spread over the session it
+    stands for, so the segment is a measure and not a calendar. That can only shorten a
+    segment, never lengthen one, so it cannot raise a score.
+
+    Raises:
+        ValueError: from ``_parse_interval`` if the bar's own ``interval`` string is not
+            one this codebase can parse. That is loud on purpose: the width is the
+            numerator of the emitted bar's confidence, and a bar silently counted as
+            zero-width would drag the score down with nothing to point at.
+    """
+    span = cache.get(interval_label)
+    if span is None:
+        span = _tradeable_ns(_parse_interval(interval_label)[0])
+        cache[interval_label] = span
+    return span
+
+
 def _union_coverage(
     segments: list[tuple[int, int, float]], lo: int, hi: int
 ) -> tuple[int, float]:
@@ -479,6 +510,53 @@ def _union_coverage(
         covered += width
         sampled += width * -active[0][0]
     return covered, sampled
+
+
+def _coverage_tail(
+    segments: list[tuple[int, int, float]],
+    lo: int,
+    hi: int,
+    tradeable_ns: int,
+    unit_ns: int = 1,
+) -> ProvenanceFields:
+    """Return the ``ohlcv_from_ohlcv`` tail for one bucket, from its inputs' spans.
+
+    **The one implementation of the coverage rule.** There were two — this module kept a
+    record form and a Polars form of the same rule — and they drifted on two independent
+    axes before anyone compared them. The frame form never clipped an input span to the
+    bucket, so a single ``1d`` bar landing 80 000 s into a ``1d`` bucket scored 1.0 where
+    the record form scored 0.0449; and it charged each instant to whichever bar owned the
+    non-overlapping remainder rather than to the best confidence covering it, so a ``1h``
+    at 0.2 with a ``1m`` at 1.0 nested inside scored 0.004734 against 0.005049. Neither
+    number is arguable on its own — they are two answers to one question. This project
+    exists because two forks kept one algorithm in two places, so the twin is collapsed
+    rather than resynchronised: both paths compute their bucket here, and both get the
+    formula from the registry rather than restating ``min(c/t,1) * min(s/t,1)``.
+
+    ``segments`` are ``(start, end, confidence)`` in the stream's own timestamp unit and
+    ``unit_ns`` says what one of those units is worth; the frame path works in
+    nanoseconds and passes 1.
+
+    Args:
+        segments: The declared spans of the bars accumulated for this bucket.
+        lo: The bucket's first instant, in the stream's unit.
+        hi: The bucket's end, exclusive, in the stream's unit.
+        tradeable_ns: How much of the bucket the market could fill (:func:`_tradeable_ns`).
+        unit_ns: Nanoseconds per unit of ``lo``/``hi``/``segments``.
+    """
+    covered, sampled = _union_coverage(segments, lo, hi)
+    covered_ns = covered * unit_ns
+    return provenance_fields(
+        "ohlcv_from_ohlcv",
+        {
+            "covered_ns": covered_ns,
+            # Clamped, not merely rounded: a float weighting can round to one
+            # nanosecond above the span it weights, and the formula refuses an
+            # instant sampled better than it is covered.
+            "sampled_ns": min(round(sampled * unit_ns), covered_ns),
+            "tradeable_ns": tradeable_ns,
+        },
+    )
 
 
 def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[OHLCV]:
@@ -763,22 +841,6 @@ def resample_quotes_to_bars(
         )
 
 
-def _bar_width_ns(interval_label: str, cache: dict[str, int]) -> int:
-    """Return one input bar's declared width in nanoseconds.
-
-    Raises:
-        ValueError: from ``_parse_interval`` if the bar's own ``interval`` string is not
-            one this codebase can parse. That is loud on purpose: the width is the
-            numerator of the emitted bar's confidence, and a bar silently counted as
-            zero-width would drag the score down with nothing to point at.
-    """
-    width = cache.get(interval_label)
-    if width is None:
-        width = _parse_interval(interval_label)[0]
-        cache[interval_label] = width
-    return width
-
-
 def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLCV]:
     """Resample lower-resolution OHLCV records into higher-resolution OHLCV records.
 
@@ -793,7 +855,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
     interval_ns, _, interval_label = _parse_interval(interval)
     adjusted_interval: int | None = None
     unit_ns = 1
-    width_cache: dict[str, int] = {}
+    span_cache: dict[str, int] = {}
     tradeable_ns = _tradeable_ns(interval_ns)
 
     # The spans the inputs of the bucket being accumulated declare, in the stream's own
@@ -805,20 +867,12 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
 
     def _tail_for_bucket() -> ProvenanceFields:
         assert current_bucket is not None and adjusted_interval is not None
-        covered, sampled = _union_coverage(
-            segments, current_bucket, current_bucket + adjusted_interval
-        )
-        covered_ns = covered * unit_ns
-        fields = provenance_fields(
-            "ohlcv_from_ohlcv",
-            {
-                "covered_ns": covered_ns,
-                # Clamped, not merely rounded: a float weighting can round to one
-                # nanosecond above the span it weights, and the formula refuses an
-                # instant sampled better than it is covered.
-                "sampled_ns": min(round(sampled * unit_ns), covered_ns),
-                "tradeable_ns": tradeable_ns,
-            },
+        fields = _coverage_tail(
+            segments,
+            current_bucket,
+            current_bucket + adjusted_interval,
+            tradeable_ns,
+            unit_ns,
         )
         return fields._replace(prov=worst_provenance([fields.prov, *input_levels]))
 
@@ -856,8 +910,8 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             unit_ns = _ts_unit_ns(bar.local_ts)
 
         bucket = (bar.local_ts // adjusted_interval) * adjusted_interval
-        width = max(1, _bar_width_ns(bar.interval, width_cache) // unit_ns)
-        segment = (bar.local_ts, bar.local_ts + width, bar.prov_confidence)
+        span = max(1, _tradeable_span_ns(bar.interval, span_cache) // unit_ns)
+        segment = (bar.local_ts, bar.local_ts + span, bar.prov_confidence)
 
         if current_bucket is None:
             current_bucket = bucket
@@ -1202,65 +1256,86 @@ column whose whole job is to report how many there were.
 """
 
 
-_COVERED = "_covered_ns"
-_SAMPLED = "_sampled_ns"
+_BUCKET = "_bucket"
+_BUCKET_NS = "_bucket_ns"
+_CONFIDENCE = "prov_confidence"
 
 
-def _measure_coverage(
-    df_dt: pl.DataFrame, group_keys: list[str], polars_str: str
-) -> tuple[pl.DataFrame, bool]:
-    """Attach each input bar's *non-overlapping* contribution to its bucket's coverage.
+def _bucket_confidences(
+    df_dt: pl.DataFrame, group_keys: list[str], polars_str: str, interval_ns: int
+) -> pl.DataFrame | None:
+    """Return one row per bucket carrying the confidence :func:`_coverage_tail` gives it.
 
-    The frame form of what :func:`_union_coverage` does for records, expressed as the
-    classic merge-intervals sweep: sort by start within the bucket, and let each bar
-    contribute only the part of its declared span that no earlier bar already covered.
-    A day that arrives twice — which is what a lake holding it under both channel tags
-    hands back — contributes its width once, so the duplicate cannot raise the emitted
-    bar's confidence. Ties are broken by confidence descending, so the instant is scored
-    at the best sampling that observed it.
+    This does not *reimplement* the coverage rule; it collects each bucket's input spans
+    and hands them to the one function that scores them, which is the whole point. The
+    Polars sweep that used to live here was the second implementation, and it disagreed
+    with the first on clipping and on how overlaps are charged — see :func:`_coverage_tail`
+    for the two numbers that disagreed and why the twin was collapsed rather than
+    resynchronised. Iterating buckets in Python costs a pass over a bar frame, which is
+    orders of magnitude smaller than the tick frames elsewhere in this module, and buys
+    the guarantee that the two entry points cannot answer differently again.
 
-    Returns ``(frame, measurable)``. A frame that declares no ``interval`` states no
-    width for its inputs, and there is nothing to divide; the caller emits a null
-    confidence rather than the 1.0 that would claim a full bucket.
+    Returns ``None`` when the frame declares no ``interval`` at all: its inputs then state
+    no width, the numerator has nothing in it, and the caller emits a null confidence
+    rather than the 1.0 that would claim a full bucket.
+
+    Raises:
+        ValueError: if the frame declares ``interval`` for some rows and leaves it null on
+            others. A null became a zero-width input and quietly dragged the bucket's
+            score down — three 1-minute bars beside one null bar scored 5.9e-05 — while
+            :func:`resample_bars_to_bars` raises on the same input. Silently scoring an
+            undeclared width is the failure mode the whole basis exists to refuse.
     """
     if "interval" not in df_dt.columns:
-        return df_dt, False
-    labels = [str(v) for v in df_dt["interval"].unique().drop_nulls().to_list()]
-    if not labels:
-        return df_dt, False
-    widths = {label: _parse_interval(label)[0] for label in labels}
+        return None
+    labels = df_dt["interval"].to_list()
+    declared = [v for v in labels if v is not None]
+    if not declared:
+        return None
+    if len(declared) != len(labels):
+        raise ValueError(
+            "some input bars declare an 'interval' and some leave it null; a bar with no "
+            "declared width has no span to contribute, and counting it as zero lowers the "
+            "bucket's confidence with nothing to point at"
+        )
 
     # A frame with no prov_confidence makes no sampling claim, and the level fallback in
     # ``_emitted_prov`` reads such a frame as venue-reported; this reads it the same way
     # rather than inventing a second, quieter answer to the same question.
     confidence = (
-        pl.col("prov_confidence").fill_null(1.0)
-        if "prov_confidence" in df_dt.columns
+        pl.col(_CONFIDENCE).fill_null(1.0)
+        if _CONFIDENCE in df_dt.columns
         else pl.lit(1.0, dtype=pl.Float64)
     )
-    df_dt = df_dt.with_columns(
-        pl.col("interval").replace_strict(widths, return_dtype=pl.Int64).alias("_width_ns"),
-        confidence.cast(pl.Float64).alias("_conf"),
-        pl.col("datetime").dt.truncate(polars_str).alias("_bucket"),
-    ).with_columns((pl.col("local_ts") + pl.col("_width_ns")).alias("_end_ns"))
+    span_cache: dict[str, int] = {}
+    tradeable_ns = _tradeable_ns(interval_ns)
 
-    partition = [*group_keys, "_bucket"]
-    df_dt = df_dt.sort(
-        [*partition, "local_ts", "_conf"],
-        descending=[*([False] * len(partition)), False, True],
-    ).with_columns(pl.col("_end_ns").cum_max().shift(1).over(partition).alias("_prev_end"))
-    return (
+    grouped = (
         df_dt.with_columns(
-            pl.max_horizontal(
-                pl.col("_end_ns")
-                - pl.max_horizontal(
-                    pl.col("local_ts"), pl.col("_prev_end").fill_null(pl.col("local_ts"))
-                ),
-                pl.lit(0, dtype=pl.Int64),
-            ).alias(_COVERED)
-        ).with_columns((pl.col(_COVERED) * pl.col("_conf")).alias(_SAMPLED)),
-        True,
+            pl.col("datetime").dt.truncate(polars_str).alias(_BUCKET),
+            pl.col("datetime").dt.truncate(polars_str).dt.epoch("ns").alias(_BUCKET_NS),
+            confidence.cast(pl.Float64).alias("_conf"),
+        )
+        .group_by([*group_keys, _BUCKET, _BUCKET_NS])
+        .agg(pl.col("local_ts"), pl.col("interval"), pl.col("_conf"))
     )
+
+    scored: list[float] = []
+    for row in grouped.iter_rows(named=True):
+        segments = [
+            (start, start + _tradeable_span_ns(str(label), span_cache), conf)
+            for start, label, conf in zip(
+                row["local_ts"], row["interval"], row["_conf"], strict=True
+            )
+        ]
+        lo = int(row[_BUCKET_NS])
+        scored.append(
+            _coverage_tail(segments, lo, lo + interval_ns, tradeable_ns).prov_confidence
+        )
+
+    return grouped.with_columns(
+        pl.Series(_CONFIDENCE, scored, dtype=pl.Float64)
+    ).select([*group_keys, pl.col(_BUCKET).alias("datetime"), _CONFIDENCE])
 
 
 def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
@@ -1275,9 +1350,9 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     invented ones answers the question with the bar count instead.
 
     The output carries the ``ohlcv_from_ohlcv`` tail: ``prov`` floored by the worst
-    input's level, and ``prov_confidence`` measured the same way
-    :func:`resample_bars_to_bars` measures it — extent times adequacy against the
-    tradeable window, over the *union* of the input spans. A frame that declares no
+    input's level, and ``prov_confidence`` measured by the *same function*
+    :func:`resample_bars_to_bars` measures it with — not by a second implementation of
+    the same rule, which is what this held and what drifted. A frame that declares no
     ``interval`` gets a null confidence, because the width of its inputs is the numerator
     and nothing on the frame supplies it.
     """
@@ -1308,7 +1383,7 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     elif count_column != "trade_count":
         df_dt = df_dt.with_columns(pl.col(count_column).alias("trade_count"))
 
-    df_dt, measurable = _measure_coverage(df_dt, group_keys, polars_str)
+    confidences = _bucket_confidences(df_dt, group_keys, polars_str, interval_ns)
 
     aggregates = [
         pl.col("open").first().alias("open"),
@@ -1331,9 +1406,6 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
     ]
     if has_rank:
         aggregates.append(pl.col(_PROV_RANK).max().alias(_PROV_RANK))
-    if measurable:
-        aggregates.append(pl.col(_COVERED).sum().alias(_COVERED))
-        aggregates.append(pl.col(_SAMPLED).sum().alias(_SAMPLED))
 
     resampled = df_dt.group_by_dynamic(
         "datetime",
@@ -1342,23 +1414,18 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
         closed="left",
     ).agg(aggregates)
 
-    tradeable_ns = _tradeable_ns(interval_ns)
-    if measurable:
-        confidence = pl.min_horizontal(
-            pl.col(_COVERED) / tradeable_ns, pl.lit(1.0)
-        ) * pl.min_horizontal(pl.col(_SAMPLED) / tradeable_ns, pl.lit(1.0))
+    if confidences is not None:
+        resampled = resampled.join(confidences, on=[*group_keys, "datetime"], how="left")
     else:
-        confidence = pl.lit(None, dtype=pl.Float64)
+        resampled = resampled.with_columns(pl.lit(None, dtype=pl.Float64).alias(_CONFIDENCE))
 
     resampled = resampled.with_columns(
         pl.col("datetime").dt.epoch("ns").alias("bar"),
         pl.lit(interval_label).alias("interval"),
         _emitted_prov(has_rank, floor),
         pl.lit("ohlcv_from_ohlcv").alias("prov_basis"),
-        confidence.cast(pl.Float64).alias("prov_confidence"),
+        pl.col(_CONFIDENCE).cast(pl.Float64),
     ).drop("datetime")
-    resampled = resampled.drop(
-        [c for c in (_PROV_RANK, _COVERED, _SAMPLED) if c in resampled.columns]
-    )
+    resampled = resampled.drop([c for c in (_PROV_RANK,) if c in resampled.columns])
 
     return _order_columns(resampled)
