@@ -106,7 +106,8 @@ def test_ticker_yields_book_ticker():
 
 def test_ticker_null_timestamp_passes_through():
     # Kraken emits timestamp=None on spot tickers.
-    ticker = {"symbol": "BTC/USD", "bid": 64614.9, "ask": 64615.0, "timestamp": None}
+    ticker = {"symbol": "BTC/USD", "bid": 64614.9, "ask": 64615.0, "timestamp": None,
+              "bidVolume": 1.5, "askVolume": 2.25}
     recs = list(norm.normalize_ticker(ticker, exchange="kraken", symbol_raw="BTC/USD",
                                       local_ts=LOCAL_TS))
     assert recs[0].source_ts is None
@@ -119,8 +120,37 @@ def test_ticker_without_bid_ask_yields_nothing():
     assert recs == []
 
 
+def test_a_ticker_that_quotes_no_size_yields_no_top_of_book():
+    """`bidVolume`/`askVolume` are optional in ccxt's unified shape, and absent on Kraken.
+
+    They used to be padded with `or 0.0`, so `SELECT avg(bid_sz) … WHERE source='kraken'`
+    returned 0.0 as a measured resting size and `WHERE bid_sz > 0` deleted the venue.
+    A top of book with no size is not a top of book, and `bid_sz` is required, so there
+    is nowhere honest to put the absence.
+    """
+    ticker = {"symbol": "BTC/USD", "bid": 64614.9, "ask": 64615.0, "timestamp": None}
+    recs = list(norm.normalize_ticker(ticker, exchange="kraken", symbol_raw="BTC/USD",
+                                      local_ts=LOCAL_TS))
+    assert recs == []
+
+
+def test_a_contract_ticker_that_quotes_no_size_still_yields_its_derivative_ticker():
+    """The size guard drops the top of book, not the mark/index/funding beside it.
+
+    Those are separate fields the venue really reported, and DerivativeTicker requires
+    none of them — dropping them too would answer one fabrication with a data loss.
+    """
+    ticker = {"symbol": "BTC/USDT:USDT", "last": 64660.0, "bid": 64659.0, "ask": 64661.0,
+              "info": {"markPrice": "64660.5", "indexPrice": "64659.9", "fundingRate": "0.0001"}}
+    recs = list(norm.normalize_ticker(ticker, exchange="bybit", symbol_raw="BTC/USDT:USDT",
+                                      local_ts=LOCAL_TS, is_contract=True))
+    kinds = {type(r) for r in recs}
+    assert BookTicker not in kinds and DerivativeTicker in kinds
+
+
 def test_contract_ticker_also_yields_derivative_ticker():
     ticker = {"symbol": "BTC/USDT:USDT", "last": 64660.0, "bid": 64659.0, "ask": 64661.0,
+              "bidVolume": 3.0, "askVolume": 4.0,
               "info": {"markPrice": "64660.5", "indexPrice": "64659.9", "fundingRate": "0.0001"}}
     recs = list(norm.normalize_ticker(ticker, exchange="bybit", symbol_raw="BTC/USDT:USDT",
                                       local_ts=LOCAL_TS, is_contract=True))

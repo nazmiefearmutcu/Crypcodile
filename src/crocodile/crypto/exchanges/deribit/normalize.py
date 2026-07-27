@@ -183,33 +183,35 @@ def normalize_message(
         is_option = td.get("greeks") is not None or td.get("mark_iv") is not None
 
         if is_option:
-            # Resolve metadata from registry if available, else parse the symbol
+            # Prefer the registry, fall back to the symbol for whatever it does not hold,
+            # and skip when neither answers. The opt_type arm already worked this way; the
+            # other three fell through to `strike=0.0` / `expiry=0` at the constructor, so
+            # a registry row with strike=None wrote a zero strike and a 1970 expiry as
+            # venue-reported facts. WHERE expiry > now() then dropped a live contract, and
+            # log(strike / forward) on a vol-surface fit went to -inf. This function
+            # already states the rule 130 lines up — "fail loud rather than silently
+            # defaulting to January" — and then stopped applying it.
             inst = registry.get_raw(EXCHANGE, sym) if registry is not None else None
-            if inst is not None:
-                strike = inst.strike
-                expiry = inst.expiry
-                underlying = inst.base
-                if inst.opt_type is not None:
-                    opt_type = OptType(inst.opt_type)
-                else:
-                    # Registry instrument has opt_type=None — fall back to symbol parse
-                    try:
-                        _, _, _, opt_type = _parse_option_symbol(sym)
-                    except (ValueError, IndexError):
-                        log.warning(
-                            "deribit: cannot parse opt_type from symbol %r (registry opt_type=None)"
-                            " — skipping",
-                            sym,
-                        )
-                        return
-            else:
+            strike = inst.strike if inst is not None else None
+            expiry = inst.expiry if inst is not None else None
+            underlying = inst.base if inst is not None else None
+            opt_type = (
+                OptType(inst.opt_type) if inst is not None and inst.opt_type is not None else None
+            )
+            if strike is None or expiry is None or underlying is None or opt_type is None:
                 try:
-                    underlying, strike, expiry, opt_type = _parse_option_symbol(sym)
+                    from_sym = _parse_option_symbol(sym)
                 except (ValueError, IndexError):
                     log.warning(
-                        "deribit: cannot parse option symbol %r — skipping", sym
+                        "deribit: cannot resolve option metadata for %r from the registry or "
+                        "the symbol — skipping",
+                        sym,
                     )
                     return
+                underlying = underlying if underlying is not None else from_sym[0]
+                strike = strike if strike is not None else from_sym[1]
+                expiry = expiry if expiry is not None else from_sym[2]
+                opt_type = opt_type if opt_type is not None else from_sym[3]
 
             # IV fields: Deribit sends percentage (e.g. 65.0 = 65%); convert to decimal fraction
             def _iv(val: float | None) -> float | None:
@@ -225,8 +227,8 @@ def normalize_message(
                 asset_class=AssetClass.CRYPTO,
                 underlying=underlying,
                 underlying_price=td.get("underlying_price"),
-                strike=strike if strike is not None else 0.0,
-                expiry=expiry if expiry is not None else 0,
+                strike=strike,
+                expiry=expiry,
                 opt_type=opt_type,
                 mark_price=td.get("mark_price"),
                 mark_iv=_iv(td.get("mark_iv")),
