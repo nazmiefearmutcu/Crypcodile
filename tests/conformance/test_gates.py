@@ -663,7 +663,9 @@ def _measurement_fields() -> dict[str, frozenset[str]]:
     }
 
 
-def _canonical_record_calls_by_class(tree: ast.AST, names: frozenset[str]) -> list[tuple[str, ast.Call]]:
+def _canonical_record_calls_by_class(
+    tree: ast.AST, names: frozenset[str]
+) -> list[tuple[str, ast.Call]]:
     """Every canonical-record construction in ``tree``, paired with the class it builds.
 
     Import aliases are resolved for the reason :func:`_canonical_record_calls` gives:
@@ -818,7 +820,7 @@ class _KeyRecorder(Mapping[str, object]):
             self.seen.append(key)
         return self._value
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self.seen)
 
     def __len__(self) -> int:
@@ -850,7 +852,7 @@ def _observed_keys(fn) -> list[str]:
         recorder = _KeyRecorder(value)
         try:
             fn(recorder)
-        except Exception:  # noqa: BLE001 - a rejected probe still reveals the keys read
+        except Exception:  # a rejected probe still reveals the keys it read first
             pass
         for key in recorder.seen:
             if key not in keys:
