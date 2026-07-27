@@ -4,9 +4,10 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any
+from types import MappingProxyType
+from typing import Any, ClassVar
 
 import aiohttp
 from bs4 import BeautifulSoup, Tag
@@ -195,6 +196,23 @@ class GoogleFinanceProvider(Provider):
     ws_url = ""
     rest_url = "https://www.google.com/finance"
 
+    supported_channels: ClassVar[frozenset[str]] = frozenset(
+        {"trade", "index_value", "fundamental"}
+    )
+    unservable_channels: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "quote": (
+                "the quote page renders one number, the last price, and no bid/ask. The "
+                "record built from it set bid_px = ask_px = price with bid_sz = ask_sz = "
+                "1.0 and labelled it native — a two-sided quote of zero width, at a price "
+                "nobody quoted, in sizes nobody posted. `Quote` requires four fields and "
+                "the scrape observes none of them, so there is no honest record to emit "
+                "and none is emitted. Use a provider with a real top of book (alpaca, "
+                "finnhub)."
+            )
+        }
+    )
+
     def __init__(
         self,
         symbols: list[str],
@@ -206,33 +224,6 @@ class GoogleFinanceProvider(Provider):
         self.session: aiohttp.ClientSession | None = None
         self._running = False
         self._resolved_symbol_cache: dict[str, str] = {}
-        self._warned_no_quotes = False
-
-    def _warn_no_quotes_once(self) -> None:
-        """Say that the ``quote`` channel yields nothing here, rather than filling it.
-
-        The quote page renders one number, the last price. The record that used to be
-        built from it set ``bid_px = ask_px = price`` and ``bid_sz = ask_sz = 1.0`` — a
-        two-sided quote of zero width, at a price nobody quoted, in sizes nobody posted,
-        labelled NATIVE. ``SELECT avg(ask_px - bid_px) … WHERE source='google_finance'``
-        returned 0.0 and read as a measured spread; a real zero-width NBBO is a locked
-        market, which is a rare and interesting event rather than every row.
-
-        There is no honest record to emit instead: ``Quote`` requires four fields and the
-        scrape observes none of them. So this warns once and emits nothing. Silence would
-        be the third bad option — a channel that is configured, never errors, and never
-        produces a row looks like a market with no quotes.
-        """
-        if self._warned_no_quotes:
-            return
-        self._warned_no_quotes = True
-        log.warning(
-            "%s cannot serve the 'quote' channel: the page publishes a last price and no "
-            "bid/ask. It used to emit a zero-width quote at that price with size 1.0 on "
-            "both sides, labelled prov=native. Nothing is emitted for this channel now; "
-            "use a provider with a real top of book (alpaca, finnhub) if you need quotes.",
-            self.name,
-        )
 
     async def list_instruments(self) -> list[Instrument]:
         insts = []
@@ -280,9 +271,22 @@ class GoogleFinanceProvider(Provider):
             self._running = False
             self.session = None
 
-    async def _scrape_with_g_sym(self, symbol: str, g_sym: str, local_ts: int) -> list[Record]:
+    async def _scrape_with_g_sym(
+        self, symbol: str, g_sym: str, local_ts: int
+    ) -> list[Record] | None:
+        """Scrape one Google symbol, or return ``None`` if it does not name this security.
+
+        ``None`` and ``[]`` are different answers and conflating them cost the caller
+        its resolved-symbol cache. ``_scrape_symbol`` reads a falsy result as "this
+        candidate is not the right Google symbol" and tries the next of four; once the
+        `quote` channel stopped emitting a record, a correctly-resolved page returned
+        `[]` for a `--channels quote` run, so the cache never populated, all four
+        candidates were refetched every poll, and the loop ran forever at four times the
+        rate with nothing to show. `None` now means "this page is not it"; an empty list
+        means "this page is it and there was nothing on it to emit".
+        """
         if not self.session:
-            return []
+            return None
 
         url = f"{self.rest_url}/quote/{g_sym}"
         headers = get_spoofed_headers()
@@ -293,7 +297,7 @@ class GoogleFinanceProvider(Provider):
                 timeout=aiohttp.ClientTimeout(total=10.0),
             ) as resp:
                 if resp.status != 200:
-                    return []
+                    return None
                 html = await resp.text()
 
                 soup = BeautifulSoup(html, "html.parser")
@@ -308,7 +312,7 @@ class GoogleFinanceProvider(Provider):
                 if not price_el:
                     price_el = soup.find(lambda tag: tag.has_attr("data-last-price"))
                 if not price_el:
-                    return []
+                    return None
 
                 # Prefer data-last-price attribute (numeric), then visible text
                 price: float | None = None
@@ -329,7 +333,7 @@ class GoogleFinanceProvider(Provider):
                     try:
                         price = float(clean_price_str)
                     except ValueError:
-                        return []
+                        return None
 
                 # Parse source timestamp
                 source_ts = None
@@ -411,8 +415,6 @@ class GoogleFinanceProvider(Provider):
                                 prov_inputs=tail.prov_inputs,
                             )
                         )
-                    if "quote" in self.channels:
-                        self._warn_no_quotes_once()
 
                 # Parse fundamentals
                 if "fundamental" in self.channels:
@@ -474,9 +476,15 @@ class GoogleFinanceProvider(Provider):
                 return records
         except Exception as e:
             log.debug("Failed checking symbol possibility %s: %s", g_sym, e)
-            return []
+            return None
 
     async def _scrape_symbol(self, symbol: str) -> list[Record]:
+        """Resolve ``symbol`` to a Google symbol, caching the one that worked.
+
+        Resolution is decided by whether the page *loaded and parsed*, never by whether
+        it produced a record: a correctly-resolved page with nothing to emit for the
+        configured channels is still the right page. See :meth:`_scrape_with_g_sym`.
+        """
         if not self.session:
             return []
 
@@ -486,7 +494,7 @@ class GoogleFinanceProvider(Provider):
         cached_g_sym = self._resolved_symbol_cache.get(symbol)
         if cached_g_sym:
             records = await self._scrape_with_g_sym(symbol, cached_g_sym, local_ts)
-            if records:
+            if records is not None:
                 return records
             # Invalidate cache if it fails
             self._resolved_symbol_cache.pop(symbol, None)
@@ -496,7 +504,7 @@ class GoogleFinanceProvider(Provider):
             if g_sym == cached_g_sym:
                 continue
             records = await self._scrape_with_g_sym(symbol, g_sym, local_ts)
-            if records:
+            if records is not None:
                 self._resolved_symbol_cache[symbol] = g_sym
                 return records
 

@@ -6,8 +6,9 @@ import logging
 import random
 import traceback
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterable
-from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator, Iterable, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, ClassVar
 
 from crocodile.core.ingest.deadletter import DeadLetterQueue
 from crocodile.core.ingest.transport import Transport
@@ -55,6 +56,32 @@ class Provider(ABC):
     ws_url: str
     rest_url: str
 
+    supported_channels: ClassVar[frozenset[str] | None] = None
+    """Every channel this provider can actually serve, or ``None`` for "not declared".
+
+    ``None`` is not "all": it means this connector has not been through the exercise
+    and nothing is enforced for it, which is where every connector starts. Declaring
+    the set turns it into a contract — :meth:`_reject_unservable_channels` warns for
+    each requested channel outside it and refuses the run when none survives, which is
+    what :class:`~crocodile.equity.providers.finnhub.connector.FinnhubProvider` already
+    does by hand for its tier-dependent set.
+
+    The alternative is what ``google_finance --channels quote`` did after its ``Quote``
+    was removed: poll forever, four fetches per symbol per cycle, and return nothing.
+    A channel that is configured, never errors and never produces a row is
+    indistinguishable from a market with nothing to report.
+    """
+
+    unservable_channels: ClassVar[Mapping[str, str]] = MappingProxyType({})
+    """Channels this provider is *asked* for and deliberately does not serve, and why.
+
+    A decision, recorded where the decision lives. An entry here is a capability the
+    connector could plausibly be expected to have and does not, with the argument —
+    the same discipline :data:`crocodile.core.capability.IRREDUCIBLE` carries. The
+    reason is emitted in the warning and in the refusal, so a user who asks for the
+    channel is told why rather than left with an empty lake.
+    """
+
     def __init__(
         self,
         symbols: list[str],
@@ -68,6 +95,36 @@ class Provider(ABC):
         self.registry = registry
         self.transport: Transport | None = None
         self._dlq: DeadLetterQueue = DeadLetterQueue()
+        self._reject_unservable_channels()
+
+    def _reject_unservable_channels(self) -> None:
+        """Warn for each requested channel this provider cannot serve; refuse if none can.
+
+        A no-op for a connector that has not declared :attr:`supported_channels`.
+
+        Raises:
+            ValueError: if every requested channel is unservable. Constructed here
+                rather than at the first poll so the CLI reports it before opening a
+                session — ``collect`` already turns a ``ValueError`` from the factory
+                into a message and a non-zero exit.
+        """
+        if self.supported_channels is None:
+            return
+        unservable = [ch for ch in self.channels if ch not in self.supported_channels]
+        for channel in unservable:
+            log.warning(
+                "%s cannot serve the %r channel and will emit nothing for it%s",
+                self.name,
+                channel,
+                f": {self.unservable_channels[channel]}"
+                if channel in self.unservable_channels
+                else "",
+            )
+        if unservable and len(unservable) == len(self.channels):
+            raise ValueError(
+                f"{self.name} has no supported channels among {self.channels!r} "
+                f"(supported: {sorted(self.supported_channels)})"
+            )
 
     @abstractmethod
     def normalize(self, msg: object, local_ts: int) -> Iterable[Record]: ...

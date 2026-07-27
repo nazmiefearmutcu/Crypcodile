@@ -27,7 +27,7 @@ from typing import Annotated, Any, cast
 
 import typer
 
-from crocodile.core.schema.enums import successor_channel
+from crocodile.core.schema.enums import channel_predecessors, successor_channel
 from crocodile.core.sink.base import Sink
 
 
@@ -55,6 +55,29 @@ BACKFILL_ONLY_PROVIDERS = ["msn_money", "tiingo"]
 # `ohlcv` is what this list did before the two structs collapsed, which made
 # stooq — the one provider that always emitted `ohlcv` — unreachable from the CLI.
 VALID_CHANNELS = ["trade", "quote", "bar", "ohlcv"]
+
+
+def channels_for_provider(provider: str | None) -> list[str]:
+    """Return the channels *this* provider can serve, in VALID_CHANNELS order.
+
+    The picker below used to offer all four channels *after* the provider was chosen,
+    with no cross-check between the two lists: `[3] google_finance` then `[2] quote`
+    was a dead channel the tool walked the user into — a poll loop that returns
+    nothing. A connector that declares its servable set narrows the menu; one that has
+    not declared anything keeps the full vocabulary, so nothing is hidden on a guess.
+
+    ``bar`` stays on offer wherever ``ohlcv`` is: it is the retired spelling of the
+    same channel, and connectors that predate the struct collapse still accept it.
+    """
+    from crocodile.equity.providers.factory import supported_channels
+
+    servable = supported_channels(provider) if provider else None
+    if servable is None:
+        return list(VALID_CHANNELS)
+    widened = set(servable)
+    if "ohlcv" in widened:
+        widened |= set(channel_predecessors("ohlcv"))
+    return [ch for ch in VALID_CHANNELS if ch in widened] or list(VALID_CHANNELS)
 
 SUGGESTED_SYMBOLS = {
     "alpaca": ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"],
@@ -779,10 +802,11 @@ def select_collect_params_interactively(
                 break
             typer.echo("Invalid selection. Try again.", err=True)
 
-    # 2. Select Channels
+    # 2. Select Channels — only the ones this provider can actually serve.
     if not channels:
+        offered = channels_for_provider(provider)
         typer.echo("\n--- Select Channels ---")
-        for idx, ch in enumerate(VALID_CHANNELS, 1):
+        for idx, ch in enumerate(offered, 1):
             typer.echo(f"  [{idx}] {ch}")
         typer.echo("  [C] Enter custom channel(s)")
         while True:
@@ -803,8 +827,8 @@ def select_collect_params_interactively(
                 for p in parts:
                     if p.isdigit():
                         idx = int(p) - 1
-                        if 0 <= idx < len(VALID_CHANNELS):
-                            selected.append(VALID_CHANNELS[idx])
+                        if 0 <= idx < len(offered):
+                            selected.append(offered[idx])
                         else:
                             valid = False
                     else:
@@ -814,7 +838,7 @@ def select_collect_params_interactively(
                     break
             else:
                 input_channels = [c.strip() for c in choice.split(",") if c.strip()]
-                if input_channels and all(ch in VALID_CHANNELS for ch in input_channels):
+                if input_channels and all(ch in offered for ch in input_channels):
                     channels = input_channels
                     break
             typer.echo("Invalid selection. Try again.", err=True)
@@ -1102,7 +1126,11 @@ async def run_dashboard(
         # `channel=ohlcv/`, and on a lake that also holds pre-merge bars
         # `SELECT * FROM bar` succeeds while showing only the old rows — the worst of
         # the three outcomes, because it looks like an answer.
-        query_channel = successor_channel(channels[0]) if channels else "trade"
+        # …and name a channel the provider actually writes. `--channels trade quote`
+        # against google_finance used to put `SELECT * FROM quote` in the footer for a
+        # channel that emits nothing, sending the user to a view that will never exist.
+        servable = [ch for ch in channels if ch in channels_for_provider(provider)]
+        query_channel = successor_channel(servable[0]) if servable else "trade"
         query_sql = f"SELECT * FROM {query_channel}"
         footer_text.append(f'stockodile query "{query_sql}"', style="bold yellow")
         footer_text.append("\nPress ")

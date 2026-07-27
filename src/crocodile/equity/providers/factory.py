@@ -22,6 +22,23 @@ _REGISTRY: dict[str, type[Provider]] = {
 _VALID_NAMES = sorted(_REGISTRY)
 
 
+def supported_channels(provider: str) -> frozenset[str] | None:
+    """Return the channels ``provider`` declares it can serve, or ``None`` if it has not.
+
+    ``None`` is "not declared", never "all" — see
+    :attr:`crocodile.equity.providers.base.Provider.supported_channels`. Callers that
+    offer a channel menu should narrow it with this and fall back to the full
+    vocabulary when it answers ``None``, so an undeclared connector keeps working
+    exactly as it did.
+
+    The CLI needed this because its picker offered all four channels *after* the
+    provider was chosen, with no cross-check: `[3] google_finance` then `[2] quote` is a
+    dead channel the tool walked you into.
+    """
+    cls = _REGISTRY.get(provider)
+    return None if cls is None else cls.supported_channels
+
+
 def make_provider(
     provider: str,
     symbols: list[str],
@@ -39,10 +56,14 @@ def make_provider(
     symbols:
         List of symbol strings to subscribe to.
     channels:
-        List of canonical channel names (e.g. ``"trade"``, ``"quote"``, ``"ohlcv"``).
-        ``"bar"`` is still accepted by the connectors that predate the struct
-        collapse, but it is a retired tag, not a canonical one, and nothing
-        writes it any more.
+        List of canonical channel names (e.g. ``"trade"``, ``"ohlcv"``). ``"bar"`` is
+        still accepted by the connectors that predate the struct collapse, but it is a
+        retired tag, not a canonical one, and nothing writes it any more. A connector
+        that declares :attr:`~crocodile.equity.providers.base.Provider.supported_channels`
+        warns for each name outside its set and refuses the run when none survives, so
+        ``google_finance`` with ``["quote"]`` raises here rather than polling forever
+        and returning nothing; :func:`supported_channels` answers the same question
+        without constructing anything.
     out:
         Sink to receive normalised records.
     registry:
@@ -53,7 +74,8 @@ def make_provider(
     Raises
     ------
     ValueError
-        If *provider* is not a recognised name.
+        If *provider* is not a recognised name, or if the connector declares its
+        servable channels and none of *channels* is among them.
     """
     cls = _REGISTRY.get(provider)
     if cls is None:

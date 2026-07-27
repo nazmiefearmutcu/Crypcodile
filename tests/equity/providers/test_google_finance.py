@@ -510,18 +510,8 @@ async def test_google_finance_key_value_misalignment() -> None:
     assert fundamentals[0].val == 150.0
 
 
-@pytest.mark.asyncio
-async def test_google_finance_says_it_cannot_serve_quotes_instead_of_inventing_one(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A configured channel that silently produces nothing looks like a quiet market."""
-    provider = GoogleFinanceProvider(
-        symbols=["AAPL"],
-        channels=["quote"],
-        out=MemorySink(),
-        registry=InstrumentRegistry(),
-    )
-
+def _quote_page_session() -> MagicMock:
+    """A session whose every request answers with a parseable quote page."""
     mock_resp = MagicMock()
     mock_resp.status = 200
     mock_resp.text = AsyncMock(
@@ -530,12 +520,113 @@ async def test_google_finance_says_it_cannot_serve_quotes_instead_of_inventing_o
     mock_session = MagicMock()
     mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
     mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-    provider.session = mock_session
+    return mock_session
 
+
+def test_asking_only_for_quotes_is_refused_before_a_single_request_is_made(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A configured channel that never errors and never produces a row looks like a quiet market.
+
+    Following the precedent `FinnhubProvider` set: declare the channels the connector
+    can serve and refuse the run when none of the requested ones survives. The reason is
+    on `unservable_channels`, so a user who asks for quotes is told why rather than left
+    with an empty lake and a poll loop.
+    """
+    with caplog.at_level("WARNING"), pytest.raises(ValueError, match="no supported channels"):
+        GoogleFinanceProvider(
+            symbols=["AAPL"],
+            channels=["quote"],
+            out=MemorySink(),
+            registry=InstrumentRegistry(),
+        )
+
+    assert any("cannot serve the 'quote' channel" in r.message for r in caplog.records)
+    assert any("no bid/ask" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_quote_only_symbol_still_resolves_once_instead_of_refetching_forever(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """I5: an empty record list was read as a failed symbol resolution.
+
+    `_scrape_symbol` treats a falsy result as "this is not the right Google symbol" and
+    moves to the next of four candidates. Once the `quote` channel stopped emitting a
+    record, a *correctly resolved* page returned `[]`, so the cache never populated and
+    all four candidates were refetched every poll — forever, at four times the rate,
+    returning nothing.
+    """
     with caplog.at_level("WARNING"):
-        records = await provider._scrape_symbol("AAPL")
-        await provider._scrape_symbol("AAPL")
+        provider = GoogleFinanceProvider(
+            symbols=["AAPL"],
+            channels=["trade", "quote"],
+            out=MemorySink(),
+            registry=InstrumentRegistry(),
+        )
+    session = _quote_page_session()
+    provider.session = session
 
-    assert records == []
+    first = await provider._scrape_symbol("AAPL")
+    calls_after_first = session.get.call_count
+    second = await provider._scrape_symbol("AAPL")
+
+    assert len(first) == 1  # the trade; the quote is not invented
+    assert len(second) == 1
+    assert provider._resolved_symbol_cache["AAPL"] == "AAPL:NASDAQ"
+    assert calls_after_first == 1, "the first candidate resolved; the other three are not tried"
+    assert session.get.call_count == 2, "the second poll hits the cache, not four candidates"
+
     warnings = [r for r in caplog.records if "cannot serve the 'quote' channel" in r.message]
-    assert len(warnings) == 1, "warned once per provider, not once per poll"
+    assert len(warnings) == 1, "warned once at construction, not once per poll"
+
+
+@pytest.mark.asyncio
+async def test_an_index_asked_for_quotes_is_warned_at_rather_than_left_silent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """I5: the warning sat inside the `else` of `if is_index`, and fired per scrape.
+
+    So `--symbols ^SPX --channels quote` produced zero rows *and* zero warnings, which is
+    the exact outcome the warning existed to avoid. It is now a declaration on the
+    provider, emitted once at construction, before a single request is made.
+    """
+    with caplog.at_level("WARNING"):
+        provider = GoogleFinanceProvider(
+            symbols=["^SPX"],
+            channels=["index_value", "quote"],
+            out=MemorySink(),
+            registry=InstrumentRegistry(),
+        )
+    provider.session = _quote_page_session()
+
+    records = await provider._scrape_symbol("^SPX")
+
+    assert [type(r).__name__ for r in records] == ["IndexValue"]
+    assert [r for r in caplog.records if "cannot serve the 'quote' channel" in r.message]
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_does_not_resolve_is_still_told_apart_from_one_with_nothing_on_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The distinction the cache rests on, asserted directly."""
+    provider = GoogleFinanceProvider(
+        symbols=["AAPL"],
+        channels=["fundamental"],
+        out=MemorySink(),
+        registry=InstrumentRegistry(),
+    )
+    provider.session = _quote_page_session()
+
+    # The page parses, and holds no fundamentals: resolved, nothing to emit.
+    assert await provider._scrape_with_g_sym("AAPL", "AAPL:NASDAQ", 1) == []
+
+    missing = MagicMock()
+    missing.status = 404
+    session = MagicMock()
+    session.get.return_value.__aenter__ = AsyncMock(return_value=missing)
+    session.get.return_value.__aexit__ = AsyncMock(return_value=None)
+    provider.session = session
+
+    assert await provider._scrape_with_g_sym("AAPL", "AAPL:NASDAQ", 1) is None

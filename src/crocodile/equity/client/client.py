@@ -31,12 +31,20 @@ def _df_to_record_iter(df: pl.DataFrame) -> Iterator[Record]:
     ``asset_class`` and no ``provider`` column at all — the equity reader would have
     raised ``KeyError('provider')`` on every one of them.
 
-    What ``core``'s reader does with a *pre-migration* equity file is partial, and it is
-    measured rather than described here: ``tests/store/test_premerge_equity_rows.py``
-    walks every channel. Five raise, which is the safe half. Two reconstruct with a
-    column silently dropped — a legacy ``ohlcv`` row's ``trade_count`` and a legacy
-    ``instrument``'s ``exchange_name``, neither of which the canonical reader looks for.
-    Teaching one reader both dialects is the merge task that follows this one.
+    **One reader, three dialects.** ``core``'s reader speaks the canonical column set,
+    the pre-migration crypto one and the pre-migration equity one, choosing between them
+    by the value of the row's origin marker; see
+    :func:`crocodile.core.store.rows.from_row`. A legacy ``ohlcv`` row's ``trade_count``
+    comes back as ``num_trades`` and a legacy ``instrument``'s ``exchange_name`` as
+    ``exchange``, rather than being dropped, and the tags ``bar`` and ``option_quote``
+    resolve to the records that absorbed them. ``tests/store/test_premerge_equity_rows.py``
+    and ``tests/store/test_lake_spanning_the_migration.py`` walk it channel by channel,
+    the second against real Parquet files in both on-disk layouts.
+
+    This paragraph used to say the capability did not exist and was "the merge task that
+    follows this one". It landed; the sentence did not, which is this project's defining
+    failure in documentation form — a reader of the primary documented entry point being
+    told a working capability is missing.
     """
     for row_dict in df.to_dicts():
         yield from_row(row_dict)
