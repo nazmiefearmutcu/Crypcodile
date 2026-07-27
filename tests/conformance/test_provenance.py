@@ -17,7 +17,18 @@ from crocodile.core.schema.provenance import (
     registered_bases,
 )
 
-_EXPECTED_BASES = frozenset({"book_resample", "native", "unavailable", "yahoo_1m_vap"})
+_EXPECTED_BASES = frozenset(
+    {
+        "alpaca_l1",
+        "book_resample",
+        "native",
+        "ohlcv_from_ohlcv",
+        "ohlcv_from_quotes",
+        "ohlcv_from_trades",
+        "unavailable",
+        "yahoo_1m_vap",
+    }
+)
 _SESSION_BARS = 390
 
 
@@ -234,3 +245,74 @@ def test_book_resample_refuses_inputs_that_could_not_have_been_measured():
         confidence_for("book_resample", {"lookahead_ns": 0, "interval_ns": 0})
     with pytest.raises(ConfidenceInputError, match="interval_ns"):
         confidence_for("book_resample", {"lookahead_ns": 0})
+
+
+# ---------------------------------------------------------------------------
+# alpaca_l1 — a top of book reshaped into a depth profile
+# ---------------------------------------------------------------------------
+
+
+def test_alpaca_l1_scores_the_sides_the_venue_actually_quoted():
+    """The whole range of the formula, which is the whole range of the endpoint.
+
+    A latest-quote call returns two sides, one, or none, and there is no requested depth
+    to compare against — so the two sides are the entire observable. The equity fork
+    wrote no confidence at all here, which meant the header default: 1.0, for a one-sided
+    quote as readily as for a two-sided one.
+    """
+    assert confidence_for("alpaca_l1", {"n_quoted_sides": 0}) == 0.0
+    assert confidence_for("alpaca_l1", {"n_quoted_sides": 1}) == 0.5
+    assert confidence_for("alpaca_l1", {"n_quoted_sides": 2}) == 1.0
+
+
+def test_alpaca_l1_is_derived_not_native_and_not_synthetic():
+    """The level is the claim, and it is a different claim from the number.
+
+    DERIVED: every price and size came from the venue, but the venue reported a quote,
+    not a depth profile. Not SYNTHETIC, because nothing is modelled — which is what keeps
+    ``DepthProfile.is_synthetic`` False for a real L1 snapshot, as the fork's hand-written
+    ``is_synthetic=False`` had it.
+    """
+    assert level_for("alpaca_l1") is Provenance.DERIVED
+    tail = provenance_fields("alpaca_l1", {"n_quoted_sides": 2})
+    assert tail.prov is Provenance.DERIVED
+    assert tail.prov_inputs == ["quote"]
+
+
+def test_alpaca_l1_refuses_a_side_count_that_could_not_have_been_measured():
+    with pytest.raises(ConfidenceInputError, match="n_quoted_sides"):
+        confidence_for("alpaca_l1", {"n_quoted_sides": 3})
+    with pytest.raises(ConfidenceInputError, match="n_quoted_sides"):
+        confidence_for("alpaca_l1", {"n_quoted_sides": -1})
+    with pytest.raises(ConfidenceInputError, match="n_quoted_sides"):
+        confidence_for("alpaca_l1", {})
+
+
+# ---------------------------------------------------------------------------
+# The three bar aggregations
+# ---------------------------------------------------------------------------
+
+
+def test_a_quote_bar_is_synthetic_and_a_trade_bar_is_not():
+    """The three aggregations differ in level, which is where the difference lives.
+
+    Trades and narrower bars aggregate into a wider bar exactly; quotes do not aggregate
+    into a bar at all — they stand in for traded prices, and the ``volume`` such a bar
+    reports is a structural zero. Confidence cannot express that difference and does not
+    try to; ``prov`` does.
+    """
+    assert level_for("ohlcv_from_trades") is Provenance.DERIVED
+    assert level_for("ohlcv_from_ohlcv") is Provenance.DERIVED
+    assert level_for("ohlcv_from_quotes") is Provenance.SYNTHETIC
+
+    assert provenance_fields("ohlcv_from_trades").prov_inputs == ["trade"]
+    assert provenance_fields("ohlcv_from_ohlcv").prov_inputs == ["ohlcv"]
+    assert provenance_fields("ohlcv_from_quotes").prov_inputs == ["quote"]
+
+
+def test_none_of_the_bar_aggregations_claims_a_venue_reported_it():
+    """The failure they were all one edit away from: the header default says NATIVE."""
+    for basis in ("ohlcv_from_trades", "ohlcv_from_ohlcv", "ohlcv_from_quotes"):
+        assert provenance_fields(basis).prov is not Provenance.NATIVE
+        assert confidence_for(basis, {}) == 1.0
+        assert describe(basis).strip(), f"{basis} has to argue for its constant"

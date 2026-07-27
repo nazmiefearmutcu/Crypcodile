@@ -119,6 +119,10 @@ _REGISTRY: Final[dict[str, _Registered]] = {}
 # session at all, so this is not a shared-core constant.
 _YAHOO_1M_VAP_SESSION_BARS: Final[int] = 390
 
+# The two sides a top of book has. Scoped the same way: it is the denominator of
+# one basis and a fact about quotes, not about depth in general.
+_L1_QUOTED_SIDES: Final[int] = 2
+
 
 def register_basis(
     basis: str, *, level: Provenance, inputs: Sequence[str], doc: str | None = None
@@ -350,6 +354,91 @@ def _yahoo_1m_vap(inputs: Mapping[str, Any]) -> float:
     if n < 0:
         raise ConfidenceInputError(f"input 'n_volume_bars' must be non-negative, got {n}")
     return min(n / _YAHOO_1M_VAP_SESSION_BARS, 1.0)
+
+
+@register_basis("alpaca_l1", level=Provenance.DERIVED, inputs=["quote"])
+def _alpaca_l1(inputs: Mapping[str, Any]) -> float:
+    """Top of book reshaped as a depth profile: confidence is how much of the top is quoted.
+
+    ``n_quoted_sides / 2``, where ``n_quoted_sides`` counts the sides Alpaca's latest-quote
+    endpoint returned a price for. It is the only thing about this method that varies: the
+    source has exactly one level per side and no notion of a requested depth, so two sides is
+    the whole of what one call can observe. A one-sided quote describes half a top of book,
+    an empty one describes none, and both are states the endpoint really returns.
+
+    :attr:`Provenance.DERIVED` rather than :attr:`Provenance.NATIVE`: every number in the
+    profile was reported by the venue, but the venue reported a *quote*. Nothing here is
+    modelled — which is what separates it from ``yahoo_1m_vap``, where traded volume stands
+    in for resting size — so it is not :attr:`Provenance.SYNTHETIC` either, and
+    ``DepthProfile.is_synthetic`` reads ``False`` for it exactly as the equity fork's
+    hand-written ``is_synthetic=False`` did.
+
+    Saturating at both sides says the profile is as well sampled as this method can make it,
+    not that one price level has become a book. That claim is ``prov``'s, and it stays
+    ``DERIVED`` at every value.
+    """
+    n = _require_int(inputs, "n_quoted_sides")
+    if not 0 <= n <= _L1_QUOTED_SIDES:
+        raise ConfidenceInputError(
+            f"input 'n_quoted_sides' must be between 0 and {_L1_QUOTED_SIDES}, got {n}"
+        )
+    return n / _L1_QUOTED_SIDES
+
+
+def _aggregate_is_total(_: Mapping[str, Any]) -> float:
+    """Shared body for the three bar-aggregation bases: an aggregate is not a sample.
+
+    The constant 1.0 is the same claim ``native`` makes and not the same claim as
+    "correct". A bar is a *function* of the records handed to the resampler — every print
+    in the bucket is in the open, high, low, close and volume, and none of them is
+    estimated — so there is nothing partial to measure within the level. What the bar
+    might be missing is records the caller never supplied, and a resampler cannot observe
+    a stream it was not given; inventing a number to stand for that unobservable is what
+    this registry exists to refuse.
+
+    The claim that the bar was not reported by a venue is ``prov``'s, and it is the level
+    each registration below states — not this number.
+    """
+    return 1.0
+
+
+register_basis(
+    "ohlcv_from_trades",
+    level=Provenance.DERIVED,
+    inputs=["trade"],
+    doc=(
+        "Bars aggregated from trade prints. DERIVED, not NATIVE: the venue reported the "
+        "prints, not the bar. Confidence is 1.0 because the aggregation is total — see "
+        "_aggregate_is_total."
+    ),
+)(_aggregate_is_total)
+
+register_basis(
+    "ohlcv_from_ohlcv",
+    level=Provenance.DERIVED,
+    inputs=["ohlcv"],
+    doc=(
+        "Lower-resolution bars re-bucketed into wider ones. Same claim as "
+        "ohlcv_from_trades one level up: first-open/max-high/min-low/last-close over "
+        "bars is exact, so confidence is 1.0 — see _aggregate_is_total. Note this "
+        "flattens its inputs' own provenance: a bar built from synthetic bars reports "
+        "DERIVED, which is why the input channel is named rather than assumed."
+    ),
+)(_aggregate_is_total)
+
+register_basis(
+    "ohlcv_from_quotes",
+    level=Provenance.SYNTHETIC,
+    inputs=["quote"],
+    doc=(
+        "Bars whose prices are quotes. SYNTHETIC rather than DERIVED because a quote is "
+        "a different data class from the traded prices a bar reports: nothing here was "
+        "ever transacted, and `volume` is a structural 0.0 rather than a measured one — "
+        "quotes carry no size that belongs in a bar. Confidence is 1.0 in the sense "
+        "_aggregate_is_total gives it: fully determined by the quotes seen, which is not "
+        "a claim that a quote bar is a trade bar."
+    ),
+)(_aggregate_is_total)
 
 
 @register_basis("book_resample", level=Provenance.DERIVED, inputs=["book_snapshot", "book_delta"])
