@@ -147,8 +147,10 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def _refuse_readonly(ctx: CapabilityContext, capability: str) -> None:
-    """Refuse a lake-mutating capability on a surface that declared itself read-only.
+def _refuse_readonly(
+    ctx: CapabilityContext, capability: str, writes: str = "the operator's lake"
+) -> None:
+    """Refuse a capability that writes outside this process on a read-only surface.
 
     ``PermissionError`` rather than ``ValueError`` — which is what
     :func:`~crocodile.core.store.catalog.assert_readonly_sql` raises — because the two are
@@ -156,12 +158,21 @@ def _refuse_readonly(ctx: CapabilityContext, capability: str) -> None:
     wrong*, and a caller that retries with better parameters is doing the right thing with
     it. This one says the parameters were fine and the surface is not trusted to run the
     capability at all, which a REST projection maps to 403 and a caller must not retry.
+
+    ``writes`` names what gets written, and it exists because the lake is not the only
+    thing that does. This guard was written for ``collect``, ``collect-market`` and
+    ``backfill``, and its wording — "writes to the lake" — is why nobody re-derived it for
+    ``export``, which writes a file at a path the *caller* chooses. An exit review measured
+    the consequence: ``GET /api/v1/export?…&dest=/…/pwned.csv&fmt=csv`` answered ``200``
+    with the file on disk. The question is not which store is being written but whether
+    this surface is trusted to make the process write anything at all, so the answer is one
+    function and the difference is one noun.
     """
     if ctx.readonly:
         raise PermissionError(
-            f"capability {capability!r} writes to the lake and this surface is read-only; "
+            f"capability {capability!r} writes {writes} and this surface is read-only; "
             f"a surface that does not trust its callers with mutating SQL cannot trust "
-            f"them to start a write into the operator's lake"
+            f"them to start a write outside this process"
         )
 
 
@@ -246,17 +257,25 @@ def _rows_to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
 # Part 1 — the IRREDUCIBLE five, and the sixth that is not a capability
 # ---------------------------------------------------------------------------
 #
-# Every implementation below rests on inputs that are read rather than reconstructed, so
-# each declares ``basis="native"``. For the three that compute over *caller-supplied*
-# numbers — gas-vol, mev-sandwich, lending-stress, and peg-deviation's pure mode — that is
-# the closest registered basis and it is the wrong shade: ``native`` says a *venue*
-# reported the value, and a series pasted in from a CSV has no venue behind it that this
-# process can see. What these want is a `caller_supplied` basis registered at
-# ``Provenance.NATIVE`` with a constant 1.0 and the argument that a pure function is exact
-# over whatever it was handed. Registering one is a change to
-# ``core/schema/provenance.py``, which this batch does not own, so the gap is reported
-# rather than filled — and filled by feel is the one thing the provenance registry exists
-# to refuse.
+# `sequencer-latency` reads the lake, so it declares ``basis="native"``: the venue stamped
+# every timestamp it summarises. The other four compute over numbers that arrive in
+# ``params``, and they declare ``caller_supplied``.
+#
+# That basis is what this comment used to ask for. It said ``native`` was "the closest
+# registered basis and the wrong shade", described the formula that would be right, and
+# noted that registering one was a change to ``core/schema/provenance.py`` which this batch
+# did not own. Somebody registered it — with the argument, the constant 1.0, and this
+# batch's own capabilities named in its docstring — and nothing here changed, so the
+# request outlived its own answer and every one of these went on shipping
+# ``prov_basis="native"`` over a series the caller pasted in.
+#
+# `peg-deviation` is the one that needs a sentence, because it has two modes: a mid the
+# caller typed and a quote series out of the lake. One implementation declares one basis,
+# and the abstaining one is the safe half of the pair — ``caller_supplied`` says this
+# engine cannot grade inputs it did not observe, which understates the lake mode, while
+# ``native`` says a venue reported the number, which is simply false on the pure mode.
+# Understating a reading is a filter that returns a superset; overstating it is a claim
+# that is not true.
 
 
 class GasVolParams(msgspec.Struct, frozen=True):
@@ -325,7 +344,11 @@ class SequencerLatencyParams(msgspec.Struct, frozen=True):
     route's floor was one.
     """
 
-    exchange: str = "base_onchain"
+    source: str = "base_onchain"
+    """Which chain's records to summarise, under the lake's own partition key.
+
+    ``--exchange`` on the wire; ``source`` here, matching ``collect``/``backfill`` and the
+    ``source=`` directory the filter actually selects."""
 
 
 def sequencer_latency(ctx: CapabilityContext, params: SequencerLatencyParams) -> pl.DataFrame:
@@ -336,8 +359,8 @@ def sequencer_latency(ctx: CapabilityContext, params: SequencerLatencyParams) ->
     and without it the query filters on a source no record carries and reports an empty
     lake.
     """
-    exchange = params.exchange.strip() or "base_onchain"
-    return calculate_sequencer_latency(ctx.catalog, exchange)
+    source = params.source.strip() or "base_onchain"
+    return calculate_sequencer_latency(ctx.catalog, source)
 
 
 class PegDeviationParams(msgspec.Struct, frozen=True):
@@ -511,7 +534,9 @@ GAS_VOL = declare(
         params=GasVolParams,
         returns=ReturnKind.SCALAR,
         impls={
-            AssetClass.CRYPTO: Impl(fn=gas_vol, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=gas_vol, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -524,7 +549,9 @@ MEV_SANDWICH = declare(
         params=MevSandwichParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=mev_sandwich, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=mev_sandwich, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -554,7 +581,9 @@ PEG_DEVIATION = declare(
         params=PegDeviationParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=peg_deviation, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=peg_deviation, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -567,7 +596,9 @@ LENDING_STRESS = declare(
         params=LendingStressParams,
         returns=ReturnKind.SCALAR,
         impls={
-            AssetClass.CRYPTO: Impl(fn=lending_stress, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=lending_stress, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -737,9 +768,27 @@ class CollectMarketParams(msgspec.Struct, frozen=True):
     channels: tuple[str, ...]
     top: int | None = None
     all_symbols: bool = False
-    quote: str | None = "USDT"
+    quote: str | None = None
+    """Quote-currency filter. ``None`` means every quote.
+
+    ``"USDT"`` here and ``None`` on ``universe`` was one venue answered two ways by two
+    batches. ``UniverseParams.quote`` argues ``None`` is the only safe value — an
+    unasked-for filter that silently empties a market is worse than no filter — and it is
+    right about this capability too: on Coinbase USD, Bitstamp EUR or Upbit KRW,
+    ``collect-market --all-symbols`` raised "no symbols matched the requested market slice"
+    while ``universe`` enumerated the same venue.
+    """
+
     kinds: tuple[str, ...] = ()
-    limit: int = 500
+    max_symbols: int = 500
+    """Cap on how many symbols the ``all_symbols`` slice subscribes to.
+
+    ``limit`` in every other batch is a cap on *rows returned*; here it decided how much of
+    a venue's market is watched, which is a different question wearing the same word.
+    ``--all-symbols`` on a 2 000-market venue collected 500 of them and nothing in the
+    request or the result said so. ``limit`` still resolves on the wire, through
+    ``_PARAM_RENAMES``.
+    """
     poll_interval: float = 2.0
     use_ws: bool = False
     book_depth: int = 50
@@ -793,7 +842,7 @@ def collect_market(ctx: CapabilityContext, params: CollectMarketParams) -> Subsc
             else:
                 instruments = await exchange_instruments(source)
                 matched = filter_instruments(instruments, kinds=kinds, quote=quote)
-                symbols = [i.symbol_raw for i in matched][: params.limit]
+                symbols = [i.symbol_raw for i in matched][: params.max_symbols]
             if symbols:
                 resolved[source] = symbols
         if not resolved:
@@ -868,7 +917,16 @@ class BackfillParams(msgspec.Struct, frozen=True):
     category: str = "linear"
     inst_type: str = "SWAP"
     interval: str = "1m"
-    period: str = "5m"
+    oi_period: str = "5m"
+    """Binance's open-interest history bucket width, as that endpoint spells it.
+
+    ``period`` until an exit review found it colliding: ops meant ``str = "5m"``, a venue's
+    bucket, and analytics meant ``int = 14``, a count of bars an indicator looks back over.
+    Two batches, one word, two concepts — and REST coerces with ``strict=False``, so
+    ``?period=14`` on ``backfill`` arrived as the string ``"14"`` and went to Binance as a
+    bucket width, which is an error nowhere along the path. ``period`` means the indicator
+    lookback everywhere now; this one says which series it buckets.
+    """
 
 
 def _check_backfill_range(params: BackfillParams) -> None:
@@ -906,7 +964,7 @@ def backfill(ctx: CapabilityContext, params: BackfillParams) -> Coroutine[Any, A
         category=params.category,
         inst_type=params.inst_type,
         interval=params.interval,
-        period=params.period,
+        period=params.oi_period,
     )
 
 
@@ -1030,10 +1088,18 @@ class ExportParams(msgspec.Struct, frozen=True):
     context the way ``collect``'s ``data_dir`` did. On a local CLI that is exactly right.
     On a network surface it is a caller choosing where the server writes, which is a
     surface policy decision of the same family as
-    :attr:`CapabilityContext.readonly <crocodile.core.capability.CapabilityContext.readonly>`
-    — a REST or MCP projection has to confine it to a directory it owns rather than pass it
-    through. Stated here because a hazard that is obvious on one surface and invisible on
-    another is the kind that ships.
+    :attr:`CapabilityContext.readonly <crocodile.core.capability.CapabilityContext.readonly>`.
+
+    That paragraph used to end by leaving the confinement to "a REST or MCP projection",
+    and closed on the observation that a hazard obvious on one surface and invisible on
+    another is the kind that ships. It shipped: neither projection confined anything, and
+    ``GET /api/v1/export?…&dest=/…/pwned.csv&fmt=csv`` wrote 5 960 bytes to a caller-chosen
+    absolute path and answered ``200`` with it. Naming a hazard is not delegating it. The
+    decision is now taken here, by :func:`_refuse_readonly`, on the same rule as the three
+    lake writers: a surface that is not trusted with mutating SQL is not trusted to make
+    this process write a file either. Confining ``dest`` to a server-owned directory
+    remains a reasonable thing for a projection to add *on top*; it is no longer the only
+    thing standing between an unauthenticated caller and the filesystem.
     """
 
     channel: str
@@ -1067,6 +1133,7 @@ def export(ctx: CapabilityContext, params: ExportParams) -> str:
     scanning — and it is not lost: ``Catalog.scan`` raises ``ValueError("limit must be >=
     0")`` on the same input, one call deeper.
     """
+    _refuse_readonly(ctx, "export", "a file at a path the caller chooses")
     export_rows(
         ctx.catalog,
         params.channel,

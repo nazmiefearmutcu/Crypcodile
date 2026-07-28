@@ -18,23 +18,33 @@ what makes the declaration checkable rather than merely present.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import pathlib
+from typing import cast
 
 import msgspec
 import pytest
 
+import crocodile.crypto.exchanges.base_onchain.price
 from crocodile.capabilities import onchain
 from crocodile.core.capability import (
     IRREDUCIBLE,
     PENDING_SYMMETRY,
     REGISTRY,
     AssetClass,
+    CapabilityContext,
     ReturnKind,
 )
 from crocodile.core.schema.provenance import Provenance, registered_bases
 from crocodile.surfaces import cli, mcp, rest
 
 _NAMES = ("onchain-price", "base-market-data")
+
+_CTX = cast(CapabilityContext, None)
+"""These two never touch ``ctx`` — see
+:func:`test_neither_implementation_reads_the_lake`, which asserts it — so the tests
+below pass nothing rather than build a lake that would not be read."""
 
 
 @pytest.mark.parametrize("name", _NAMES)
@@ -128,3 +138,94 @@ def test_all_three_surfaces_project_the_restored_capability(name: str) -> None:
     assert name in cli.command_names()
     assert f"{rest.API_PREFIX}/{name}" in rest.route_paths()
     assert name in mcp.tool_names()
+
+
+# ---------------------------------------------------------------------------
+# Callable from a loop, and honest when the chain says no
+# ---------------------------------------------------------------------------
+
+
+async def test_the_pool_readers_answer_from_inside_a_running_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two of the three surfaces could not call these at all, and the comment said why not.
+
+    ``_run`` was a bare ``asyncio.run``, justified in the source by the claim that "both
+    network surfaces call ``dispatch.invoke`` from a worker thread rather than from the
+    event loop". They do not: ``surfaces/rest.py``'s endpoint is ``async def`` and
+    ``surfaces/stdio.py`` calls ``handle_request`` inside an async body. Measured on the
+    shipped build — CLI worked, REST returned 500, MCP returned ``RuntimeError:
+    asyncio.run() cannot be called from a running event loop``.
+
+    The shape that serves all three already existed one batch over, in
+    ``capabilities/market.py``, with a docstring explaining precisely this case. It is in
+    ``core/capability.py`` now so a third copy is never the easy option.
+    """
+
+    async def _fake_price(symbol: str) -> dict[str, object]:
+        return {"symbol": symbol, "price": 2500.0}
+
+    monkeypatch.setattr(
+        "crocodile.crypto.exchanges.base_onchain.price.get_onchain_price", _fake_price
+    )
+
+    assert asyncio.get_running_loop() is not None
+    answer = onchain.onchain_price(
+        _CTX, onchain.OnchainPriceParams(symbol="WETH-USDC")
+    )
+    assert answer == {"symbol": "WETH-USDC", "price": 2500.0}
+
+
+async def test_a_pool_read_that_failed_raises_instead_of_answering_with_an_error_dict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An RPC failure was reported as a successful ``NATIVE`` reading.
+
+    ``crocodile onchain-price --symbol WETH/USDC`` exited 0 with ``{"error": …}`` printed as
+    the answer, and ``GET /api/v1/base-market-data`` answered ``200`` with
+    ``{"result":{"error":"403 Forbidden"},"provenance":{"prov":"native"}}``. A script
+    checking ``$?`` sees success; ``warning_for`` stays silent because the declared ``prov``
+    is ``NATIVE``; and the provenance block describes a reading that does not exist.
+
+    A failure has to leave by the path failures leave by, which is the exception the three
+    surfaces already know how to render.
+    """
+    from crocodile.core.errors import ConnectorError
+
+    async def _boom(symbol: str) -> dict[str, object]:
+        raise ConnectorError("403 Forbidden")
+
+    monkeypatch.setattr(
+        "crocodile.crypto.exchanges.base_onchain.price.get_onchain_price", _boom
+    )
+
+    with pytest.raises(ConnectorError, match="403 Forbidden"):
+        onchain.onchain_price(_CTX, onchain.OnchainPriceParams(symbol="WETH-USDC"))
+
+
+def test_no_pool_reader_reports_a_failure_as_a_result() -> None:
+    """The source rule, scanned, because the dicts were built five places deep.
+
+    ``price.py`` returned ``{"error": …}`` at five sites — an unsupported symbol, a missing
+    pool, a failed state read, an unsupported pair and a failed volume read. Each one looks
+    like an answer to every caller above it, and the two capabilities here declare
+    ``prov=NATIVE`` over whatever comes back.
+    """
+    import ast
+
+    source = pathlib.Path(
+        crocodile.crypto.exchanges.base_onchain.price.__file__
+    ).read_text()
+    returned_errors = [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Dict)
+        and any(
+            isinstance(key, ast.Constant) and key.value == "error" for key in node.value.keys
+        )
+    ]
+    assert not returned_errors, (
+        f"base_onchain/price.py returns an error dict at lines {returned_errors}; raise "
+        f"instead, so a failure cannot be served as a NATIVE reading"
+    )

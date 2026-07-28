@@ -354,6 +354,106 @@ def test_gate2_registry_is_not_empty():
     )
 
 
+_REGISTRY_AS_SHIPPED: frozenset[str] = frozenset(
+    {
+        "backfill",
+        "base-market-data",
+        "basis",
+        "catalog",
+        "catalog-channels",
+        "catalog-dates",
+        "catalog-exchanges",
+        "catalog-inventory",
+        "catalog-scan",
+        "catalog-stats",
+        "catalog-summary",
+        "catalog-symbols",
+        "census",
+        "chaos-score",
+        "collect",
+        "collect-market",
+        "data-coverage",
+        "depth",
+        "export",
+        "funding-apr",
+        "funding-predict",
+        "gas-vol",
+        "indicators",
+        "iv-surface",
+        "label-transfers",
+        "lending-stress",
+        "liquidity-depth",
+        "list-exchanges",
+        "markets",
+        "mev-sandwich",
+        "ofi",
+        "onchain-price",
+        "open-interest",
+        "peg-deviation",
+        "perp-basis",
+        "query",
+        "replay",
+        "resample",
+        "resolve-symbols",
+        "risk-reversal",
+        "search",
+        "sequencer-latency",
+        "slippage",
+        "smart-money",
+        "spot-future-basis",
+        "term-structure",
+        "universe",
+        "vol-skew",
+        "whale-alerts",
+    }
+)
+"""The 49 capabilities Phase 2 shipped, by name, so that losing one is a red test.
+
+:func:`test_gate2_registry_is_not_empty` guards the vacuous case — a gate over an empty
+registry proves nothing — and this is the same argument one capability at a time. Every
+other gate in the tree takes ``REGISTRY`` as its subject: Gate 2 iterates it, Gate 3 reads
+the bases declared in it, Gate 4 compares the three surfaces *against* it. A name that
+leaves therefore leaves every gate's subject at once, and all of them stay green over the
+smaller world — which is exactly how an exit review deleted ``catalog-dates``, excused its
+two wire names as infrastructure, and passed all 689 conformance tests.
+
+A census cannot be evaded that way, because it is the one assertion whose subject is a
+number this file states rather than a list the code supplies.
+"""
+
+
+def test_gate2_no_capability_leaves_the_registry_unremarked() -> None:
+    """Phase 1 lost seven capabilities and nothing raised; the queries came back empty.
+
+    The whole merge rests on the claim that nothing disappeared silently, and every
+    mechanism defending it reads ``REGISTRY``. So the registry itself is pinned: removing a
+    declaration fails here first and by name, and the failure is not one an exemption ledger
+    can answer — ``IRREDUCIBLE`` and ``PENDING_SYMMETRY`` both describe capabilities that
+    *exist* and are asymmetric, which is a different claim from one that is gone.
+    """
+    from crocodile.capabilities import load_all
+    from crocodile.core.capability import REGISTRY
+
+    load_all()
+    live = set(REGISTRY)
+
+    gone = sorted(_REGISTRY_AS_SHIPPED - live)
+    assert not gone, (
+        f"{gone} were declared capabilities and are not in REGISTRY any more. A capability "
+        "that leaves takes its command, its route and its tool with it, and every gate that "
+        "would notice reads REGISTRY. Restore the declaration, or — if it is genuinely being "
+        "retired — retire it here in the same commit, where the diff shows what the product "
+        "stopped answering."
+    )
+
+    added = sorted(live - _REGISTRY_AS_SHIPPED)
+    assert not added, (
+        f"{added} are declared and unrecorded here. New capabilities are welcome; add them "
+        "to _REGISTRY_AS_SHIPPED so the census keeps counting, and so the next deletion is "
+        "measured against a list that includes them."
+    )
+
+
 def test_gate2_every_capability_is_symmetric():
     """Two ways out, and both cost something.
 
@@ -764,47 +864,74 @@ _CONSTANT_BUILTINS: dict[str, Callable[..., float]] = {
 }
 """Builtins that are a constant when every argument is. ``min(1.0, 2.0)`` is ``1.0``."""
 
-FABRICATION_BLIND_SPOTS = (
-    "a constant that reaches the field through a *name* rather than through the "
-    "expression at the call site — `val = 0.0` on one branch, `val = read(payload)` on "
-    "another, then `Fundamental(val=val)`. The guard rule below reads the call-site "
-    "expression only, and deliberately: chasing names was measured over this tree and "
-    "flagged 27 sites in `equity/resample/ohlcv.py` alone, where `open_px = 0.0` is an "
-    "accumulator initialiser and not a substitute for anything. Every one of the 13 it "
-    "found outside the resamplers was real, so the noise is not evenly spread — but a "
-    "gate that is two-thirds false positives on its largest subject is a gate that gets "
-    "turned off, which is worse than one that says what it misses.",
-    "a clamp — `Trade(amount=max(msg.size, 0.0001))`. `min`/`max`/`abs` over a "
-    "measurement are folded only when *every* argument is constant, so a floor applied "
-    "to a real reading passes. It fabricates when the reading is zero, and flagging it "
-    "would flag every legitimate clamp in the tree.",
-    "a class attribute — `class C: SIZE = 1.0` then `Trade(amount=C.SIZE)`. Class "
-    "bodies are separate scopes and are not descended into, so the attribute never "
-    "becomes a binding.",
-    "a default argument — `def f(size=1.0): return Trade(amount=size)`. Parameters "
-    "are deliberately recorded as non-constant, because a caller may pass a real "
-    "measurement; folding the default would flag every honest reader with a fallback.",
-    "a helper's return value — `def _size(): return 1.0` then "
-    "`Trade(amount=_size())`. Only `float`/`int` and the builtins in "
-    "`_CONSTANT_BUILTINS` are folded through; user calls are opaque.",
-    "a constant imported from another module — `from .sizes import ASSUMED` then "
-    "`Trade(amount=ASSUMED)`. The scanner parses one file at a time and has no "
-    "cross-module binding table.",
-    "a constant reached through a container the scanner cannot see into — an "
-    "attribute of a dataclass, a `NamedTuple` field, a dict built by a function.",
-)
-"""What this scanner does **not** see, listed because a gate that hides its limits
-teaches false confidence.
+FABRICATION_BLIND_SPOTS: dict[str, tuple[str, str]] = {
+    "a name assigned a constant on one branch": (
+        "def f(payload, x):\n"
+        "    val = 0.0\n"
+        "    if x:\n"
+        "        val = float(payload['size'])\n"
+        "    return Trade(amount=val)",
+        "A constant that reaches the field through a *name* rather than through the "
+        "expression at the call site. The guard rule below reads the call-site "
+        "expression only, and deliberately: chasing names was measured over this tree and "
+        "flagged 27 sites in `equity/resample/ohlcv.py` alone, where `open_px = 0.0` is an "
+        "accumulator initialiser and not a substitute for anything. Every one of the 13 it "
+        "found outside the resamplers was real, so the noise is not evenly spread — but a "
+        "gate that is two-thirds false positives on its largest subject is a gate that gets "
+        "turned off, which is worse than one that says what it misses.",
+    ),
+    "a clamp over a real reading": (
+        "def f(msg):\n    return Trade(amount=max(msg.size, 0.0001))",
+        "`min`/`max`/`abs` over a measurement are folded only when *every* argument is "
+        "constant, so a floor applied to a real reading passes. It fabricates when the "
+        "reading is zero, and flagging it would flag every legitimate clamp in the tree.",
+    ),
+    "a class attribute": (
+        "class C:\n    SIZE = 1.0\n\n\nTrade(amount=C.SIZE)",
+        "Class bodies are separate scopes and are not descended into, so the attribute "
+        "never becomes a binding.",
+    ),
+    "a default argument": (
+        "def f(size=1.0):\n    return Trade(amount=size)",
+        "Parameters are deliberately recorded as non-constant, because a caller may pass a "
+        "real measurement; folding the default would flag every honest reader with a "
+        "fallback.",
+    ),
+    "a helper's return value": (
+        "def _size():\n    return 1.0\n\n\nTrade(amount=_size())",
+        "Only `float`/`int` and the builtins in `_CONSTANT_BUILTINS` are folded through; "
+        "user calls are opaque.",
+    ),
+    "a constant imported from another module": (
+        "from crocodile.core.schema.sizes import ASSUMED\n\nTrade(amount=ASSUMED)",
+        "The scanner parses one file at a time and has no cross-module binding table.",
+    ),
+    "a constant reached through a container": (
+        "def f(cfg):\n    return Trade(amount=cfg.assumed_size)",
+        "An attribute of a dataclass, a `NamedTuple` field, a dict built by a function: the "
+        "scanner cannot see into any of them to learn the value is a constant.",
+    ),
+}
+"""What this scanner does **not** see, each with a probe proving it is still not seen.
 
 Every entry is a way to write a fabricated measurement that reads green. They are here
 rather than closed because each would cost either a cross-module analysis or a false
 positive on an honest reading — a default argument is the clearest case, since
 `def f(size=1.0)` is what a real adapter writes when the payload may omit the field.
 
-Closing one is welcome; deleting the entry without closing it is not. The last review
-found the plain `from msgspec.structs import replace` spelling evading a guard whose
-own evasion set covered only the aliased form, which is the same failure as an
-undocumented blind spot with extra steps: the gate looked complete.
+Closing one is welcome; deleting the entry without closing it is not — and until the
+review that added the probes, nothing enforced that half. This was seven prose strings no
+test read, sitting between `_EVASIONS` and `_HONEST_READINGS`, which are both parametrised.
+An unread list of limitations decays exactly the way an unread list of exemptions does: the
+earlier review found the plain `from msgspec.structs import replace` spelling evading a
+guard whose own evasion set covered only the aliased form, which is the same failure as an
+undocumented blind spot with extra steps. The gate looked complete.
+
+So each entry now carries a snippet the scanner must **not** flag, and
+:func:`test_gate3b_a_documented_blind_spot_is_still_open` runs it. Close a blind spot and
+that test goes red, which is the prompt to delete the entry; delete an entry without
+closing it and :func:`test_gate3b_the_blind_spot_list_is_the_set_that_was_measured` goes
+red instead. The prose can no longer drift away from the scanner in either direction.
 """
 
 
@@ -1376,6 +1503,58 @@ def test_gate3b_the_fabrication_scanner_leaves_a_real_reading_alone(form: str) -
     tree = ast.parse(_FABRICATION_HEADER + _HONEST_READINGS[form])
 
     assert _fabrications_in(tree, _measurement_fields(), "<probe>") == []
+
+
+@pytest.mark.parametrize(
+    "blind_spot", sorted(FABRICATION_BLIND_SPOTS), ids=lambda k: k.replace(" ", "_")
+)
+def test_gate3b_a_documented_blind_spot_is_still_open(blind_spot: str) -> None:
+    """Each declared limit, exercised, so the prose cannot outlive the limitation.
+
+    The assertion runs the *opposite* way to :data:`_EVASIONS`: this is a fabrication the
+    scanner does not see, and the test says so out loud rather than leaving a reader to
+    take the paragraph's word for it. A red result here is good news — somebody taught the
+    scanner one more spelling — and the fix is to delete the entry, which
+    :func:`test_gate3b_the_blind_spot_list_is_the_set_that_was_measured` then asks to be
+    confirmed.
+    """
+    probe, _why = FABRICATION_BLIND_SPOTS[blind_spot]
+    tree = ast.parse(_FABRICATION_HEADER + probe)
+
+    offences = _fabrications_in(tree, _measurement_fields(), "<probe>")
+
+    assert offences == [], (
+        f"{blind_spot!r} is no longer a blind spot — the scanner flagged {probe!r}. Delete "
+        f"its FABRICATION_BLIND_SPOTS entry; the list is what the gate admits it misses, "
+        f"and an entry for something it now catches understates it."
+    )
+
+
+def test_gate3b_the_blind_spot_list_is_the_set_that_was_measured() -> None:
+    """Pinning the set is what stops an entry being deleted instead of closed.
+
+    The docstring above has always said deleting without closing is unwelcome, and nothing
+    read it. Both halves are enforced now: the parametrised test above fails when a listed
+    hole closes, and this one fails when a hole leaves the list — so the only way out of
+    the list is a commit that shows both.
+    """
+    assert sorted(FABRICATION_BLIND_SPOTS) == [
+        "a clamp over a real reading",
+        "a class attribute",
+        "a constant imported from another module",
+        "a constant reached through a container",
+        "a default argument",
+        "a helper's return value",
+        "a name assigned a constant on one branch",
+    ], (
+        "the blind-spot list changed. Adding one is a limit worth documenting; removing one "
+        "means the scanner now sees that spelling, which "
+        "test_gate3b_a_documented_blind_spot_is_still_open would already have said."
+    )
+
+    for blind_spot, (probe, why) in FABRICATION_BLIND_SPOTS.items():
+        assert probe.strip(), f"{blind_spot} carries no probe, so nothing checks it is open"
+        assert why.strip(), f"{blind_spot} carries no argument for why it is left open"
 
 
 def test_gate3b_the_scanner_records_whether_the_fabricating_record_states_prov() -> None:

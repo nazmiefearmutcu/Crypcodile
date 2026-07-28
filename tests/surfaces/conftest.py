@@ -81,3 +81,42 @@ def indicator_query() -> dict[str, str]:
         "indicator": "rsi",
         "period": "5",
     }
+
+
+@pytest.fixture(autouse=True)
+def _equity_depth_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the live equity depth source, so no surface test reaches the internet.
+
+    ``slippage``/equity used to be the same function as ``slippage``/crypto and read
+    ``book_snapshot`` out of the lake, so the three tests below answered an *equity* request
+    from the crypto book this conftest writes — and labelled the result ``yahoo_1m_vap``, a
+    basis for a code path that did not exist. They passed on the strength of the defect.
+
+    The equity half now walks the ladder ``depth`` already serves, which is a network fetch
+    (Alpaca L1 when keyed, Yahoo 1m VAP when not). A surfaces test asserting that a
+    projection carries a provenance banner should not depend on Yahoo being up or on how
+    hard it is rate-limiting today, so the ladder is fixed here. Autouse because *no* test
+    in this package should be making that call.
+    """
+    from crocodile.core.schema.records import DepthProfile
+
+    profile = DepthProfile(
+        source="alpaca",
+        symbol=SYMBOL,
+        symbol_raw="BTC-PERPETUAL",
+        local_ts=START_NS,
+        source_ts=None,
+        asset_class=AssetClass.EQUITY,
+        bids=[(41_990.0, 5.0), (41_980.0, 10.0)],
+        asks=[(42_010.0, 5.0), (42_020.0, 10.0)],
+        reference_price=42_000.0,
+        depth=2,
+    )
+
+    class _FixedLadder:
+        async def snapshot(self, symbol: str) -> DepthProfile:
+            return profile
+
+    monkeypatch.setattr(
+        "crocodile.capabilities.analytics.select_depth_source", lambda **_: _FixedLadder()
+    )

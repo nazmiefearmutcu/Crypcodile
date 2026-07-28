@@ -41,7 +41,7 @@ import msgspec
 import polars as pl
 
 from crocodile.core.analytics.indicators import apply_indicators
-from crocodile.core.analytics.slippage import estimate_slippage
+from crocodile.core.analytics.slippage import estimate_slippage, slippage_over_levels
 from crocodile.core.capability import (
     PENDING_SYMMETRY,
     AssetClass,
@@ -50,6 +50,7 @@ from crocodile.core.capability import (
     Impl,
     ReturnKind,
     declare,
+    run_to_completion,
 )
 from crocodile.core.resample.ohlcv import resample_ohlcv
 from crocodile.core.schema.provenance import Provenance
@@ -81,6 +82,7 @@ from crocodile.crypto.analytics.volsurface import (
     vol_skew as _vol_skew,
 )
 from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.equity.depth import select_depth_source
 
 __all__ = [
     "BASIS",
@@ -134,6 +136,27 @@ class IndicatorParams(msgspec.Struct, frozen=True):
     interval: str = "1d"
     indicator: str | None = None
     period: int = 14
+    fill_empty: bool = False
+    """Insert a zero-volume bar for every bucket in the range that saw no trades.
+
+    ``False``, which is what the equity CLI's ``--fill-empty`` defaulted to
+    (``equity/legacy/cli.py:1641-1647@4a0f84c``, whose help warned it "can explode wide
+    date ranges"). The port dropped the flag and hardcoded ``True`` in the adapter, on the
+    argument that a 14-period SMA otherwise spans different amounts of wall-clock time on a
+    thin symbol than on a busy one. That argument is real and it is not this field's to
+    settle: a caller who wants an even time grid asks for one, and a caller who does not
+    gets the arithmetic the legacy command gave them.
+
+    What the silent flip changed, measured on a 40-bar equity series with a 60-minute
+    session gap: 40 rows became 121, the last bar's RSI moved 49.573 → 55.732, and the
+    largest per-bar RSI difference was 36.56. A period is a count of *bars*, so inserting
+    bars redefines every window in the result.
+
+    And with no field to ask for ``False``, there was no way back on any of the three
+    surfaces — including for the second-order case, where a symbol the lake has never seen
+    stopped answering "no data found" and started answering with fabricated bars carrying
+    ``num_trades=0``, ``volume=0.0`` and the header's default ``prov_confidence=1.0``.
+    """
 
 
 class SlippageParams(msgspec.Struct, frozen=True):
@@ -141,10 +164,16 @@ class SlippageParams(msgspec.Struct, frozen=True):
 
     ``size_unit`` is the crypto half of a collision: the crypto implementation took
     ``size: float | str`` plus a unit and could walk the book denominated in either asset,
-    the equity one took a bare ``float``. One struct has to cover both, so the unit is
-    either equity-ignored or crypto-lost, and it is equity-ignored — an optional parameter
+    the equity one took a bare ``float``. One struct has to cover both, so the unit was
+    either equity-ignored or crypto-lost, and it was equity-ignored — an optional parameter
     costs a caller that omits it nothing, while dropping it deletes a measured, tested book
     walk. Left unset, the walk is by quantity, which is what sizing in shares means.
+
+    It is no longer equity-*ignored*, because the walk is now one function over whichever
+    ladder the asset class brings — see
+    :func:`~crocodile.core.analytics.slippage.slippage_over_levels`. Sizing an equity order
+    in dollars was the use the original note said the parameter was being kept for; keeping
+    it turned out to cost nothing and it now works.
     """
 
     symbol: str
@@ -423,11 +452,16 @@ def indicators(ctx: CapabilityContext, params: IndicatorParams) -> pl.DataFrame:
     """Resample the symbol's trades into bars, then append the requested indicators.
 
     The query is the crypto CLI's ``indicators`` command end to end, via
-    ``CrypcodileClient.get_indicators``: resample with ``fill_empty=True``, sort by
-    ``bar``, then compute. It is copied rather than invented because the two differ in ways
-    that change the numbers — without ``fill_empty`` a quiet hour is simply absent from the
-    series, so a 14-period SMA silently spans a different amount of wall-clock time on a
-    thin symbol than on a busy one.
+    ``CrypcodileClient.get_indicators``: resample, sort by ``bar``, then compute.
+
+    ``fill_empty`` was hardcoded ``True`` here, on the argument that a quiet hour is
+    otherwise absent from the series and a 14-period SMA therefore spans a different amount
+    of wall-clock time on a thin symbol than on a busy one. The argument stands; the
+    hardcoding does not, because it was also the equity command's flag and its default was
+    ``False``. Silently flipping a default is not the same decision as offering one: it
+    changed the arithmetic for every caller (max ΔRSI 36.56 over a session gap) and left
+    nobody able to ask for the other answer, on any of the three surfaces. It now comes
+    from :attr:`IndicatorParams.fill_empty`, which carries the measurement.
 
     An empty frame is passed through to :func:`apply_indicators` rather than returned
     early, so an unknown ``indicator`` name is still rejected on a lake with no data. The
@@ -439,7 +473,7 @@ def indicators(ctx: CapabilityContext, params: IndicatorParams) -> pl.DataFrame:
         params.start_ns,
         params.end_ns,
         params.interval,
-        fill_empty=True,
+        fill_empty=params.fill_empty,
     )
     if not bars.is_empty():
         bars = bars.sort("bar")
@@ -447,13 +481,47 @@ def indicators(ctx: CapabilityContext, params: IndicatorParams) -> pl.DataFrame:
 
 
 def slippage(ctx: CapabilityContext, params: SlippageParams) -> pl.DataFrame:
-    """Walk the stored book for the requested size. A pure argument shuffle."""
+    """Walk the stored crypto book for the requested size. A pure argument shuffle."""
     return estimate_slippage(
         ctx.catalog,
         params.symbol,
         params.side,
         params.size,
         params.size_unit,
+    )
+
+
+def slippage_equities(ctx: CapabilityContext, params: SlippageParams) -> pl.DataFrame:
+    """Walk the equity depth ladder for the requested size.
+
+    A separate adapter, because ``fn=slippage`` was bound for both asset classes and that
+    was the whole defect. :func:`estimate_slippage` reads ``book_snapshot``, and no equity
+    provider in this tree emits one — so every equity call raised ``ValueError: No book
+    snapshots found`` while the declaration published ``prov_basis: "yahoo_1m_vap"``, a
+    basis naming a ladder the code path never opened. A declared basis for an unreachable
+    branch is worse than a missing one: it reads as measured.
+
+    The ladder that basis names is the one ``depth`` already serves —
+    :func:`~crocodile.equity.depth.select_depth_source`, Alpaca L1 when keyed and the
+    synthetic Yahoo VAP profile when not — so the two capabilities now read one book and
+    the walk over it is :func:`~crocodile.core.analytics.slippage.slippage_over_levels`,
+    shared with crypto. Which of the two branches ran is on the profile's own tail, where
+    it was measured; the declaration states the ceiling, and it states the same ceiling
+    ``depth`` does, because there is only one book to have a ceiling over.
+
+    Like ``depth``, this reaches the network rather than the lake, so it is driven through
+    :func:`~crocodile.core.capability.run_to_completion` — the caller may or may not own an
+    event loop, and the same declaration has to answer on all three surfaces.
+    """
+    source = select_depth_source()
+    profile = run_to_completion(lambda: source.snapshot(params.symbol))
+    return slippage_over_levels(
+        params.symbol,
+        params.side,
+        params.size,
+        list(profile.bids),
+        list(profile.asks),
+        size_unit=params.size_unit,
     )
 
 
@@ -672,13 +740,23 @@ SLIPPAGE = declare(
         aliases=("simulate-price-impact",),
         impls={
             AssetClass.CRYPTO: Impl(fn=slippage, prov=Provenance.DERIVED, basis="native"),
-            # An equity book is modelled from volume bars unless an Alpaca key upgrades it
-            # to L1, so an estimate walked over it is SYNTHETIC on its best day. Declaring
-            # the keyed ceiling here would let a keyless deployment report a level it never
-            # reaches; which of the two a given snapshot actually was is on the snapshot's
-            # own tail, where it can be measured rather than promised.
+            # `DERIVED`/`alpaca_l1`, which is what `market.py` declares for `depth` over
+            # exactly this book. The two used to disagree: this entry said SYNTHETIC /
+            # `yahoo_1m_vap` and argued it as the deliberate *floor* — "declaring the keyed
+            # ceiling would let a keyless deployment report a level it never reaches" —
+            # while `depth` said DERIVED / `alpaca_l1` and argued the ceiling. One book, one
+            # `select_depth_source`, two batches, opposite ends of one range.
+            #
+            # `Impl.prov` is documented as a ceiling, so the floor argument was answering a
+            # question the field does not ask, and its own worry is already handled where it
+            # belongs: which branch ran is on the returned profile's tail, measured by
+            # `provenance_fields`, not promised here.
+            #
+            # The basis was additionally false rather than merely pessimistic. `fn=slippage`
+            # was the same object for both classes and read `book_snapshot`, which no equity
+            # provider writes, so `yahoo_1m_vap` named a path that could not execute.
             AssetClass.EQUITY: Impl(
-                fn=slippage, prov=Provenance.SYNTHETIC, basis="yahoo_1m_vap"
+                fn=slippage_equities, prov=Provenance.DERIVED, basis="alpaca_l1"
             ),
         },
     )
@@ -787,15 +865,15 @@ FUNDING_PREDICT = declare(
             # method — XGBoost when the `ml` extra is installed, a rolling mean otherwise —
             # is named in the returned object's `method` field, where it varies per call.
             #
-            # `native` names where the *inputs* came from, and this is the batch's weakest
-            # basis: the rates arrive in `params` rather than out of the lake, so what is
-            # really being claimed is "funding rates as a venue settles them", which is what
-            # the parameter documents and not something this capability can check. A
-            # registered basis for caller-supplied inputs would say it properly; there is
-            # none, and inventing a confidence formula to get one is the thing the registry
-            # exists to forbid. Reported rather than papered over.
+            # `caller_supplied` names where the *inputs* came from, and this used to say
+            # `native` under a paragraph explaining that it was the batch's weakest basis:
+            # the rates arrive in `params` rather than out of the lake, so `native` claimed
+            # "funding rates as a venue settles them" — which is what the parameter
+            # documents and not something this capability can check. The registered basis
+            # that says it properly now exists and names this capability in its own
+            # docstring, so the caveat is spent and the declaration carries the claim.
             AssetClass.CRYPTO: Impl(
-                fn=funding_predict, prov=Provenance.SYNTHETIC, basis="native"
+                fn=funding_predict, prov=Provenance.SYNTHETIC, basis="caller_supplied"
             ),
         },
     )
@@ -916,11 +994,11 @@ SMART_MONEY = declare(
         returns=ReturnKind.TABLE,
         impls={
             # DERIVED: every output field is a sum or a max over the transfers supplied, and
-            # nothing here is modelled. `native` carries the same caveat as `funding-predict`
-            # — the rows arrive in `params`, so the claim is about what a transfer row is
-            # rather than about a channel this capability read.
+            # nothing here is modelled. `caller_supplied` for the reason `funding-predict`
+            # gives — the rows arrive in `params`, so no channel this capability read is
+            # behind them and nothing here can grade how they were sampled.
             AssetClass.CRYPTO: Impl(
-                fn=smart_money, prov=Provenance.DERIVED, basis="native"
+                fn=smart_money, prov=Provenance.DERIVED, basis="caller_supplied"
             ),
         },
     )
@@ -935,7 +1013,7 @@ LABEL_TRANSFERS = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=label_transfers, prov=Provenance.DERIVED, basis="native"
+                fn=label_transfers, prov=Provenance.DERIVED, basis="caller_supplied"
             ),
         },
     )
@@ -953,9 +1031,12 @@ CHAOS_SCORE = declare(
             # Its four terms are soft-thresholded and averaged, so the number is modelled
             # from a different data class than any of them — which is the definition, and
             # also why a chaos score is not comparable with anything but another chaos
-            # score. `native` carries the caller-supplied caveat `funding-predict` states.
+            # score. `caller_supplied` because all four terms are typed in by the caller:
+            # this is the capability whose shipped answer read `{"prov": "synthetic",
+            # "prov_basis": "native", "method": "A venue-reported value is certain by
+            # definition."}` over four numbers no venue ever saw.
             AssetClass.CRYPTO: Impl(
-                fn=chaos_score, prov=Provenance.SYNTHETIC, basis="native"
+                fn=chaos_score, prov=Provenance.SYNTHETIC, basis="caller_supplied"
             ),
         },
     )

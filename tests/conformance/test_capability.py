@@ -123,11 +123,19 @@ def test_the_seeded_registry_holds_slippage_under_one_name() -> None:
     ``slippage`` (crypto CLI, crypto REST GET, MCP ``estimate_slippage``) and
     ``simulate-price-impact`` (REST POST, both asset classes) both called the same
     estimator. The measurement is the name; the retired spelling is an alias.
+
+    One name, two adapters. This used to assert one *function* for both asset classes, and
+    that reading was the defect rather than the invariant: the shared function read
+    ``book_snapshot``, which no equity provider writes, so every equity call raised while
+    the declaration advertised a ``yahoo_1m_vap`` ladder it never opened. What has to be
+    shared is the name, the params struct and the arithmetic — not the store the ladder
+    comes out of.
     """
     cap = REGISTRY["slippage"]
     assert cap.returns is ReturnKind.SCALAR
     assert set(cap.impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
-    assert all(impl.fn is analytics.slippage for impl in cap.impls.values())
+    assert cap.impls[AssetClass.CRYPTO].fn is analytics.slippage
+    assert cap.impls[AssetClass.EQUITY].fn is analytics.slippage_equities
     assert cap.aliases == ("simulate-price-impact",)
     assert "simulate-price-impact" not in REGISTRY, (
         "an alias that is also a registered name is two capabilities again"
@@ -155,12 +163,19 @@ def test_no_alias_collides_with_a_capability_name_or_another_alias() -> None:
             seen[alias] = cap.name
 
 
-def test_slippage_rests_on_a_modelled_book_for_equities_and_a_native_one_for_crypto() -> None:
+def test_slippage_rests_on_a_rebuilt_ladder_for_equities_and_a_streamed_book_for_crypto() -> None:
     """``basis`` names the inputs, and the two asset classes genuinely differ here.
 
-    A crypto venue streams its book. An equity book is modelled from volume bars unless an
-    Alpaca key upgrades it to L1, so the estimate is SYNTHETIC on its best day — declaring
-    the keyed ceiling would let a keyless deployment claim a level it never reaches.
+    A crypto venue streams its book. An equity ladder is built by ``select_depth_source`` —
+    Alpaca L1 when keyed, a synthetic Yahoo VAP profile when not — which is the same book
+    ``depth`` reads, so the two declare the same ceiling.
+
+    Renamed and re-pinned. The old assertion was ``SYNTHETIC``/``yahoo_1m_vap``, argued as
+    the deliberate *floor* so that a keyless deployment could not claim a level it never
+    reaches. ``Impl.prov`` is documented as a ceiling, so the floor argument was answering a
+    question the field does not ask — and the worry behind it is handled where it belongs,
+    on the returned profile's own tail. The basis was also naming a code path that could not
+    execute, which is the part that made it not merely pessimistic but false.
     """
     crypto = REGISTRY["slippage"].impls[AssetClass.CRYPTO]
     assert crypto.basis == "native"
@@ -168,9 +183,13 @@ def test_slippage_rests_on_a_modelled_book_for_equities_and_a_native_one_for_cry
     assert crypto.prov is Provenance.DERIVED
 
     equity = REGISTRY["slippage"].impls[AssetClass.EQUITY]
-    assert equity.basis == "yahoo_1m_vap"
-    assert level_for(equity.basis) is Provenance.SYNTHETIC
-    assert equity.prov is Provenance.SYNTHETIC
+    assert (equity.basis, equity.prov) == ("alpaca_l1", Provenance.DERIVED)
+    assert level_for(equity.basis) is Provenance.DERIVED
+
+    depth_equity = REGISTRY["depth"].impls[AssetClass.EQUITY]
+    assert (equity.basis, equity.prov) == (depth_equity.basis, depth_equity.prov), (
+        "one book cannot have two ceilings; slippage and depth both read select_depth_source"
+    )
 
 
 def test_indicators_declares_a_native_input_basis() -> None:

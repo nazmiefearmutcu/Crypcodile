@@ -10,11 +10,23 @@ They belong here: they read the same pools ``connector.py`` streams, through the
 ``POOL_SPECS`` and ``FACTORIES`` registries, and they are the only part of the deleted MCP
 servers that was not a hand-copy of something the capability registry now declares.
 
-They are **not** capabilities and are not registered. Every capability answers out of the
-lake, and these two open an RPC socket to Base mainnet and read the head block — no asset
-class, no stored record, no ``prov`` that would survive contact with the fact that the
-answer is different one block later. They stay reachable as functions, which is how
-``examples/base_dashboard.py`` and ``examples/farcaster_frame.py`` already used them.
+They **are** capabilities, and this paragraph used to say the opposite. It argued that every
+capability answers out of the lake while these two read the head block over RPC, so neither
+had an asset class, a stored record, or a ``prov`` that survives the answer being different
+one block later. The surface-parity gate disagreed on the first point — three wire names had
+been on the wire and were served by nothing — and ``crocodile.capabilities.onchain`` now
+declares both, crypto-only and on ``IRREDUCIBLE``. A pool contract reporting its own
+``slot0`` is a venue reporting itself, which is what ``prov`` had to be a claim about. They
+also stay reachable as plain functions, which is how ``examples/base_dashboard.py`` and
+``examples/farcaster_frame.py`` use them.
+
+**A failure here raises.** Both readers returned ``{"error": …}`` from five places, which
+every caller above them read as an answer: the CLI exited 0 with the dict printed as the
+result, and REST answered 200 with ``{"result":{"error":"403 Forbidden"},"provenance":
+{"prov":"native"}}`` — a provenance block describing a reading that does not exist, and a
+``warning_for`` that stays silent because the level claimed is ``NATIVE``. An unsupported
+pool raises :class:`~crocodile.core.errors.FatalConnectorError` because no retry helps, and
+an exhausted RPC failover raises :class:`~crocodile.core.errors.ConnectorError`.
 
 The equity fork's yfinance branch did not come with them. It hardcoded eight tickers,
 returned ``pool_address="equity_feed"`` with ``reserve0``/``reserve1`` of ``0.0``, and fell
@@ -33,6 +45,7 @@ from typing import Any, cast
 import web3
 from web3 import AsyncHTTPProvider
 
+from crocodile.core.errors import ConnectorError, CrocodileError, FatalConnectorError
 from crocodile.crypto.exchanges.base_onchain.connector import FACTORIES, POOL_SPECS, TOKENS
 
 __all__ = [
@@ -188,7 +201,9 @@ async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict
         pass
     spec = cast(dict[str, Any], POOL_SPECS.get(symbol))
     if not spec:
-        return {"error": f"Symbol {symbol} not supported. Supported: {list(POOL_SPECS.keys())}"}
+        raise FatalConnectorError(
+            f"Symbol {symbol} not supported. Supported: {list(POOL_SPECS.keys())}"
+        )
     
     async def query_price(w3: AsyncWeb3) -> dict[str, Any]:
         t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
@@ -214,7 +229,7 @@ async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict
             ).call()
             
         if pool_addr == "0x0000000000000000000000000000000000000000":
-            return {"error": f"Pool for {symbol} not found on Base mainnet."}
+            raise FatalConnectorError(f"Pool for {symbol} not found on Base mainnet.")
             
         # 2. Query pool state
         price = 0.0
@@ -273,20 +288,20 @@ async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict
 
     try:
         return await execute_with_retry_and_failover(rpc_url, query_price)
+    except CrocodileError:
+        raise
     except Exception as e:
-        return {"error": f"Failed fetching pool state: {e}"}
+        raise ConnectorError(f"Failed fetching pool state: {e}") from e
 
 async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) -> dict[str, Any]:
     """Fetch real-time price, reserves, and 1-hour volume for a token pair on Base mainnet."""
     symbol = token_pair.replace("/", "-").upper()
     
     state_res = await get_onchain_price(symbol, rpc_url)
-    if "error" in state_res:
-        return state_res
-        
+
     spec = cast(dict[str, Any], POOL_SPECS.get(symbol))
     if not spec:
-        return {"error": f"Symbol {symbol} not supported."}
+        raise FatalConnectorError(f"Symbol {symbol} not supported.")
         
     async def query_volume(w3: AsyncWeb3) -> dict[str, Any]:
         t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
@@ -352,8 +367,10 @@ async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) 
 
     try:
         return await execute_with_retry_and_failover(rpc_url, query_volume)
+    except CrocodileError:
+        raise
     except Exception as e:
-        return {"error": f"Failed fetching 1h volume: {e}"}
+        raise ConnectorError(f"Failed fetching 1h volume: {e}") from e
 
 # ---------------------------------------------------------------------------
 # Discovery tool handlers (pure; unit-testable without stdio)

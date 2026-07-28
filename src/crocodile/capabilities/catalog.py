@@ -179,9 +179,16 @@ class ChannelParams(msgspec.Struct, frozen=True):
 class CatalogFilterParams(msgspec.Struct, frozen=True):
     """The two optional lake filters, shared by ``catalog-inventory`` and ``catalog-symbols``.
 
-    Both capabilities take exactly ``channel`` and ``exchange`` and both pass them to
+    Both capabilities take exactly ``channel`` and ``source`` and both pass them to
     :meth:`Catalog.inventory <crocodile.core.store.catalog.Catalog.inventory>`, so they
     share one struct and therefore one published schema.
+
+    ``source`` and not ``exchange``, which is what this batch shipped. ``core.store.migrate``
+    already renamed the lake's top-level partition from ``exchange=``/``provider=`` to
+    ``source=``, and the ops batch named its parameter after the key — so one CLI offered
+    ``collect --source binance`` beside ``catalog-symbols --exchange binance`` for the same
+    venue, and the second word cannot describe ``stooq`` or ``alpaca`` at all. The frozen
+    ``--exchange`` spelling still resolves, through ``_PARAM_RENAMES``.
 
     ``str | None`` covers all three surfaces: the CLI spelled an absent filter ``None`` and
     REST spelled it ``""``, and every one of the six legacy call sites normalised through
@@ -191,7 +198,7 @@ class CatalogFilterParams(msgspec.Struct, frozen=True):
     """
 
     channel: str | None = None
-    exchange: str | None = None
+    source: str | None = None
 
 
 class SearchParams(msgspec.Struct, frozen=True):
@@ -209,7 +216,7 @@ class SearchParams(msgspec.Struct, frozen=True):
 
     q: str
     channel: str | None = None
-    exchange: str | None = None
+    source: str | None = None
     limit: int = 20
 
 
@@ -242,7 +249,7 @@ class DataCoverageParams(msgspec.Struct, frozen=True):
 
     symbol: str
     channel: str | None = None
-    exchange: str | None = None
+    source: str | None = None
 
 
 class ScanParams(msgspec.Struct, frozen=True):
@@ -389,7 +396,7 @@ def catalog_symbols(ctx: CapabilityContext, params: CatalogFilterParams) -> list
     its own capability rather than a flag on that one because the two return different
     shapes, and a surface has to know which before it can render either.
     """
-    inv = ctx.catalog.inventory(channel=_filter(params.channel), exchange=_filter(params.exchange))
+    inv = ctx.catalog.inventory(channel=_filter(params.channel), exchange=_filter(params.source))
     if len(inv) == 0:
         return []
     symbols: list[str] = sorted(inv["symbol"].unique().to_list())
@@ -399,7 +406,7 @@ def catalog_symbols(ctx: CapabilityContext, params: CatalogFilterParams) -> list
 def catalog_inventory(ctx: CapabilityContext, params: CatalogFilterParams) -> pl.DataFrame:
     """Per-symbol coverage: exchange, channel, symbol, first and last timestamp, row count."""
     return ctx.catalog.inventory(
-        channel=_filter(params.channel), exchange=_filter(params.exchange)
+        channel=_filter(params.channel), exchange=_filter(params.source)
     )
 
 
@@ -444,7 +451,7 @@ def search(ctx: CapabilityContext, params: SearchParams) -> pl.DataFrame:
     return ctx.catalog.search_symbols(
         params.q,
         channel=_filter(params.channel),
-        exchange=_filter(params.exchange),
+        exchange=_filter(params.source),
         limit=params.limit,
     )
 
@@ -474,7 +481,7 @@ def data_coverage(ctx: CapabilityContext, params: DataCoverageParams) -> pl.Data
     instead of being hand-built from a second copy of the column list: the fork's copy is
     what a schema change would have to remember to update twice.
     """
-    inv = ctx.catalog.inventory(channel=_filter(params.channel), exchange=_filter(params.exchange))
+    inv = ctx.catalog.inventory(channel=_filter(params.channel), exchange=_filter(params.source))
     if len(inv) == 0:
         return inv
     return inv.filter(pl.col("symbol") == params.symbol.strip())

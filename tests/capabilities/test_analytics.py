@@ -27,12 +27,14 @@ from crocodile.capabilities.analytics import (
     ChaosScoreParams,
     FundingAprParams,
     FundingPredictParams,
+    IndicatorParams,
     IvSurfaceParams,
     LabelTransfersParams,
     LiquidityDepthParams,
     OfiParams,
     PerpBasisParams,
     RiskReversalParams,
+    SlippageParams,
     SmartMoneyParams,
     SpotFutureBasisParams,
     TermStructureParams,
@@ -44,6 +46,7 @@ from crocodile.core.config import Settings
 from crocodile.core.schema.enums import OptType, Side
 from crocodile.core.schema.records import (
     BookSnapshot,
+    DepthProfile,
     DerivativeTicker,
     Funding,
     Liquidation,
@@ -701,3 +704,171 @@ def test_the_declared_return_kinds_match_what_the_adapters_return(
     assert REGISTRY["basis"].returns is ReturnKind.TABLE
     score = _call("chaos-score", empty_ctx, ChaosScoreParams(0.0, 0.0, 0.0, 0.0))
     assert isinstance(score, float) and not math.isnan(score)
+
+
+# ---------------------------------------------------------------------------
+# indicators: the default that flipped
+# ---------------------------------------------------------------------------
+
+
+def test_indicators_can_be_asked_not_to_fill_the_gaps_and_does_not_by_default() -> None:
+    """The legacy default was ``False`` and this port hardcoded ``True`` with no way back.
+
+    ``equity/legacy/cli.py:1641-1647@4a0f84c`` declared ``--fill-empty`` defaulting to
+    ``False``, with help warning it "can explode wide date ranges". The adapter passes
+    ``fill_empty=True`` unconditionally and ``IndicatorParams`` has no field to ask for the
+    other one, so every caller on all three surfaces gets a series the legacy command would
+    only have produced on request.
+
+    It changes the numbers, which is the part that matters: measured on a 40-bar equity
+    series with a 60-minute session gap, 40 rows became 121 and the last bar's RSI moved
+    49.573 → 55.732, max ΔRSI 36.56. A period is a count of bars, so inserting bars
+    redefines the window every indicator is measured over.
+    """
+    assert IndicatorParams(symbol="x", start_ns=0, end_ns=1).fill_empty is False
+    assert "fill_empty" in IndicatorParams.__struct_fields__
+
+
+def test_indicators_over_a_symbol_with_no_trades_returns_nothing_to_indicate(
+    ctx: CapabilityContext,
+) -> None:
+    """The second-order effect, which is a fabrication rather than a difference of opinion.
+
+    With ``fill_empty=True``, a symbol the lake has never seen stops answering "no data" and
+    starts answering with bars: ``num_trades: 0``, ``volume: 0.0``, and — because the tail is
+    the header's default — ``prov_confidence: 1.0``. Eleven invented rows, exit 0, at the
+    confidence a venue print carries. Gate 3b bans exactly this shape inside a record
+    constructor; it arrived here through a resampler argument instead.
+    """
+    bars = _call(
+        "indicators",
+        ctx,
+        IndicatorParams(
+            symbol="deribit:NOTHING-EVER-TRADED",
+            start_ns=_BASE_NS,
+            end_ns=_BASE_NS + 10 * 60 * _SEC_NS,
+            interval="1m",
+        ),
+    )
+    assert bars.is_empty(), (
+        f"a symbol with no stored trades produced {bars.height} bars; a bar the market never "
+        f"printed is a fabrication whatever the resampler calls it"
+    )
+
+
+def test_the_indicators_fill_empty_parameter_is_served_rather_than_redirected() -> None:
+    """``_PARAM_BECAME_A_CAPABILITY`` said the flag moved to ``resample``, and it had.
+
+    That entry was true and was not the whole story: the flag moved, and the *default* moved
+    with it in the opposite direction, so a caller who did nothing got the behaviour the
+    legacy command reserved for a caller who asked. A redirect ledger has no vocabulary for
+    a default, which is why the parameter is back on the capability that no longer only
+    redirects it.
+    """
+    from tests.conformance.test_phase2_surface_parity import _PARAM_BECAME_A_CAPABILITY
+
+    assert ("indicators", "fill_empty") not in _PARAM_BECAME_A_CAPABILITY
+    load_all()
+    assert "fill_empty" in REGISTRY["indicators"].params.__struct_fields__
+
+
+# ---------------------------------------------------------------------------
+# slippage: the equity half that declared a book it never opened
+# ---------------------------------------------------------------------------
+
+
+def _equity_ctx(tmp_path: Path) -> CapabilityContext:
+    load_all()
+    return CapabilityContext(
+        catalog=Catalog(tmp_path),
+        settings=Settings(data_dir=tmp_path),
+        asset_class=AssetClass.EQUITY,
+    )
+
+
+class _StubDepthSource:
+    """A depth source that answers with a fixed ladder, the way the real ones answer."""
+
+    def __init__(self, profile: DepthProfile) -> None:
+        self._profile = profile
+
+    async def snapshot(self, symbol: str) -> DepthProfile:
+        return self._profile
+
+
+def _equity_profile() -> DepthProfile:
+    return DepthProfile(
+        source="alpaca",
+        symbol="alpaca:AAPL",
+        symbol_raw="AAPL",
+        local_ts=_BASE_NS,
+        source_ts=_BASE_NS,
+        asset_class=AssetClass.EQUITY,
+        bids=[(99.0, 100.0), (98.0, 200.0)],
+        asks=[(101.0, 50.0), (102.0, 200.0)],
+        reference_price=100.0,
+        depth=2,
+    )
+
+
+def test_slippage_for_equities_walks_a_ladder_instead_of_a_book_no_equity_source_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``fn=slippage`` was one object for both asset classes and read ``book_snapshot``.
+
+    No equity provider emits a ``BookSnapshot``, so every equity call raised
+    ``ValueError: No book snapshots found`` — while the declaration published
+    ``prov_basis: "yahoo_1m_vap"``, naming a synthetic VAP ladder the code path never
+    touched. A declared basis for a branch that cannot run is the decorative provenance the
+    registry exists to refuse, and it is worse than a missing one because it reads as
+    measured.
+
+    The ladder it names does exist: ``equity/depth/select.py`` is what ``depth`` already
+    serves, and walking it is the same arithmetic the crypto book gets.
+    """
+    monkeypatch.setattr(
+        "crocodile.capabilities.analytics.select_depth_source",
+        lambda **_: _StubDepthSource(_equity_profile()),
+    )
+    frame = REGISTRY["slippage"].impls[AssetClass.EQUITY].fn(
+        _equity_ctx(tmp_path),
+        SlippageParams(symbol="alpaca:AAPL", side="buy", size=60.0),
+    )
+    row = frame.to_dicts()[0]
+    assert row["best_price"] == 101.0
+    # 50 @ 101 + 10 @ 102 = 6070 over 60 shares.
+    assert math.isclose(row["expected_price"], 6070.0 / 60.0)
+    assert row["slippage_usd"] > 0.0
+
+
+def test_slippage_and_depth_declare_the_same_ceiling_over_the_same_equity_book(
+    tmp_path: Path,
+) -> None:
+    """Two batches read one book and picked opposite ends of its range.
+
+    ``market.py`` declared ``depth``/equity ``DERIVED``/``alpaca_l1`` and argued it as the
+    deliberate *ceiling*; ``analytics.py`` declared ``slippage``/equity ``SYNTHETIC``/
+    ``yahoo_1m_vap`` and argued it as the deliberate *floor*. Same
+    ``select_depth_source()``, same two branches, opposite declarations —
+    and ``Impl.prov`` is documented as a ceiling, so only one of the two arguments can be
+    the one the field takes.
+    """
+    load_all()
+    slippage_equity = REGISTRY["slippage"].impls[AssetClass.EQUITY]
+    depth_equity = REGISTRY["depth"].impls[AssetClass.EQUITY]
+    assert (slippage_equity.prov, slippage_equity.basis) == (
+        depth_equity.prov,
+        depth_equity.basis,
+    )
+
+
+def test_the_two_asset_classes_of_slippage_are_not_the_same_function() -> None:
+    """The tell that the equity declaration was never exercised.
+
+    ``analytics.py:674,680`` bound ``fn=slippage`` twice. One function reading one store
+    cannot be two implementations resting on two different bases, and the parameter that
+    would have said so — an asset class on the context — was ignored by the body.
+    """
+    load_all()
+    impls = REGISTRY["slippage"].impls
+    assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn

@@ -18,7 +18,9 @@ signature introspection that convention exists to refuse — and a surface that 
 not crash: it would hand the caller a coroutine object that never runs, which is a wrong
 answer wearing a passing call. A capability that works on MCP and hangs on the CLI is worse
 than one that is not declared, so the coroutine is driven to completion inside the adapter,
-by :func:`_run_to_completion`, and what every surface gets back is a value.
+by :func:`~crocodile.core.capability.run_to_completion`, and what every surface gets back is
+a value. That helper started here and moved to the machinery when a second batch wrote its
+own bare ``asyncio.run`` and broke two surfaces out of three with it.
 
 **Why none of them needs a live client on the context.**
 :class:`~crocodile.core.capability.CapabilityContext` carries a ``Catalog`` and a
@@ -39,9 +41,7 @@ argued there rather than left to be found.
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Callable, Coroutine, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Mapping
 from typing import Any, Final
 
 import msgspec
@@ -55,6 +55,7 @@ from crocodile.core.capability import (
     Impl,
     ReturnKind,
     declare,
+    run_to_completion,
 )
 from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import DepthProfile
@@ -96,38 +97,6 @@ integer and only ever worked because DuckDB widened the literal. ``local_ts`` is
 """
 
 
-def _run_to_completion[T](make: Callable[[], Coroutine[Any, Any, T]]) -> T:
-    """Drive ``make()``'s coroutine to a value, from a caller that may or may not have a loop.
-
-    The two callers this has to serve are the reason it is not a bare ``asyncio.run``. A CLI
-    projection has no running loop, so ``asyncio.run`` is exactly right. A REST or MCP
-    projection *is* a running loop, and ``asyncio.run`` raises ``RuntimeError`` there —
-    which would make the same declaration work on one surface and fail on another, the
-    asymmetry this registry exists to end.
-
-    So a running loop is detected and the coroutine gets its own loop on a worker thread.
-    That blocks the calling loop for the duration, which is a real cost and is stated rather
-    than hidden: an async surface that does not want to pay it calls the adapter through
-    ``asyncio.to_thread``, which puts it on a thread with no loop and takes the first
-    branch. It cannot deadlock — every coroutine here builds its own ``aiohttp``/``ccxt``
-    session inside the new loop and awaits nothing belonging to the outer one.
-
-    ``make`` is a factory rather than a coroutine so the object is created on the thread
-    that will await it, and so a failure before submission cannot leave a
-    "coroutine was never awaited" warning behind instead of an error.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(make())
-
-    def _in_its_own_loop() -> T:
-        return asyncio.run(make())
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(_in_its_own_loop).result()
-
-
 class ListExchangesParams(msgspec.Struct, frozen=True):
     """No parameters: the answer is the whole registry or nothing.
 
@@ -164,8 +133,12 @@ class UniverseParams(msgspec.Struct, frozen=True):
     renders this answer, not a different answer.
     """
 
-    exchange: str
-    """Venue id, native or ccxt."""
+    source: str
+    """Venue id, native or ccxt.
+
+    ``source``, which is the lake's merged partition key and what the ops batch already
+    called it. This struct said ``exchange`` — the crypto fork's word, which has no meaning
+    on the equity half this capability inherits when M3 lands."""
 
     top: int | None = None
     """Rank by 24 h quote volume and return the top N, instead of enumerating."""
@@ -361,13 +334,13 @@ def universe(ctx: CapabilityContext, params: UniverseParams) -> pl.DataFrame:
     Reaches the network and not the lake: ``load_markets`` and ``fetch_tickers`` are what a
     venue publishes about itself, which is why this capability can answer for a symbol that
     has never been collected. The coroutine is driven here rather than returned; see
-    :func:`_run_to_completion`.
+    :func:`~crocodile.core.capability.run_to_completion`.
     """
     kinds = _kinds(params.kinds)
     top = params.top
     if top is not None:
-        symbols = _run_to_completion(
-            lambda: top_symbols_by_volume(params.exchange, top, quote=params.quote, kinds=kinds)
+        symbols = run_to_completion(
+            lambda: top_symbols_by_volume(params.source, top, quote=params.quote, kinds=kinds)
         )
         return pl.DataFrame(
             [
@@ -378,7 +351,7 @@ def universe(ctx: CapabilityContext, params: UniverseParams) -> pl.DataFrame:
         )
 
     instruments = filter_instruments(
-        _run_to_completion(lambda: exchange_instruments(params.exchange)),
+        run_to_completion(lambda: exchange_instruments(params.source)),
         kinds=kinds,
         quote=params.quote,
     )
@@ -405,7 +378,7 @@ def census(ctx: CapabilityContext, params: CensusParams) -> dict[str, Any]:
     test; that is an argument for the *function's* signature, not for a field in a schema
     three surfaces publish, since when a snapshot was taken is not something a user chooses.
     """
-    return _run_to_completion(
+    return run_to_completion(
         lambda: census_mod.market_census(
             generated_ns=now_ns(),
             venues=list(params.venues) or None,
@@ -450,7 +423,7 @@ def depth(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
     fixed by a field that is documented as a maximum.
     """
     source = select_depth_source(bins=params.bins, top_n=params.top_n, method=params.method)
-    return _run_to_completion(lambda: source.snapshot(params.symbol))
+    return run_to_completion(lambda: source.snapshot(params.symbol))
 
 
 LIST_EXCHANGES = declare(

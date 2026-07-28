@@ -34,7 +34,6 @@ the deleted MCP server into the connector package they read through, unchanged.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import msgspec
@@ -46,6 +45,7 @@ from crocodile.core.capability import (
     Impl,
     ReturnKind,
     declare,
+    run_to_completion,
 )
 from crocodile.core.schema.provenance import Provenance
 
@@ -70,19 +70,6 @@ class BaseMarketDataParams(msgspec.Struct, frozen=True):
     the field keeps its own name because that is the name the tool was called with."""
 
 
-def _run(coro: Any) -> dict[str, Any]:
-    """Run one coroutine to completion from a synchronous capability implementation.
-
-    :data:`~crocodile.core.capability.CapabilityFn` is synchronous, and these two readers are
-    async because they hold an RPC socket open across several calls. ``asyncio.run`` is
-    correct here and would not be inside a running loop — but no surface calls an
-    implementation from one: the CLI is synchronous, and both network surfaces call
-    ``dispatch.invoke`` from a worker thread rather than from the event loop.
-    """
-    result: dict[str, Any] = asyncio.run(coro)
-    return result
-
-
 def onchain_price(ctx: CapabilityContext, params: OnchainPriceParams) -> dict[str, Any]:
     """Current price, virtual reserves and pool address for one Base pool.
 
@@ -90,10 +77,20 @@ def onchain_price(ctx: CapabilityContext, params: OnchainPriceParams) -> dict[st
     the lake, so there is no ``ctx.query`` to make and no stored row behind the answer. It is
     the only pair of capabilities in the registry for which that is true, and it is why the
     ``prov`` below is a claim about a contract call rather than about a Parquet file.
+
+    :func:`~crocodile.core.capability.run_to_completion` rather than the ``asyncio.run`` this
+    module shipped with. That call was justified by the claim that "both network surfaces
+    call ``dispatch.invoke`` from a worker thread rather than from the event loop", and
+    neither does: ``surfaces/rest.py``'s endpoint is ``async def`` and ``surfaces/stdio.py``
+    calls ``handle_request`` inside an async body. So these two answered on the CLI, returned
+    500 on REST, and raised ``RuntimeError: asyncio.run() cannot be called from a running
+    event loop`` on MCP — a capability that works on one surface and fails on another, which
+    is the asymmetry the registry exists to end, arriving through the module that was added
+    to close a different one.
     """
     from crocodile.crypto.exchanges.base_onchain.price import get_onchain_price
 
-    return _run(get_onchain_price(params.symbol))
+    return run_to_completion(lambda: get_onchain_price(params.symbol))
 
 
 def base_market_data(ctx: CapabilityContext, params: BaseMarketDataParams) -> dict[str, Any]:
@@ -103,7 +100,7 @@ def base_market_data(ctx: CapabilityContext, params: BaseMarketDataParams) -> di
     """
     from crocodile.crypto.exchanges.base_onchain.price import get_base_market_data
 
-    return _run(get_base_market_data(params.token_pair))
+    return run_to_completion(lambda: get_base_market_data(params.token_pair))
 
 
 ONCHAIN_PRICE = declare(

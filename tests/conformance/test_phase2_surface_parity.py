@@ -137,6 +137,43 @@ than hand-copied beside it — which is what fixes the drift that prompted the o
 ``list_all_exchanges`` existed and the self-description did not mention it).
 """
 
+_INFRASTRUCTURE_AS_SHIPPED: frozenset[str] = frozenset(
+    {
+        "/",
+        "admin-payments",
+        "api",
+        "capabilities",
+        "docs",
+        "events",
+        "flowmap",
+        "gas-tracker",
+        "health",
+        "mcp",
+        "metrics",
+        "migrate-lake",
+        "ready",
+        "shell",
+        "simulate-payment",
+        "status",
+        "update",
+        "version",
+    }
+)
+"""The eighteen names above, written out a second time, because this ledger may only shrink.
+
+Not redundancy: a *pin*. ``_INFRASTRUCTURE`` is a claim about the past — *this was never a
+capability* — and an exit review showed the dict alone could not tell that claim apart from
+its opposite. Deleting the ``catalog-dates`` declaration and adding its two canonical wire
+names to the dict above passed all 689 conformance tests, because every rule the dict had
+was one a freshly deleted capability satisfies by construction (see
+:func:`test_the_infrastructure_list_cannot_grow_to_excuse_a_deleted_capability`).
+
+Growing the list is therefore an edit to two places with a failing test in between, and the
+test says what the second edit is admitting to. Shrinking it stays free in one direction
+only — when the name became a declared capability, which
+:func:`test_the_infrastructure_list_is_not_hoarding_entries` already forces.
+"""
+
 
 # ---------------------------------------------------------------------------
 # The rename ledger. Every entry is an argument, not a mapping.
@@ -373,6 +410,34 @@ _PARAM_RENAMES: dict[tuple[str | None, str], tuple[str, str]] = {
         "`backfill --exchange`. That the two forks called one slot `exchange` and `provider` "
         "is the whole reason the partition key was merged."),
     ("collect-market", "exchange"): ("sources", "Same as `collect --exchange`."),
+    (None, "exchange"): (
+        "source",
+        "The same merged partition key as `backfill --exchange`, applied to the five "
+        "capabilities that filter by one venue rather than subscribing to several: "
+        "`universe`, `sequencer-latency`, `catalog-inventory`, `catalog-symbols`, "
+        "`data-coverage` and `search`. Two batches shipped `exchange` and one shipped "
+        "`source`, so one CLI offered `collect --source binance` beside `catalog-symbols "
+        "--exchange binance` for the same venue — and `exchange` cannot describe `stooq` or "
+        "`alpaca`, which is why the lake stopped using it. Written as a `None` key because "
+        "it now holds everywhere the per-capability entries above do not override it.",
+    ),
+    ("collect-market", "limit"): (
+        "max_symbols",
+        "`limit` means a cap on rows returned in every other batch — `replay`, `export`, "
+        "`search`, `catalog-scan`, `universe`. On `collect-market` it capped how many "
+        "symbols the `--all` slice *subscribes to*, so `--all` on a 2 000-market venue "
+        "collected 500 and neither the request nor the result said so. Same word, different "
+        "question; the question gets its own word.",
+    ),
+    ("backfill", "period"): (
+        "oi_period",
+        "`period` was `str = \"5m\"` here — Binance's open-interest history bucket — and "
+        "`int = 14` on `indicators`, a count of bars an indicator looks back over. REST "
+        "coerces with `strict=False`, so `?period=14` on `backfill` became the string "
+        "`\"14\"` and reached the venue as a bucket width, which nothing along the path "
+        "reads as an error. `period` keeps the meaning five capabilities share; the venue's "
+        "bucket says which series it buckets.",
+    ),
     ("collect", "dlq_report"): (
         "dlq_report_path",
         "Both name a file to write the dead-letter report to; the registry suffixes it "
@@ -469,14 +534,15 @@ _PARAM_BECAME_A_CAPABILITY: dict[tuple[str, str], tuple[str, str]] = {
         "The other half of the same mode: a dated future has an expiry and the other two "
         "measurements have nothing to put in it. It is `spot-future-basis`'s `expiry_ns`.",
     ),
-    ("indicators", "fill_empty"): (
-        "resample",
-        "The equity `indicators` command resampled the bars and *then* applied the "
-        "indicator, and `--fill-empty` governed the first step — its body passes the flag "
-        "to `client.resample(...)` and nothing else reads it. Resampling is its own "
-        "capability, and the flag went with the step it belongs to rather than staying on "
-        "a command that no longer performs it.",
-    ),
+    # `("indicators", "fill_empty")` was here, redirected to `resample`, on the argument
+    # that the equity command resampled and *then* applied the indicator so the flag went
+    # with the step it belonged to. Every word of that was true and it was not the whole
+    # decision: the flag moved and its default moved the other way, from the legacy `False`
+    # to a hardcoded `True` in the adapter, so a caller who did nothing got a series the
+    # legacy command produced only on request — 40 rows became 121 and the last bar's RSI
+    # moved 49.573 to 55.732 over one session gap. This ledger has no vocabulary for a
+    # default, which is exactly why the redirect read as complete. `indicators` accepts the
+    # parameter again, so there is nothing left to redirect.
 }
 """(capability, parameter as frozen) → (the capability that now accepts it, why).
 
@@ -944,9 +1010,13 @@ def test_no_wire_name_disappeared() -> None:
     )
     assert not lost, (
         f"{len(lost)} wire names that were callable before Phase 2 and are callable nowhere "
-        f"now: {lost}. Either serve them — a registry entry, or an `aliases` entry for a "
-        "retired spelling — or add them to _INFRASTRUCTURE with the argument for why they "
-        "were never a capability."
+        f"now: {lost}. Serve them: a registry entry, or an `aliases` entry for a retired "
+        "spelling. _INFRASTRUCTURE is not the remedy for this failure — it records that a "
+        "name was *never* a capability, which is a claim about the past, and offering it "
+        "here is how an exit review deleted `catalog-dates` and left all 689 conformance "
+        "tests green. Adding a name to it now also fails "
+        "test_the_infrastructure_list_cannot_grow_to_excuse_a_deleted_capability, which is "
+        "the test to read before deciding this name was never a capability."
     )
 
 
@@ -1033,6 +1103,56 @@ def test_the_infrastructure_list_is_not_hoarding_entries() -> None:
     )
     assert not contradicted, (
         f"these are declared capabilities and cannot also be infrastructure: {contradicted}"
+    )
+
+
+def test_the_infrastructure_list_cannot_grow_to_excuse_a_deleted_capability() -> None:
+    """A name that served a capability yesterday cannot become one that never was.
+
+    The hole an exit review walked through, end to end: delete the ``catalog-dates``
+    declaration, add ``catalog-dates`` and ``list-dates`` to :data:`_INFRASTRUCTURE`, and
+    the whole conformance suite passes. Every gate that could have caught it declined for a
+    different reason, and each reason was correct in isolation:
+
+    * Gate 4 compares the three surfaces against ``REGISTRY``, so a capability that leaves
+      the registry leaves all three surfaces together and the comparison stays balanced.
+    * Gate 2 iterates ``REGISTRY``, so a name that is no longer in it is no longer its
+      subject.
+    * :func:`test_no_wire_name_disappeared` was satisfied by the new ledger entry — and its
+      own failure message recommended exactly that.
+    * :func:`test_the_infrastructure_list_is_not_hoarding_entries` asks that the name was on
+      the frozen wire, that it carries prose, and that it is **not currently registered**.
+      A just-deleted capability satisfies all three by construction; the third is the one
+      that inverts, because deletion is what makes it true.
+
+    What none of them could ask is the question this list actually answers, which is about
+    the past rather than about today. So the answer is pinned in
+    :data:`_INFRASTRUCTURE_AS_SHIPPED` and an addition has to survive being named there.
+    """
+    added = sorted(set(_INFRASTRUCTURE) - _INFRASTRUCTURE_AS_SHIPPED)
+    assert not added, (
+        f"_INFRASTRUCTURE grew by {added}. This list means *never a capability*. If one of "
+        "these was serving a capability that has since been deleted, the deletion is the "
+        "thing to justify — not the name — and it is not justifiable here: restore the "
+        "declaration, or serve the name through `aliases`. If it genuinely was never a "
+        "capability, add it to _INFRASTRUCTURE_AS_SHIPPED in the same commit, where the "
+        "diff shows a reviewer both halves of the claim at once."
+    )
+
+    from crocodile.core.capability import REGISTRY
+
+    dropped = sorted(
+        name
+        for name in _INFRASTRUCTURE_AS_SHIPPED
+        if name not in _INFRASTRUCTURE
+        and name not in REGISTRY
+        and not any(name in cap.aliases for cap in REGISTRY.values())
+    )
+    assert not dropped, (
+        f"{dropped} left _INFRASTRUCTURE without becoming capabilities. The one exit this "
+        "list has is being declared — which is what "
+        "test_the_infrastructure_list_is_not_hoarding_entries forces — so a name that is on "
+        "neither list is a wire name with nothing left saying what happened to it."
     )
 
 
