@@ -168,22 +168,33 @@ def test_every_implementation_is_a_named_module_level_adapter(name: str) -> None
         assert getattr(ops, impl.fn.__name__, None) is impl.fn, f"{where} is not module-level"
 
 
-def test_the_five_irreducible_capabilities_that_are_capabilities_are_declared() -> None:
-    """``IRREDUCIBLE`` names six things and five of them are capabilities."""
-    declared = {name for name in IRREDUCIBLE if name in REGISTRY}
-    assert declared == set(IRREDUCIBLE) - {"gas-tracker"}
+def test_every_irreducible_name_is_a_declared_capability() -> None:
+    """``IRREDUCIBLE`` is now all capabilities, which is what the list is for.
 
-
-def test_gas_tracker_is_named_irreducible_but_is_not_a_capability() -> None:
-    """The finding, asserted rather than described.
-
-    A Qt launcher has no parameters, no return, no provenance and no asset class, so there
-    is nothing for the registry to hold. The name stays on ``IRREDUCIBLE`` because that dict
-    is not this batch's to edit; this test is what makes the contradiction visible instead
-    of leaving an exemption pointing at nothing.
+    It named six and one of them was not: ``gas-tracker``. An exemption list whose entries
+    are not all the same kind of thing means two things at once, and the one that is not a
+    capability is the one nothing can check.
     """
-    assert "gas-tracker" in IRREDUCIBLE
+    assert {name for name in IRREDUCIBLE if name in REGISTRY} == set(IRREDUCIBLE)
+
+
+def test_gas_tracker_is_a_launcher_and_is_on_no_list_that_would_imply_otherwise() -> None:
+    """Migrated: this used to assert ``"gas-tracker" in IRREDUCIBLE`` and call it a finding.
+
+    It was a finding — recorded here because ``IRREDUCIBLE`` was not this batch's file to
+    edit — and the coordinator acted on it, so the assertion now pins the resolution rather
+    than the contradiction. A Qt launcher has no parameters, no return, no provenance and
+    no asset class; it cannot reach REST or MCP even in principle, and its old
+    justification argued about gas *data*, which ``gas-vol`` already carries. ``flowmap``
+    is the same kind of thing and was never on the list, which is the evidence.
+
+    The reasoning stays reachable from the batch module rather than living only in a commit
+    message, because the next reader of ``UNDECLARED`` is someone asking why this name is
+    not in the registry.
+    """
+    assert "gas-tracker" not in IRREDUCIBLE
     assert "gas-tracker" not in REGISTRY
+    assert "gas-tracker" not in PENDING_SYMMETRY
     assert "gas-tracker" in ops.UNDECLARED
     assert ops.UNDECLARED["gas-tracker"]().strip()
     assert (ops._why_gas_tracker_is_not_a_capability.__doc__ or "").strip()
