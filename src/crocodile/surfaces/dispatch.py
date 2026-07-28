@@ -349,11 +349,29 @@ def build_params(cap: Capability, values: dict[str, Any]) -> Any:
     has no other way to spell one. What those four take is a JSON document either way; this
     only says so where the transport lost the type.
 
+    A name the capability does not declare is **refused**, not dropped. ``msgspec.convert``
+    ignores what it does not recognise, so ``GET /api/v1/catalog-inventory?source=nope``
+    answered 200 with the whole inventory: the field is spelled ``exchange``, ``source`` is
+    the lake's own partition key and therefore the obvious guess, and a filter that is
+    silently ignored narrows nothing and does not say so. The caller reads the entire lake
+    as the answer to a question about one exchange. The refusal lists what the capability
+    does accept, so a near miss is one line from being fixed rather than a hunt through a
+    schema.
+
     Raises:
-        ValueError: a value does not fit the declared schema, a required one is missing, or a
-            structured field was handed text that is not JSON. msgspec's own message names
-            the field and the type, and is not reworded.
+        ValueError: a name is not a parameter of this capability, a value does not fit the
+            declared schema, a required one is missing, or a structured field was handed text
+            that is not JSON. msgspec's own message names the field and the type, and is not
+            reworded.
     """
+    known = {field.name for field in msgspec.structs.fields(cap.params)}
+    unknown = sorted(set(values) - known)
+    if unknown:
+        raise ValueError(
+            f"{cap.name}: {', '.join(unknown)} "
+            f"{'is not a parameter' if len(unknown) == 1 else 'are not parameters'} of this "
+            f"capability; it takes {sorted(known)}"
+        )
     sequences = _sequence_fields(cap.params)
     structured = structured_fields(cap)
     supplied = {
