@@ -34,6 +34,7 @@ from crocodile.core.schema.provenance import Provenance, level_for, provenance_f
 from crocodile.core.schema.records import DepthProfile, OpenInterest
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.core.util.time import now_ns
 from crocodile.crypto.instruments.registry import Instrument, Kind
 
 _BASE_NS = 1_704_067_200_000_000_000
@@ -537,17 +538,109 @@ def test_depth_declares_the_keyed_ceiling_rather_than_todays_environment() -> No
     assert not keyed.is_synthetic
 
 
-def test_depth_is_the_only_capability_here_whose_missing_half_is_the_crypto_one() -> None:
-    """Its equity half is what already ships, which is what M6 describes.
+def test_depth_was_the_capability_whose_missing_half_was_the_crypto_one() -> None:
+    """The batch's one backwards gap, closed — and asserted as closed rather than described.
 
-    Recorded as a test rather than only as a comment because the ledger's value cannot say
-    it: every entry in ``SPEC_METHODS`` closes an *equity* gap, so ``depth`` is scheduled
-    against the only method that names depth at all while the half it is waiting for is the
-    other one. Phase 3's exit gate is what forces somebody to look at that.
+    Every entry in ``SPEC_METHODS`` closes an *equity* gap, so while ``depth`` was
+    asymmetric it was scheduled against M6, the only method that named depth at all, and M6
+    describes the equity half that already shipped. That mismatch is what M8 was written
+    for. The remaining four here still run the usual direction, which is what makes ``depth``
+    worth a test of its own rather than a line in the parametrised sweep: it is the one whose
+    two implementations are asymmetric in *kind*, one reaching a vendor and one reading the
+    lake, and asserting they are both present is the cheapest way to notice if either leaves.
     """
-    assert set(REGISTRY["depth"].impls) == {AssetClass.EQUITY}
+    assert set(REGISTRY["depth"].impls) == {AssetClass.EQUITY, AssetClass.CRYPTO}
+    assert "depth" not in PENDING_SYMMETRY
     for name in ("markets", "universe", "census", "open-interest"):
         assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
+
+
+def _book_frame(*, local_ts: int) -> pl.DataFrame:
+    """One stored ``book_snapshot`` row, in the shape a lake read hands back."""
+    return pl.DataFrame(
+        {
+            "source": ["deribit"],
+            "symbol": ["deribit:BTC-PERPETUAL"],
+            "symbol_raw": ["BTC-PERPETUAL"],
+            "local_ts": [local_ts],
+            "source_ts": [None],
+            "bids": [[{"price": 99.0, "amount": 5.0}, {"price": 98.0, "amount": 4.0}]],
+            "asks": [[{"price": 101.0, "amount": 5.0}, {"price": 102.0, "amount": 4.0}]],
+        },
+        schema_overrides={"source_ts": pl.Int64},
+    )
+
+
+class _RecordingCatalog:
+    """A lake that answers one book row and remembers how it was asked.
+
+    Enough of a ``Catalog`` for :meth:`CapabilityContext.query`, and nothing else — an
+    adapter that reached for ``scan``, ``refresh_views`` or ``connection`` raises here rather
+    than quietly working, which is the point.
+    """
+
+    def __init__(self, frame: pl.DataFrame) -> None:
+        self.frame = frame
+        self.seen: list[tuple[str, bool]] = []
+
+    def query(self, sql: str, *, readonly: bool = False) -> pl.DataFrame:
+        self.seen.append((sql, readonly))
+        return self.frame
+
+
+def test_the_crypto_half_reads_the_lake_under_the_surfaces_policy_not_around_it() -> None:
+    """``ctx.query`` applies ``readonly`` and ``row_limit``; ``ctx.catalog.query`` does not.
+
+    The assertion is the wrapper, not the call count: ``CapabilityContext.query`` is the only
+    thing in the tree that wraps a statement in ``SELECT * FROM (…) LIMIT n`` and forwards
+    ``readonly``, so seeing both at the catalog proves the adapter went through it. Reaching
+    the catalog directly compiles and runs and ignores both fields, which is how the crypto
+    CLI came to have no SQL guard while REST and MCP each grew their own.
+    """
+    catalog = _RecordingCatalog(_book_frame(local_ts=_BASE_NS))
+    ctx = CapabilityContext(
+        catalog=catalog,
+        settings=Settings(),
+        asset_class=AssetClass.CRYPTO,
+        readonly=True,
+        row_limit=5,
+    )
+    profile = market.depth_crypto(
+        ctx, market.DepthParams(symbol="deribit:BTC-PERPETUAL", as_of_ns=_BASE_NS, top_n=2)
+    )
+    assert profile.reference_price == 100.0
+    assert profile.asset_class is AssetClass.CRYPTO
+
+    sql, readonly = catalog.seen[0]
+    assert readonly is True
+    assert sql.startswith("SELECT * FROM (") and sql.endswith("LIMIT 5")
+    assert "book_snapshot" in sql
+
+
+def test_the_crypto_half_defaults_its_instant_to_the_moment_it_is_called() -> None:
+    """``None`` means "when you are asked", and a struct default cannot be a call.
+
+    A default evaluated at import time would freeze the instant at process start, so a
+    long-running REST process would answer every unqualified depth request against the book
+    as it stood when the server booted.
+    """
+    catalog = _RecordingCatalog(_book_frame(local_ts=now_ns()))
+    ctx = CapabilityContext(catalog=catalog, settings=Settings(), asset_class=AssetClass.CRYPTO)
+
+    before = now_ns()
+    market.depth_crypto(ctx, market.DepthParams(symbol="deribit:BTC-PERPETUAL"))
+    after = now_ns()
+
+    bound = int(catalog.seen[0][0].split("local_ts <= ")[1].split(" ")[0])
+    assert before <= bound <= after
+
+
+def test_the_two_halves_share_one_parameter_struct() -> None:
+    """Symmetry is the same name *and* the same schema; two structs would drift."""
+    cap = REGISTRY["depth"]
+    assert cap.params is market.DepthParams
+    fields = {f.name for f in msgspec.structs.fields(cap.params)}
+    assert fields == {"symbol", "method", "bins", "top_n", "as_of_ns", "max_age_ns"}
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +682,6 @@ def test_the_ledger_schedules_every_asymmetric_capability_in_this_batch() -> Non
         "universe": "M3",
         "census": "M3",
         "open-interest": "M2",
-        "depth": "M6",
     }
     for method in scheduled.values():
         assert method in SPEC_METHODS

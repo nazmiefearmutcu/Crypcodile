@@ -26,17 +26,20 @@ own bare ``asyncio.run`` and broke two surfaces out of three with it.
 :class:`~crocodile.core.capability.CapabilityContext` carries a ``Catalog`` and a
 ``Settings`` and no client, and nothing here wants one: ``universe`` and ``census``
 construct their own ``ccxt``/``aiohttp`` sessions inside the coroutine and close them
-again, and ``depth`` asks
+again, and ``depth``'s equity half asks
 :func:`~crocodile.equity.depth.select.select_depth_source` for a source rather than being
 handed one. ``open-interest`` reads the lake through ``ctx.catalog``, exactly as
-``slippage`` does. The one thing that *is* read from outside the context is the pair of
-Alpaca keys, and that read happens inside ``select_depth_source``; see :func:`depth`.
+``slippage`` does, and ``depth``'s crypto half reads it through ``ctx.query``, which is
+where a surface's ``readonly`` and ``row_limit`` are applied. The one thing that *is* read
+from outside the context is the pair of Alpaca keys, and that read happens inside
+``select_depth_source``; see :func:`depth`.
 
 The equity halves of this family are where :data:`SPEC_METHODS
 <crocodile.core.capability.SPEC_METHODS>` M2 and M3 land, and the block at the foot of this
 module is where each of them is scheduled. ``list-exchanges`` needs no entry — both markets
-can already answer it — and ``depth`` needs one the ledger cannot quite express, which is
-argued there rather than left to be found.
+can already answer it — and ``depth`` needed one the ledger could not express, because its
+missing half was the crypto one. M8 closed it; the block records how, since the shape of
+that argument outlives the entry it retired.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ from crocodile.core.schema.records import DepthProfile
 from crocodile.core.util.time import now_ns
 from crocodile.crypto import census as census_mod
 from crocodile.crypto.analytics.oi_aggregator import aggregate_open_interest
+from crocodile.crypto.depth import depth_from_book_snapshots
 from crocodile.crypto.exchanges import factory
 from crocodile.crypto.instruments.registry import Kind
 from crocodile.crypto.instruments.universe import (
@@ -215,8 +219,29 @@ class OpenInterestParams(msgspec.Struct, frozen=True):
     """
 
 
+_DEPTH_WINDOW_NS: Final[int] = 60 * 1_000_000_000
+"""How stale a stored book may be, by default, and still be reported as describing an instant.
+
+A minute, and it is a default rather than a constant of the method — the caller overrides it,
+because only the caller knows whether a minute-old ladder answers their question. It is the
+denominator of ``book_snapshot_slice``'s freshness term, argued at that registration; the
+value here is chosen to be wide enough that a lake collecting a liquid venue's book answers a
+"depth now" request, and narrow enough that a quiet symbol's hour-old book is refused rather
+than served as current.
+"""
+
+
 class DepthParams(msgspec.Struct, frozen=True):
-    """Parameters for ``depth``. One struct, which the crypto half inherits when it lands."""
+    """Parameters for ``depth``. One struct, and both halves now read from it.
+
+    Four of the six fields are consumed by one half and ignored by the other, which is what
+    a shared struct across two markets costs and is not a defect: ``bins`` and ``method``
+    were already in that position — the Alpaca L1 branch has one level per side and nothing
+    to bin — and the two added for the crypto half are the same shape. The alternative is a
+    struct per asset class, which is the thing the registry refuses, because identical
+    parameter schemas are half of what "full API symmetry" means and two structs are two
+    places for one question to drift apart.
+    """
 
     symbol: str
     """The ticker to snapshot."""
@@ -229,7 +254,29 @@ class DepthParams(msgspec.Struct, frozen=True):
     """Price buckets the synthetic ladder is built from."""
 
     top_n: int = 10
-    """Levels returned per side."""
+    """Levels returned per side. The one field both halves read: it shapes the ladder the
+    equity source builds and the ladder the crypto slice cuts."""
+
+    as_of_ns: int | None = None
+    """The instant the crypto ladder should describe; ``None`` means the moment of the call.
+
+    The crypto half's, because it is the half with a history to read. The equity half has no
+    stored ladder to slice — it fetches a live quote or bins today's bars — so it answers at
+    the instant it is called whatever this says, and that asymmetry is a property of the two
+    markets' data rather than of this schema. It becomes meaningful for equities the day an
+    equity provider streams a book into the lake, which is the same day
+    ``crocodile.crypto.depth.depth_from_book_snapshots`` serves both.
+    """
+
+    max_age_ns: int = _DEPTH_WINDOW_NS
+    """How old a stored book may be and still answer for ``as_of_ns``. Crypto's, likewise.
+
+    Both a bound and a measurement: a snapshot older than this is not returned at all, and
+    how much of the window the returned one used up is the freshness half of the confidence
+    on the record. See ``book_snapshot_slice`` in
+    :mod:`crocodile.core.schema.provenance`, including why a caller-declared window is the
+    least bad denominator available here.
+    """
 
 
 def list_exchanges(ctx: CapabilityContext, params: ListExchangesParams) -> list[str]:
@@ -426,6 +473,43 @@ def depth(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
     return run_to_completion(lambda: source.snapshot(params.symbol))
 
 
+def depth_crypto(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
+    """A crypto depth ladder, sliced out of the book snapshots already in the lake.
+
+    The half M8 names, and the one thing worth saying at the declaration site is what it is
+    *not*. It is not the equity half's method pointed at a different market: nothing here is
+    modelled, because a crypto venue streams the ladder and the sink has been storing it all
+    along. It is not synchronous-over-async either — there is no coroutine, so no
+    :func:`~crocodile.core.capability.run_to_completion` — because the lake is a local read
+    and the network call the equity half makes has no counterpart here.
+
+    ``ctx.query`` rather than ``ctx.catalog.query``, which is the other way round from
+    :func:`open_interest` two functions up, and the difference is the ``WHERE`` clause.
+    ``open_interest`` hands the aggregator a catalog because the statement is entirely
+    internal to it and carries nothing a caller wrote. This one carries the caller's symbol,
+    which arrives off a URL query string on REST and a tool argument on MCP — so the read
+    goes through the bound method that applies this surface's ``readonly`` and ``row_limit``
+    rather than around it. It is the method that is handed over rather than the whole
+    context, so :func:`~crocodile.crypto.depth.depth_from_book_snapshots` can be exercised
+    against a few rows with no lake on disk. ``ctx.asset_class`` goes with it for the reason
+    the field exists: the surface has already resolved which market the request is in, and
+    the reader has no crypto-specific line in it to re-derive that from.
+
+    ``as_of_ns`` defaulting to :func:`~crocodile.core.util.time.now_ns` here rather than in
+    the struct is deliberate. A default evaluated at import time would freeze the instant at
+    process start, and a struct default cannot be a call; ``None`` means "when you are asked",
+    and this is where being asked happens.
+    """
+    return depth_from_book_snapshots(
+        ctx.query,
+        params.symbol,
+        asset_class=ctx.asset_class,
+        as_of_ns=now_ns() if params.as_of_ns is None else params.as_of_ns,
+        top_n=params.top_n,
+        max_age_ns=params.max_age_ns,
+    )
+
+
 LIST_EXCHANGES = declare(
     Capability(
         name="list-exchanges",
@@ -516,6 +600,14 @@ DEPTH = declare(
             # book rather than a ladder — and it is the best of the two branches
             # `select_depth_source` can take.
             AssetClass.EQUITY: Impl(fn=depth, prov=Provenance.DERIVED, basis="alpaca_l1"),
+            # DERIVED on both halves, and the two arrive at it from opposite directions.
+            # Equity's best branch is a real quote reshaped into a ladder; crypto's is a
+            # real ladder re-cut and re-stamped. Neither is NATIVE — no venue published
+            # *this* record — and neither is SYNTHETIC, because nothing in either is
+            # modelled. `book_snapshot_slice` is where the second of those is argued.
+            AssetClass.CRYPTO: Impl(
+                fn=depth_crypto, prov=Provenance.DERIVED, basis="book_snapshot_slice"
+            ),
         },
     )
 )
@@ -538,26 +630,30 @@ PENDING_SYMMETRY.update(
         # what M3 resolves.
         "census": "M3",
         "open-interest": "M2",
-        # `depth` is the one entry whose direction the ledger cannot express, and it is
-        # recorded here rather than left to be discovered. Every method in SPEC_METHODS
-        # closes an *equity* gap; `depth`'s missing half is the **crypto** one, because the
-        # equity half is what already ships. M6 — "equity depth from the synthetic VAP
-        # ladder, upgraded by Alpaca L1 when keyed" — is a description of
-        # `equity/depth/select.py`, which this module declares, so M6 is already spent and
-        # cannot be what closes this.
+        # `depth` was here, mapped to M6, and it is the entry this block should be read
+        # backwards from. It was the one whose *direction* the ledger could not express:
+        # every method in SPEC_METHODS closes an equity gap, and depth's missing half was
+        # the crypto one, because the equity half — the synthetic VAP ladder upgraded by
+        # Alpaca L1, which this module declares — is what already shipped. M6 describes
+        # that equity half, so M6 was already spent and could never have closed this. The
+        # entry was scheduled against it anyway, because IRREDUCIBLE would have claimed a
+        # crypto order book cannot exist and leaving the capability undeclared is the
+        # silent absence the registry exists to end. It was recorded as honest about being
+        # asymmetric and wrong about which direction, on the argument that Phase 3's exit
+        # gate would force somebody to look at it. It did.
         #
-        # It is scheduled anyway, against the only method that names depth at all, because
-        # the alternatives are worse in kind rather than in degree: IRREDUCIBLE would claim
-        # a crypto order book cannot exist, and not declaring the capability at all is the
-        # silent-absence failure the registry was built to end. The entry is honest about
-        # being asymmetric and wrong about which direction; Phase 3's exit gate forces
-        # somebody to look at it, which is the property that makes recording it better than
-        # leaving it out.
+        # M8 is what looking at it produced, and closing the entry meant deleting it rather
+        # than remapping it to M8: the ledger's own gate refuses a re-map, on the ground
+        # that a method is the plan that closes a gap and swapping one is a re-plan rather
+        # than a correction. A capability with both halves needs no schedule at all, so the
+        # clean resolution is the entry's absence, here and in `_LEDGER_AS_SHIPPED`.
         #
-        # What closing it actually needs: a registered confidence formula for a ladder
-        # sliced out of a stored venue book snapshot. `native` would claim the venue
-        # published the ladder, `book_resample` measures a boundary lookahead this has none
-        # of, and inventing a formula is exactly what the provenance registry forbids.
-        "depth": "M6",
+        # What it actually took was the missing confidence formula, which is the part the
+        # old note named and could not supply: `book_snapshot_slice` in
+        # `core/schema/provenance.py`, measuring how much of the requested ladder the store
+        # held and how much of the caller's staleness tolerance the answer used up. `native`
+        # would have claimed the venue published this ladder and `book_resample` measures a
+        # boundary lookahead a slice has none of — both true when it was written, and
+        # neither an argument for inventing a number.
     }
 )
