@@ -575,3 +575,64 @@ def test_no_capability_reading_the_lake_claims_its_inputs_were_handed_in():
         f"{unexpected} declare caller_supplied and are not on the list that argues for it; "
         f"add them there with the argument, or declare what their inputs really rest on"
     )
+
+
+# ---------------------------------------------------------------------------
+# M4's two filing bases
+# ---------------------------------------------------------------------------
+# Both are NATIVE with a formula, which is a combination the registry had not carried
+# before: `native` and `caller_supplied` are NATIVE and constant, and every basis with a
+# real formula was DERIVED or SYNTHETIC. The pairing is the point. A filer really did report
+# these numbers — that is `prov` — and the report can still be partial, which is what
+# `prov_confidence` is for. The two tests below pin each half, because collapsing them is
+# exactly the mistake that shipped a price-less gift at the header's default 1.0.
+
+
+def test_a_form_4_line_is_natively_reported_and_can_still_be_half_observed():
+    """Two boxes make a notional and Form 4 leaves either of them blank.
+
+    A gift and an award state shares and no price; a holding-only line states neither. The
+    level stays NATIVE because a filer reported whatever is there, and the number says how
+    much of it there is — the same shape as `alpaca_l1`'s `n_quoted_sides / 2`, over the
+    form's own boxes instead of the two sides of a top of book.
+    """
+    assert level_for("sec_form4") is Provenance.NATIVE
+    assert confidence_for("sec_form4", {"n_reported_amounts": 2}) == 1.0
+    assert confidence_for("sec_form4", {"n_reported_amounts": 1}) == 0.5
+    assert confidence_for("sec_form4", {"n_reported_amounts": 0}) == 0.0
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("sec_form4", {"n_reported_amounts": 3})
+
+
+def test_a_13f_is_scored_on_the_window_a_regulator_wrote_down():
+    """`book_resample` declines to score staleness and both of its reasons fail here.
+
+    Its first is that "absence of updates is not absence of sampling" — a quiet book really
+    did not change. A withheld 13F describes a portfolio that existed the whole time and that
+    nobody outside the manager could observe, which is unsampled rather than unchanged. Its
+    second is that scoring staleness "would need a reference for how often a book ought to
+    tick, and no such reference exists"; Rule 13f-1 wrote this one down as 45 days, so the
+    denominator is not invented to make a constant look measured.
+    """
+    assert level_for("sec_13f_hr") is Provenance.NATIVE
+    assert confidence_for("sec_13f_hr", {"disclosure_lag_days": 0}) == 1.0
+    assert confidence_for("sec_13f_hr", {"disclosure_lag_days": 45}) == 0.0
+    # An amendment landing months late clamps rather than going negative, which
+    # `confidence_for` would reject as a broken formula.
+    assert confidence_for("sec_13f_hr", {"disclosure_lag_days": 200}) == 0.0
+    assert confidence_for("sec_13f_hr", {"disclosure_lag_days": 9}) == pytest.approx(0.8)
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("sec_13f_hr", {"disclosure_lag_days": -1})
+
+
+def test_neither_filing_basis_is_the_flat_native_one_they_would_otherwise_have_used():
+    """`native` scores everything 1.0 by definition, which is the claim being refused.
+
+    A Form 4 line with no price and one with a price are not equally observed, and a 13F
+    filed the day after quarter end and one filed at the deadline are not equally current.
+    Under `native` all four would report the same number, and the two records that deserve
+    less would be indistinguishable from the two that do not.
+    """
+    assert confidence_for("native", {}) == 1.0
+    assert confidence_for("sec_form4", {"n_reported_amounts": 1}) < confidence_for("native", {})
+    assert confidence_for("sec_13f_hr", {"disclosure_lag_days": 45}) < confidence_for("native", {})

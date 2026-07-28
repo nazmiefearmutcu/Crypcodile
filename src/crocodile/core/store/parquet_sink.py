@@ -432,6 +432,8 @@ _EQUITY_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
         "price": pl.Float64,
         "value": pl.Float64,
         "ownership": pl.Utf8,
+        "acquired_disposed": pl.Utf8,
+        "insider_cik": pl.Utf8,
     },
     "holding_13f": {
         "manager_name": pl.Utf8,
@@ -446,6 +448,7 @@ _EQUITY_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
         "voting_none": pl.Float64,
         "report_date": pl.Utf8,
         "accession_number": pl.Utf8,
+        "manager_cik": pl.Utf8,
     },
     "short_interest": {
         "settlement_date": pl.Utf8,
