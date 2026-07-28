@@ -24,9 +24,20 @@ also stay reachable as plain functions, which is how ``examples/base_dashboard.p
 every caller above them read as an answer: the CLI exited 0 with the dict printed as the
 result, and REST answered 200 with ``{"result":{"error":"403 Forbidden"},"provenance":
 {"prov":"native"}}`` — a provenance block describing a reading that does not exist, and a
-``warning_for`` that stays silent because the level claimed is ``NATIVE``. An unsupported
-pool raises :class:`~crocodile.core.errors.FatalConnectorError` because no retry helps, and
-an exhausted RPC failover raises :class:`~crocodile.core.errors.ConnectorError`.
+``warning_for`` that stays silent because the level claimed is ``NATIVE``.
+
+Which exception depends on whose mistake it is, because the surfaces classify them
+differently and only one of the three is worth a retry:
+
+``ValueError``
+    The caller named a pool this build does not serve. Its own message lists the ones it
+    does, and every surface maps ``ValueError`` to 400 — this codebase's settled reading of
+    "your parameters are wrong", the one ``_refuse_readonly`` chose ``PermissionError`` over.
+:class:`~crocodile.core.errors.FatalConnectorError`
+    The pool is in ``POOL_SPECS`` and the chain says it does not exist. Not the caller's
+    error — our own registry claimed it — and no retry helps.
+:class:`~crocodile.core.errors.ConnectorError`
+    The RPC failover was exhausted. Ours, and worth retrying later.
 
 The equity fork's yfinance branch did not come with them. It hardcoded eight tickers,
 returned ``pool_address="equity_feed"`` with ``reserve0``/``reserve1`` of ``0.0``, and fell
@@ -201,9 +212,11 @@ async def get_onchain_price(symbol: str, rpc_url: str = DEFAULT_RPC_URL) -> dict
         pass
     spec = cast(dict[str, Any], POOL_SPECS.get(symbol))
     if not spec:
-        raise FatalConnectorError(
-            f"Symbol {symbol} not supported. Supported: {list(POOL_SPECS.keys())}"
-        )
+        # ValueError and not FatalConnectorError: the caller named a pool this build does
+        # not serve, and the list of ones it does is in the message. Every surface already
+        # maps ValueError to 400 — `FatalConnectorError` is unclassified and falls to 500,
+        # which reports the caller's typo as our outage and as worth retrying.
+        raise ValueError(f"Symbol {symbol} not supported. Supported: {list(POOL_SPECS.keys())}")
     
     async def query_price(w3: AsyncWeb3) -> dict[str, Any]:
         t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])
@@ -301,7 +314,7 @@ async def get_base_market_data(token_pair: str, rpc_url: str = DEFAULT_RPC_URL) 
 
     spec = cast(dict[str, Any], POOL_SPECS.get(symbol))
     if not spec:
-        raise FatalConnectorError(f"Symbol {symbol} not supported.")
+        raise ValueError(f"Symbol {symbol} not supported.")
         
     async def query_volume(w3: AsyncWeb3) -> dict[str, Any]:
         t0_addr = AsyncWeb3.to_checksum_address(TOKENS[str(spec["token0"])])

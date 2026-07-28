@@ -229,3 +229,31 @@ def test_no_pool_reader_reports_a_failure_as_a_result() -> None:
         f"base_onchain/price.py returns an error dict at lines {returned_errors}; raise "
         f"instead, so a failure cannot be served as a NATIVE reading"
     )
+
+
+def test_a_pool_this_build_does_not_serve_is_the_callers_mistake_not_ours() -> None:
+    """Refusing a symbol and failing to reach the chain are different answers.
+
+    Both used to be ``{"error": …}`` and both then became ``FatalConnectorError``, which is
+    a ``CrocodileError`` the surfaces do not classify — so an unknown pool name answered
+    **500** on REST and a traceback on the CLI. That is the same defect as the one that was
+    just fixed in the other direction: the caller's bad parameter reported as our fault, and
+    reported as retryable, when the supported list is right there in the message.
+
+    ``ValueError`` is what this codebase already means by "your parameters are wrong" —
+    ``_refuse_readonly`` chose ``PermissionError`` over it on exactly that reading — and
+    ``surfaces/rest.py`` maps it to 400 at the invoke site. So an unserved pool raises
+    ``ValueError`` and a chain that would not answer keeps ``ConnectorError``. The split is
+    not cosmetic: one of the two is worth retrying and the other never is.
+    """
+    from crocodile.core.errors import CrocodileError
+    from crocodile.crypto.exchanges.base_onchain.price import get_onchain_price
+
+    with pytest.raises(ValueError, match="not supported") as caught:
+        await_result = get_onchain_price("NOT-A-POOL")
+        asyncio.run(await_result)
+
+    assert not isinstance(caught.value, CrocodileError), (
+        "a bad parameter must not arrive as a connector failure; the surfaces classify the "
+        "two differently and only one of them is the caller's to fix"
+    )
