@@ -293,34 +293,27 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 # ---------------------------------------------------------------------------
 
 _LEDGER_AS_SHIPPED: dict[str, str] = {
-    "basis": "M5",
     "census": "M3",
     "chaos-score": "M6",
     "collect-market": "M3",
-    "funding-apr": "M5",
-    "funding-predict": "M5",
     "label-transfers": "M4",
     "liquidity-depth": "M6",
     "markets": "M3",
     "ofi": "M7",
-    "perp-basis": "M5",
     "smart-money": "M4",
-    "spot-future-basis": "M5",
     "universe": "M3",
     "whale-alerts": "M4",
 }
-"""The entries the ledger currently holds, pinned so its size is a watched number.
+"""What the ledger holds right now, pinned so its size is a watched number.
 
-Phase 2 closed with 21. It is 16: M1 and M2 have been repaid, and five names left in the
-commit that gave them equity halves — ``iv-surface``, ``term-structure``, ``vol-skew`` and
-``risk-reversal`` off M1, and ``open-interest`` off M2. Deleting them here and from the
-``PENDING_SYMMETRY.update`` blocks in ``capabilities/analytics.py`` and
-``capabilities/market.py`` is one change and not two: leave the batch entry and
-:func:`test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric` fails because
-the capability is symmetric; leave this one and
-:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails because the
-name departed unrecorded. That the two fail in opposite directions is what makes them one
-gate rather than two lists to keep in step by hand.
+Phase 2 closed with 21 entries and Phase 3 empties it one method at a time. Each name
+leaves in the same commit that gives its capability the implementation it was missing,
+which is the only way an entry is allowed to leave: delete it from
+``capabilities.analytics`` alone and this pin names a capability that is no longer
+scheduled; delete it from here alone and a schedule survives that nothing records. Both
+deletions in one commit is the only state
+:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` accepts, and it
+fails in *both* directions, so a half-done deletion is as red as an undeclared addition.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was
@@ -329,6 +322,12 @@ watching. Two things made that hard to see. The declaration in ``core/capability
 entry is assembled at import time by three batch modules calling ``update()`` on it. And
 :func:`test_phase_3_exit_the_ledger_must_be_empty` skipped whenever the ledger was
 non-empty, so it was green at 21 and would have been green at 48.
+
+No count is written into this docstring, on purpose. Several agents empty this dict in
+parallel and a sentence naming a number is a merge conflict that resolves to a lie — this
+paragraph said "It is 16" and then "It is 10" across two merges, each true for exactly one
+commit. The number that matters is the length of the literal above, which is what the test
+reads.
 
 Pinned here rather than beside the declaration for the reason the batches write it here:
 ``core/capability.py`` is shared and this is a test's assertion about a fact, not a fact.

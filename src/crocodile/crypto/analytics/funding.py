@@ -20,6 +20,26 @@ Formulas
   ``funding_ts`` ascending (after deduplicating by ``funding_ts`` so live-lake
   re-emits of the same settlement do not inflate the sum).
 
+Where the first two live now
+----------------------------
+:func:`periods_per_year` and :func:`apr_from_rate` are re-exported from
+:mod:`crocodile.core.analytics.carry` and are no longer defined here. Neither says
+anything about crypto: a year has 8760 hours in both markets, and the equity half of
+``funding-apr`` annualises the cost of holding a share over the hours to its next dividend
+by exactly this multiplication. Two copies of one multiplication is how the two forks came
+to annualise a basis by 365 in one file and a funding rate by 8760 in another with nothing
+relating them. The names stay importable from here because that is where every caller and
+every test already reaches for them, and the arithmetic and the ``ValueError`` message are
+unchanged — ``tests/analytics/test_funding.py`` is the gate that says so.
+
+What stayed
+-----------
+Everything below the helpers, because all of it names a crypto record. The ``funding``
+channel is a perpetual's settlement log; ``funding_timestamp`` is the venue's stamp for a
+settlement that has no equity counterpart; and the deduplication exists because a
+websocket reconnect re-emits a settlement, which is a property of how this data arrives
+rather than of what it means.
+
 Missing ``interval_hours``
 --------------------------
 If a stored row has a NULL ``interval_hours`` (the field is optional in the
@@ -31,6 +51,7 @@ from __future__ import annotations
 
 import polars as pl
 
+from crocodile.core.analytics.carry import apr_from_rate, periods_per_year
 from crocodile.core.store.catalog import Catalog
 
 __all__ = [
@@ -42,47 +63,6 @@ __all__ = [
 
 # Default funding interval when the stored field is NULL.
 _DEFAULT_INTERVAL_HOURS: int = 8
-
-
-# ---------------------------------------------------------------------------
-# Pure-math helpers
-# ---------------------------------------------------------------------------
-
-
-def periods_per_year(interval_hours: int) -> float:
-    """Return the number of funding periods in a calendar year.
-
-    Args:
-        interval_hours: Length of one funding interval in hours.
-                        Must be a positive integer.
-
-    Returns:
-        ``8760.0 / interval_hours``  (e.g. 1095.0 for 8-hour intervals).
-
-    Raises:
-        ValueError: If *interval_hours* is zero or negative.
-    """
-    if interval_hours <= 0:
-        raise ValueError(
-            f"interval_hours must be a positive integer, got {interval_hours}"
-        )
-    return 8760.0 / interval_hours
-
-
-def apr_from_rate(rate: float, interval_hours: int) -> float:
-    """Annualise a single funding rate.
-
-    Uses simple (non-compounded) annualisation:
-    ``apr = rate * (8760 / interval_hours)``.
-
-    Args:
-        rate:           The funding rate for one period (e.g. 0.0001).
-        interval_hours: Length of one funding interval in hours.
-
-    Returns:
-        Annualised percentage rate as a decimal (e.g. 0.10950 for 10.95 %).
-    """
-    return rate * periods_per_year(interval_hours)
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,12 @@ from crocodile.crypto.analytics.volsurface import (
     vol_skew as _vol_skew,
 )
 from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.equity.analytics.carry import (
+    equity_basis,
+    equity_forward_basis,
+    equity_funding_apr,
+    equity_spot_future_carry,
+)
 from crocodile.equity.analytics.volsurface import (
     iv_surface as _equity_iv_surface,
 )
@@ -206,6 +212,14 @@ class BasisParams(msgspec.Struct, frozen=True):
     surface. The CLI resolves an omitted range to the whole lake (cli.py:3197) and REST
     defaults both to ``0`` (:1985), which returns nothing; neither is a default worth
     freezing into the one schema all three surfaces will publish.
+
+    ``perp_symbol`` names *the derivative leg*, and for equities that is a future rather
+    than a perpetual. The field keeps the crypto spelling because one capability has one
+    parameter schema — that is half of what full API symmetry means, and a second struct
+    is what would let the two drift. Renaming it to something market-neutral was the
+    alternative and is worse than it looks: the name is on the wire in three surfaces
+    already, so a rename is a breaking change to every caller in exchange for a word.
+    What the leg is for each asset class is documented rather than encoded.
     """
 
     spot_symbol: str
@@ -225,6 +239,14 @@ class PerpBasisParams(msgspec.Struct, frozen=True):
     its one symbol ``symbol``, and a schema that renames the same field per capability is
     the drift the single registry exists to stop. The leg is already named by the
     capability.
+
+    The single symbol is also the constraint that decided what the equity half computes.
+    Crypto gets away with one because ``derivative_ticker`` carries a mark and an index on
+    one record; no equity source in this tree writes one, so the equity half reads the
+    derivative side off the symbol's own option chain by put-call parity and the reference
+    side off its own cash price series. Both are keyed on this one symbol, which is why
+    the schema did not have to change — see
+    :func:`~crocodile.equity.analytics.carry.equity_forward_basis` for the argument.
     """
 
     symbol: str
@@ -545,9 +567,49 @@ def basis(ctx: CapabilityContext, params: BasisParams) -> pl.DataFrame:
     )
 
 
+def basis_equities(ctx: CapabilityContext, params: BasisParams) -> pl.DataFrame:
+    """ASOF-join the equity derivative leg onto the nearest prior cash print.
+
+    A separate adapter rather than ``fn=basis`` for both, on the argument
+    :func:`slippage_equities` records: ``spot_perp_basis`` reads ``derivative_ticker``,
+    and nothing under ``equity/providers`` writes one, so a shared binding would publish a
+    declaration for a code path an equity lake cannot reach. The equity legs are price
+    series in ``trade``, ``ohlcv`` or ``index_value``, which is why
+    :func:`~crocodile.equity.analytics.carry.price_leg` exists and why it is not in
+    ``core``: the fallback order is a fact about equity's channels, not about the
+    measurement.
+
+    ``perp_symbol`` names the derivative leg here. The struct is shared by both asset
+    classes and one capability has one parameter schema, so the field keeps the spelling
+    the crypto half gave it; what it means for equities is in
+    :class:`BasisParams`'s own docstring rather than in a second struct.
+    """
+    return equity_basis(
+        ctx.catalog,
+        params.spot_symbol,
+        params.perp_symbol,
+        params.start_ns,
+        params.end_ns,
+    )
+
+
 def perp_basis(ctx: CapabilityContext, params: PerpBasisParams) -> pl.DataFrame:
     """Mark price against index price, off the perpetual's own ticker channel."""
     return _perp_basis(ctx.catalog, params.symbol, params.start_ns, params.end_ns)
+
+
+def perp_basis_equities(ctx: CapabilityContext, params: PerpBasisParams) -> pl.DataFrame:
+    """The option market's forward for the symbol against its cash price, per snapshot.
+
+    The equity reading of "one symbol, a derivative price and its reference on the same
+    observation". Crypto gets both off one ``derivative_ticker`` row; equity gets the
+    derivative side from put-call parity on its own option chain and the reference side
+    from its own cash price series, which is the only single-symbol construction an equity
+    lake can actually serve. The argument in full, including why the discount factor is
+    what puts this capability on M5 rather than on M1 with the options family, is in
+    :func:`~crocodile.equity.analytics.carry.equity_forward_basis`.
+    """
+    return equity_forward_basis(ctx.catalog, params.symbol, params.start_ns, params.end_ns)
 
 
 def spot_future_basis(ctx: CapabilityContext, params: SpotFutureBasisParams) -> pl.DataFrame:
@@ -562,9 +624,42 @@ def spot_future_basis(ctx: CapabilityContext, params: SpotFutureBasisParams) -> 
     )
 
 
+def spot_future_basis_equities(
+    ctx: CapabilityContext, params: SpotFutureBasisParams
+) -> pl.DataFrame:
+    """The dated equity future against spot, annualised and net of the Treasury yield.
+
+    The capability M5 is named for. Everything up to ``annualized_pct`` is the crypto
+    half's answer in the crypto half's columns; ``carry_pct`` is that number minus what
+    the money costs over the same horizon, which is the term a perpetual quotes directly
+    as funding and a future does not quote at all.
+    """
+    return equity_spot_future_carry(
+        ctx.catalog,
+        params.future_symbol,
+        params.spot_symbol,
+        params.start_ns,
+        params.end_ns,
+        params.expiry_ns,
+    )
+
+
 def funding_apr(ctx: CapabilityContext, params: FundingAprParams) -> pl.DataFrame:
     """Per-settlement funding APR and the running sum. A pure argument shuffle."""
     return _funding_apr(ctx.catalog, params.symbol, params.start_ns, params.end_ns)
+
+
+def funding_apr_equities(ctx: CapabilityContext, params: FundingAprParams) -> pl.DataFrame:
+    """Per-dividend cost of carry for an equity position, in the crypto frame's columns.
+
+    A perpetual settles financing in cash and logs it; an equity position pays financing
+    and receives dividends, and only the second half is published as an event. So the row
+    is the dividend, the period is the gap since the previous one, and the annualisation
+    is the identical :func:`~crocodile.core.analytics.carry.apr_from_rate` the crypto half
+    calls — with hours-to-the-next-payment where crypto passes the settlement interval.
+    ``risk_free_apr`` and ``carry_apr`` close the other half.
+    """
+    return equity_funding_apr(ctx.catalog, params.symbol, params.start_ns, params.end_ns)
 
 
 def funding_predict(ctx: CapabilityContext, params: FundingPredictParams) -> dict[str, Any]:
@@ -877,6 +972,14 @@ BASIS = declare(
             # the two ratios are this implementation's own work, which is what makes the
             # result DERIVED rather than the NATIVE its inputs are.
             AssetClass.CRYPTO: Impl(fn=basis, prov=Provenance.DERIVED, basis="native"),
+            # The same claim, verbatim, for the equity half: both legs are price series a
+            # source published — `trade` prints, `ohlcv` closes or an `index_value` level —
+            # and the ASOF join and the two ratios are the implementation's own work. This
+            # is the one of the four M5 capabilities that needs no risk-free leg, because
+            # `basis` takes no expiry on either asset class and so has no horizon to
+            # finance over; `treasury_carry` would claim a third leg this measurement does
+            # not have.
+            AssetClass.EQUITY: Impl(fn=basis_equities, prov=Provenance.DERIVED, basis="native"),
         },
     )
 )
@@ -885,11 +988,21 @@ BASIS = declare(
 PERP_BASIS = declare(
     Capability(
         name="perp-basis",
-        summary="Perpetual mark price against its index price, per ticker update.",
+        summary="Derivative price against its index price, per update, from one symbol.",
         params=PerpBasisParams,
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(fn=perp_basis, prov=Provenance.DERIVED, basis="native"),
+            # `treasury_carry` and not `native`, because the equity forward is not read off
+            # a record: put-call parity discounts the call/put difference at a published
+            # yield, so a third input joins the two option marks and the cash price. The
+            # confidence formula is a function of how stale that yield is against the
+            # option's own horizon, which is the observable that varies here — the two
+            # price legs are always both present in an emitted row, since a row cannot be
+            # built without them.
+            AssetClass.EQUITY: Impl(
+                fn=perp_basis_equities, prov=Provenance.DERIVED, basis="treasury_carry"
+            ),
         },
     )
 )
@@ -905,6 +1018,15 @@ SPOT_FUTURE_BASIS = declare(
             AssetClass.CRYPTO: Impl(
                 fn=spot_future_basis, prov=Provenance.DERIVED, basis="native"
             ),
+            # DERIVED is still the ceiling: every number in is reported by somebody — the
+            # future's prints by its venue, the cash leg by its source, the par yield by
+            # the US Treasury — and the annualisation and the subtraction are arithmetic
+            # over the three. Nothing is modelled from a different data class, which is
+            # what would make it SYNTHETIC. The basis moves off `native` because a venue
+            # reported none of the *carry*: `native` would say one had.
+            AssetClass.EQUITY: Impl(
+                fn=spot_future_basis_equities, prov=Provenance.DERIVED, basis="treasury_carry"
+            ),
         },
     )
 )
@@ -913,11 +1035,18 @@ SPOT_FUTURE_BASIS = declare(
 FUNDING_APR = declare(
     Capability(
         name="funding-apr",
-        summary="Per-settlement funding APR and cumulative funding for a perpetual.",
+        summary="Per-period financing cost of a position, annualised and accumulated.",
         params=FundingAprParams,
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(fn=funding_apr, prov=Provenance.DERIVED, basis="native"),
+            # Same basis as the two above and for the same reason: the dividend leg is
+            # published (`corp_action`, from three providers), the price it is expressed
+            # against is published, and the financing leg is the Treasury curve. What is
+            # not published is their combination, which is what the capability returns.
+            AssetClass.EQUITY: Impl(
+                fn=funding_apr_equities, prov=Provenance.DERIVED, basis="treasury_carry"
+            ),
         },
     )
 )
@@ -943,6 +1072,25 @@ FUNDING_PREDICT = declare(
             # that says it properly now exists and names this capability in its own
             # docstring, so the caveat is spent and the declaration carries the claim.
             AssetClass.CRYPTO: Impl(
+                fn=funding_predict, prov=Provenance.SYNTHETIC, basis="caller_supplied"
+            ),
+            # One function serves both, which is the `indicators` pattern and not the
+            # `fn=slippage` defect. The distinction is whether the shared body can reach
+            # data the asset class has: `slippage` read `book_snapshot`, which no equity
+            # provider writes, while this reads nothing at all — the history arrives in
+            # `params` and the model is offline, so there is no lake, no channel and no
+            # venue for the two halves to differ over. A second adapter here would be two
+            # spellings of one call with nothing to distinguish them but a name.
+            #
+            # The ledger scheduled this against M5 because "there is nothing for its
+            # equity half to predict until `carry` exists", and that is now discharged
+            # rather than dismissed: the series it forecasts is the one `funding-apr`
+            # produces, and `funding-apr` has an equity half in this same commit. Both
+            # series are per-period financing rates in the same sign convention, which is
+            # what makes one forecaster correct for both — the crypto period is a
+            # settlement interval and the equity period is the gap to the next dividend,
+            # and a rolling mean over a sequence does not know or need the difference.
+            AssetClass.EQUITY: Impl(
                 fn=funding_predict, prov=Provenance.SYNTHETIC, basis="caller_supplied"
             ),
         },
@@ -1146,17 +1294,6 @@ CHAOS_SCORE = declare(
 
 PENDING_SYMMETRY.update(
     {
-        # M5 — carry. All four are the same trade priced four ways: the spread between a
-        # derivative and its spot or index leg, annualised. Equity has the legs already and
-        # is missing the risk-free rate that turns a spread into a carry, which is exactly
-        # the keyless `treasury` provider M5 adds. `funding-predict` is on the same method
-        # because it forecasts the series `funding-apr` produces; there is nothing for its
-        # equity half to predict until `carry` exists.
-        "basis": "M5",
-        "perp-basis": "M5",
-        "spot-future-basis": "M5",
-        "funding-apr": "M5",
-        "funding-predict": "M5",
         # M1 was here — the options family, all four of it — and is repaid. The prediction
         # the entry made held: `term-structure`, `vol-skew` and `risk-reversal` are
         # `iv-surface` read three ways, and once the Yahoo chain carried a spot and the
@@ -1165,6 +1302,21 @@ PENDING_SYMMETRY.update(
         # chain needed the *underlying price* before any of it worked — Yahoo's option
         # payload carries it in the quote block beside the strikes, and without it every
         # moneyness is NaN and no mid can be inverted.
+        #
+        # M5 is discharged and its five names are gone from here too. The prediction the
+        # entries made held: all four spread capabilities were the same trade priced four
+        # ways, equity had the legs, and what it was missing was the rate that turns a
+        # spread into a carry. `crocodile.equity.providers.treasury` is that rate,
+        # `crocodile.core.analytics.carry` is the arithmetic both asset classes now share,
+        # and `crocodile.equity.analytics.carry` is where the four equity halves read
+        # their legs. Two of the five needed an argument the ledger did not anticipate:
+        # `perp-basis`, whose one-symbol schema no equity *record* can satisfy — nothing
+        # under `equity/providers` writes a `derivative_ticker` — and which is served
+        # instead by put-call parity on the symbol's own option chain, which is what makes
+        # the discount factor load-bearing rather than decorative; and `funding-apr`,
+        # whose equity period is the gap between dividend events rather than a settlement
+        # interval. `funding-predict` needed neither, for the reason its declaration
+        # gives.
         # M7 — order-flow imbalance from L1 quote changes, which is this measurement's
         # equity form: the crypto implementation differences consecutive top-of-book
         # snapshots, and an equity quote stream is the same two prices and two sizes.

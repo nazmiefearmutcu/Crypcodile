@@ -739,6 +739,91 @@ def _book_snapshot_slice(inputs: Mapping[str, Any]) -> float:
     fill = min(n_levels / n_requested, 1.0)
     freshness = 1.0 - age_ns / window_ns
     return fill * freshness
+_CARRY_LEGS: Final[int] = 3
+"""Legs a carry is defined over: a derivative price, a cash price, and a financing rate.
+
+Definitional rather than chosen, and scoped here for the same reason
+``_L1_QUOTED_SIDES`` is: it is the denominator of one basis and a statement about what
+that basis computes, not a constant about spreads in general. A two-leg spread — the
+``basis`` and ``perp-basis`` capabilities without a horizon — is not this measurement and
+does not use this basis.
+"""
+
+
+@register_basis(
+    "treasury_carry",
+    level=Provenance.DERIVED,
+    inputs=["trade", "ohlcv", "index_value", "corp_action", "options_chain", "macro_series"],
+)
+def _treasury_carry(inputs: Mapping[str, Any]) -> float:
+    """A spread carried to an annual rate net of a published yield: legs present, yield fresh.
+
+    ``(n_price_legs + max(1 - yield_age_ns / horizon_ns, 0)) / 3``, where
+
+    * ``n_price_legs`` counts how many of the two price legs the row had — the derivative
+      leg and the cash leg it is measured against;
+    * ``yield_age_ns`` is how long before the price pair the Treasury quote being
+      subtracted was published;
+    * ``horizon_ns`` is the period the carry is annualised over — time to expiry for a
+      dated future, time to the next dividend event for a holding cost.
+
+    **Why three terms over three, rather than two factors multiplied.** The two price legs
+    are stored prints: a leg is there or it is not, and a leg that is there was not
+    partially observed. The yield leg is different in kind — it is always a *carried*
+    number, because the Treasury publishes the par curve once per business day at 3:30pm
+    ET while the price pair can be stamped at any instant, so the only honest question
+    about it is how much of the period being priced it actually speaks to. Scoring each
+    leg in ``[0, 1]`` and averaging says exactly that: three legs, two of them binary, one
+    of them graded.
+
+    **Why the horizon is the denominator, and why nothing else could be.** The temptation
+    is to divide the yield's age by the Treasury's publication interval — one business day
+    — which would say a same-session quote is perfect and a Monday quote used on Wednesday
+    is two-thirds stale. That number is about the *feed*, and this registry has refused
+    that shape before: ``_aggregate_of_an_undeclared_stream`` declines to invent a
+    denominator for how often a stream ought to tick. The rate here is not being reported,
+    it is being *applied across a horizon*, and the horizon is declared by the caller from
+    the contract's own expiry. A quote published a day before a 90-day carry misses a
+    ninetieth of what it is being used to price; the same quote against a two-day carry
+    misses half of it. Same staleness, different consequence, and the consequence is what
+    a consumer filtering on this number needs.
+
+    Saturating at zero rather than going negative says a yield older than the whole
+    horizon speaks to none of the period being priced — the same information content as no
+    yield at all, which is why an absent leg is passed in as ``yield_age_ns ==
+    horizon_ns`` rather than given a fourth term of its own. Absence and total staleness
+    are the same claim here, and a fourth term would let them disagree.
+
+    :attr:`Provenance.DERIVED` and not :attr:`Provenance.SYNTHETIC`. Every number that
+    goes in was reported by somebody: the derivative's price by its venue, the cash leg by
+    its source, and the par yield by the US Treasury. Nothing is modelled from a different
+    data class, which is the line ``yahoo_1m_vap`` and ``amm_tick_curve`` sit the other
+    side of. Not :attr:`Provenance.NATIVE` either, and this is the whole reason the basis
+    exists: no venue publishes an equity carry, and the header default would have said one
+    did.
+
+    The honest caveat, stated because the basis name invites it: a Treasury par yield is a
+    *proxy* for the rate an actual carry trade finances at, which is a repo rate and is
+    not published keylessly. The emitted rows carry ``risk_free_rate``,
+    ``risk_free_tenor_days`` and ``risk_free_date`` beside the carry, so which published
+    number was subtracted is on the row rather than in this docstring.
+    """
+    n_price_legs = _require_int(inputs, "n_price_legs")
+    yield_age_ns = _require_int(inputs, "yield_age_ns")
+    horizon_ns = _require_int(inputs, "horizon_ns")
+    if not 0 <= n_price_legs <= _CARRY_LEGS - 1:
+        raise ConfidenceInputError(
+            f"input 'n_price_legs' must be between 0 and {_CARRY_LEGS - 1}, got {n_price_legs}"
+        )
+    if yield_age_ns < 0:
+        raise ConfidenceInputError(
+            f"input 'yield_age_ns' must be non-negative, got {yield_age_ns}; a yield "
+            f"published after the price pair it is subtracted from is not a staleness"
+        )
+    if horizon_ns <= 0:
+        raise ConfidenceInputError(f"input 'horizon_ns' must be positive, got {horizon_ns}")
+    freshness = max(1.0 - yield_age_ns / horizon_ns, 0.0)
+    return (n_price_legs + freshness) / _CARRY_LEGS
 
 
 _TRUST_ORDER: Final[tuple[Provenance, ...]] = (
