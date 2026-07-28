@@ -17,6 +17,7 @@ import itertools
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Final, get_args, get_origin
 
+import duckdb
 import msgspec
 
 from crocodile.capabilities import load_all
@@ -41,7 +42,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from crocodile.core.store.catalog import Catalog
 
 __all__ = [
+    "BAD_REQUEST",
     "NETWORK_ROW_LIMIT",
+    "REFUSED",
+    "UNAVAILABLE",
     "asset_class_option_values",
     "build_context",
     "build_params",
@@ -64,6 +68,54 @@ The number the legacy REST server already used, on every one of its fifteen
 ``_*_MAX_LIMIT`` constants. It is one constant here because fifteen copies of one policy
 is the shape this package exists to remove, and because a per-capability limit is a
 per-capability branch in a projector.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Whose fault a failure is
+# ---------------------------------------------------------------------------
+#
+# Three categories, declared once and read by all three projectors, because the question
+# they are answering is the same one in three vocabularies: a status code, an exit code, a
+# JSON-RPC result. Anything not named here is *ours* — a 500, a traceback, a protocol error
+# — and that default is the point. The legacy REST server caught ``Exception`` and answered
+# 400, which is the opposite failure: a lake that cannot be read reported as a bad request
+# tells the caller to fix a query that was fine, and pages nobody.
+
+UNAVAILABLE: Final[tuple[type[BaseException], ...]] = (CapabilityUnavailable,)
+"""This capability has no implementation for the asset class that was resolved.
+
+Not the caller's mistake and not a fault: the request is well formed and the answer does
+not exist yet, which is 501 on REST.
+"""
+
+REFUSED: Final[tuple[type[BaseException], ...]] = (PermissionError,)
+"""The request is fine and this surface is not trusted to run it.
+
+``capabilities.ops._refuse_readonly`` chose ``PermissionError`` over ``ValueError``
+precisely so this category could exist — its docstring says "a REST projection maps [it] to
+403 and a caller must not retry" — and then no surface caught it, so a deliberate policy
+refusal was served as a 500 and became indistinguishable from a crash. A crash invites a
+retry; this must not be retried, because nothing about it will be different next time.
+"""
+
+BAD_REQUEST: Final[tuple[type[BaseException], ...]] = (
+    ValueError,
+    duckdb.ProgrammingError,
+    duckdb.DataError,
+)
+"""The caller asked for something that cannot be answered as asked.
+
+``ValueError`` is what an implementation raises for an unknown indicator or a symbol with
+no stored book, and what ``build_params`` raises for a value that does not fit the schema.
+
+The two DuckDB families are the ``query`` capability's, and they are named rather than
+caught wholesale: DB-API says ``ProgrammingError`` is a statement problem (a missing table,
+a syntax error, a bad column) and ``DataError`` a value problem, while ``OperationalError``
+— ``IOException``, ``OutOfMemoryException`` — is the environment's. Only the first two are
+the caller's. Before this, ``duckdb.CatalogException`` was neither ``CrocodileError`` nor
+``ValueError``, so every user SQL typo answered 500: alerting fires, and every client that
+backs off on 5xx retries a statement that will never compile.
 """
 
 

@@ -22,11 +22,27 @@ from pathlib import Path
 from typing import Any
 
 from crocodile.core.errors import CrocodileError
-from crocodile.surfaces import mcp
+from crocodile.surfaces import dispatch, mcp
 
 __all__ = ["handle_request", "serve_stdio"]
 
 _PROTOCOL_VERSION = "2024-11-05"
+
+_REPORTED: tuple[type[BaseException], ...] = (
+    CrocodileError,
+    TypeError,
+    *dispatch.BAD_REQUEST,
+    *dispatch.REFUSED,
+    *dispatch.UNAVAILABLE,
+)
+"""What is answered inside the tool result rather than as a JSON-RPC error.
+
+``TypeError`` is here for one specific reason: it is what escapes when the result cannot be
+encoded, and that is a fact about this transport rather than about the request, so the agent
+that asked has to be told in the channel it reads. Everything else is the caller's own — a
+bad argument, an unimplemented asset class, a refusal.
+"""
+
 
 def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> dict[str, Any]:
     """Answer one JSON-RPC request.
@@ -69,10 +85,12 @@ def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> 
             text = json.dumps(result, indent=2)
         except KeyError:
             text = json.dumps({"error": f"Tool {name} not found"}, indent=2)
-        except (CrocodileError, ValueError, TypeError) as exc:
-            # A bad argument or an asset class with no implementation is the caller's
-            # problem and is reported in the tool result, which is what an agent reads.
-            # A protocol-level error would tell it the *call* failed rather than the ask.
+        except _REPORTED as exc:
+            # A bad argument, an asset class with no implementation, a write this surface is
+            # not trusted to start: the caller's problem, reported in the tool result, which
+            # is what an agent reads. A protocol-level error would tell it the *call* failed
+            # rather than what about the ask could not be answered — and a refusal reported
+            # that way reads as a transport fault an agent will retry.
             text = json.dumps({"error": f"{name} failed: {exc}"}, indent=2)
         return {
             "jsonrpc": "2.0",

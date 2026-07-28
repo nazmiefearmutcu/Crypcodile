@@ -39,6 +39,24 @@ time so the collision is a startup failure rather than a capability that reads t
 directory.
 """
 
+_REPORTED: tuple[type[BaseException], ...] = (
+    CrocodileError,
+    *dispatch.BAD_REQUEST,
+    *dispatch.REFUSED,
+)
+"""What this surface reports as a message and an exit code rather than as a traceback.
+
+The three categories :mod:`~crocodile.surfaces.dispatch` classifies, plus every
+``CrocodileError``, because on a command line there is no distinction to draw between them:
+each one is a sentence for the operator and ``exit 1``. What is deliberately *not* here is
+everything else — a bug in an implementation still prints its traceback, because that is
+the one audience who can act on it.
+
+``duckdb.CatalogException`` is why this is a named tuple rather than
+``(CrocodileError, ValueError)``: a mistyped table name printed forty lines of traceback at
+an operator who had simply spelled a table wrong.
+"""
+
 _SCALARS: tuple[type, ...] = (str, int, float, bool)
 
 
@@ -142,7 +160,7 @@ def _runner(cap: Capability) -> Any:
             resolved = dispatch.resolve_asset_class(
                 cap, explicit=asset_class, symbol=kwargs.get("symbol")
             )
-        except (CrocodileError, ValueError) as exc:
+        except _REPORTED as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
 
@@ -162,7 +180,7 @@ def _runner(cap: Capability) -> Any:
                 pending = dispatch.invoke(cap, ctx, params)
                 # See the module docstring: local operator, own lake, so nothing is capped.
                 result = dispatch.drive(pending, row_limit=None)
-            except (CrocodileError, ValueError) as exc:
+            except _REPORTED as exc:
                 typer.echo(f"Error: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
             typer.echo(_render(cap, result, pending))

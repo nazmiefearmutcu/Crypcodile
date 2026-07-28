@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any
 
 from crocodile.core.capability import REGISTRY, AssetClass, Capability
 from crocodile.core.config import Settings
-from crocodile.core.errors import CapabilityUnavailable
 from crocodile.core.store.catalog import Catalog
 from crocodile.surfaces import dispatch
 
@@ -86,9 +85,9 @@ def _handler(
             resolved = dispatch.resolve_asset_class(
                 cap, explicit=asset_class, symbol=supplied.get("symbol")
             )
-        except CapabilityUnavailable as exc:
+        except dispatch.UNAVAILABLE as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
-        except ValueError as exc:
+        except dispatch.BAD_REQUEST as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         with Catalog(dispatch.data_dir_for(settings, data_dir)) as catalog:
@@ -103,11 +102,14 @@ def _handler(
                 result = dispatch.drive(
                     dispatch.invoke(cap, ctx, params), row_limit=ctx.row_limit
                 )
-            except CapabilityUnavailable as exc:
+            except dispatch.UNAVAILABLE as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
-            except ValueError as exc:
-                # An unknown indicator, a symbol with no stored book: a bad request, not a
-                # broken server. The legacy routes mapped these the same way.
+            except dispatch.REFUSED as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except dispatch.BAD_REQUEST as exc:
+                # An unknown indicator, a symbol with no stored book, SQL that does not
+                # compile against this lake: a bad request, not a broken server. The legacy
+                # routes mapped these the same way.
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             body = dispatch.payload(cap, result)
