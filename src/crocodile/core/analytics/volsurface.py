@@ -31,6 +31,7 @@ data exists, which is the contract ``resample_ohlcv`` and ``funding_apr`` alread
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol
 
 import duckdb
@@ -754,14 +755,54 @@ def risk_reversal_butterfly(
     return iv_call - iv_put, 0.5 * (iv_call + iv_put) - atm_iv
 
 
+def _nearest(
+    rows: Iterable[Mapping[str, Any]],
+    distance: Callable[[Mapping[str, Any]], float],
+) -> Mapping[str, Any] | None:
+    """The row minimising ``distance``, skipping every row whose distance is not finite.
+
+    Every "which strike is nearest X" search in this module goes through here, because
+    ``min(rows, key=…)`` does not answer that question over a column that can hold a hole.
+    ``moneyness`` is ``NaN`` where the chain carried no underlying price — ``iv_surface``
+    calls that "a hole, not a strike that happens to sit at zero" — and
+    ``abs(nan - 1.0)`` is ``nan``, which compares false against everything. ``min`` keeps
+    an incumbent unless a later candidate is strictly smaller, so a ``NaN`` that arrives
+    first is never displaced and every honest strike behind it loses.
+
+    That made the winner a property of frame order, and ``_snapshot`` de-duplicates with
+    ``maintain_order=False``, so frame order is not stable between runs over one lake.
+    Measured on twenty-five runs against an identical store, ten published
+    ``atm_strike=5000.0, atm_iv=2.5`` — a 250% vol on a strike fifty times spot, reported
+    as that expiry's ATM — and fifteen published the strike next to spot. A capability
+    whose two asset-class halves "cannot disagree about which strike is ATM" had a half
+    that could not agree with itself.
+
+    Skipping is the right treatment rather than scoring a hole as far away: a row with no
+    underlying price makes no statement about where the money is, and ranking it last
+    would still let it win an expiry where it is the only row. When nothing is finite the
+    answer is ``None``, and each caller says what it does with that.
+
+    Ties keep the earliest row, which is ``min``'s rule; callers that need the result to
+    be stable across runs order their rows before calling.
+    """
+    best: Mapping[str, Any] | None = None
+    best_distance = math.inf
+    for row in rows:
+        candidate = distance(row)
+        if not math.isfinite(candidate):
+            continue
+        if candidate < best_distance:
+            best_distance = candidate
+            best = row
+    return best
+
+
 def _nearest_delta_row(
     rows: list[dict[str, Any]],
     target: float,
-) -> dict[str, Any] | None:
+) -> Mapping[str, Any] | None:
     """Return the row whose ``delta`` is nearest to ``target``, or ``None``."""
-    if not rows:
-        return None
-    return min(rows, key=lambda r: abs(float(r["delta"]) - target))
+    return _nearest(rows, lambda r: abs(float(r["delta"]) - target))
 
 
 def _atm_iv(
@@ -772,19 +813,23 @@ def _atm_iv(
 
     Delta first because it is the definition the risk reversal is quoted against, and
     moneyness second because a chain whose deltas could not be priced still knows which
-    strike sits at the money.
+    strike sits at the money. Both searches run through :func:`_nearest`, so a hole in
+    either column loses instead of winning; if neither column leaves a finite candidate
+    the answer is ``None``, which ``risk_reversal_butterfly`` already turns into
+    ``(None, None)`` rather than a zero.
     """
     if not all_rows:
         return None
 
     if all(r["delta"] is not None for r in all_rows):
-        atm_row = min(all_rows, key=lambda r: abs(abs(float(r["delta"])) - 0.5))
-        return float(atm_row["iv"])
+        atm_row = _nearest(all_rows, lambda r: abs(abs(float(r["delta"])) - 0.5))
+        if atm_row is not None:
+            return float(atm_row["iv"])
 
     if "moneyness" in skew_df.columns:
         moneyness_rows = [r for r in all_rows if r.get("moneyness") is not None]
-        if moneyness_rows:
-            atm_row = min(moneyness_rows, key=lambda r: abs(float(r["moneyness"]) - 1.0))
+        atm_row = _nearest(moneyness_rows, lambda r: abs(float(r["moneyness"]) - 1.0))
+        if atm_row is not None:
             return float(atm_row["iv"])
 
     return None
@@ -824,23 +869,37 @@ def term_structure(
     out_atm_iv: list[float | None] = []
 
     for expiry in sorted(set(surface["expiry"].to_list())):
-        expiry_rows = surface.filter(pl.col("expiry") == expiry)
+        # Sorted, because `_snapshot` de-duplicates with `maintain_order=False` and the
+        # search below can tie: two strikes equidistant from spot are a real chain, and
+        # which of them is named must not be a property of how DuckDB happened to hand
+        # the rows back. `expiry` is constant inside the loop, so strike and type are the
+        # whole key.
+        expiry_rows = surface.filter(pl.col("expiry") == expiry).sort(["strike", "opt_type"])
         if len(expiry_rows) == 0:
             continue
 
         if underlying_price is not None:
             reference = underlying_price
-            best_row = min(
+            best_row = _nearest(
                 expiry_rows.iter_rows(named=True),
-                key=lambda r, up=reference: abs(float(r["strike"]) - up),  # type: ignore[misc]
+                lambda r, up=reference: abs(float(r["strike"]) - up),  # type: ignore[misc]
             )
         else:
             # No stored spot: moneyness is the only remaining statement about where the
-            # money is, and it is one the surface already made.
-            best_row = min(
+            # money is, and it is one the surface already made. Rows that made no such
+            # statement carry `NaN` there and are skipped by `_nearest` rather than
+            # winning it — see that function for what they used to cost.
+            best_row = _nearest(
                 expiry_rows.iter_rows(named=True),
-                key=lambda r: abs(float(r["moneyness"]) - 1.0),
+                lambda r: abs(float(r["moneyness"]) - 1.0),
             )
+
+        if best_row is None:
+            # Every row of this expiry is a hole: no stored spot, and no row carrying an
+            # underlying price of its own. There is no strike this expiry can call ATM,
+            # and `atm_strike` is not nullable, so the expiry is absent from the term
+            # structure rather than present with an invented one.
+            continue
 
         atm_iv = best_row["iv"]
         out_expiry.append(int(expiry))

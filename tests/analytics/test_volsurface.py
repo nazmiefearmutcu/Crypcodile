@@ -28,6 +28,7 @@ from crocodile.core.schema.records import OptionsChain
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.volsurface import (
+    _atm_iv,
     iv_surface,
     risk_reversal_butterfly,
     term_structure,
@@ -505,3 +506,129 @@ def test_iv_surface_skips_fit_when_underlying_price_missing(tmp_path: Path) -> N
             f"strike={row['strike']}: expected fitted_iv=None when underlying "
             f"missing, got {row['fitted_iv']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# A hole in `moneyness` must lose the ATM search, not win it
+# ---------------------------------------------------------------------------
+
+
+def _chain_row_with_spot(
+    ts: int,
+    strike: float,
+    expiry: int,
+    mark_iv: float,
+    underlying_price: float | None,
+) -> OptionsChain:
+    """A chain row whose stored spot may be absent — `underlying_price` is nullable.
+
+    `_make_chain_row` above hardcodes 100.0, and the whole defect below lives in the rows
+    that carry no spot at all: those are the ones `iv_surface` gives `moneyness = NaN`.
+    """
+    sym = f"{_SYMBOL_PREFIX}-{int(strike)}-hole-C"
+    return OptionsChain(
+        source=_EXCHANGE,
+        symbol=sym,
+        symbol_raw=sym.split(":", 1)[-1],
+        source_ts=ts,
+        local_ts=ts,
+        asset_class=AssetClass.CRYPTO,
+        underlying=_UNDERLYING,
+        underlying_price=underlying_price,
+        strike=strike,
+        expiry=expiry,
+        opt_type=OptType.CALL,
+        mark_price=None,
+        mark_iv=mark_iv,
+    )
+
+
+def test_term_structure_does_not_report_a_hole_as_the_atm_strike(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`min(..., key=lambda r: abs(r["moneyness"] - 1.0))` never displaced a NaN incumbent.
+
+    `abs(nan - 1.0)` is `nan`, and every `<` against `nan` is False, so whichever row the
+    frame happened to put first won when it was the hole. `_snapshot` de-duplicates with
+    `maintain_order=False`, so "whichever row the frame put first" is not stable between
+    runs over one lake: twenty-five runs against an identical store published
+    `atm_strike=5000.0, atm_iv=2.5` ten times and `atm_strike=100.0, atm_iv=0.5` fifteen.
+
+    The order is pinned here rather than sampled: `_snapshot` is wrapped so it returns its
+    own rows in one of the orders it is free to return them in — the hole first.
+    """
+    hole_ts = _BASE_NS + 1
+    records: list[object] = [
+        _chain_row_with_spot(_BASE_NS, 100.0, _E1_NS, 0.5, 100.0),
+        # Strike fifty times spot, quoted at a 250% vol, and carrying no spot of its own —
+        # so its moneyness is NaN. Stamped last, which is what makes `_underlying_price_at`
+        # answer None and send the search down the moneyness branch.
+        _chain_row_with_spot(hole_ts, 5000.0, _E1_NS, 2.5, None),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+
+    from crocodile.core.analytics import volsurface as _core
+
+    real_snapshot = _core._snapshot
+
+    def hole_first(raw: pl.DataFrame, at_ns: int) -> pl.DataFrame:
+        snap = real_snapshot(raw, at_ns)
+        return snap if len(snap) == 0 else snap.sort("strike", descending=True)
+
+    monkeypatch.setattr(_core, "_snapshot", hole_first)
+
+    df = term_structure(Catalog(tmp_path), _UNDERLYING, hole_ts)
+
+    assert len(df) == 1
+    row = df.row(0, named=True)
+    # Before: atm_strike=5000.0, atm_iv=2.5.
+    assert row["atm_strike"] == 100.0
+    assert row["atm_iv"] == pytest.approx(0.5)
+
+
+def test_term_structure_omits_an_expiry_whose_every_row_is_a_hole(tmp_path: Path) -> None:
+    """No stored spot and no row carrying one: there is no strike this expiry calls ATM.
+
+    `min` over a column that is entirely NaN still returns a row — the first one — so the
+    expiry appeared in the term structure with `atm_strike` set to whichever strike that
+    was. `atm_strike` is not nullable, so the honest answer is that the expiry is absent,
+    the same refusal `iv_surface` makes when it declines to fit against an invented
+    forward.
+    """
+    records: list[object] = [
+        _chain_row_with_spot(_BASE_NS, 90.0, _E1_NS, 0.5, None),
+        _chain_row_with_spot(_BASE_NS, 100.0, _E1_NS, 0.4, None),
+        _chain_row_with_spot(_BASE_NS, 110.0, _E1_NS, 0.6, None),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+
+    df = term_structure(Catalog(tmp_path), _UNDERLYING, _AT_NS)
+
+    # Before: one row, atm_strike=90.0 or 100.0 or 110.0 by frame order, atm_iv to match.
+    assert len(df) == 0
+
+
+def test_atm_iv_skips_a_hole_in_the_moneyness_column() -> None:
+    """The same search, at the other site that runs it: `_atm_iv`'s moneyness fallback.
+
+    Reached when some row of the skew could not be priced a delta. The frame is built
+    here rather than read from a lake because the defect is entirely about which row
+    comes first, and a literal frame is the only way to say which one does.
+    """
+    skew_df = pl.DataFrame(
+        {
+            "strike": [5000.0, 90.0, 100.0, 110.0],
+            "moneyness": [float("nan"), 0.9, 1.0, 1.1],
+            "opt_type": ["C", "C", "C", "C"],
+            "iv": [2.5, 0.6, 0.5, 0.55],
+            "delta": [None, 0.8, 0.5, 0.2],
+        }
+    )
+    all_rows = [
+        row
+        for row in skew_df.iter_rows(named=True)
+        if row["iv"] is not None and row["moneyness"] is not None
+    ]
+
+    # Before: 2.5 — the hole's own vol, reported as the vol at the money.
+    assert _atm_iv(skew_df, all_rows) == pytest.approx(0.5)
