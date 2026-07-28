@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import polars as pl
 
+from crocodile.core.analytics.ofi import OFI_SCHEMA, TopOfBook, bin_ofi
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.rows import _coerce_levels_from_row
 
@@ -65,11 +66,20 @@ def calculate_ofi(
         interval: Time-bin interval string, e.g. "1s", "5m", "1h".
 
     Returns:
-        A Polars DataFrame containing columns:
-        - timestamp: Bin start timestamp (Int64, nanoseconds UTC)
-        - best_bid: Best bid price of the last snapshot in the bin (Float64)
-        - best_ask: Best ask price of the last snapshot in the bin (Float64)
-        - ofi: Net order flow imbalance in the bin (Float64)
+        A Polars DataFrame with the columns
+        :data:`~crocodile.core.analytics.ofi.OFI_SCHEMA` declares — ``timestamp``,
+        ``best_bid``, ``best_ask``, ``ofi`` — and no rows where the window holds fewer
+        than two usable snapshots.
+
+    The imbalance arithmetic and the binning are
+    :func:`~crocodile.core.analytics.ofi.ofi_increment` and
+    :func:`~crocodile.core.analytics.ofi.bin_ofi`, which used to be sixteen lines inline
+    here. They moved when M7 gave them a second caller: an equity L1 quote is the same
+    two prices and two sizes as this function's top of book, so the alternative was a
+    second copy of the conditioning — and a copy that dropped it would still return
+    numbers, just a different statistic under the same capability name. What stays here
+    is the part that is genuinely crypto's: reading ``book_snapshot`` and taking the
+    first level of each side.
     """
     interval_ns = parse_interval_to_ns(interval)
 
@@ -80,92 +90,24 @@ def calculate_ofi(
         df = pl.DataFrame()
 
     if df.is_empty():
-        return pl.DataFrame()
+        return pl.DataFrame(schema=OFI_SCHEMA)
 
-    # Convert to list of dicts for easy step-by-step processing
-    rows = df.to_dicts()
-    snapshots = []
-    for r in rows:
-        ts = int(r["local_ts"])
+    tops: list[tuple[int, TopOfBook]] = []
+    for r in df.to_dicts():
         bids = _coerce_levels_from_row(r.get("bids"))
         asks = _coerce_levels_from_row(r.get("asks"))
+        # A snapshot missing a side is not a top of book: there is no imbalance between
+        # one price and nothing.
         if not bids or not asks:
             continue
-        snapshots.append({
-            "ts": ts,
-            "bid_px": float(bids[0][0]),
-            "bid_sz": float(bids[0][1]),
-            "ask_px": float(asks[0][0]),
-            "ask_sz": float(asks[0][1]),
-        })
+        tops.append((
+            int(r["local_ts"]),
+            TopOfBook(
+                bid_px=float(bids[0][0]),
+                bid_sz=float(bids[0][1]),
+                ask_px=float(asks[0][0]),
+                ask_sz=float(asks[0][1]),
+            ),
+        ))
 
-    # Sort snapshots by timestamp just to be safe
-    snapshots.sort(key=lambda x: x["ts"])
-
-    if len(snapshots) < 2:
-        return pl.DataFrame()
-
-    # Calculate step-by-step OFI
-    steps = []
-    for i in range(1, len(snapshots)):
-        prev = snapshots[i - 1]
-        curr = snapshots[i]
-
-        # Bid flow change
-        if curr["bid_px"] > prev["bid_px"]:
-            delta_wb = curr["bid_sz"]
-        elif curr["bid_px"] < prev["bid_px"]:
-            delta_wb = -prev["bid_sz"]
-        else:
-            delta_wb = curr["bid_sz"] - prev["bid_sz"]
-
-        # Ask flow change
-        if curr["ask_px"] < prev["ask_px"]:
-            delta_wa = curr["ask_sz"]
-        elif curr["ask_px"] > prev["ask_px"]:
-            delta_wa = -prev["ask_sz"]
-        else:
-            delta_wa = curr["ask_sz"] - prev["ask_sz"]
-
-        ofi_val = delta_wb - delta_wa
-        steps.append({
-            "ts": curr["ts"],
-            "bid_px": curr["bid_px"],
-            "ask_px": curr["ask_px"],
-            "ofi": ofi_val,
-        })
-
-    # Bin the step OFIs
-    bins: dict[int, list[dict]] = {}
-    for step in steps:
-        # Align to start_ns
-        bin_start_ts = start_ns + ((step["ts"] - start_ns) // interval_ns) * interval_ns
-        if bin_start_ts not in bins:
-            bins[bin_start_ts] = []
-        bins[bin_start_ts].append(step)
-
-    # Build the final binned dataframe
-    binned_data = []
-    for bin_start_ts, bin_steps in sorted(bins.items()):
-        total_ofi = sum(s["ofi"] for s in bin_steps)
-        # Last step in this bin dictates the final prices
-        last_step = bin_steps[-1]
-        binned_data.append({
-            "timestamp": bin_start_ts,
-            "best_bid": last_step["bid_px"],
-            "best_ask": last_step["ask_px"],
-            "ofi": total_ofi,
-        })
-
-    if not binned_data:
-        return pl.DataFrame()
-
-    return pl.DataFrame(
-        binned_data,
-        schema={
-            "timestamp": pl.Int64,
-            "best_bid": pl.Float64,
-            "best_ask": pl.Float64,
-            "ofi": pl.Float64,
-        }
-    )
+    return bin_ofi(tops, start_ns=start_ns, interval_ns=interval_ns)
