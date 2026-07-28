@@ -50,6 +50,48 @@ _XSL_RENDERED_PREFIX = "xsl"
 directory whose name starts with this — ``xslF345X03/wf-form4_1234.xml`` — and the raw XML
 at the same basename in the filing's root. ``primaryDocument`` in the submissions index
 names the rendered one, which parses as HTML and yields no transactions at all."""
+def require_user_agent(settings: Settings) -> str:
+    """Return the contact string SEC requires, or refuse to invent one.
+
+    The single gate on one contract, and it is here — in the module that puts the header on
+    the wire — because the two modules that need it cannot both own it:
+    ``crocodile.equity.reference.universe`` imports :class:`SecEdgarClient`, so the
+    dependency only runs one way.
+
+    It was written twice, and the two spellings disagreed. This one strips; the reference
+    universe's ``require_sec_user_agent`` tested ``if not settings.sec_user_agent`` with no
+    ``.strip()``, and that was the copy every caller reached, because nothing routed through
+    :meth:`SecEdgarClient.from_settings`. So ``CROCODILE_SEC_USER_AGENT="   "`` passed the
+    gate, and the failure moved from configuration time to *inside* ``begin()`` — the exact
+    place ``capabilities.ops`` says it must not be, "must not first fail on an await inside
+    somebody's event loop". Measured: six requests, 2 + 4 + 8 + 16 + 30 seconds of backoff,
+    sixty seconds before a 403 surfaced, with ``User-Agent: '   '`` on every one of them.
+
+    Stripping is the right half of the disagreement, and not by preference. A shell that
+    exports ``CROCODILE_SEC_USER_AGENT=" "`` has supplied nothing, and a header of three
+    spaces identifies nobody — which is precisely what SEC blocks. A gate whose answer
+    depends on whitespace is a gate that says the request is fine and then watches it fail
+    at a layer with no configuration vocabulary left to explain itself.
+
+    Note what this is *not*: a credential. SEC issues none — ``company_tickers.json`` is
+    public to anyone who says who they are, and saying so is free.
+
+    Raises:
+        ConfigError: naming the variable and what belongs in it.
+    """
+    user_agent = (settings.sec_user_agent or "").strip()
+    if not user_agent:
+        raise ConfigError(
+            "SEC EDGAR requires a User-Agent identifying a contactable party and blocks "
+            "requests carrying none. Set CROCODILE_SEC_USER_AGENT to something of the form "
+            "'YourApp/1.0 (you@example.com)'. It is not an API key and SEC issues none: the "
+            "file is public to anyone who says who they are — but an invented address is "
+            "worse than a missing one, because it satisfies the string check and gives the "
+            "regulator a dead mailbox."
+        )
+    return user_agent
+
+
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 """SEC's registrant-to-ticker index. Keyless, one file, no pagination.
 
@@ -199,18 +241,14 @@ class SecEdgarClient:
         Reading ``os.environ`` here instead would be the sixteen-scattered-reads problem
         :mod:`crocodile.core.config` exists to end, one module deeper.
 
+        The validation itself is :func:`require_user_agent`, which is also what the equity
+        reference universe calls — one contract, one gate, whether the caller wants a client
+        or just the string.
+
         Raises:
             ConfigError: ``sec_user_agent`` is unset or blank.
         """
-        user_agent = (settings.sec_user_agent or "").strip()
-        if not user_agent:
-            raise ConfigError(
-                "SEC EDGAR requires a User-Agent naming a contactable party, e.g. "
-                "'Acme Research ops@acme.example'. Set CROCODILE_SEC_USER_AGENT; requests "
-                "without one are blocked, and an invented address is worse than none "
-                "because it fails silently."
-            )
-        return cls(user_agent=user_agent, **kwargs)
+        return cls(user_agent=require_user_agent(settings), **kwargs)
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
