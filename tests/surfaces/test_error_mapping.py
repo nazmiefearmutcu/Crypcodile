@@ -17,6 +17,7 @@ Two failures were measured at the exit review:
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any
 
@@ -201,3 +202,129 @@ def test_a_bug_in_an_implementation_is_still_a_500(
     assert response.status_code == 500, response.text
     with pytest.raises(RuntimeError, match="a genuine bug"):
         mcp.call_tool("catalog-summary", {"asset_class": "crypto"}, settings=_settings(lake))
+
+
+# ---------------------------------------------------------------------------
+# A JSON-RPC response the caller can match to its request
+# ---------------------------------------------------------------------------
+
+
+_UNMATCHED_COLUMNS = {
+    # `gas-vol` correlates two caller-supplied series and needs `local_ts` on each. A
+    # document without it is the caller's own array being wrong, and polars says so with
+    # `ColumnNotFoundError` — which is neither `CrocodileError` nor `ValueError`, so it
+    # escaped `handle_request` entirely.
+    "gas": '[{"ts": 1, "gwei": 2}]',
+    "vol": '[{"x": 1}]',
+    "asset_class": "crypto",
+}
+
+
+def _one_line(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> None:
+    """Feed the read loop exactly one line and then EOF, so ``serve_stdio`` returns.
+
+    A ``BytesIO`` rather than a pipe: the loop reads ``sys.stdin.buffer`` directly, and an
+    empty read is how it learns the peer has gone.
+    """
+    import io
+
+    monkeypatch.setattr(
+        stdio.sys, "stdin", type("_Pipe", (), {"buffer": io.BytesIO(payload)})()
+    )
+
+
+def test_a_failing_tool_answers_with_the_id_the_caller_is_waiting_on(
+    lake: pathlib.Path,
+) -> None:
+    """A JSON-RPC client matches responses to requests by id and has nothing else.
+
+    Before: the failure escaped to the read loop, whose handler built
+    ``{'jsonrpc', 'error'}`` — no ``id`` — so the caller's future never resolved. On a
+    long-lived stdio session it never would.
+    """
+    response = stdio.handle_request(
+        {"jsonrpc": "2.0", "id": 17, "method": "tools/call",
+         "params": {"name": "gas-vol", "arguments": dict(_UNMATCHED_COLUMNS)}},
+        data_dir=lake,
+    )
+    assert response["id"] == 17
+    assert "error" not in response, response
+    assert response["result"]["isError"] is True
+    assert "local_ts" in response["result"]["content"][0]["text"]
+
+
+def test_a_success_is_not_marked_as_an_error(lake: pathlib.Path) -> None:
+    """``isError`` has to distinguish, which means it must be absent on the happy path."""
+    response = stdio.handle_request(
+        {"jsonrpc": "2.0", "id": 18, "method": "tools/call",
+         "params": {"name": "catalog-summary", "arguments": {"asset_class": "crypto"}}},
+        data_dir=lake,
+    )
+    assert response["id"] == 18
+    assert "isError" not in response["result"], response
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("gas-vol", _UNMATCHED_COLUMNS),
+        ("query", {"sql": "SELECT * FROM no_such_table", "asset_class": "crypto"}),
+        ("no-such-tool", {}),
+    ],
+    ids=["escaping-library-error", "caller-sql", "unknown-tool"],
+)
+def test_no_tool_failure_reaches_the_caller_as_a_protocol_error(
+    lake: pathlib.Path, name: str, arguments: dict[str, str]
+) -> None:
+    """``-32603`` is the code for "this server broke", and every client may retry it.
+
+    ``_REPORTED`` was deciding two things and only one was its own: it chose the wording, and
+    it also chose whether the agent heard anything at all rather than a transport fault. It
+    keeps the first. Three shapes are driven — a library exception it never named, one it
+    did, and a name that is not a tool — because the property is that *none* of them is a
+    protocol error, not that the list got one entry longer.
+    """
+    response = stdio.handle_request(
+        {"jsonrpc": "2.0", "id": 19, "method": "tools/call",
+         "params": {"name": name, "arguments": dict(arguments)}},
+        data_dir=lake,
+    )
+    assert response["id"] == 19
+    assert "error" not in response, response
+    assert response["result"]["isError"] is True
+
+
+async def test_the_read_loop_carries_the_id_even_when_the_handler_itself_fails(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The last line of defence, driven by breaking the handler rather than by inspection.
+
+    ``handle_request`` is not supposed to raise. The loop's ``except`` exists because it
+    might, and it was building a response with no ``id`` — which is exactly the case where a
+    client most needs one, since the alternative is a request that never completes.
+    """
+    def _explode(request: dict[str, Any], *, data_dir: Any = None) -> dict[str, Any]:
+        raise RuntimeError("the handler itself is broken")
+
+    monkeypatch.setattr(stdio, "handle_request", _explode)
+    _one_line(monkeypatch, b'{"jsonrpc":"2.0","id":23,"method":"tools/list"}\n')
+    await stdio.serve_stdio(data_dir=lake)
+
+    written = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert written, "the loop answered nothing at all"
+    answer = json.loads(written[0])
+    assert answer["id"] == 23
+    assert answer["error"]["code"] == -32603
+
+
+async def test_a_line_that_is_not_json_is_a_parse_error_with_a_null_id(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one case where there is no id to carry, which is why the parse is separate."""
+    _one_line(monkeypatch, b"{not json\n")
+    await stdio.serve_stdio(data_dir=lake)
+
+    written = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    answer = json.loads(written[0])
+    assert answer["id"] is None
+    assert answer["error"]["code"] == -32700
