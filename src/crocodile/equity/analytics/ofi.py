@@ -10,12 +10,33 @@ makes the two halves of ``ofi`` one statistic rather than two functions that hap
 declared under one name.
 
 **Why a quote is the right input and a bar is not.** ``OHLCV.buy_volume`` and
-``sell_volume`` look like the obvious ingredients for an equity order-flow number and they
-are set by no connector in this tree — every row in the lake carries ``0.0`` for both. An
-imbalance built on them would return a column of zeros for every symbol and every window,
-which is a fabricated calm rather than a missing answer. Quotes are what the equity
-providers actually write, and OFI is defined over quote revisions anyway: it measures the
-size that entered or left the *touch*, not the size that traded.
+``sell_volume`` look like the obvious ingredients for an equity order-flow number. The
+argument for rejecting them has changed, and the weaker half of it is now obsolete: when
+this module was written both fields defaulted to ``0.0``, so a bar-based imbalance would
+have returned a column of zeros for every symbol and every window — a fabricated calm
+rather than a missing answer. That defect was fixed in the schema rather than routed
+around. :class:`~crocodile.core.schema.records.OHLCV` now declares them ``float | None``
+defaulting to ``None``, so an unfilled split reads as absent instead of as quiet, and a
+bar-based OFI would today return nulls: honest, and still no answer.
+
+Two facts survive the fix, and they are what the choice actually rests on.
+
+*Nothing under* ``equity/providers`` *writes the split.* Only two writers in the tree set
+these fields at all — ``crypto/exchanges/binance/backfill.py``, off
+``takerBuyBaseAssetVolume``, and ``core/corpactions/calculator.py``, which rescales a
+split it was handed — plus
+:func:`~crocodile.equity.resample.ohlcv.resample_trades_to_bars`, which measures one from
+``Trade.side``. An equity bar that came from a provider carries ``None`` on both, so the
+column would be null for exactly the inputs this module exists to serve.
+
+*Even a fully populated split would be the wrong statistic*, which is the stronger point
+and the one that would hold even if every provider filled the fields in tomorrow. An
+aggressor split measures volume that **traded**. OFI measures size that entered or left
+the *touch* — including size that was posted and pulled without ever printing, which is
+most of what a quote stream shows and none of what a bar records. The two numbers answer
+different questions, so a bar is not a degraded input here; it is a different measurement
+wearing a similar name. Quotes are both what the equity providers actually write and what
+OFI is defined over.
 
 **What the equity read has to do that the crypto one does not.** Nothing structural, which
 is the finding worth recording. A crypto snapshot is two lists and the top of book is their

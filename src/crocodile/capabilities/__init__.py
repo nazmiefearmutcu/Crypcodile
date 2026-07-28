@@ -1,9 +1,11 @@
 """Where capabilities are declared: one batch module per family, filled in parallel.
 
 :mod:`crocodile.core.capability` holds the machinery; this package holds the list. The
-split is not tidiness. Porting 48 capabilities off the six legacy surfaces is four agents'
+split is not tidiness. Porting 47 capabilities off the six legacy surfaces is four agents'
 work, and one declaration file would serialise them into a queue behind a single set of
-merge conflicts. Four modules, four owners, one registry.
+merge conflicts. Four modules, four owners, one registry — and then ``onchain``, a fifth
+module for the two capabilities the parity gate found after the batches closed, which is
+what brings the registry to the 49 names ``tests/conformance/test_gates.py`` pins.
 
 The families, and what belongs in each:
 

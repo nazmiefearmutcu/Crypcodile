@@ -1636,6 +1636,11 @@ CHAOS_SCORE = declare(
 
 PENDING_SYMMETRY.update(
     {
+        # This block is empty. What follows is the record of what it held and how each
+        # entry left, in the past tense throughout, kept because the arguments turned out
+        # to be the design. A capability still on the schedule would show up as a live
+        # mapping here, not as a paragraph.
+        #
         # M1 was here — the options family, all four of it — and is repaid. The prediction
         # the entry made held: `term-structure`, `vol-skew` and `risk-reversal` are
         # `iv-surface` read three ways, and once the Yahoo chain carried a spot and the
@@ -1663,8 +1668,9 @@ PENDING_SYMMETRY.update(
         # equity form: the crypto implementation differences consecutive top-of-book
         # snapshots, and an equity quote stream is the same two prices and two sizes.
         # M6 — depth. The crypto implementation reads a real ladder out of `book_snapshot`;
-        # equity has no ladder until the synthetic VAP profile and its Alpaca L1 upgrade
-        # exist, and cumulative size within a percent band is meaningless without one.
+        # equity had no ladder until the synthetic VAP profile and its Alpaca L1 upgrade
+        # were built, and cumulative size within a percent band is meaningless without one.
+        # Both exist now — `crocodile.equity.depth.select` — which is what discharged this.
         # M4 is closed and its three names have left this ledger. The argument that stood
         # here is kept because it turned out to be the whole design and not a plan: the
         # equity form of "who is moving size" is a filing rather than a transfer, so

@@ -448,15 +448,22 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # 429 → 428: the two data-dir resolvers in the crypto REST server became one, and
 # its import block was reformatted on the way past.
 # 428 → 240: Phase 2 deleted the six hand-written surface stacks — 15 899 lines,
-# and 188 of the findings were theirs. What is left is 238 in `crypto` and 2 in
-# `equity`, which is the shape the merge always had: the crypto fork is the older
-# and larger tree. Note the ratchet did *not* fall by the whole of what left,
-# because `crypto/legacy/mcp_server.py` did not entirely go — the two Base pool
-# readers moved to `crypto/exchanges/base_onchain/price.py`, and their findings
-# moved with them rather than being fixed. That is deliberate: this commit is a
-# deletion, and reformatting code on its way past is how a deletion stops being
-# reviewable.
-_LEGACY_RUFF_BUDGET = 240
+# and 188 of the findings were theirs. Note the ratchet did *not* fall by the
+# whole of what left, because `crypto/legacy/mcp_server.py` did not entirely go —
+# the two Base pool readers moved to `crypto/exchanges/base_onchain/price.py`, and
+# their findings moved with them rather than being fixed. That is deliberate: this
+# commit is a deletion, and reformatting code on its way past is how a deletion
+# stops being reviewable.
+# 240 → 222: no fix, a measurement. The line above used to add that "what is left
+# is 238 in `crypto` and 2 in `equity`" — and the merge then took 18 more out of
+# `crypto` without anybody lowering the cap, so the tree sat at 222 under a budget
+# of 240 with room for 18 new findings to land green. That is the exact condition
+# the 431 → 430 step was taken to remove, and it had reappeared behind a sentence
+# that described the split instead of asserting it. The composition is no longer
+# written here for the same reason: it is `_ruff("src/crocodile/crypto")` and
+# `_ruff("src/crocodile/equity")`, and a prose copy of a number only ever goes out
+# of date in the direction that loosens the gate.
+_LEGACY_RUFF_BUDGET = 222
 
 
 def _ruff(*paths: str) -> list[str]:

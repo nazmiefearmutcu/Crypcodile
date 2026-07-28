@@ -13,8 +13,12 @@ Usage::
         market="usdm",          # forwarded as **kw to BinanceConnector
     )
 
-Valid exchange names: ``binance``, ``bybit``, ``coinbase``, ``deribit``,
-``okx``, ``base_onchain``, ``derive``, ``gmx_synthetix``, ``superchain``.
+Valid exchange names: ``base_onchain``, ``binance``, ``bybit``, ``coinbase``,
+``coingecko``, ``deribit``, ``derive``, ``gmx_synthetix``, ``okx``, ``superchain``.
+That list is ``_REGISTRY`` below spelled out, and
+``tests/conformance/test_prose_counts.py`` asserts the two agree, because the
+version of this sentence that omitted ``coingecko`` read as a complete
+enumeration and was not one.
 Extra keyword arguments (e.g. ``market`` for Binance, ``category`` for Bybit,
 ``region`` for OKX, ``rpc_url`` / ``viewer_address`` for Derive) are
 forwarded to the connector constructor unchanged.
@@ -109,9 +113,10 @@ def make_connector(
     Parameters
     ----------
     exchange:
-        Lowercase exchange name.  Valid values: ``binance``, ``bybit``,
-        ``coinbase``, ``deribit``, ``derive``, ``okx``, ``base_onchain``,
-        ``gmx_synthetix``, ``superchain``.
+        Lowercase exchange name.  Valid values: ``base_onchain``, ``binance``,
+        ``bybit``, ``coinbase``, ``coingecko``, ``deribit``, ``derive``,
+        ``gmx_synthetix``, ``okx``, ``superchain``.  Any other name falls
+        through to the universal ccxt connector rather than raising here.
     symbols:
         List of symbol strings to subscribe to (exchange-native format).
     channels:
