@@ -687,23 +687,47 @@ over *every* declared name and checks the two facts against each other.
 """
 
 
-@pytest.mark.parametrize("name", _DECLARED)
-def test_every_crypto_only_capability_is_scheduled_against_a_spec_method(name: str) -> None:
-    """The other half of declaring an asymmetric capability, asserted per name.
+def test_every_crypto_only_capability_is_scheduled_against_a_spec_method() -> None:
+    """The other half of declaring an asymmetric capability — the half with no subject left.
 
-    ``test_pending_symmetry.py`` proves the ledger's rules hold; this proves this batch
-    actually filed under them, so a declaration added later without a schedule fails here
-    with its own name rather than in a loop over the whole registry.
+    This was 17 parametrised cases whose first branch, ``if name in _SYMMETRIC: … return``,
+    every one of them took: ``_DECLARED - _SYMMETRIC`` is empty, so the two assertions after
+    it never ran and what did run duplicated
+    :func:`test_every_symmetric_capability_left_the_ledger` exactly — 34 cases asserting the
+    same two facts twice.
+
+    The rule still matters and Phase 4 will declare capabilities, so it is not deleted; it
+    moved to :func:`~tests.conformance.test_pending_symmetry.assert_asymmetry_is_scheduled`,
+    where ``_isolate`` drives it with a fixture capability and proves it catches an
+    unscheduled one, an invented method, a name that grew an equity half, and a name nothing
+    registered. Here it is applied to this batch's actual crypto-only set, which is empty
+    today and says so rather than looking like coverage.
     """
-    from crocodile.core.capability import PENDING_SYMMETRY, SPEC_METHODS
+    from tests.conformance.test_pending_symmetry import assert_asymmetry_is_scheduled
 
     load_all()
-    if name in _SYMMETRIC:
-        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
-        assert name not in PENDING_SYMMETRY
-        return
-    assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
-    assert PENDING_SYMMETRY[name] in SPEC_METHODS
+    assert_asymmetry_is_scheduled(set(_DECLARED) - _SYMMETRIC)
+
+
+def test_the_symmetric_list_names_exactly_the_capabilities_that_are_symmetric() -> None:
+    """``_SYMMETRIC`` as an assertion rather than as a list the tests below trust.
+
+    :func:`test_every_symmetric_capability_left_the_ledger` checks that everything on the
+    list really has both halves. This is the other direction, and it is the one that keeps
+    the list from being an exemption: a capability that becomes symmetric without being
+    added here would silently move into the *unscheduled asymmetric* set above, where the
+    rule would then demand a schedule for a capability that no longer needs one.
+    """
+    load_all()
+    symmetric_now = {
+        name
+        for name in _DECLARED
+        if set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+    }
+    assert symmetric_now == set(_SYMMETRIC), (
+        f"symmetric and unlisted: {sorted(symmetric_now - _SYMMETRIC)}; "
+        f"listed and not symmetric: {sorted(_SYMMETRIC - symmetric_now)}"
+    )
 
 
 @pytest.mark.parametrize("name", _SYMMETRIC)
