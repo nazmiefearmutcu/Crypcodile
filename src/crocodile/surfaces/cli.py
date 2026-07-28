@@ -15,13 +15,14 @@ surface*, made once here, rather than an omission repeated at forty-eight call s
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from typing import Annotated, Any, get_args
 
 import msgspec
 import typer
 
-from crocodile.core.capability import REGISTRY, AssetClass, Capability
+from crocodile.core.capability import REGISTRY, AssetClass, Capability, ReturnKind
 from crocodile.core.config import Settings
 from crocodile.core.errors import CrocodileError
 from crocodile.core.store.catalog import Catalog
@@ -158,11 +159,13 @@ def _runner(cap: Capability) -> Any:
             if warning:
                 typer.echo(warning, err=True)
             try:
-                result = _drive(dispatch.invoke(cap, ctx, params))
+                pending = dispatch.invoke(cap, ctx, params)
+                # See the module docstring: local operator, own lake, so nothing is capped.
+                result = dispatch.drive(pending, row_limit=None)
             except (CrocodileError, ValueError) as exc:
                 typer.echo(f"Error: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
-            typer.echo(_render(cap, result))
+            typer.echo(_render(cap, result, pending))
 
     runner: Any = run
     runner.__name__ = cap.name.replace("-", "_")
@@ -175,37 +178,41 @@ def _runner(cap: Capability) -> Any:
     return runner
 
 
-def _drive(result: Any) -> Any:
-    """Run to completion anything the capability handed back unstarted.
+def _render(cap: Capability, result: Any, pending: Any = None) -> str:
+    """Print a table as a table and everything else as JSON, per the declaration.
 
-    ``backfill`` returns an *unstarted coroutine* and ``collect`` an unstarted
-    :class:`~crocodile.capabilities.ops.Subscription`, both deliberately: an implementation
-    cannot know whether its caller already owns an event loop, and ``asyncio.run`` from
-    inside a FastAPI route raises. The CLI is the surface that owns no loop, so it is the
-    surface that starts one — and it must, because without this the command printed
-    ``<coroutine object backfill at 0x…>``, exited 0, and moved no data. A zero exit code
-    over work that never ran is the quietest possible failure.
+    ``pending`` is what the capability handed back before :func:`dispatch.drive` finished it,
+    and it is only consulted for a ``STREAM``: a subscription run returns ``None``, so
+    rendering the return value printed the word ``None`` after a collection run and reported
+    neither what was collected nor for how long.
+
+    JSON rather than ``str(...)`` for everything that is not a polars frame. A Python
+    ``repr`` of a dict is single-quoted, which is neither JSON nor the bordered frame the
+    legacy CLI printed, so it could be read by neither ``jq`` nor a person — and this is the
+    only surface whose output is routinely piped into another program.
     """
-    import asyncio
-    import inspect
-
-    begin = getattr(result, "run", None)
-    if callable(begin) and not isinstance(result, type):
-        return asyncio.run(begin())
-    if inspect.iscoroutine(result):
-        return asyncio.run(result)
-    return result
-
-
-def _render(cap: Capability, result: Any) -> str:
-    """Print a table as a table and a scalar as one line, per the declaration."""
+    if cap.returns is ReturnKind.STREAM:
+        return _stream_line(pending)
     shaped = dispatch.payload(cap, result)
     if "rows" in shaped:
         rows = shaped["rows"]
         if hasattr(result, "to_dicts"):
             return "No data found for the given parameters." if not rows else str(result)
-        return str(rows)
-    return str(shaped["result"])
+        return json.dumps(rows, indent=2)
+    return json.dumps(shaped["result"], indent=2)
+
+
+def _stream_line(pending: Any) -> str:
+    """What a finished subscription has to report, which is not its return value."""
+    summary = dispatch.stream_summary(pending)
+    if summary is None:
+        return "Stream finished."
+    bound = summary["duration_seconds"]
+    return (
+        f"Collected {', '.join(summary['channels']) or 'no channels'} from "
+        f"{', '.join(summary['sources']) or 'no sources'} into the lake"
+        + (f" for {bound}s." if bound is not None else " until cancelled.")
+    )
 
 
 def build_app() -> typer.Typer:

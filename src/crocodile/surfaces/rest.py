@@ -72,12 +72,12 @@ def _handler(
 ) -> Callable[..., Coroutine[Any, Any, dict[str, Any]]]:
     """Return the endpoint for one capability. The whole of the per-capability code."""
     from fastapi import HTTPException, Request
+    from starlette.concurrency import run_in_threadpool
 
-    async def endpoint(request: Request) -> dict[str, Any]:
-        supplied = dict(request.query_params)
-        explicit = supplied.pop("asset_class", None)
+    def serve(supplied: dict[str, Any]) -> dict[str, Any]:
+        explicit_raw = supplied.pop("asset_class", None)
         try:
-            asset_class = AssetClass(explicit) if explicit else None
+            asset_class = AssetClass(explicit_raw) if explicit_raw else None
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -100,7 +100,9 @@ def _handler(
                 row_limit=dispatch.NETWORK_ROW_LIMIT,
             )
             try:
-                result = dispatch.invoke(cap, ctx, params)
+                result = dispatch.drive(
+                    dispatch.invoke(cap, ctx, params), row_limit=ctx.row_limit
+                )
             except CapabilityUnavailable as exc:
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
             except ValueError as exc:
@@ -114,6 +116,15 @@ def _handler(
             if warning:
                 body["warning"] = warning
             return body
+
+    async def endpoint(request: Request) -> dict[str, Any]:
+        supplied = dict(request.query_params)
+        # Off the event loop, for two reasons that are really one. Every capability here is
+        # blocking — DuckDB, Parquet, HTTP — so serving it inline stalls every other request
+        # on the process; and `dispatch.drive` calls `asyncio.run` for a capability that
+        # handed back an unstarted coroutine, which raises outright inside a running loop.
+        # A worker thread has no loop of its own, so both stop being true at once.
+        return await run_in_threadpool(serve, supplied)
 
     # FastAPI resolves a route's parameters through ``get_type_hints`` against the module
     # globals. ``from __future__ import annotations`` turns ``request: Request`` into the

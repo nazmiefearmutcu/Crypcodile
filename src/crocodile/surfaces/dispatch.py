@@ -11,6 +11,10 @@ The one thing the surfaces are *allowed* to disagree about is trust, and
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import itertools
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Final, get_args, get_origin
 
 import msgspec
@@ -41,12 +45,14 @@ __all__ = [
     "asset_class_option_values",
     "build_context",
     "build_params",
+    "drive",
     "invoke",
     "params_schema",
     "payload",
     "provenance_block",
     "resolve",
     "resolve_asset_class",
+    "stream_summary",
     "warning_for",
     "wire_names",
 ]
@@ -321,6 +327,67 @@ def invoke(cap: Capability, ctx: CapabilityContext, params: Any) -> Any:
     return implementation(cap, ctx).fn(ctx, params)
 
 
+def drive(result: Any, *, row_limit: int | None) -> Any:
+    """Finish anything a capability handed back unstarted or unconsumed.
+
+    Three return shapes in the registry are *work* rather than an answer, and all three are
+    deliberate: an implementation cannot know whether its caller already owns an event loop,
+    and ``asyncio.run`` from inside a running one raises — so ``backfill`` returns an
+    unstarted coroutine, a ``STREAM`` returns an unstarted
+    :class:`~crocodile.capabilities.ops.Subscription`, and ``replay`` returns a lazy iterator
+    because the whole point of its k-way merge is to stay O(channels) in memory.
+
+    This lives here rather than in one projector because the hazard is not one surface's.
+    The first two were fixed inside the CLI, and that is exactly why the third shipped
+    unnoticed on all three at once: ``replay`` printed ``<itertools.islice object at 0x…>``
+    and exited **0** on the CLI, answered 500 on REST, and failed ``json.dumps`` on MCP.
+    A zero exit code over work that never ran is the quietest possible failure, and a
+    projection that answers it in one place answers it once.
+
+    ``row_limit`` bounds the materialisation, because a lazy result is only safe on a network
+    surface while somebody bounds it: ``replay`` reads through :meth:`Catalog.scan` rather
+    than :meth:`CapabilityContext.query`, so the ``LIMIT`` wrapper that caps raw SQL never
+    sees it and draining the iterator is how one request materialises a lake. ``None`` — the
+    CLI's posture, on the machine that owns the lake — drains it all.
+    """
+    begin = getattr(result, "run", None)
+    if callable(begin) and not isinstance(result, type):
+        return asyncio.run(begin())
+    if inspect.iscoroutine(result):
+        return asyncio.run(result)
+    if isinstance(result, Iterator):
+        # ``Iterator`` and not ``Iterable``: a str, a dict, a list and a polars frame are all
+        # iterable and none of them is unconsumed work. What is being caught here is the
+        # generator/islice family, which has a ``__next__`` and one shot at being read.
+        return list(result) if row_limit is None else list(itertools.islice(result, row_limit))
+    return result
+
+
+def stream_summary(pending: Any) -> dict[str, Any] | None:
+    """Describe an unstarted subscription, or ``None`` if this is not one.
+
+    A ``STREAM`` run returns ``None`` when it finishes — there is no last element to report —
+    so a surface that renders only the return value prints ``None`` after an hour of
+    collection and says nothing about what it collected. Everything worth reporting is known
+    *before* the run starts, which is the whole reason a ``Subscription`` exists, so it is
+    read off here while it still exists.
+
+    Duck-typed rather than an ``isinstance`` against
+    :class:`~crocodile.capabilities.ops.Subscription`: importing that module here would drag
+    every connector and every analytics dependency into a surface that is often only being
+    asked to list its commands, which is the cost ``dispatch`` defers everywhere else.
+    """
+    sources = getattr(pending, "sources", None)
+    channels = getattr(pending, "channels", None)
+    if not callable(getattr(pending, "run", None)) or sources is None or channels is None:
+        return None
+    return {
+        "sources": list(sources),
+        "channels": list(channels),
+        "duration_seconds": getattr(pending, "duration_seconds", None),
+    }
+
+
 # ---------------------------------------------------------------------------
 # The response envelope
 # ---------------------------------------------------------------------------
@@ -383,19 +450,45 @@ def _headline(basis: str) -> str:
 
 
 def _jsonable(value: Any) -> Any:
-    """Make one cell safe to serialise.
+    """Make one cell safe to serialise, on every surface's encoder rather than on one.
 
     JSON has no ``NaN`` and no ``Infinity``. Polars produces both from ordinary analytics —
     a Bollinger band over a constant window, a ratio with a zero denominator — and
     ``json.dumps`` emits them as bare ``NaN`` tokens that most clients reject as malformed.
-    ``None`` is the honest encoding: the number does not exist.
+    ``None`` is the honest encoding: the number does not exist. The rule itself is
+    :func:`crocodile.core.util.json_safe.json_safe_float` rather than an ``isfinite`` written
+    here. Both deleted REST servers and both deleted MCP servers re-exported that function
+    precisely so there would be one answer, and a fourth copy in the projection would undo
+    what the re-export was for.
 
-    The rule itself is :func:`crocodile.core.util.json_safe.json_safe_float` rather than an
-    ``isfinite`` written here. Both deleted REST servers and both deleted MCP servers
-    re-exported that function precisely so there would be one answer, and a fourth copy in
-    the projection would undo what the re-export was for.
+    Narrowing only ``float`` was not enough, and the gap divided the surfaces exactly the way
+    ``DepthProfile`` did. Every lake read carries a ``date`` cell — the partition column — and
+    FastAPI's encoder knows what to do with one while ``json.dumps`` does not, so
+    ``catalog-scan`` answered 200 on REST and raised ``Object of type date is not JSON
+    serializable`` on MCP. A ``date``, a ``Decimal``, a ``UUID`` and a nested Struct are all
+    values a capability may legitimately return; which of them a given transport happens to
+    understand is not something a caller should have to know.
+
+    ``msgspec.to_builtins`` supplies the conversion for anything that is not already a JSON
+    primitive, and the walk continues into the result so a non-finite float *inside* a
+    converted structure is still caught. Sequence types are preserved rather than flattened
+    to lists: both encoders write a tuple as an array, so changing it would only churn the
+    shape a caller sees.
     """
-    return json_safe_float(value) if isinstance(value, float) else value
+    if isinstance(value, float):
+        return json_safe_float(value)
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        converted = [_jsonable(item) for item in value]
+        return tuple(converted) if isinstance(value, tuple) else converted
+    builtin = msgspec.to_builtins(value)
+    # ``to_builtins`` returns a str for a date and a dict for a Struct, so one more pass
+    # finishes the walk. The type check is what makes that pass terminate rather than
+    # recur forever on a value msgspec handed straight back.
+    return _jsonable(builtin) if type(builtin) is not type(value) else builtin
 
 
 def payload(cap: Capability, result: Any) -> dict[str, Any]:
@@ -405,17 +498,20 @@ def payload(cap: Capability, result: Any) -> dict[str, Any]:
     off the declaration rather than off the value's Python type, which is what stops a
     one-row frame from being served as a table by one surface and as an object by another —
     ``slippage`` returns exactly that and is declared ``SCALAR``.
+
+    Whatever comes out is plain JSON data all the way down, because the three surfaces do not
+    share an encoder and the one thing they must share is what they are asked to encode.
     """
     rows = _rows(result)
     if cap.returns is ReturnKind.TABLE:
-        return {"rows": rows if rows is not None else _encodable(result)}
+        return {"rows": rows if rows is not None else _encodable(cap, result)}
     if rows is not None:
         return {"result": rows[0] if rows else None}
-    return {"result": _encodable(result)}
+    return {"result": _encodable(cap, result)}
 
 
-def _encodable(result: Any) -> Any:
-    """Render a ``msgspec.Struct`` result as plain data.
+def _encodable(cap: Capability, result: Any) -> Any:
+    """Render a result as plain data, or say loudly that it cannot be.
 
     ``depth`` returns a ``DepthProfile``, which is a Struct and is this codebase's wire type
     — but only for *msgspec's* encoder. FastAPI serialises with pydantic, which refuses an
@@ -427,13 +523,25 @@ def _encodable(result: Any) -> Any:
     ``to_builtins`` and not ``json.encode``: the result has to stay a Python object for the
     CLI to render and for MCP to embed, and it is msgspec's own recursive walk, so a Struct
     nested inside a dict or a list is converted too.
+
+    The failure is **raised**. Swallowing it and handing the object back is what let a lazy
+    ``replay`` reach three different callers as three different symptoms — an ``islice`` repr
+    on stdout under exit 0, a 500 with no detail, and a JSON-RPC internal error — none of
+    which names the capability or the type. Anything unstarted is :func:`drive`'s to finish
+    before it gets here, so reaching this branch means the projection has a bug, and a bug
+    says so where it happens.
+
+    Raises:
+        TypeError: the result is not encodable by any surface.
     """
     try:
-        return msgspec.to_builtins(result)
-    except (TypeError, NotImplementedError):
-        # Not encodable at all — a Subscription, a generator. Handed back untouched so the
-        # surface that asked for it decides, rather than being flattened into a string here.
-        return result
+        return _jsonable(msgspec.to_builtins(result))
+    except (TypeError, NotImplementedError) as exc:
+        raise TypeError(
+            f"{cap.name} returned a {type(result).__name__}, which no surface can encode; "
+            f"a capability returns data, and work handed back unstarted must be driven to "
+            f"completion before it reaches the envelope"
+        ) from exc
 
 
 def _rows(result: Any) -> list[dict[str, Any]] | None:

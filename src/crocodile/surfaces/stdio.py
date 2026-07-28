@@ -28,7 +28,6 @@ __all__ = ["handle_request", "serve_stdio"]
 
 _PROTOCOL_VERSION = "2024-11-05"
 
-
 def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> dict[str, Any]:
     """Answer one JSON-RPC request.
 
@@ -60,17 +59,25 @@ def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> 
         name = params.get("name", "")
         try:
             result: Any = mcp.call_tool(name, params.get("arguments") or {}, data_dir=data_dir)
+            # Inside the try, because serialising the result is part of answering the call.
+            # It sat outside, so a value this transport cannot encode — every lake read
+            # carries a `date` cell — escaped to the read loop as `-32603 Internal error`,
+            # which tells an agent the *call* failed rather than what about its request
+            # could not be answered. The encoder is `json.dumps` and not msgspec's on
+            # purpose: it is the one every MCP client reads with, so a type it refuses is a
+            # type this projection must not put on the wire.
+            text = json.dumps(result, indent=2)
         except KeyError:
-            result = {"error": f"Tool {name} not found"}
-        except (CrocodileError, ValueError) as exc:
+            text = json.dumps({"error": f"Tool {name} not found"}, indent=2)
+        except (CrocodileError, ValueError, TypeError) as exc:
             # A bad argument or an asset class with no implementation is the caller's
             # problem and is reported in the tool result, which is what an agent reads.
             # A protocol-level error would tell it the *call* failed rather than the ask.
-            result = {"error": f"{name} failed: {exc}"}
+            text = json.dumps({"error": f"{name} failed: {exc}"}, indent=2)
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]},
+            "result": {"content": [{"type": "text", "text": text}]},
         }
 
     return {
