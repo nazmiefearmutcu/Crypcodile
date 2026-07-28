@@ -1,5 +1,4 @@
 import os
-import sys
 
 # Prevent OpenMP and OpenBLAS multithreading deadlocks/slowness on macOS Apple Silicon
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -9,13 +8,32 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Force Qt offscreen platform for headless tests run in CI/CLI environments
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-# Safeguard against xgboost C-library loading failures on macOS
-sys.modules["xgboost"] = MagicMock()
+# There is deliberately no `sys.modules["xgboost"] = MagicMock()` here.
+#
+# One lived at this line, to "safeguard against xgboost C-library loading failures on
+# macOS" — the wheel needs libomp and `import xgboost` raises XGBoostError without it.
+# The safeguard was unnecessary and it was not free. `crocodile.crypto.analytics.
+# funding_prediction` is the only module in the tree that imports xgboost, and it already
+# wraps the import in `except BaseException`, which is what XGBoostError needs; the module
+# handles an absent library on its own, exactly as it does in production.
+#
+# What the stub did instead was make the import *succeed*, so XGBOOST_AVAILABLE was True in
+# every test process regardless of the machine. `predict_next_funding` then took its
+# xgboost branch, `MagicMock().predict(...)[0]` floated to MagicMock's default `__float__`,
+# and the capability returned `predicted_funding_rate=1.0` — a mock artefact with the shape
+# of a forecast. `funding-predict`'s only numeric check sat behind
+# `if result["method"] == "rolling_mean"`, a branch that could then never be taken.
+#
+# A mock that decides which branch of the code under test runs is not a safeguard against
+# the environment; it is a second environment nobody chose. Tests that want the xgboost
+# path patch XGBOOST_AVAILABLE and inject a regressor that computes — see
+# tests/analytics/test_funding_prediction.py, whose `_WeightedSumRegressor` returns a value
+# derivable by hand, so the assertion is about the wiring and not about MagicMock.
 
 # NOTE: PyQt6 / pyqtgraph are intentionally NOT mocked here. The FlowMap GUI
 # tests exercise real (offscreen) Qt widgets — QT_QPA_PLATFORM=offscreen above

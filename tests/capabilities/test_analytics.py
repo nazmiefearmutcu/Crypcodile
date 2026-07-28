@@ -1446,8 +1446,14 @@ def test_funding_predict_is_one_function_for_both_asset_classes(tmp_path: Path) 
     answer = _call_equity(
         "funding-predict", ctx, FundingPredictParams((0.01, 0.02, 0.03), window_size=2)
     )
-    assert answer["method"] in {"xgboost", "rolling_mean"}
-    assert isinstance(answer["predicted_funding_rate"], float)
+    # `method in {"xgboost", "rolling_mean"}` was what stood here, and those are the only
+    # two literals the function assigns — an assertion the implementation could not fail.
+    # Three rates cannot leave a trainable row after lag-1/2/3 shifting, so the branch is
+    # the rolling mean however the machine answers `import xgboost`, and the number is the
+    # mean of the last `window_size` rates: mean([0.02, 0.03]).
+    assert answer["method"] == "rolling_mean"
+    assert answer["predicted_funding_rate"] == pytest.approx(0.025)
+    assert answer["window_size"] == 2
 
 
 def test_every_m5_equity_impl_is_a_named_module_level_function() -> None:
