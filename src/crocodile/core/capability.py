@@ -214,6 +214,41 @@ class Impl(msgspec.Struct, frozen=True):
     :attr:`prov` describes what the implementation hands back.
     """
 
+    reads: tuple[str, ...] = ()
+    """The lake channels this implementation reads, for the asset class it is declared under.
+
+    The missing half of :attr:`basis`. A basis names the *method* the answer rests on and is
+    checked against a registry of confidence formulas; nothing checked that the data the
+    method needs could ever be in the lake. Eleven equity implementations read
+    ``options_chain``, ``macro_series`` or ``insider``, no shipped equity ingest path could
+    write any of them, and every gate stayed green: ``iv-surface``, ``open-interest``,
+    ``perp-basis`` and ``whale-alerts`` returned zero rows on every lake this product can
+    build, while ``spot-future-basis`` returned a row whose ``carry_pct`` was null under a
+    ``prov_confidence`` of 0.667. ``tests/conformance/test_channel_writability.py`` is the
+    gate this field exists for, and it fails when a name here is not a channel some
+    registered provider for that asset class declares it can write.
+
+    **Why a declaration and not a scan.** The alternative considered was deriving the
+    read-set mechanically, by walking the SQL each implementation's module authors. It is
+    the more attractive option — a derived fact cannot go stale — and it does not work at
+    the precision this needs. ``spot-future-basis``'s equity implementation reads
+    ``macro_series`` through two modules it does not name (``equity.analytics.carry`` calls
+    into ``core.analytics.carry``); ``price_leg`` scans a channel held in a loop variable
+    over a module constant, so the table name is not a literal at the call site at all; and
+    ``core.analytics.volsurface`` reads ``options_chain`` on behalf of *both* asset classes
+    from one module, which no per-module scan can attribute to one of them. A scan would go
+    blind in exactly the places the indirection lives, which is where the defect lived. So
+    the read-set is claimed by the author, and the *mechanical* half of the gate is turned
+    on the sources instead: what a provider can write is derived from its own declaration,
+    and a coarse module sweep backs the claim up where a scan can see (see that test's
+    docstring for the division of labour).
+
+    Empty means "reads no lake channel", which is true of ``collect``, ``backfill`` and of
+    implementations that compute from their parameters — not "not declared". A capability
+    that reads the lake and declares nothing is caught by the module sweep, not by this
+    field.
+    """
+
 
 class Capability(msgspec.Struct, frozen=True):
     """One capability, declared once for both asset classes."""

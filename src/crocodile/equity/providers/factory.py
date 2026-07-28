@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
+from crocodile.core.schema.enums import CHANNEL_SUCCESSORS, Channel
 from crocodile.core.sink.base import Sink
 from crocodile.equity.providers.alpaca.connector import AlpacaProvider
 from crocodile.equity.providers.base import Provider
 from crocodile.equity.providers.finnhub.connector import FinnhubProvider
 from crocodile.equity.providers.google_finance.connector import GoogleFinanceProvider
 from crocodile.equity.providers.msn_money.connector import MsnMoneyProvider
+from crocodile.equity.providers.sec_edgar.connector import SecEdgarProvider
 from crocodile.equity.providers.stooq.connector import StooqProvider
+from crocodile.equity.providers.tiingo.connector import TiingoProvider
+from crocodile.equity.providers.treasury.connector import TreasuryProvider
+from crocodile.equity.providers.yahoo.connector import YahooProvider
 from crocodile.equity.reference.registry import InstrumentRegistry
+
+if TYPE_CHECKING:
+    from crocodile.core.config import Settings
 
 _REGISTRY: dict[str, type[Provider]] = {
     "alpaca": AlpacaProvider,
@@ -17,22 +25,83 @@ _REGISTRY: dict[str, type[Provider]] = {
     "stooq": StooqProvider,
     "google_finance": GoogleFinanceProvider,
     "msn_money": MsnMoneyProvider,
+    "sec_edgar": SecEdgarProvider,
+    "tiingo": TiingoProvider,
+    "treasury": TreasuryProvider,
+    "yahoo": YahooProvider,
 }
+"""Every equity source ``collect`` and ``backfill`` can resolve, keyed by the name a user
+types.
+
+The last four joined it late, and being outside it is what the defect *was*: eleven shipped
+equity capability implementations read ``options_chain``, ``macro_series`` and ``insider``,
+and no shipped ingest path could write any of them, because these four sources were plain
+clients that ``make_provider`` had never heard of. See
+:class:`~crocodile.equity.providers.base.PullProvider` for why they were clients and what
+changed.
+
+Imports here are eager, which is what lets :data:`VALID_CHANNELS` be *derived* from the
+classes rather than hand-written. That trade only holds while a connector module is cheap
+to import, so a connector whose dependencies are not — ``yahoo`` pulls ``yfinance`` and
+``pandas``, about 1.2s, against a 0.46s CLI import — defers its own client import into its
+constructor rather than making this registry lazy.
+"""
 
 _VALID_NAMES = sorted(_REGISTRY)
 
-VALID_CHANNELS = ["trade", "quote", "bar", "ohlcv"]
-"""Channel names a caller may ask an equity provider for, widest first.
 
-``ohlcv`` is the surviving tag for a bar; ``bar`` is accepted because lakes and scripts
-still spell it that way and connectors that predate the struct collapse still answer to it
-(see :data:`crocodile.core.schema.enums.CHANNEL_SUCCESSORS`). This is a *vocabulary* — which
-names a user may type — not a read widening: a ``channel=bar/`` partition is read by asking
-for ``bar``. Rejecting ``ohlcv`` is what this list did before the two structs collapsed,
-which made stooq — the one provider that always emitted ``ohlcv`` — unreachable.
+def _derive_vocabulary() -> list[str]:
+    """Every channel some registered provider declares it serves, plus retired spellings.
+
+    Derived rather than written out, and that is the change that made ``macro_series``,
+    ``options_chain``, ``insider`` and ``holding_13f`` typeable at all.
+
+    The old list was four names — ``trade``, ``quote``, ``bar``, ``ohlcv`` — and it was
+    offered as the channel menu for *every* provider, including the ones that declared
+    nothing. That is what made adding a channel to it dangerous: ``macro_series`` in a flat
+    list is ``macro_series`` offered for ``alpaca``, which is precisely the dead channel
+    ``tests/conformance/test_provider_channels.py`` exists to stop the picker walking a user
+    into. The argument was recorded in ``treasury/client.py`` as a reason not to register the
+    source at all, and it was a real objection to a real hazard — but the hazard is in the
+    *flatness*, not in the length. A vocabulary that is the union of per-provider
+    declarations, narrowed back to the chosen provider by :func:`channels_for_provider`,
+    carries every channel any source serves and offers none of them for a source that does
+    not. The gate that keeps it honest is that every registered provider declares; an
+    undeclared one would be offered the whole union again.
+
+    Ordering: :class:`~crocodile.core.schema.enums.Channel`'s declaration order, which groups
+    the shared market-data channels first and the equity reference channels after, so a menu
+    reads the way the schema does. A retired tag rides immediately behind its successor.
+    """
+    served: set[str] = set()
+    for cls in _REGISTRY.values():
+        served |= set(cls.supported_channels or ())
+    retired = {
+        retired_tag: successor
+        for retired_tag, successor in CHANNEL_SUCCESSORS.items()
+        if successor in served
+    }
+    ordered: list[str] = []
+    for channel in Channel:
+        if channel.value in served:
+            ordered.append(channel.value)
+            ordered.extend(
+                tag for tag, successor in retired.items() if successor == channel.value
+            )
+    return ordered
+
+
+VALID_CHANNELS: Final[list[str]] = _derive_vocabulary()
+"""Channel names a caller may ask *some* equity provider for.
+
+A vocabulary — which names a user may type — and not a read widening: a ``channel=bar/``
+partition is read by asking for ``bar``. ``bar`` is in it because lakes and scripts still
+spell ``ohlcv`` that way and the connectors that predate the struct collapse still answer to
+it (:data:`crocodile.core.schema.enums.CHANNEL_SUCCESSORS`).
 
 It lives here rather than in a surface because it is a fact about what the providers in
-``_REGISTRY`` speak, and it outlived the CLI that used to hold it.
+:data:`_REGISTRY` speak, and it outlived the CLI that used to hold it. It is now derived
+from them rather than agreeing with them by inspection — see :func:`_derive_vocabulary`.
 """
 
 
@@ -45,17 +114,19 @@ def channels_for_provider(provider: str | None) -> list[str]:
     returns nothing. A connector that declares its servable set narrows the menu; one that
     has not declared anything keeps the full vocabulary, so nothing is hidden on a guess.
 
-    ``bar`` stays on offer wherever ``ohlcv`` is: it is the retired spelling of the same
-    channel, and connectors that predate the struct collapse still accept it.
+    A retired tag stays on offer wherever its successor is: ``bar`` behind ``ohlcv`` and
+    ``option_quote`` behind ``options_chain`` are the same channel under two spellings, and
+    connectors that predate the struct collapse still accept the older one. The widening is
+    over :data:`~crocodile.core.schema.enums.CHANNEL_SUCCESSORS` rather than over ``ohlcv``
+    by name, because a rule written for one pair silently omits the second the day it
+    appears — and it did: ``option_quote`` was in the derived vocabulary and off every menu.
     """
-    from crocodile.core.schema.enums import channel_predecessors
-
     servable = supported_channels(provider) if provider else None
     if servable is None:
         return list(VALID_CHANNELS)
-    widened = set(servable)
-    if "ohlcv" in widened:
-        widened |= set(channel_predecessors("ohlcv"))
+    widened = set(servable) | {
+        retired for retired, successor in CHANNEL_SUCCESSORS.items() if successor in servable
+    }
     return [channel for channel in VALID_CHANNELS if channel in widened] or list(VALID_CHANNELS)
 
 
@@ -99,6 +170,7 @@ def make_provider(
     channels: list[str],
     out: Sink,
     registry: InstrumentRegistry,
+    settings: Settings | None = None,
     **kw: Any,
 ) -> Provider:
     """Instantiate and return the correct Provider subclass.
@@ -122,6 +194,16 @@ def make_provider(
         Sink to receive normalised records.
     registry:
         Instrument registry for symbol resolution.
+    settings:
+        The resolved environment, forwarded only to connectors that declare
+        :attr:`~crocodile.equity.providers.base.Provider.wants_settings`. Opt-in because
+        most connectors need nothing from configuration and would carry a parameter they
+        ignore; the two that do — ``sec_edgar``'s contactable User-Agent and ``tiingo``'s
+        token — are credentials a *surface* owns, and passing
+        :attr:`CapabilityContext.settings
+        <crocodile.core.capability.CapabilityContext.settings>` here is what stops a
+        deployment configured from anywhere but ``os.environ`` being quietly ignored by
+        the ingest layer.
     **kw:
         Extra keyword arguments forwarded verbatim to the provider constructor.
 
@@ -134,6 +216,8 @@ def make_provider(
     cls = _REGISTRY.get(provider)
     if cls is None:
         raise ValueError(f"Unknown provider {provider!r}. Valid names: {_VALID_NAMES}")
+    if cls.wants_settings and settings is not None:
+        kw.setdefault("settings", settings)
     return cls(
         symbols=symbols,
         channels=channels,

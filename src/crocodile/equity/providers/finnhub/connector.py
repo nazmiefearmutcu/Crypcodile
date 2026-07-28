@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Mapping
+from types import MappingProxyType
+from typing import ClassVar
 
 from crocodile.core.ingest.transport import AiohttpWsTransport, Transport
 from crocodile.core.schema.enums import AssetClass, SecurityType, Side
@@ -81,6 +83,29 @@ class FinnhubWsTransport(AiohttpWsTransport):
 class FinnhubProvider(Provider):
     name = "finnhub"
     rest_url = "https://finnhub.io/api/v1"
+
+    supported_channels: ClassVar[frozenset[str]] = frozenset({"trade"})
+    """Trade prints, and on every tier.
+
+    ``_subscribe`` widens its own local set to ``{"quote", "forex", "crypto"}`` off the free
+    tier, and that is a statement about which *subscriptions* the endpoint accepts rather
+    than about which records arrive here. The subscribe frame this connector sends is
+    ``{"type": "subscribe", "symbol": ...}`` on every tier — there is no separate BBO stream
+    to ask for — and :meth:`normalize` logs and drops ``quote`` frames rather than mapping
+    them onto a ``Trade``. So a paid deployment that asked for ``quote`` got a connection
+    that stayed up and wrote nothing, which is the dead channel this declaration exists to
+    make visible before the socket opens.
+    """
+
+    unservable_channels: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "quote": (
+                "the paid tier accepts a quote subscription, but this connector's subscribe "
+                "frame carries no stream selector and `normalize` drops quote frames rather "
+                "than inventing a Trade from one. Use alpaca for an equity top of book."
+            )
+        }
+    )
 
     def __init__(
         self,

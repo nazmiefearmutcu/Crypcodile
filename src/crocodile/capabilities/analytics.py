@@ -1177,7 +1177,12 @@ SLIPPAGE = declare(
         # nothing rather than of the name being the better one.
         aliases=("simulate-price-impact",),
         impls={
-            AssetClass.CRYPTO: Impl(fn=slippage, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=slippage,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("book_snapshot",),
+            ),
             # `DERIVED`/`alpaca_l1`, which is what `market.py` declares for `depth` over
             # exactly this book. The two used to disagree: this entry said SYNTHETIC /
             # `yahoo_1m_vap` and argued it as the deliberate *floor* — "declaring the keyed
@@ -1194,7 +1199,15 @@ SLIPPAGE = declare(
             # was the same object for both classes and read `book_snapshot`, which no equity
             # provider writes, so `yahoo_1m_vap` named a path that could not execute.
             AssetClass.EQUITY: Impl(
-                fn=slippage_equities, prov=Provenance.DERIVED, basis="alpaca_l1"
+                fn=slippage_equities,
+                prov=Provenance.DERIVED,
+                basis="alpaca_l1",
+                # Nothing. `select_depth_source` fetches a book from Alpaca or models
+                # one from Yahoo bars; neither reaches the lake. An empty read-set is a
+                # claim — "this answer needs no stored channel" — and it is the claim
+                # that makes the crypto half's `book_snapshot` visible as the one the
+                # equity half cannot make.
+                reads=(),
             ),
         },
     )
@@ -1212,8 +1225,12 @@ INDICATORS = declare(
             # produce natively. This is the walking skeleton that keeps the symmetry gate
             # honest before the real work of Phase 3 — a gate whose only subject is a
             # capability contrived to satisfy it proves nothing.
-            AssetClass.CRYPTO: Impl(fn=indicators, prov=Provenance.DERIVED, basis="native"),
-            AssetClass.EQUITY: Impl(fn=indicators, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=indicators, prov=Provenance.DERIVED, basis="native", reads=("trade",)
+            ),
+            AssetClass.EQUITY: Impl(
+                fn=indicators, prov=Provenance.DERIVED, basis="native", reads=("trade",)
+            ),
         },
     )
 )
@@ -1244,7 +1261,12 @@ BASIS = declare(
             # off `trade` with `book_snapshot` mid as the documented fallback. The join and
             # the two ratios are this implementation's own work, which is what makes the
             # result DERIVED rather than the NATIVE its inputs are.
-            AssetClass.CRYPTO: Impl(fn=basis, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=basis,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("derivative_ticker", "trade", "book_snapshot"),
+            ),
             # The same claim, verbatim, for the equity half: both legs are price series a
             # source published — `trade` prints, `ohlcv` closes or an `index_value` level —
             # and the ASOF join and the two ratios are the implementation's own work. This
@@ -1252,7 +1274,15 @@ BASIS = declare(
             # `basis` takes no expiry on either asset class and so has no horizon to
             # finance over; `treasury_carry` would claim a third leg this measurement does
             # not have.
-            AssetClass.EQUITY: Impl(fn=basis_equities, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.EQUITY: Impl(
+                fn=basis_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                # `price_leg`'s three channels, best first. They are read through a
+                # loop over a module constant rather than named at the call site, which
+                # is one of the two reasons this field is authored rather than scanned.
+                reads=("trade", "ohlcv", "index_value"),
+            ),
         },
     )
 )
@@ -1265,7 +1295,12 @@ PERP_BASIS = declare(
         params=PerpBasisParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=perp_basis, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=perp_basis,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("derivative_ticker",),
+            ),
             # `treasury_carry` and not `native`, because the equity forward is not read off
             # a record: put-call parity discounts the call/put difference at a published
             # yield, so a third input joins the two option marks and the cash price. The
@@ -1274,7 +1309,16 @@ PERP_BASIS = declare(
             # price legs are always both present in an emitted row, since a row cannot be
             # built without them.
             AssetClass.EQUITY: Impl(
-                fn=perp_basis_equities, prov=Provenance.DERIVED, basis="treasury_carry"
+                fn=perp_basis_equities,
+                prov=Provenance.DERIVED,
+                basis="treasury_carry",
+                reads=(
+                    "options_chain",
+                    "macro_series",
+                    "trade",
+                    "ohlcv",
+                    "index_value",
+                ),
             ),
         },
     )
@@ -1289,7 +1333,10 @@ SPOT_FUTURE_BASIS = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=spot_future_basis, prov=Provenance.DERIVED, basis="native"
+                fn=spot_future_basis,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("trade",),
             ),
             # DERIVED is still the ceiling: every number in is reported by somebody — the
             # future's prints by its venue, the cash leg by its source, the par yield by
@@ -1298,7 +1345,10 @@ SPOT_FUTURE_BASIS = declare(
             # what would make it SYNTHETIC. The basis moves off `native` because a venue
             # reported none of the *carry*: `native` would say one had.
             AssetClass.EQUITY: Impl(
-                fn=spot_future_basis_equities, prov=Provenance.DERIVED, basis="treasury_carry"
+                fn=spot_future_basis_equities,
+                prov=Provenance.DERIVED,
+                basis="treasury_carry",
+                reads=("macro_series", "trade", "ohlcv", "index_value"),
             ),
         },
     )
@@ -1312,13 +1362,24 @@ FUNDING_APR = declare(
         params=FundingAprParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=funding_apr, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=funding_apr, prov=Provenance.DERIVED, basis="native", reads=("funding",)
+            ),
             # Same basis as the two above and for the same reason: the dividend leg is
             # published (`corp_action`, from three providers), the price it is expressed
             # against is published, and the financing leg is the Treasury curve. What is
             # not published is their combination, which is what the capability returns.
             AssetClass.EQUITY: Impl(
-                fn=funding_apr_equities, prov=Provenance.DERIVED, basis="treasury_carry"
+                fn=funding_apr_equities,
+                prov=Provenance.DERIVED,
+                basis="treasury_carry",
+                reads=(
+                    "corp_action",
+                    "macro_series",
+                    "trade",
+                    "ohlcv",
+                    "index_value",
+                ),
             ),
         },
     )
@@ -1385,7 +1446,12 @@ IV_SURFACE = declare(
             # SYNTHETIC either, because the fallback path inverts Black-76 on a venue mark
             # price rather than modelling a price from some other data class. Which of the
             # three each row actually took is on the row, in its `source` column.
-            AssetClass.CRYPTO: Impl(fn=iv_surface, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=iv_surface,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
+            ),
             # The equity half lands on the same two words, by the same argument rather than
             # by symmetry. On its best day every `iv` is Yahoo's own `impliedVolatility`,
             # carried on the row as `mark_iv` — the feed supplied the points and this
@@ -1402,7 +1468,16 @@ IV_SURFACE = declare(
             # neither is a sampling deficiency and `prov_confidence` would be the wrong
             # place to report them.
             AssetClass.EQUITY: Impl(
-                fn=iv_surface_equities, prov=Provenance.DERIVED, basis="native"
+                fn=iv_surface_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                # Read through `core.analytics.volsurface`, which serves both asset
+                # classes from one module and so cannot be attributed to either by any
+                # per-module scan. That blind spot is the other reason this field is
+                # authored, and it is where the defect sat: until `yahoo` joined the
+                # provider registry, no equity ingest path wrote this channel and this
+                # capability returned zero rows on every lake the product could build.
+                reads=("options_chain",),
             ),
         },
     )
@@ -1417,10 +1492,16 @@ TERM_STRUCTURE = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=term_structure, prov=Provenance.DERIVED, basis="native"
+                fn=term_structure,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
             ),
             AssetClass.EQUITY: Impl(
-                fn=term_structure_equities, prov=Provenance.DERIVED, basis="native"
+                fn=term_structure_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
             ),
         },
     )
@@ -1434,9 +1515,17 @@ VOL_SKEW = declare(
         params=VolSkewParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=vol_skew, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=vol_skew,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
+            ),
             AssetClass.EQUITY: Impl(
-                fn=vol_skew_equities, prov=Provenance.DERIVED, basis="native"
+                fn=vol_skew_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
             ),
         },
     )
@@ -1451,10 +1540,16 @@ RISK_REVERSAL = declare(
         returns=ReturnKind.SCALAR,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=risk_reversal, prov=Provenance.DERIVED, basis="native"
+                fn=risk_reversal,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
             ),
             AssetClass.EQUITY: Impl(
-                fn=risk_reversal_equities, prov=Provenance.DERIVED, basis="native"
+                fn=risk_reversal_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("options_chain",),
             ),
         },
     )
@@ -1468,13 +1563,23 @@ OFI = declare(
         params=OfiParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=ofi, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=ofi,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("book_snapshot",),
+            ),
             # The same pair as crypto, and for the same reason: every number the increment
             # consumes — two prices and two sizes — was published by the provider on the
             # `quote` channel, which is what `native` names, and differencing consecutive
             # ones into an imbalance is this implementation's own work, which is what makes
             # the result DERIVED. The split `indicators` makes, one channel over.
-            AssetClass.EQUITY: Impl(fn=ofi_equities, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.EQUITY: Impl(
+                fn=ofi_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("quote",),
+            ),
         },
     )
 )
@@ -1492,7 +1597,10 @@ LIQUIDITY_DEPTH = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=liquidity_depth, prov=Provenance.DERIVED, basis="native"
+                fn=liquidity_depth,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("book_snapshot",),
             ),
             # `DERIVED`/`alpaca_l1`, the pair `depth` and `slippage` already declare over
             # this same `select_depth_source` ladder. `Impl.prov` is a ceiling, so it names
@@ -1506,7 +1614,10 @@ LIQUIDITY_DEPTH = declare(
             # resting size — the distinction `alpaca_l1` and `yahoo_1m_vap` are registered
             # to keep, and which a shared `native` would erase.
             AssetClass.EQUITY: Impl(
-                fn=liquidity_depth_equities, prov=Provenance.DERIVED, basis="alpaca_l1"
+                fn=liquidity_depth_equities,
+                prov=Provenance.DERIVED,
+                basis="alpaca_l1",
+                reads=(),
             ),
         },
     )
@@ -1521,7 +1632,10 @@ WHALE_ALERTS = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=whale_alerts, prov=Provenance.DERIVED, basis="native"
+                fn=whale_alerts,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("trade", "liquidation"),
             ),
             # DERIVED over `sec_form4`, which is the same relationship the crypto entry has
             # to `native`: the venue — here the filer, through EDGAR — reported the shares,
@@ -1535,7 +1649,10 @@ WHALE_ALERTS = declare(
             # row that could not be priced would otherwise reach the lake claiming the same
             # sampling adequacy as one that could.
             AssetClass.EQUITY: Impl(
-                fn=whale_alerts_filings, prov=Provenance.DERIVED, basis="sec_form4"
+                fn=whale_alerts_filings,
+                prov=Provenance.DERIVED,
+                basis="sec_form4",
+                reads=("insider",),
             ),
         },
     )

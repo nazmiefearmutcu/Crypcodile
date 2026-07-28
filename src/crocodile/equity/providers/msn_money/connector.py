@@ -7,7 +7,7 @@ import random
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import aiohttp
 
@@ -114,6 +114,19 @@ class MsnMoneyProvider(Provider):
     name = "msn_money"
     ws_url = ""
     rest_url = "https://assets.msn.com"
+
+    supported_channels: ClassVar[frozenset[str]] = frozenset({"ohlcv", "corp_action"})
+    """Daily bars, and the splits and dividends the same endpoint carries alongside them.
+
+    ``corp_action`` was already written by :meth:`backfill` and appeared on no channel menu,
+    because the menu was a hand-written list of four market-data names. It is on the derived
+    vocabulary now, which matters beyond tidiness: ``corp_action`` is one of the two channels
+    an equity lake could actually be filled with before this change, and a user reading the
+    menu had no way to learn that.
+
+    ``bar`` is absent and still accepted; see
+    :meth:`~crocodile.equity.providers.base.Provider._reject_unservable_channels`.
+    """
 
     def __init__(
         self,

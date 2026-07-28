@@ -929,7 +929,16 @@ UNIVERSE = declare(
             # The ranked branch does not lower it further: ranking sorts rows by evidence
             # already in the lake and adds no modelling, exactly as on the crypto side.
             AssetClass.EQUITY: Impl(
-                fn=universe_equities, prov=Provenance.DERIVED, basis="reference_merge"
+                fn=universe_equities,
+                prov=Provenance.DERIVED,
+                basis="reference_merge",
+                # The rows come from the three registries over the network; the lake is
+                # read only to rank them, and only for `--top`. `volume_by_symbol` asks
+                # `Catalog.list_channels` first and returns an empty ranking when the
+                # lake holds no bars, so this is a channel the answer improves with
+                # rather than one it requires — and it is still a channel this
+                # implementation reads, which is what this field records.
+                reads=("ohlcv",),
             ),
         },
     )
@@ -967,7 +976,12 @@ OPEN_INTEREST = declare(
         params=OpenInterestParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=open_interest, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=open_interest,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("open_interest",),
+            ),
             # DERIVED and `native` on both sides, and for one argument rather than for
             # symmetry's sake. The inputs are venue- and provider-reported open interest —
             # a perpetual's own figure on one side, a contract's own figure on the other —
@@ -978,7 +992,16 @@ OPEN_INTEREST = declare(
             # arithmetic and not the provenance: a sum of reported values is still not a
             # model of anything, which is the line SYNTHETIC is on the far side of.
             AssetClass.EQUITY: Impl(
-                fn=open_interest_equities, prov=Provenance.DERIVED, basis="native"
+                fn=open_interest_equities,
+                prov=Provenance.DERIVED,
+                basis="native",
+                # Not `open_interest`. The equity figure is the per-contract open
+                # interest carried on an `options_chain` row, summed over the chain —
+                # which is why binding `fn=open_interest` here would have read a channel
+                # no equity provider writes, the defect this batch already recorded once
+                # and then repeated one channel over: `options_chain` was equally
+                # unwritable until `yahoo` joined the provider registry.
+                reads=("options_chain",),
             ),
         },
     )
@@ -996,14 +1019,24 @@ DEPTH = declare(
             # number in the profile was quoted by the venue, but the venue quoted a top of
             # book rather than a ladder — and it is the best of the two branches
             # `select_depth_source` can take.
-            AssetClass.EQUITY: Impl(fn=depth, prov=Provenance.DERIVED, basis="alpaca_l1"),
+            AssetClass.EQUITY: Impl(
+                fn=depth,
+                prov=Provenance.DERIVED,
+                basis="alpaca_l1",
+                # Nothing: `select_depth_source` fetches from Alpaca or models a ladder
+                # from Yahoo bars, and neither branch touches the lake.
+                reads=(),
+            ),
             # DERIVED on both halves, and the two arrive at it from opposite directions.
             # Equity's best branch is a real quote reshaped into a ladder; crypto's is a
             # real ladder re-cut and re-stamped. Neither is NATIVE — no venue published
             # *this* record — and neither is SYNTHETIC, because nothing in either is
             # modelled. `book_snapshot_slice` is where the second of those is argued.
             AssetClass.CRYPTO: Impl(
-                fn=depth_crypto, prov=Provenance.DERIVED, basis="book_snapshot_slice"
+                fn=depth_crypto,
+                prov=Provenance.DERIVED,
+                basis="book_snapshot_slice",
+                reads=("book_snapshot",),
             ),
         },
     )

@@ -202,7 +202,13 @@ async def test_msn_money_backfill_corporate_action() -> None:
     sink = MemorySink()
     provider = MsnMoneyProvider(
         symbols=["AAPL"],
-        channels=["corp_actions"],
+        # `corp_action`, not the plural these four constructions used to pass. The
+        # plural is a spelling only this connector's backfill dispatch ever accepted; it
+        # is not a `Channel`, no partition is named after it, and every one of these
+        # tests already calls `backfill("corp_action", ...)` on the next line. Now that
+        # msn_money declares what it serves, a construction whose every channel is
+        # outside that set is refused before the session opens — which is the point.
+        channels=["corp_action"],
         out=sink,
         registry=registry,
         apikey="test-key",
@@ -291,7 +297,13 @@ async def test_msn_money_split_parsing_ratios() -> None:
     sink = MemorySink()
     provider = MsnMoneyProvider(
         symbols=["AAPL"],
-        channels=["corp_actions"],
+        # `corp_action`, not the plural these four constructions used to pass. The
+        # plural is a spelling only this connector's backfill dispatch ever accepted; it
+        # is not a `Channel`, no partition is named after it, and every one of these
+        # tests already calls `backfill("corp_action", ...)` on the next line. Now that
+        # msn_money declares what it serves, a construction whose every channel is
+        # outside that set is refused before the session opens — which is the point.
+        channels=["corp_action"],
         out=sink,
         registry=registry,
         apikey="test-key",
@@ -384,7 +396,13 @@ async def test_a_split_factor_that_will_not_divide_is_dropped_not_read_as_its_nu
     sink = MemorySink()
     provider = MsnMoneyProvider(
         symbols=["AAPL"],
-        channels=["corp_actions"],
+        # `corp_action`, not the plural these four constructions used to pass. The
+        # plural is a spelling only this connector's backfill dispatch ever accepted; it
+        # is not a `Channel`, no partition is named after it, and every one of these
+        # tests already calls `backfill("corp_action", ...)` on the next line. Now that
+        # msn_money declares what it serves, a construction whose every channel is
+        # outside that set is refused before the session opens — which is the point.
+        channels=["corp_action"],
         out=sink,
         registry=registry,
         apikey="test-key",
@@ -438,7 +456,13 @@ async def test_a_dividend_the_page_spelled_na_is_not_reported_as_paying_zero() -
     sink = MemorySink()
     provider = MsnMoneyProvider(
         symbols=["AAPL"],
-        channels=["corp_actions"],
+        # `corp_action`, not the plural these four constructions used to pass. The
+        # plural is a spelling only this connector's backfill dispatch ever accepted; it
+        # is not a `Channel`, no partition is named after it, and every one of these
+        # tests already calls `backfill("corp_action", ...)` on the next line. Now that
+        # msn_money declares what it serves, a construction whose every channel is
+        # outside that set is refused before the session opens — which is the point.
+        channels=["corp_action"],
         out=sink,
         registry=registry,
         apikey="test-key",
