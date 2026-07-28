@@ -38,6 +38,31 @@ def test_the_package_tree_is_anchored_where_this_test_thinks_it_is() -> None:
     assert len(_package_files()) > 100, "package tree is implausibly small; check the anchor"
 
 
+def test_the_package_being_imported_is_the_package_being_scanned() -> None:
+    """The other half, and it is not hypothetical in a worktree.
+
+    Half the gates in this suite read the tree off disk and half of them ``import crocodile``.
+    Those are only the same subject when the interpreter resolves the package to *this*
+    checkout, and an editable install does not guarantee it: this repository's venv carries
+    a ``.pth`` naming one absolute source directory, so any interpreter started without
+    ``pythonpath`` reads whichever tree that file points at. A worktree, a second clone, or a
+    rebase in progress all make that a different tree — and a conformance suite that scans
+    one checkout while importing another is green about nothing in particular.
+
+    ``pyproject``'s ``pythonpath = ["src"]`` is what makes it come out right under pytest.
+    This is the assertion that says so out loud, so the day someone removes that line the
+    failure names the cause instead of appearing as an unrelated gate going strange.
+    """
+    import crocodile
+
+    imported = pathlib.Path(crocodile.__file__ or "").resolve().parent
+    assert imported == _SRC.resolve(), (
+        f"scanning {_SRC.resolve()} but importing {imported}. These gates would be measuring "
+        f"two different checkouts; check `pythonpath` in pyproject.toml and the editable "
+        f"install's .pth."
+    )
+
+
 def test_no_source_file_still_imports_the_old_packages() -> None:
     """Nothing under `crocodile` may still *depend* on `crypcodile` / `stockodile`.
 

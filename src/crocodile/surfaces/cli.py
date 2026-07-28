@@ -158,7 +158,7 @@ def _runner(cap: Capability) -> Any:
             if warning:
                 typer.echo(warning, err=True)
             try:
-                result = dispatch.invoke(cap, ctx, params)
+                result = _drive(dispatch.invoke(cap, ctx, params))
             except (CrocodileError, ValueError) as exc:
                 typer.echo(f"Error: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
@@ -173,6 +173,28 @@ def _runner(cap: Capability) -> Any:
     runner.__signature__ = inspect.Signature(_parameters(cap), return_annotation=None)
     runner.__annotations__ = {}
     return runner
+
+
+def _drive(result: Any) -> Any:
+    """Run to completion anything the capability handed back unstarted.
+
+    ``backfill`` returns an *unstarted coroutine* and ``collect`` an unstarted
+    :class:`~crocodile.capabilities.ops.Subscription`, both deliberately: an implementation
+    cannot know whether its caller already owns an event loop, and ``asyncio.run`` from
+    inside a FastAPI route raises. The CLI is the surface that owns no loop, so it is the
+    surface that starts one — and it must, because without this the command printed
+    ``<coroutine object backfill at 0x…>``, exited 0, and moved no data. A zero exit code
+    over work that never ran is the quietest possible failure.
+    """
+    import asyncio
+    import inspect
+
+    begin = getattr(result, "run", None)
+    if callable(begin) and not isinstance(result, type):
+        return asyncio.run(begin())
+    if inspect.iscoroutine(result):
+        return asyncio.run(result)
+    return result
 
 
 def _render(cap: Capability, result: Any) -> str:

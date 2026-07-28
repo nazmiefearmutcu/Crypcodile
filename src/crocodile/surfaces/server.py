@@ -32,6 +32,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import msgspec
+
 from crocodile.core.config import Settings
 from crocodile.surfaces import mcp, rest
 from crocodile.surfaces.payments import PaymentsStore, SlidingWindowRateLimiter
@@ -40,11 +42,15 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from fastapi import FastAPI, Request, Response
 
 __all__ = [
+    "PaymentSignature",
     "build_server",
     "capabilities",
+    "get_all_payments",
     "health",
     "metrics",
     "ready",
+    "root_dashboard",
+    "simulate_payment",
     "status",
     "version",
 ]
@@ -281,6 +287,110 @@ def _allow_simulation() -> bool:
     return os.environ.get("ALLOW_SIMULATION", "false").lower() == "true"
 
 
+class PaymentSignature(msgspec.Struct, frozen=True):
+    """The body ``simulate-payment`` takes: which payment, which transfer, and who signed.
+
+    A declared body rather than the ``dict[str, str]`` it would otherwise be, because
+    ``payment_id`` is the message the signature is recovered against — a request that
+    reaches the recovery step with a missing field would recover a signer for the empty
+    string, which is a valid address.
+    """
+
+    payment_id: str
+    tx_hash: str
+    signature: str
+
+
+async def root_dashboard() -> Any:
+    """Say what this is and where the two machine-readable answers are.
+
+    It replaces the x402 demo dashboard, whose markup and JavaScript lived in the Node
+    portal under ``crypto/legacy/api_portal/`` and animated one route that no longer exists.
+    A landing page that links to the generated schema cannot go stale.
+    """
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><title>Crocodile</title>"
+        "<h1>Crocodile</h1>"
+        "<p>Deterministic market data for crypto and US equities.</p>"
+        "<ul>"
+        '<li><a href="/docs">/docs</a> &mdash; the generated API reference</li>'
+        '<li><a href="/api/v1/capabilities">/api/v1/capabilities</a> &mdash; '
+        "every route and tool this build serves</li>"
+        '<li><a href="/api/v1/health">/api/v1/health</a> &mdash; liveness</li>'
+        "</ul>"
+    )
+
+
+async def simulate_payment(payload: dict[str, str], request: Request) -> dict[str, Any]:
+    """Mark a pending payment id paid, for exercising the ledger without paying.
+
+    The order of the checks is the contract and is testable: rate limit, then the
+    simulation gate, then the body, then the signature, then the ledger — so a caller with
+    simulation disabled learns nothing about which payment ids exist.
+
+    The body arrives as a mapping and is converted to :class:`PaymentSignature` here rather
+    than annotated as one, because FastAPI builds its body model out of pydantic and this
+    codebase's wire type is ``msgspec``. Annotating the struct directly raises at route
+    registration; converting keeps one declaration of what the body is.
+    """
+    from fastapi import HTTPException
+
+    if _RATE_LIMITER.check_rate_limit(_client(request)):
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+    if not _allow_simulation():
+        raise HTTPException(status_code=400, detail="Simulation mode is disabled.")
+
+    try:
+        body = msgspec.convert(payload, type=PaymentSignature)
+    except msgspec.ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        signer = _recover_signer(body.payment_id, body.signature)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async with _PAYMENTS.lock:
+        ledger = await _PAYMENTS.all()
+        record = ledger.get(body.payment_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Payment ID not found.")
+        if record.get("status") != "pending":
+            raise HTTPException(status_code=400, detail="Payment already processed.")
+        if any(
+            other != body.payment_id and other_record.get("tx_hash") == body.tx_hash
+            for other, other_record in ledger.items()
+        ):
+            raise HTTPException(status_code=400, detail="Transaction hash already processed.")
+        record |= {"status": "paid", "tx_hash": body.tx_hash, "sender": signer}
+        await _PAYMENTS.set(body.payment_id, record)
+    return {"status": "success", "payment_id": body.payment_id, "payment_record": record}
+
+
+async def get_all_payments(request: Request) -> dict[str, Any]:
+    """Dump the ledger, behind ``ADMIN_API_KEY``.
+
+    With no key configured the route answers 404 rather than 401: a 401 tells an
+    unauthenticated caller the endpoint is there and worth guessing at.
+    """
+    import hmac
+
+    from fastapi import HTTPException
+
+    expected = os.environ.get("ADMIN_API_KEY")
+    if not expected:
+        raise HTTPException(status_code=404, detail="Not Found")
+    supplied = request.headers.get("x-admin-key") or ""
+    if not supplied:
+        authorization = request.headers.get("authorization") or ""
+        supplied = authorization.removeprefix("Bearer ").removeprefix("bearer ").strip()
+    if not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return await _PAYMENTS.all()
+
+
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
@@ -293,7 +403,7 @@ def build_server(*, settings: Settings | None = None, data_dir: Path | None = No
     than rebuilt, so there is exactly one place a capability becomes a route and this module
     cannot serve a different set than Gate 4 measured.
     """
-    from fastapi import FastAPI, HTTPException, Response
+    from fastapi import FastAPI, Response
     from fastapi import Request as LiveRequest
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse
@@ -338,75 +448,15 @@ def build_server(*, settings: Settings | None = None, data_dir: Path | None = No
         _REQUESTS[request.url.path] = _REQUESTS.get(request.url.path, 0) + 1
         return await call_next(request)
 
-    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
-    async def root_dashboard() -> HTMLResponse:
-        """Say what this is and where the two machine-readable answers are.
-
-        It replaces the x402 demo dashboard, whose markup and JavaScript lived in the Node
-        portal under ``crypto/legacy/api_portal/`` and animated one route that no longer
-        exists. A landing page that links to the generated schema cannot go stale.
-        """
-        return HTMLResponse(
-            "<!doctype html><meta charset=utf-8><title>Crocodile</title>"
-            "<h1>Crocodile</h1>"
-            "<p>Deterministic market data for crypto and US equities.</p>"
-            "<ul>"
-            '<li><a href="/docs">/docs</a> &mdash; the generated API reference</li>'
-            '<li><a href="/api/v1/capabilities">/api/v1/capabilities</a> &mdash; '
-            "every route and tool this build serves</li>"
-            '<li><a href="/api/v1/health">/api/v1/health</a> &mdash; liveness</li>'
-            "</ul>"
-        )
-
-    @app.post("/api/v1/simulate-payment")
-    async def simulate_payment(payload: dict[str, str], request: Request) -> dict[str, Any]:
-        """Mark a pending payment id paid, for exercising the ledger without paying."""
-        if _RATE_LIMITER.check_rate_limit(_client(request)):
-            raise HTTPException(status_code=429, detail="Too Many Requests")
-        if not _allow_simulation():
-            raise HTTPException(status_code=400, detail="Simulation mode is disabled.")
-
-        payment_id = payload.get("payment_id", "")
-        tx_hash = payload.get("tx_hash", "")
-        try:
-            signer = _recover_signer(payment_id, payload.get("signature", ""))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        async with _PAYMENTS.lock:
-            ledger = await _PAYMENTS.all()
-            record = ledger.get(payment_id)
-            if record is None:
-                raise HTTPException(status_code=404, detail="Payment ID not found.")
-            if record.get("status") != "pending":
-                raise HTTPException(status_code=400, detail="Payment already processed.")
-            if any(
-                other != payment_id and body.get("tx_hash") == tx_hash
-                for other, body in ledger.items()
-            ):
-                raise HTTPException(status_code=400, detail="Transaction hash already processed.")
-            record |= {"status": "paid", "tx_hash": tx_hash, "sender": signer}
-            await _PAYMENTS.set(payment_id, record)
-        return {"status": "success", "payment_id": payment_id, "payment_record": record}
-
-    @app.get("/api/v1/admin/payments", include_in_schema=False)
-    async def get_all_payments(request: Request) -> dict[str, Any]:
-        """Dump the ledger, behind ``ADMIN_API_KEY``.
-
-        With no key configured the route answers 404 rather than 401: a 401 tells an
-        unauthenticated caller the endpoint is there and worth guessing at.
-        """
-        import hmac
-
-        expected = os.environ.get("ADMIN_API_KEY")
-        if not expected:
-            raise HTTPException(status_code=404, detail="Not Found")
-        supplied = request.headers.get("x-admin-key") or ""
-        if not supplied:
-            authorization = request.headers.get("authorization") or ""
-            supplied = authorization.removeprefix("Bearer ").removeprefix("bearer ").strip()
-        if not hmac.compare_digest(supplied, expected):
-            raise HTTPException(status_code=401, detail="Unauthorized")
-        return await _PAYMENTS.all()
-
+    app.add_api_route(
+        "/",
+        root_dashboard,
+        methods=["GET"],
+        include_in_schema=False,
+        response_class=HTMLResponse,
+    )
+    app.add_api_route("/api/v1/simulate-payment", simulate_payment, methods=["POST"])
+    app.add_api_route(
+        "/api/v1/admin/payments", get_all_payments, methods=["GET"], include_in_schema=False
+    )
     return app

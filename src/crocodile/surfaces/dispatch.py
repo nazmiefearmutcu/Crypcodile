@@ -11,8 +11,7 @@ The one thing the surfaces are *allowed* to disagree about is trust, and
 
 from __future__ import annotations
 
-import math
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, get_args, get_origin
 
 import msgspec
 
@@ -28,6 +27,7 @@ from crocodile.core.capability import (
 from crocodile.core.config import Settings
 from crocodile.core.errors import CapabilityUnavailable
 from crocodile.core.schema.provenance import Provenance, describe
+from crocodile.core.util.json_safe import json_safe_float
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -221,15 +221,46 @@ def build_params(cap: Capability, values: dict[str, Any]) -> Any:
     "not supplied" as ``None`` gets the struct's own default instead of overwriting it with
     a null.
 
+    A string arriving for a *sequence* field is split on commas, because a command line and
+    a query string have no lists either. Without this, fifteen of the registry's capabilities
+    were unreachable from two of their three surfaces: ``--symbols BTCUSDT`` and
+    ``?symbols=BTC`` both failed with ``Expected 'array', got 'str'``, which is a capability
+    that is declared, projected, listed by Gate 4 and impossible to call. Comma separation is
+    not invented here — it is what both forks' REST servers and both CLIs took, and what
+    ``_PARAM_RENAMES`` in the surface-parity gate already documents for ``open-interest``.
+
     Raises:
         ValueError: a value does not fit the declared schema, or a required one is missing.
             msgspec's own message names the field and the type, and is not reworded.
     """
-    supplied = {key: value for key, value in values.items() if value is not None}
+    sequences = _sequence_fields(cap.params)
+    supplied = {
+        key: [part.strip() for part in value.split(",") if part.strip()]
+        if key in sequences and isinstance(value, str)
+        else value
+        for key, value in values.items()
+        if value is not None
+    }
     try:
         return msgspec.convert(supplied, type=cap.params, strict=False)
     except msgspec.ValidationError as exc:
         raise ValueError(f"{cap.name}: {exc}") from exc
+
+
+def _sequence_fields(params: type[msgspec.Struct]) -> frozenset[str]:
+    """Field names whose declared type is a sequence rather than a scalar.
+
+    Read off the annotation rather than guessed from the name: ``symbols`` is a list and
+    ``symbol`` is not, but so is ``rates``, and ``sql`` is a string that would be ruined by
+    a split on commas.
+    """
+    found: set[str] = set()
+    for field in msgspec.structs.fields(params):
+        for candidate in (field.type, *get_args(field.type)):
+            origin = get_origin(candidate) or candidate
+            if isinstance(origin, type) and issubclass(origin, (list, tuple, set, frozenset)):
+                found.add(field.name)
+    return frozenset(found)
 
 
 # ---------------------------------------------------------------------------
@@ -358,10 +389,13 @@ def _jsonable(value: Any) -> Any:
     a Bollinger band over a constant window, a ratio with a zero denominator — and
     ``json.dumps`` emits them as bare ``NaN`` tokens that most clients reject as malformed.
     ``None`` is the honest encoding: the number does not exist.
+
+    The rule itself is :func:`crocodile.core.util.json_safe.json_safe_float` rather than an
+    ``isfinite`` written here. Both deleted REST servers and both deleted MCP servers
+    re-exported that function precisely so there would be one answer, and a fourth copy in
+    the projection would undo what the re-export was for.
     """
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    return value
+    return json_safe_float(value) if isinstance(value, float) else value
 
 
 def payload(cap: Capability, result: Any) -> dict[str, Any]:
@@ -374,10 +408,32 @@ def payload(cap: Capability, result: Any) -> dict[str, Any]:
     """
     rows = _rows(result)
     if cap.returns is ReturnKind.TABLE:
-        return {"rows": rows if rows is not None else result}
+        return {"rows": rows if rows is not None else _encodable(result)}
     if rows is not None:
         return {"result": rows[0] if rows else None}
-    return {"result": result}
+    return {"result": _encodable(result)}
+
+
+def _encodable(result: Any) -> Any:
+    """Render a ``msgspec.Struct`` result as plain data.
+
+    ``depth`` returns a ``DepthProfile``, which is a Struct and is this codebase's wire type
+    — but only for *msgspec's* encoder. FastAPI serialises with pydantic, which refuses an
+    unknown type, so the route answered 500 with ``Unable to serialize unknown type:
+    DepthProfile`` while the CLI printed it happily. A capability that works on one surface
+    and 500s on another is the divergence this projection exists to end, so the conversion
+    is here — once, for every surface — rather than in the REST handler.
+
+    ``to_builtins`` and not ``json.encode``: the result has to stay a Python object for the
+    CLI to render and for MCP to embed, and it is msgspec's own recursive walk, so a Struct
+    nested inside a dict or a list is converted too.
+    """
+    try:
+        return msgspec.to_builtins(result)
+    except (TypeError, NotImplementedError):
+        # Not encodable at all — a Subscription, a generator. Handed back untouched so the
+        # surface that asked for it decides, rather than being flattened into a string here.
+        return result
 
 
 def _rows(result: Any) -> list[dict[str, Any]] | None:

@@ -113,12 +113,16 @@ def assert_readonly_sql(sql: str) -> None:
       from ``read_parquet`` over the lake.
 
     Wiring this into :meth:`Catalog.query` unconditionally is a follow-up
-    decision, not a default: the crypto fork reaches ``query()`` with SQL this
-    guard rejects. ``crocodile.crypto.legacy.cli.get_available_option_underlyings``
-    builds ``SELECT DISTINCT underlying FROM read_parquet('<absolute glob>', …)``
-    to read one date partition directly, which trips the absolute-path branch.
-    Callers that want the guard pass ``readonly=True``, matching how the equity
-    fork shipped it.
+    decision, not a default: a local operator legitimately reaches ``query()``
+    with SQL this guard rejects. The crypto CLI's
+    ``get_available_option_underlyings`` built ``SELECT DISTINCT underlying FROM
+    read_parquet('<absolute glob>', …)`` to read one date partition directly,
+    which trips the absolute-path branch. That function went with the CLI it
+    lived in, but the shape did not: the guard is now a property of the
+    *surface* rather than of the call site — see
+    :attr:`crocodile.core.capability.CapabilityContext.readonly`, which the CLI
+    sets to ``False`` and both network surfaces set to ``True``. That is the
+    same split the two forks arrived at by accident and never wrote down.
 
     Args:
         sql: The statement to vet before it reaches DuckDB.

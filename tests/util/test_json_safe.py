@@ -1,17 +1,17 @@
-"""Unit tests for crocodile.core.util.json_safe (shared REST/MCP boundary helpers)."""
+"""Unit tests for crocodile.core.util.json_safe (the shared REST/MCP boundary helper).
+
+The last test used to assert that the crypto REST server and the crypto MCP server
+re-exported the *same* function object, which is what stopped the two hand-written stacks
+from growing two answers to "what is NaN on the wire". Both stacks are gone; the projection
+is the one boundary now, so the same property is asserted about it instead. Dropping the
+test with the stacks would have quietly permitted the fourth copy — and there nearly was
+one: ``dispatch._jsonable`` had reimplemented ``math.isfinite`` inline.
+"""
 
 from __future__ import annotations
 
 import json
 
-from crocodile.crypto.legacy.api_server import (
-    _json_safe_float as api_json_safe_float,
-    _json_safe_records as api_json_safe_records,
-)
-from crocodile.crypto.legacy.mcp_server import (
-    _json_safe_float as mcp_json_safe_float,
-    _json_safe_records as mcp_json_safe_records,
-)
 from crocodile.core.util.json_safe import json_safe_float, json_safe_records
 
 
@@ -69,9 +69,18 @@ def test_json_safe_records_sanitizes_float_fields() -> None:
     assert "NaN" not in encoded
 
 
-def test_api_and_mcp_reexport_same_helpers() -> None:
-    """api_server / mcp_server re-export the shared util (dedupe check)."""
-    assert api_json_safe_float is json_safe_float
-    assert mcp_json_safe_float is json_safe_float
-    assert api_json_safe_records is json_safe_records
-    assert mcp_json_safe_records is json_safe_records
+def test_the_one_surface_boundary_uses_the_shared_helper() -> None:
+    """The dedupe check, moved onto the surface that replaced the four that had it.
+
+    Asserted by behaviour rather than by identity because ``_jsonable`` takes a cell of any
+    type and delegates only the floats: an identity check would have to be against a
+    wrapper, and would pass for a wrapper that had stopped calling anything.
+    """
+    from crocodile.surfaces import dispatch
+
+    for non_finite in (float("inf"), float("-inf"), float("nan")):
+        assert dispatch._jsonable(non_finite) is json_safe_float(non_finite) is None
+    for finite in (1.5, 0.0, -2.25):
+        assert dispatch._jsonable(finite) == json_safe_float(finite) == finite
+    for passthrough in (7, "x", None, True):
+        assert dispatch._jsonable(passthrough) is passthrough
