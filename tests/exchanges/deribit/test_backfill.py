@@ -76,14 +76,32 @@ def test_parse_funding_page_maps_interest_8h_as_funding_rate():
     assert f0.symbol_raw == "BTC-PERPETUAL"
     # canonical: interest_8h -> funding_rate
     assert f0.funding_rate == pytest.approx(0.0001)
-    # interest_1h -> predicted_funding_rate
-    assert f0.predicted_funding_rate == pytest.approx(0.000012)
     assert f0.source_ts == 1700000000000 * 1_000_000  # ms → ns
     assert f0.local_ts == 99
 
     f1 = records[1]
     assert f1.funding_rate == pytest.approx(0.00009)
-    assert f1.predicted_funding_rate == pytest.approx(0.000011)
+
+
+def test_a_history_page_forecasts_nothing():
+    """``get_funding_rate_history`` answers about windows that have already closed.
+
+    ``interest_1h`` used to be written to ``predicted_funding_rate`` here, which is the
+    same substitution the ticker path was making with ``funding_8h``: a realized number
+    in the field a consumer reads to decide whether to hold through the next settlement.
+    Backfill made it worse than the live path did, because a backfilled row is read long
+    after the interval it "predicts" has been and gone.
+
+    ``realized_funding_rate`` is left unset too rather than given ``interest_1h``: it is
+    an hourly figure and every rate on this record is scoped to ``interval_hours``, which
+    is 8.
+    """
+    raw = json.loads((FIXTURES / "rest_funding.json").read_text())
+    records = list(parse_funding_page(raw, symbol="BTC-PERPETUAL", local_ts=99))
+
+    assert [r.predicted_funding_rate for r in records] == [None, None]
+    assert [r.realized_funding_rate for r in records] == [None, None]
+    assert [r.interval_hours for r in records] == [8, 8]
 
 
 def test_parse_funding_page_populates_funding_timestamp() -> None:

@@ -247,7 +247,19 @@ def normalize_message(
                 rho=greeks.get("rho"),
             )
         else:
-            # Perp / future: emit DerivativeTicker + Funding (from current_funding/funding_8h)
+            # Perp / future: emit DerivativeTicker + Funding.
+            #
+            # Deribit's ticker publishes two funding numbers and they are about different
+            # spans. ``current_funding`` is the rate in force; ``funding_8h`` describes
+            # the eight hours that have already happened. Both used to be written out of
+            # this one payload as ``funding_rate`` and ``predicted_funding_rate``, which
+            # put a realized figure into a field whose entire purpose is to say what is
+            # coming — the one substitution that field cannot survive, because a consumer
+            # reads it to decide whether to hold the position through the next
+            # settlement. It annualizes cleanly either way, which is what made it
+            # invisible: 0.0001 * 1095 is a plausible APR whichever eight hours it is
+            # about. Deribit publishes no forward estimate at all, so the forward field
+            # is simply not set.
             yield DerivativeTicker(
                 source=EXCHANGE,
                 symbol=symbol_canonical,
@@ -259,11 +271,10 @@ def normalize_message(
                 mark_price=td.get("mark_price"),
                 index_price=td.get("index_price"),
                 funding_rate=td.get("current_funding"),
-                predicted_funding_rate=td.get("funding_8h"),
+                realized_funding_rate=td.get("funding_8h"),
                 open_interest=td.get("open_interest"),
             )
-            # Emit Funding derived from current_funding/funding_8h
-            # canonical: funding_rate = current_funding; funding_8h -> predicted_funding_rate
+            # canonical: current_funding -> funding_rate; funding_8h -> realized_funding_rate
             if td.get("current_funding") is not None:
                 yield Funding(
                     source=EXCHANGE,
@@ -273,7 +284,7 @@ def normalize_message(
                     local_ts=local_ts,
                     asset_class=AssetClass.CRYPTO,
                     funding_rate=float(td["current_funding"]),
-                    predicted_funding_rate=td.get("funding_8h"),
+                    realized_funding_rate=td.get("funding_8h"),
                     interval_hours=8,  # Deribit perpetual funding settles every 8 hours
                 )
     else:
