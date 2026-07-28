@@ -13,7 +13,11 @@ import pytest
 
 from crocodile.core.ratelimit import TokenBucketLimiter
 from crocodile.core.schema.records import Filing, Fundamental
-from crocodile.equity.providers.sec_edgar import SecEdgarClient
+from crocodile.equity.providers.sec_edgar import (
+    COMPANY_TICKERS_URL,
+    SecEdgarClient,
+    parse_company_tickers,
+)
 
 
 def test_normalize_cik() -> None:
@@ -57,11 +61,59 @@ async def test_fetch_ticker_map() -> None:
 
         await client.fetch_ticker_map()
 
-        mock_req.assert_called_once_with("https://www.sec.gov/files/company_tickers.json")
+        mock_req.assert_called_once_with(COMPANY_TICKERS_URL)
         assert client._ticker_to_cik["AAPL"] == 320193
         assert client._ticker_to_cik["MSFT"] == 789019
         assert client._cik_to_primary_ticker[320193] == "AAPL"
         assert client._cik_to_primary_ticker[789019] == "MSFT"
+
+
+def test_the_registrant_index_keeps_the_company_name() -> None:
+    """The two ticker dicts discard ``title``, and it is the only legal name in the tree.
+
+    Tiingo's supported-tickers file carries no name at all and OpenFIGI's is a security
+    description, so the equity reference merge had nothing to fill ``Instrument.name`` from
+    until this stopped being dropped at parse time.
+    """
+    rows = parse_company_tickers(
+        {
+            "0": {"cik_str": 320193, "ticker": "aapl", "title": "Apple Inc."},
+            "1": {"cik_str": "789019", "ticker": "MSFT", "title": "MICROSOFT CORP"},
+        }
+    )
+    assert [(row.cik, row.ticker, row.title) for row in rows] == [
+        (320193, "AAPL", "Apple Inc."),
+        (789019, "MSFT", "MICROSOFT CORP"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param([], id="an array rather than the indexed object SEC publishes"),
+        pytest.param({"0": "not a row"}, id="a row that is not an object"),
+        pytest.param({"0": {"ticker": "AAPL"}}, id="a row with no cik"),
+        pytest.param({"0": {"cik_str": 320193, "ticker": ""}}, id="a row with no ticker"),
+        pytest.param({"0": {"cik_str": "not a number", "ticker": "X"}}, id="an unparseable cik"),
+    ],
+)
+def test_a_row_that_names_nothing_mergeable_is_skipped_rather_than_raising(payload: object) -> None:
+    """A schema change should empty the universe loudly downstream, not crash the parse.
+
+    The CIK and the ticker are the identity; a row missing either names nothing the reference
+    merge can key on, and a ``TypeError`` out of a parser says nothing about what SEC changed.
+    """
+    assert parse_company_tickers(payload) == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_company_tickers_reads_the_same_keyless_file_as_the_ticker_map() -> None:
+    client = SecEdgarClient()
+    with patch.object(client, "_request_json", new_callable=AsyncMock) as mock_req:
+        mock_req.return_value = {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple"}}
+        rows = await client.fetch_company_tickers()
+    mock_req.assert_called_once_with(COMPANY_TICKERS_URL)
+    assert [row.ticker for row in rows] == ["AAPL"]
 
 
 @pytest.mark.asyncio
