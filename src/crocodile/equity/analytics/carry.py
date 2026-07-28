@@ -547,13 +547,22 @@ def equity_spot_future_carry(
 
 
 def _carry_confidence(
-    *, at_ns: int, horizon_days: float, quote: RiskFreeQuote | None, n_price_legs: int = 2
+    *, at_ns: int, horizon_days: float, quote: RiskFreeQuote | None
 ) -> float:
     """Score one carry row through the registered ``treasury_carry`` formula.
 
-    The three observables it needs are assembled here and nowhere else, so there is one
-    place where "the yield leg was absent" is encoded as "the yield is exactly as stale as
-    the horizon is long" — the equivalence ``treasury_carry``'s registration argues for.
+    The two observables it needs are assembled here and nowhere else, so there is one place
+    where "the yield leg was absent" is encoded as "the yield is exactly as stale as the
+    horizon is long" — the equivalence ``treasury_carry``'s registration argues for.
+
+    There used to be a third, ``n_price_legs``, keyword-only with a default of ``2``. No
+    call site ever passed it, and none could have said anything else: all three carry
+    functions build a row out of a pairing that drops anything unpaired, so both price legs
+    are present in every emitted row by construction. A term that cannot move is a
+    constant, and this one put a floor of 0.667 under every score — including the score on
+    a row with no financing leg at all, which is the one thing this basis exists to
+    measure. See :func:`~crocodile.core.schema.provenance._treasury_carry` for the
+    arithmetic it took with it.
 
     ``horizon_days`` is clamped to at least one nanosecond because a non-positive horizon
     is already reported as ``annualized_pct = None``; the formula rejects a zero
@@ -564,11 +573,7 @@ def _carry_confidence(
     age_ns = horizon_ns if quote is None else max(at_ns - quote.quote_ts, 0)
     return confidence_for(
         CARRY_BASIS,
-        {
-            "n_price_legs": n_price_legs,
-            "yield_age_ns": min(age_ns, horizon_ns),
-            "horizon_ns": horizon_ns,
-        },
+        {"yield_age_ns": min(age_ns, horizon_ns), "horizon_ns": horizon_ns},
     )
 
 

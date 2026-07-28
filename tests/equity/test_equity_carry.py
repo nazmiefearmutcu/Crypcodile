@@ -497,16 +497,44 @@ def test_a_fresh_yield_scores_higher_than_a_stale_one(tmp_path: Path) -> None:
     assert 0.0 <= stale_confidence <= fresh_confidence <= 1.0
 
 
-def test_an_absent_yield_scores_the_two_price_legs_and_nothing_more(
+def test_a_carry_with_no_financing_leg_scores_zero_and_not_two_thirds(
     tmp_path: Path,
 ) -> None:
-    """Two of three legs, the third scoring zero — the encoding the basis argues for."""
+    """The row reports ``carry_pct = None``; the confidence has to agree with the column.
+
+    It did not. ``treasury_carry`` was ``(n_price_legs + freshness) / 3`` with
+    ``n_price_legs`` a ``def`` default of 2 that nothing ever passed, so the floor was
+    0.667 — comfortably over the ``>= 0.5`` filter this registry cites as the reason
+    ``ohlcv_from_ohlcv`` changed denominators, on a row whose whole subject, the financing
+    rate, is missing. Both price legs are present in any emitted row by construction, so
+    there was never anything for the term to count.
+    """
     catalog = _lake(
         tmp_path,
         [_trade(_SPOT, _T1, 100.0, "s1"), _trade(_FUTURE, _T2, 101.0, "f1")],
     )
     frame = equity_spot_future_carry(catalog, _FUTURE, _SPOT, *_WINDOW, _EXPIRY)
-    assert frame["prov_confidence"][0] == pytest.approx(2.0 / 3.0)
+    assert frame["risk_free_rate"][0] is None
+    assert frame["carry_pct"][0] is None
+    assert frame["prov_confidence"][0] == pytest.approx(0.0)
+
+
+def test_the_confidence_formula_reads_no_input_that_cannot_move(tmp_path: Path) -> None:
+    """A term with one reachable value is a constant, wherever it is spelled.
+
+    Gate 3c probes the registry for formulas whose *output* never moves. It cannot see a
+    formula that varies overall while one of its declared inputs is pinned by every call
+    site, which is what ``n_price_legs`` was.
+    """
+    from crocodile.core.schema.provenance import ConfidenceInputError, confidence_for
+
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("treasury_carry", {"horizon_ns": 10})
+    assert confidence_for("treasury_carry", {"yield_age_ns": 0, "horizon_ns": 10}) == 1.0
+    assert confidence_for("treasury_carry", {"yield_age_ns": 10, "horizon_ns": 10}) == 0.0
+    assert confidence_for(
+        "treasury_carry", {"yield_age_ns": 5, "horizon_ns": 10, "n_price_legs": 0}
+    ) == pytest.approx(0.5)
 
 
 def test_the_confidence_is_the_registered_formula_and_not_a_number_written_here(
@@ -517,12 +545,9 @@ def test_the_confidence_is_the_registered_formula_and_not_a_number_written_here(
     frame = equity_spot_future_carry(two_leg_lake, _FUTURE, _SPOT, *_WINDOW, _EXPIRY)
     row = frame.row(0, named=True)
     horizon_ns = _EXPIRY - int(row["local_ts"])
-    age_ns = int(row["local_ts"]) - 1_704_412_800_000_000_000  # 2024-01-05 UTC midnight
+    age_ns = int(row["local_ts"]) - _published_ns("2024-01-05")
     assert frame["prov_confidence"][0] == pytest.approx(
-        confidence_for(
-            "treasury_carry",
-            {"n_price_legs": 2, "yield_age_ns": age_ns, "horizon_ns": horizon_ns},
-        )
+        confidence_for("treasury_carry", {"yield_age_ns": age_ns, "horizon_ns": horizon_ns})
     )
 
 
@@ -825,13 +850,19 @@ def test_carry_apr_is_financing_paid_minus_dividends_received(
 
 def test_the_dividend_leg_still_answers_without_a_curve(tmp_path: Path) -> None:
     """This is the one of the three carry capabilities that degrades rather than empties:
-    the dividend yield is a real measurement whether or not financing is known."""
+    the dividend yield is a real measurement whether or not financing is known.
+
+    The row degrades and the confidence says so. It used to report 0.667 — the floor
+    ``n_price_legs`` put under every score — while ``risk_free_apr`` and ``carry_apr`` were
+    both ``None``, so the two halves of the row disagreed about whether a financing leg had
+    been found, and the number that disagreed was the one a ``>= 0.5`` filter reads.
+    """
     catalog = _lake(tmp_path, [_bar(_STOCK, _NOW - _SEC_NS, 200.0), _dividend(_NOW, 1.0)])
     row = equity_funding_apr(catalog, _STOCK, *_WINDOW).row(0, named=True)
     assert row["funding_rate"] == pytest.approx(-0.005)
     assert row["risk_free_apr"] is None
     assert row["carry_apr"] is None
-    assert row["prov_confidence"] == pytest.approx(2.0 / 3.0)
+    assert row["prov_confidence"] == pytest.approx(0.0)
 
 
 def test_a_symbol_with_no_dividends_or_no_price_is_empty(tmp_path: Path) -> None:
