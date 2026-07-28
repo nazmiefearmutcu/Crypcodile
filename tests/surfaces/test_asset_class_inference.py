@@ -21,7 +21,8 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.core.capability import AssetClass
+from crocodile.capabilities import load_all
+from crocodile.core.capability import IRREDUCIBLE, REGISTRY, AssetClass
 from crocodile.core.config import Settings
 from crocodile.core.errors import CapabilityUnavailable
 from crocodile.surfaces import cli, dispatch, mcp, rest
@@ -136,18 +137,44 @@ def test_a_symbol_with_no_registered_source_settles_nothing() -> None:
 
 
 def test_an_explicit_asset_class_is_never_overridden_by_a_symbol() -> None:
-    """Step 1 of the order, and the symbol does not get a vote against it."""
+    """Step 1 of the order, and the symbol does not get a vote against it.
+
+    The second half needs a capability that genuinely has no equity implementation, and this
+    fixture has now been chased twice: it was ``collect-market`` until M3 gave that an equity
+    half, then ``open-interest`` until M1 gave that one — and the agent that made the second
+    swap could not see the first, because both landed in the same phase from different
+    branches. A third name would be chased too. The population it was drawn from is
+    *scheduled asymmetry*, and emptying that population is exactly what Phase 3 was, so no
+    member of it is a durable fixture by construction.
+
+    So the fixture is derived rather than named, and drawn from :data:`IRREDUCIBLE` — the
+    other kind of asymmetry, which is a claim about the market and therefore does not expire.
+    The guard below is the part that matters: deriving a subject from a set means the test
+    quietly stops testing anything if the set empties, which is the vacuous-green shape this
+    codebase keeps finding. If ``IRREDUCIBLE`` is ever empty, this fails and says why rather
+    than passing over nothing.
+    """
     assert dispatch.resolve_asset_class(
         dispatch.resolve("replay"), explicit=AssetClass.EQUITY, symbols=(SYMBOL,)
     ) is AssetClass.EQUITY
-    # `collect-market` stood here until M3 gave it an equity half, at which point it stopped
-    # being a capability that can be unavailable for a market. `open-interest` replaces it as
-    # the fixture on the same grounds it was picked for: a live crypto-only declaration with
-    # a real implementation, scheduled against M2 rather than claimed irreducible.
-    with pytest.raises(CapabilityUnavailable):
-        dispatch.resolve_asset_class(
-            dispatch.resolve("open-interest"), explicit=AssetClass.EQUITY, symbols=(SYMBOL,)
-        )
+
+    load_all()
+    crypto_only = sorted(
+        name
+        for name in IRREDUCIBLE
+        if (cap := REGISTRY.get(name)) is not None and set(cap.impls) == {AssetClass.CRYPTO}
+    )
+    assert crypto_only, (
+        "no capability is crypto-only, so this test has no subject and would pass over "
+        "nothing. IRREDUCIBLE is what guarantees one exists; an empty one means either the "
+        "list was emptied or its entries stopped being asymmetric, and both are decisions "
+        "somebody should have to make deliberately."
+    )
+    for name in crypto_only:
+        with pytest.raises(CapabilityUnavailable):
+            dispatch.resolve_asset_class(
+                dispatch.resolve(name), explicit=AssetClass.EQUITY, symbols=(SYMBOL,)
+            )
 
 
 def test_a_field_that_is_not_a_symbol_is_not_read_as_one() -> None:
