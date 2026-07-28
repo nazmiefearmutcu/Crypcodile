@@ -214,8 +214,12 @@ def adjust_bars(
             low=bar.low / cfacpr,
             close=bar.close / cfacpr,
             volume=bar.volume * cfacshr,
-            buy_volume=bar.buy_volume * cfacshr,
-            sell_volume=bar.sell_volume * cfacshr,
+            # A bar that states no split still states none after a split adjustment.
+            # Scaling `None` is not available and scaling a substituted 0.0 would have
+            # manufactured "no buying happened" out of "nobody filled this in" — and
+            # done it on the *adjusted* series, which is the one research reads.
+            buy_volume=None if bar.buy_volume is None else bar.buy_volume * cfacshr,
+            sell_volume=None if bar.sell_volume is None else bar.sell_volume * cfacshr,
             vwap=bar.vwap / cfacpr if bar.vwap is not None else None,
         )
         adjusted_bars.append(adj_bar)

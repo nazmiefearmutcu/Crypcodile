@@ -1495,3 +1495,133 @@ def test_the_record_path_and_duckdb_put_a_trade_in_the_same_week() -> None:
 
     assert res["bar"].to_list() == [b.local_ts for b in from_records]
     assert res.row(0, named=True)["bar"] == _iso_monday_ns(_WEEK_PROBE_NS)
+
+
+# ---------------------------------------------------------------------------
+# The aggressor split: filled where it can be, a hole where it cannot
+# ---------------------------------------------------------------------------
+# `OHLCV.buy_volume` and `sell_volume` declared `float = 0.0` and almost nothing set
+# them. Two writers in the whole tree did — `binance/backfill.py` off
+# `takerBuyBaseAssetVolume`, and `corpactions/calculator.py`, which rescales what it is
+# handed — against six equity providers, two other crypto ones, and all three record
+# resamplers below that shipped the default. So a zero meant "no buying happened" on a
+# Binance bar and "nobody filled this in" everywhere else, and the bytes are identical.
+#
+# The trade path is the one that could always have answered: a `Trade` states `side`.
+# The tests below are the ones that would have gone red on the all-zeros state, and each
+# names the reason its particular path can or cannot fill the field.
+
+
+def _sided_trade(ts: int, amount: float, side: Side) -> Trade:
+    return Trade(
+        source="alpaca",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        source_ts=None,
+        local_ts=ts,
+        asset_class=AssetClass.EQUITY,
+        id=str(ts),
+        price=100.0,
+        amount=amount,
+        side=side,
+    )
+
+
+def _split_bar(local_ts: int, buy: float | None, sell: float | None) -> OHLCV:
+    return OHLCV(
+        source="binance",
+        symbol="binance:BTCUSDT",
+        symbol_raw="BTCUSDT",
+        source_ts=None,
+        local_ts=local_ts,
+        interval="1m",
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+        buy_volume=buy,
+        sell_volume=sell,
+        num_trades=1,
+        asset_class=AssetClass.CRYPTO,
+    )
+
+
+def test_a_bar_built_from_trades_reports_the_side_its_trades_stated() -> None:
+    """The path that had the answer all along and threw it away.
+
+    Every print here is a buy, and the bar used to say `buy_volume=0.0` — which reads as
+    the exact opposite of what happened, not as an absence.
+    """
+    trades = [_sided_trade(i * 100_000_000, 1.0, Side.BUY) for i in range(3)]
+
+    bar = next(iter(resample_trades_to_bars(trades, "1s")))
+
+    assert bar.buy_volume == 3.0
+    assert bar.sell_volume == 0.0, "a measured zero, on a bucket whose every print was a buy"
+    assert bar.volume == 3.0
+
+
+def test_an_unclassified_print_is_credited_to_neither_side() -> None:
+    """The same rule the SQL path applies, asserted against the record path.
+
+    `Side.UNKNOWN` is the normal case on a consolidated equity tape. Crediting it to
+    `sell_volume` — which is what "everything that is not a buy" amounts to — reported
+    whole sessions as seller-initiated. So the identity is an inequality and the gap is
+    recoverable by subtraction.
+    """
+    trades = [
+        _sided_trade(0, 1.0, Side.BUY),
+        _sided_trade(100_000_000, 2.0, Side.SELL),
+        _sided_trade(200_000_000, 0.5, Side.UNKNOWN),
+    ]
+
+    bar = next(iter(resample_trades_to_bars(trades, "1s")))
+
+    assert bar.buy_volume == 1.0
+    assert bar.sell_volume == 2.0
+    assert bar.volume == 3.5
+    assert bar.buy_volume + bar.sell_volume <= bar.volume
+    assert bar.volume - bar.buy_volume - bar.sell_volume == pytest.approx(0.5)
+
+
+def test_a_bar_built_from_quotes_states_no_split_at_all() -> None:
+    """Nothing here was transacted, so there is no aggressor to attribute."""
+    quotes = [_week_quote(i * 100_000_000) for i in range(2)]
+
+    bar = next(iter(resample_quotes_to_bars(quotes, "1s")))
+
+    assert bar.buy_volume is None
+    assert bar.sell_volume is None
+    assert bar.volume == 0.0, "the structural zero ohlcv_from_quotes argues for, unchanged"
+
+
+def test_re_bucketing_carries_a_split_its_inputs_stated() -> None:
+    """A Binance backfill day re-read at a wider width used to lose its split entirely."""
+    bars = [_split_bar(i * _MINUTE_NS, buy=6.0, sell=4.0) for i in range(3)]
+
+    out = next(iter(resample_bars_to_bars(bars, "1h")))
+
+    assert out.buy_volume == 18.0
+    assert out.sell_volume == 12.0
+
+
+def test_one_silent_input_disqualifies_the_whole_buckets_split() -> None:
+    """A partial sum understates by the silent bars' volume, and understates invisibly.
+
+    18 buys out of 40 total would still satisfy `buy + sell <= volume`, which is the only
+    invariant a consumer can check — so the wrong answer is indistinguishable from a
+    genuinely lopsided fortnight. Stricter than the `num_trades` rule beside it on purpose:
+    a missing count is bounded by the count, a missing split by the bar's whole volume.
+    """
+    bars = [
+        _split_bar(0, buy=6.0, sell=4.0),
+        _split_bar(_MINUTE_NS, buy=None, sell=None),
+        _split_bar(2 * _MINUTE_NS, buy=6.0, sell=4.0),
+    ]
+
+    out = next(iter(resample_bars_to_bars(bars, "1h")))
+
+    assert out.buy_volume is None
+    assert out.sell_volume is None
+    assert out.volume == 30.0, "volume is still the sum; only the attribution is withheld"

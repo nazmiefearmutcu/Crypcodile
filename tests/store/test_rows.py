@@ -432,7 +432,14 @@ def test_from_row_ohlcv():
 
 
 def test_from_row_ohlcv_buy_sell_volume_defaults():
-    """buy_volume and sell_volume default to 0.0 when absent."""
+    """Migrated: this used to assert both read back as ``0.0`` when the column is absent.
+
+    That was a faithful test of the wrong default. A row written by a source that never
+    split its volume has no such column, and reading it back as zero turns "unfilled" into
+    "measured none" at the one boundary where the distinction was still recoverable — the
+    column really was absent, and ``from_row`` had it in hand. It now reads back as the
+    hole it is, the same way ``num_trades`` on the line below always did.
+    """
     row = {
         **_base("ohlcv"),
         "interval": "1h",
@@ -444,8 +451,8 @@ def test_from_row_ohlcv_buy_sell_volume_defaults():
     }
     rec = from_row(row)
     assert isinstance(rec, OHLCV)
-    assert rec.buy_volume == 0.0
-    assert rec.sell_volume == 0.0
+    assert rec.buy_volume is None
+    assert rec.sell_volume is None
     assert rec.num_trades is None
 
 

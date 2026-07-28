@@ -325,6 +325,32 @@ def test_ohlcv_keeps_vwap_and_keeps_it_optional() -> None:
     assert field.default is None, "vwap must default to None, not to a fabricated price"
 
 
+def test_ohlcv_side_volumes_are_a_hole_and_not_a_measured_zero() -> None:
+    """``0.0`` on these two fields was a measurement standing in for an unfilled field.
+
+    The same argument ``vwap`` above wins on, lost once: these declared ``float = 0.0``,
+    and ``0.0`` on a volume split is a *claim* — no buying happened in this bar. Across the
+    lake it was almost never that. Two writers ever set them: ``binance/backfill.py`` off
+    ``takerBuyBaseAssetVolume``, and ``corpactions/calculator.py``, which rescales what it
+    is given. Six equity providers, two other crypto ones and all three record resamplers
+    left the default, so ``sum(buy_volume) / sum(volume)`` over a mixed lake answered with
+    the Binance share of it, and a consumer had nothing to filter on: an unset field and a
+    genuinely one-sided bar are the same bytes.
+
+    ``None`` is the same encoding ``num_trades`` beside them has always used, and unlike a
+    sentinel it survives Parquet, ``from_row`` and a ``WHERE buy_volume IS NULL``.
+    """
+    fields = {f.name: f for f in msgspec.structs.fields(OHLCV)}
+    for name in ("buy_volume", "sell_volume"):
+        assert fields[name].type == float | None, (
+            f"{name} must be float | None, got {fields[name].type}"
+        )
+        assert fields[name].default is None, (
+            f"{name} must default to None; 0.0 is a measurement of no buying, and it was "
+            f"standing in for every path that never filled the field"
+        )
+
+
 def test_gate1_the_union_discriminates_by_tag() -> None:
     """What widening ``Record`` actually buys: a blob decodes back to its own class."""
     f = Funding(

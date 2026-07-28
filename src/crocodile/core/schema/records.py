@@ -275,8 +275,27 @@ class OHLCV(_Header, frozen=True, kw_only=True, tag=Channel.OHLCV.value, tag_fie
     low: float
     close: float
     volume: float
-    buy_volume: float = 0.0
-    sell_volume: float = 0.0
+    buy_volume: float | None = None
+    sell_volume: float | None = None
+    """Volume whose aggressor was a buyer / a seller, or ``None`` if nobody split it.
+
+    Optional for the reason ``vwap`` below is, and the zero they replaced was the worse
+    half of that argument: ``0.0`` is a *measurement* — no buying happened in this bar —
+    and it was standing in for "no path filled this in", which was almost every path.
+    Exactly two writers ever set them: ``binance/backfill.py``, off
+    ``takerBuyBaseAssetVolume``, and ``corpactions/calculator.py``, which rescales what it
+    is handed. Every other bar in the lake — six equity providers, two crypto ones, and
+    all three record resamplers — carried a defaulted zero, so a consumer reading
+    ``buy_volume == 0.0`` could not tell a quiet bar from an unfilled field, and
+    ``sum(buy_volume) / sum(volume)`` over a mixed lake answered with the Binance
+    fraction of it.
+
+    ``buy_volume + sell_volume <= volume`` where both are stated: an unclassified print is
+    credited to neither side, and the remainder is the volume no source attributed. See
+    :func:`crocodile.core.resample.ohlcv._side_volume_sql` for why that is an inequality
+    rather than an identity.
+    """
+
     num_trades: int | None = None
     vwap: float | None = None
     """Volume-weighted average price over the bar, or ``None`` if the source omits it.
