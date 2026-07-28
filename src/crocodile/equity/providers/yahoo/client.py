@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Self
 
@@ -59,6 +59,31 @@ def _clean_float(val: Any) -> float | None:
         return float(val)
     except (ValueError, TypeError):
         return None
+
+
+def _underlying_spot(chain: Any) -> float | None:
+    """The underlying's price out of the option-chain payload, or ``None`` if it is absent.
+
+    ``yfinance``'s ``option_chain()`` returns ``(calls, puts, underlying)`` and the third
+    element is Yahoo's own ``quote`` block from the *same* ``optionChain`` response — the
+    one request that produced the strikes also carried the spot they are struck against.
+    That is why this is read here rather than fetched separately: a second call would
+    stamp a price from a different instant onto a chain snapshot, and every moneyness in
+    the surface would be a ratio of two moments.
+
+    Only ``regularMarketPrice`` is consulted. ``regularMarketPreviousClose`` is present in
+    the same block and is a *different* measurement — yesterday's close — so reading it
+    when today's is missing would put a stale number in a field the record documents as
+    the underlying's price, with nothing on the row to say which one it is. An absent
+    spot stays ``None``, which the surface renders as a ``NaN`` moneyness and an
+    ``unavailable`` vol wherever the venue published no IV: a visible hole rather than a
+    quiet approximation.
+    """
+    quote = getattr(chain, "underlying", None)
+    if not isinstance(quote, Mapping):
+        return None
+    price = _clean_float(quote.get("regularMarketPrice"))
+    return price if price is not None and price > 0.0 else None
 
 
 def _clean_str(val: Any) -> str | None:
@@ -590,6 +615,7 @@ class YahooClient:
                 return []
 
             single_records: list[OptionsChain] = []
+            underlying_price = _underlying_spot(chain)
             for opt_type, df in (("calls", chain.calls), ("puts", chain.puts)):
                 if df is None or getattr(df, "empty", True):
                     continue
@@ -622,11 +648,12 @@ class YahooClient:
                         local_ts=local_ts,
                         asset_class=AssetClass.EQUITY,
                         underlying=symbol,
-                        # Yahoo's option payload carries no spot for the underlying, and
-                        # this endpoint is not asked for one. Said out loud rather than
-                        # left to a default: `None` here means the feed did not publish
-                        # it, which is a different fact from a price of zero.
-                        underlying_price=None,
+                        # The spot out of this same payload's quote block, or `None` when
+                        # it did not carry one — a different fact from a price of zero,
+                        # and the one thing the four vol-surface capabilities cannot
+                        # compute a moneyness or invert a mid without. See
+                        # `_underlying_spot` for why it is not fetched separately.
+                        underlying_price=underlying_price,
                         expiry=_expiry_to_ns(exp),
                         strike=strike_val,
                         opt_type=opt_enum,

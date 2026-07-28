@@ -66,6 +66,16 @@ def mock_option_chain() -> MagicMock:
     }
     chain.puts = pd.DataFrame(puts_data)
 
+    # yfinance's `option_chain()` returns `(calls, puts, underlying)`, and the third
+    # element is Yahoo's own quote block out of the same `optionChain` response. Modelled
+    # here as the real payload's dict rather than left as a MagicMock attribute, because
+    # the spot in it is what every moneyness and every solved vol is computed against.
+    chain.underlying = {
+        "regularMarketPrice": 152.0,
+        "regularMarketPreviousClose": 149.0,
+        "symbol": "AAPL",
+    }
+
     return chain
 
 
@@ -183,14 +193,71 @@ async def test_fetch_option_chain(mock_option_chain: MagicMock) -> None:
             datetime.fromtimestamp(call.expiry / 1e9, tz=UTC).strftime("%Y-%m-%d")
             == "2026-06-26"
         )
-        # Yahoo's chain payload carries no underlying spot, and the record says so out
-        # loud rather than defaulting: `None` is "not published", not a price of zero.
-        assert call.underlying_price is None
+        # The spot comes off the same payload as the strikes — `regularMarketPrice` in the
+        # quote block `option_chain()` returns third — so the moneyness a surface reports
+        # is a ratio of two numbers from one instant. `regularMarketPreviousClose` sits
+        # beside it in the same block and is deliberately not read: it is yesterday's
+        # close, a different measurement, and there is no column to say which one it was.
+        assert call.underlying_price == 152.0
 
         put = next(r for r in records if r.opt_type == OptType.PUT)
         assert put.symbol == "AAPL260626P00150000"
         assert put.last_price == 3.0
         assert put.mark_iv == 0.22
+        assert put.underlying_price == 152.0
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_chain_payload_with_no_quote_block_leaves_the_spot_unstated(
+    mock_option_chain: MagicMock,
+) -> None:
+    """`None` means the feed did not publish a spot, which is not a price of zero.
+
+    yfinance returns `underlying=None` when Yahoo answers with no quote block, and the
+    honest record of that is an absent price. The downstream cost is visible rather than
+    silent: the surface reports a `NaN` moneyness and an `unavailable` vol for any contract
+    whose IV would have had to be solved, instead of inverting a mid against a spot
+    somebody assumed.
+    """
+    client = YahooClient()
+    mock_option_chain.underlying = None
+
+    with patch("yfinance.Ticker") as mock_ticker_cls:
+        mock_ticker = MagicMock()
+        mock_ticker.options = ("2026-06-26",)
+        mock_ticker.option_chain.return_value = mock_option_chain
+        mock_ticker_cls.return_value = mock_ticker
+
+        records = await client.fetch_option_chain("AAPL")
+        assert records
+        assert all(record.underlying_price is None for record in records)
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_non_positive_spot_is_read_as_unpublished(
+    mock_option_chain: MagicMock,
+) -> None:
+    """A zero in `regularMarketPrice` is Yahoo saying nothing, not the stock being free.
+
+    Carried through as a price it would divide every strike by zero on the way to a
+    moneyness, and would be handed to the IV solver as the underlying's value.
+    """
+    client = YahooClient()
+    mock_option_chain.underlying = {"regularMarketPrice": 0.0}
+
+    with patch("yfinance.Ticker") as mock_ticker_cls:
+        mock_ticker = MagicMock()
+        mock_ticker.options = ("2026-06-26",)
+        mock_ticker.option_chain.return_value = mock_option_chain
+        mock_ticker_cls.return_value = mock_ticker
+
+        records = await client.fetch_option_chain("AAPL")
+        assert records
+        assert all(record.underlying_price is None for record in records)
 
     await client.close()
 
