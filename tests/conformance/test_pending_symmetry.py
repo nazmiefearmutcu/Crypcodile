@@ -43,7 +43,7 @@ that everywhere else two dict keys may not point at one callable. See its rules 
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 import msgspec
 import pytest
@@ -136,6 +136,37 @@ def test_the_ledger_only_holds_capabilities_that_exist() -> None:
     """An entry for an unregistered name is a deadline against nothing."""
     ghosts = sorted(set(PENDING_SYMMETRY) - set(REGISTRY))
     assert not ghosts, f"scheduled but never registered: {ghosts}"
+
+
+def assert_asymmetry_is_scheduled(names: Iterable[str]) -> None:
+    """The rule each capability batch files under: crypto-only means scheduled, with a method.
+
+    Exported rather than written out per batch because the batches have run out of subject.
+    Phase 3 emptied ``PENDING_SYMMETRY``, so every batch's "not symmetric" branch now has an
+    empty name set — ``tests/capabilities/test_analytics.py`` parametrised 17 cases over a
+    branch none of them took, and ``test_market.py`` looped over a dict it had just asserted
+    was empty. Two shapes of the same thing: a rule whose only remaining subject is nothing.
+
+    Deleting the rule is wrong — it is the rule that makes an unscheduled asymmetric
+    capability a build failure, and Phase 4 will declare capabilities. Keeping it as a
+    per-batch loop over an empty set is also wrong, because it reads as coverage. So it
+    lives here as one function, and the self-tests below drive it with a fixture capability
+    through ``_isolate``, which is how this module has tested every other empty-subject rule
+    since the exit review.
+    """
+    for name in names:
+        cap = REGISTRY.get(name)
+        assert cap is not None, f"{name} is not registered, so nothing about it is asserted"
+        assert set(cap.impls) == {AssetClass.CRYPTO}, (
+            f"{name} was treated as crypto-only and implements {sorted(cap.impls)}; if the "
+            f"equity half landed, move the name onto its batch's symmetric list in the same "
+            f"commit"
+        )
+        method = PENDING_SYMMETRY.get(name)
+        assert method in SPEC_METHODS, (
+            f"{name} has only a crypto half and is scheduled against {method!r}, which is "
+            f"not a method in design §9.1. Known methods: {sorted(SPEC_METHODS)}"
+        )
 
 
 def test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric() -> None:
@@ -270,6 +301,59 @@ def test_a_settled_entry_left_behind_is_caught(_isolate: None) -> None:
     PENDING_SYMMETRY["indicators"] = "M1"
     with pytest.raises(AssertionError, match="indicators"):
         test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric()
+
+
+def test_a_ledger_entry_naming_nothing_registered_is_caught(_isolate: None) -> None:
+    """The one ledger rule that had no self-test, and now has no real iterations either.
+
+    Its twin on ``IRREDUCIBLE`` has had ``test_an_irreducible_entry_naming_nothing_
+    registered_is_caught`` since the exit review; this side was left with a set difference
+    over an empty ledger, which is ``set() - set(REGISTRY)`` — a comprehension that cannot
+    produce an element. That is the same "green because it did not run" shape the rest of
+    this section exists to close.
+    """
+    PENDING_SYMMETRY["fixture-never-declared"] = "M1"
+    with pytest.raises(AssertionError, match="fixture-never-declared"):
+        test_the_ledger_only_holds_capabilities_that_exist()
+
+
+def test_an_unscheduled_asymmetric_capability_fails_its_batch_rule(_isolate: None) -> None:
+    """:func:`assert_asymmetry_is_scheduled` over the state no batch can produce today."""
+    register(_crypto_only("fixture-batch-unscheduled"))
+    with pytest.raises(AssertionError, match="fixture-batch-unscheduled"):
+        assert_asymmetry_is_scheduled(["fixture-batch-unscheduled"])
+
+
+def test_a_scheduled_asymmetric_capability_satisfies_its_batch_rule(_isolate: None) -> None:
+    register(_crypto_only("fixture-batch-scheduled"))
+    PENDING_SYMMETRY["fixture-batch-scheduled"] = "M1"
+    assert_asymmetry_is_scheduled(["fixture-batch-scheduled"])
+
+
+def test_a_batch_rule_rejects_a_schedule_against_an_invented_method(_isolate: None) -> None:
+    register(_crypto_only("fixture-batch-invented"))
+    PENDING_SYMMETRY["fixture-batch-invented"] = "M9"
+    with pytest.raises(AssertionError, match="M9"):
+        assert_asymmetry_is_scheduled(["fixture-batch-invented"])
+
+
+def test_a_batch_rule_rejects_a_name_that_grew_its_equity_half(_isolate: None) -> None:
+    """The direction that catches a stale entry on a batch's crypto-only side.
+
+    A capability whose equity half landed while the batch still lists it as asymmetric is
+    the mirror of the hoarding failure the ledger's own rule catches, and it is the one a
+    per-name loop could not report while there were no crypto-only names left to loop over.
+    """
+    REGISTRY["fixture-batch-grown"] = _symmetric("fixture-batch-grown")
+    PENDING_SYMMETRY["fixture-batch-grown"] = "M1"
+    with pytest.raises(AssertionError, match="fixture-batch-grown"):
+        assert_asymmetry_is_scheduled(["fixture-batch-grown"])
+
+
+def test_a_batch_rule_rejects_a_name_nothing_registered(_isolate: None) -> None:
+    """A batch list that names a deleted capability asserts nothing about it, loudly."""
+    with pytest.raises(AssertionError, match="fixture-batch-deleted"):
+        assert_asymmetry_is_scheduled(["fixture-batch-deleted"])
 
 
 def test_an_irreducible_capability_that_grew_an_equity_half_is_caught(_isolate: None) -> None:

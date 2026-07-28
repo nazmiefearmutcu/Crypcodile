@@ -23,7 +23,6 @@ from crocodile.core.capability import (
     IRREDUCIBLE,
     PENDING_SYMMETRY,
     REGISTRY,
-    SPEC_METHODS,
     AssetClass,
     CapabilityContext,
     ReturnKind,
@@ -1102,6 +1101,18 @@ def test_every_declared_basis_carries_a_registered_confidence_formula(name: str)
 
 
 def test_the_ledger_schedules_every_asymmetric_capability_in_this_batch() -> None:
+    """The batch's filing, with the loop that could not run removed rather than reworded.
+
+    ``for method in scheduled.values(): assert method in SPEC_METHODS`` stood below the
+    next assertion and had zero iterations by construction: the line above pins
+    ``scheduled`` to the empty dict, so the loop's body was unreachable for as long as that
+    assertion held, and unreachable-while-a-neighbour-passes is the whole shape this pass
+    is clearing out. It is deleted rather than replaced. This batch's claim is the stronger
+    one — *nothing here is scheduled at all* — and the spec-method rule it restated now
+    lives once, in
+    :func:`~tests.conformance.test_pending_symmetry.assert_asymmetry_is_scheduled`, where
+    ``_isolate`` drives it with a fixture capability and proves it bites.
+    """
     scheduled = {
         name: PENDING_SYMMETRY[name] for name in _MARKET_CAPABILITIES if name in PENDING_SYMMETRY
     }
@@ -1109,8 +1120,6 @@ def test_the_ledger_schedules_every_asymmetric_capability_in_this_batch() -> Non
     # the capability that came back. Five of the six left through M2, M3 and M8;
     # `list-exchanges` never needed an entry.
     assert scheduled == {}
-    for method in scheduled.values():
-        assert method in SPEC_METHODS
     for name in _MARKET_CAPABILITIES:
         symmetric = set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
         assert symmetric != (name in scheduled), f"{name} is scheduled and symmetric, or neither"

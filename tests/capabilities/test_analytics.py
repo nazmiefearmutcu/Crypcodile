@@ -622,9 +622,36 @@ _DECLARED = (
 
 
 def test_the_batch_declares_every_capability_it_owns() -> None:
-    """A name that quietly failed to register would make every test above skip its subject."""
+    """Both directions, because the subset check only ever closed one.
+
+    ``set(_DECLARED) <= set(REGISTRY)`` catches a name that failed to register, which is
+    what makes every parametrised test above skip its subject. It says nothing about a
+    capability that registers and is listed here nowhere — and ``_DECLARED`` is the subject
+    of every per-capability gate in this file, so such a capability is asserted about by
+    none of them. A completeness review registered a fixture capability and found 57 of the
+    58 architectural gates green, the exception being a hand-maintained census whose own
+    message told it how to opt in.
+
+    The registry side is derived from ``Impl.fn.__module__`` rather than typed out, so this
+    is a comparison against the module's declarations and not against a second copy of this
+    tuple. :func:`~tests.conformance.test_capability_batches.
+    test_no_capability_is_registered_outside_the_batches_that_are_tested` holds the same
+    line across all five batches at once.
+    """
     load_all()
-    assert set(_DECLARED) <= set(REGISTRY)
+    declared_in_module = {
+        name
+        for name, cap in REGISTRY.items()
+        if any(
+            impl.fn.__module__ == "crocodile.capabilities.analytics"
+            for impl in cap.impls.values()
+        )
+    }
+    assert set(_DECLARED) == declared_in_module, (
+        f"declared in capabilities/analytics.py and untested here: "
+        f"{sorted(declared_in_module - set(_DECLARED))}; listed here and not declared "
+        f"there: {sorted(set(_DECLARED) - declared_in_module)}"
+    )
 
 
 @pytest.mark.parametrize("name", _DECLARED)
@@ -687,23 +714,47 @@ over *every* declared name and checks the two facts against each other.
 """
 
 
-@pytest.mark.parametrize("name", _DECLARED)
-def test_every_crypto_only_capability_is_scheduled_against_a_spec_method(name: str) -> None:
-    """The other half of declaring an asymmetric capability, asserted per name.
+def test_every_crypto_only_capability_is_scheduled_against_a_spec_method() -> None:
+    """The other half of declaring an asymmetric capability — the half with no subject left.
 
-    ``test_pending_symmetry.py`` proves the ledger's rules hold; this proves this batch
-    actually filed under them, so a declaration added later without a schedule fails here
-    with its own name rather than in a loop over the whole registry.
+    This was 17 parametrised cases whose first branch, ``if name in _SYMMETRIC: … return``,
+    every one of them took: ``_DECLARED - _SYMMETRIC`` is empty, so the two assertions after
+    it never ran and what did run duplicated
+    :func:`test_every_symmetric_capability_left_the_ledger` exactly — 34 cases asserting the
+    same two facts twice.
+
+    The rule still matters and Phase 4 will declare capabilities, so it is not deleted; it
+    moved to :func:`~tests.conformance.test_pending_symmetry.assert_asymmetry_is_scheduled`,
+    where ``_isolate`` drives it with a fixture capability and proves it catches an
+    unscheduled one, an invented method, a name that grew an equity half, and a name nothing
+    registered. Here it is applied to this batch's actual crypto-only set, which is empty
+    today and says so rather than looking like coverage.
     """
-    from crocodile.core.capability import PENDING_SYMMETRY, SPEC_METHODS
+    from tests.conformance.test_pending_symmetry import assert_asymmetry_is_scheduled
 
     load_all()
-    if name in _SYMMETRIC:
-        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
-        assert name not in PENDING_SYMMETRY
-        return
-    assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
-    assert PENDING_SYMMETRY[name] in SPEC_METHODS
+    assert_asymmetry_is_scheduled(set(_DECLARED) - _SYMMETRIC)
+
+
+def test_the_symmetric_list_names_exactly_the_capabilities_that_are_symmetric() -> None:
+    """``_SYMMETRIC`` as an assertion rather than as a list the tests below trust.
+
+    :func:`test_every_symmetric_capability_left_the_ledger` checks that everything on the
+    list really has both halves. This is the other direction, and it is the one that keeps
+    the list from being an exemption: a capability that becomes symmetric without being
+    added here would silently move into the *unscheduled asymmetric* set above, where the
+    rule would then demand a schedule for a capability that no longer needs one.
+    """
+    load_all()
+    symmetric_now = {
+        name
+        for name in _DECLARED
+        if set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+    }
+    assert symmetric_now == set(_SYMMETRIC), (
+        f"symmetric and unlisted: {sorted(symmetric_now - _SYMMETRIC)}; "
+        f"listed and not symmetric: {sorted(_SYMMETRIC - symmetric_now)}"
+    )
 
 
 @pytest.mark.parametrize("name", _SYMMETRIC)
@@ -1446,8 +1497,14 @@ def test_funding_predict_is_one_function_for_both_asset_classes(tmp_path: Path) 
     answer = _call_equity(
         "funding-predict", ctx, FundingPredictParams((0.01, 0.02, 0.03), window_size=2)
     )
-    assert answer["method"] in {"xgboost", "rolling_mean"}
-    assert isinstance(answer["predicted_funding_rate"], float)
+    # `method in {"xgboost", "rolling_mean"}` was what stood here, and those are the only
+    # two literals the function assigns — an assertion the implementation could not fail.
+    # Three rates cannot leave a trainable row after lag-1/2/3 shifting, so the branch is
+    # the rolling mean however the machine answers `import xgboost`, and the number is the
+    # mean of the last `window_size` rates: mean([0.02, 0.03]).
+    assert answer["method"] == "rolling_mean"
+    assert answer["predicted_funding_rate"] == pytest.approx(0.025)
+    assert answer["window_size"] == 2
 
 
 def test_every_m5_equity_impl_is_a_named_module_level_function() -> None:

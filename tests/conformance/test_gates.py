@@ -558,6 +558,90 @@ def test_gate3_every_declared_basis_is_registered():
             )
 
 
+class _BasisSite(NamedTuple):
+    """A line of source that names a ``prov_basis``, and the name it states."""
+
+    lineno: int
+    basis: str
+
+
+def _module_level_strings(tree: ast.Module) -> dict[str, str]:
+    """``NAME -> "literal"`` for the module's top-level string constants.
+
+    Four of the tree's basis names are stated as constants (``AMM_TICK_CURVE``,
+    ``CAST_SEARCH``, ``REFERENCE_MERGE_BASIS``, ``SCRAPED_LAST_PRICE``) rather than as
+    literals at the call site. Resolving them is what keeps the scanner's subject the set
+    of bases the tree *names*, rather than the subset that happens to be spelled inline.
+    """
+    found: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target]
+        else:
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for target in targets:
+                found[target.id] = node.value.value
+    return found
+
+
+def _bases_named_in(source: str) -> tuple[list[_BasisSite], list[int]]:
+    """Every basis a module names, and the lines where it names one the scanner cannot read.
+
+    Two shapes name a basis, and the gate below has to see both:
+
+    ``prov_basis="…"`` — a literal keyword on a record constructor. This is the
+    hand-assembled tail :func:`test_gate3_no_source_file_hand_writes_a_confidence` argues
+    against; it is kept as a subject because a future one should still be caught. It does
+    not occur today: all 22 live ``prov_basis=`` sites are ``prov_basis=tail.prov_basis``,
+    forwarding a tail that :func:`provenance_fields` already built. A non-literal there is
+    therefore the *correct* shape and is deliberately not an offence.
+
+    ``provenance_fields("…")`` — the first argument of the only supported constructor of a
+    provenance tail, and where every basis this tree stamps onto a record is actually
+    named. Scanning only the first shape is why six registered-but-undeclared bases
+    (``book_resample``, ``ohlcv_from_ohlcv``, ``ohlcv_from_quotes``, ``ohlcv_from_trades``,
+    ``sec_13f_hr``, ``yahoo_1m_vap``) reached runtime records with no gate over them: they
+    are named here and nowhere in ``REGISTRY``, so the sibling gate that reads
+    ``impl.basis`` cannot see them either.
+
+    Returns ``(sites, opaque_linenos)``. A first argument that is neither a literal nor a
+    module-level string constant is *opaque*: the gate reports it rather than skipping it.
+    Skipping would reopen the hole this function exists to close — one
+    ``provenance_fields(_pick_basis())`` and a basis leaves the gate's subject with nothing
+    said — and a warning that does not fail is the same hole with a nicer log line. The
+    runtime does raise ``UnregisteredBasisError`` on an unknown basis, but only on the line
+    that executes, which is exactly the guarantee a static gate is here to strengthen.
+    There are no opaque sites today, so the rule costs nothing to adopt and the escape it
+    forbids is one nobody has taken.
+    """
+    tree = ast.parse(source)
+    constants = _module_level_strings(tree)
+    sites: list[_BasisSite] = []
+    opaque: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "prov_basis" and isinstance(kw.value, ast.Constant):
+                if isinstance(kw.value.value, str):
+                    sites.append(_BasisSite(kw.value.lineno, kw.value.value))
+        func = node.func
+        called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if called != "provenance_fields" or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            sites.append(_BasisSite(first.lineno, first.value))
+        elif isinstance(first, ast.Name) and first.id in constants:
+            sites.append(_BasisSite(first.lineno, constants[first.id]))
+        else:
+            opaque.append(first.lineno)
+    return sites, opaque
+
+
 def test_gate3_no_source_file_emits_an_unregistered_basis():
     from crocodile.core.schema.provenance import load_all_bases, registered_bases
 
@@ -566,16 +650,72 @@ def test_gate3_no_source_file_emits_an_unregistered_basis():
     load_all_bases()
     known = registered_bases()
     offenders = []
+    opaque_sites = []
+    seen = 0
     for path in _crocodile_sources():
-        for node in ast.walk(ast.parse(path.read_text())):
-            if not isinstance(node, ast.Call):
-                continue
-            for kw in node.keywords:
-                if kw.arg == "prov_basis" and isinstance(kw.value, ast.Constant):
-                    value = kw.value.value
-                    if isinstance(value, str) and value not in known:
-                        offenders.append(f"{path}:{kw.value.lineno} {value!r}")
-    assert not offenders, f"unregistered prov_basis literals: {offenders}"
+        sites, opaque = _bases_named_in(path.read_text())
+        seen += len(sites)
+        offenders += [
+            f"{path}:{site.lineno} {site.basis!r}" for site in sites if site.basis not in known
+        ]
+        opaque_sites += [f"{path}:{lineno}" for lineno in opaque]
+    assert not offenders, f"unregistered bases named in source: {offenders}"
+    assert not opaque_sites, (
+        f"provenance_fields() called with a basis this gate cannot read: {opaque_sites}. "
+        f"Name it with a string literal or a module-level string constant; a basis chosen "
+        f"at runtime is one no static gate can check."
+    )
+    # The scanner found nothing at all only if it stopped matching the tree's shape — the
+    # previous version of this gate evaluated its condition 3773 times and took it never.
+    assert seen, "no basis is named anywhere in the tree; this gate has stopped looking"
+
+
+_SCANNER_FIXTURE = '''
+BASIS_CONSTANT = "constant_basis"
+LATER: Final = "annotated_basis"
+
+
+def build(tail):
+    a = provenance_fields("literal_basis")
+    b = provenance_fields(BASIS_CONSTANT, {"n": 1})
+    c = provenance_fields(LATER)
+    d = provenance_fields(pick())
+    return OHLCV(prov_basis=tail.prov_basis), OHLCV(prov_basis="hand_written")
+'''
+
+
+def test_the_basis_scanner_reads_every_shape_the_tree_uses():
+    """The gate above passes over real source; this is what proves it can fail.
+
+    A scanner is only worth what its subject is, and the subject is what this asserts:
+    literal first arguments, constants (plain and annotated), the forwarded
+    ``prov_basis=tail.prov_basis`` that must *not* register, the hand-written literal that
+    must, and the runtime-chosen argument that has to surface as opaque rather than vanish.
+    """
+    sites, opaque = _bases_named_in(_SCANNER_FIXTURE)
+    assert sorted(site.basis for site in sites) == [
+        "annotated_basis",
+        "constant_basis",
+        "hand_written",
+        "literal_basis",
+    ]
+    assert len(opaque) == 1
+
+
+def test_an_unregistered_basis_named_only_at_a_provenance_fields_call_is_caught():
+    """The exact defect the old scanner could not see, driven end to end.
+
+    ``ohlcv_from_trades`` and its five siblings are named nowhere but here. A file that
+    named an *unregistered* one passed the previous gate in silence because the gate only
+    read ``prov_basis=`` keywords.
+    """
+    from crocodile.core.schema.provenance import load_all_bases, registered_bases
+
+    load_all_bases()
+    known = registered_bases()
+    sites, _ = _bases_named_in('tail = provenance_fields("ohlcv_from_moonbeams")\n')
+    unregistered = [site.basis for site in sites if site.basis not in known]
+    assert unregistered == ["ohlcv_from_moonbeams"]
 
 
 def test_gate3_no_source_file_hand_writes_a_confidence():
