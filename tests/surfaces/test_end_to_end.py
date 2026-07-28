@@ -27,6 +27,26 @@ def _settings(lake: pathlib.Path) -> Settings:
     return Settings(data_dir=lake)
 
 
+_ALPACA_ENV = (
+    "CROCODILE_ALPACA_API_KEY",
+    "CROCODILE_ALPACA_API_SECRET",
+    "ALPACA_API_KEY",
+    "ALPACA_API_SECRET",
+)
+"""Every spelling ``alpaca_is_keyed`` consults, so "keyless" is a fact rather than a hope.
+
+``Settings`` reads the prefixed pair and ``select_depth_source`` has always read the bare
+one; both are honoured so an existing keyed deployment does not go dark. A test asserting
+what the *default* deployment announces therefore has to clear all four, or it passes or
+fails according to whose laptop it runs on.
+"""
+
+
+def _unkey(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _ALPACA_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -83,7 +103,7 @@ def test_the_cli_answers_to_a_retired_spelling(lake: pathlib.Path) -> None:
 
 
 def test_the_cli_does_not_banner_a_derived_answer_but_the_payload_still_says_so(
-    lake: pathlib.Path,
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Migrated: this asserted ``DERIVED`` on the terminal, and the rule narrowed under it.
 
@@ -99,7 +119,19 @@ def test_the_cli_does_not_banner_a_derived_answer_but_the_payload_still_says_so(
     So the subject survives and the assertion moves: the terminal stays quiet, and the
     provenance is still there for a reader that wants it. ``warning_for`` is unchanged and
     REST and MCP carry every non-native answer in the payload.
+
+    Migrated a second time, and this is why the keys are set. ``DERIVED`` is the *ceiling*
+    and it is only what happens when the deployment can reach it: with no Alpaca keys
+    ``select_depth_source`` returns the modelled Yahoo ladder, so the answer is ``SYNTHETIC``
+    and now says so. The claim under test — a derived answer does not shout — is a claim
+    about a derived answer, so the deployment is keyed here and
+    ``test_the_keyless_deployment_announces_the_ladder_it_actually_returns`` owns the other
+    branch. Before that split, this test passed *because* the surface named a method that
+    never ran.
     """
+    monkeypatch.setenv("CROCODILE_ALPACA_API_KEY", "key")
+    monkeypatch.setenv("CROCODILE_ALPACA_API_SECRET", "secret")
+
     runner = CliRunner()
     result = runner.invoke(
         cli.build_app(),
@@ -117,12 +149,75 @@ def test_the_cli_does_not_banner_a_derived_answer_but_the_payload_still_says_so(
     catalog = Catalog(lake)
     try:
         ctx = CapabilityContext(
-            catalog=catalog, settings=_settings(lake), asset_class=AssetClass.EQUITY
+            catalog=catalog,
+            settings=Settings(data_dir=lake, alpaca_api_key="key", alpaca_api_secret="secret"),
+            asset_class=AssetClass.EQUITY,
         )
         warning = dispatch.warning_for(cap, ctx) or ""
     finally:
         catalog.close()
     assert "DERIVED" in warning and "alpaca_l1" in warning
+
+
+@pytest.mark.parametrize("keyed", [False, True], ids=["keyless", "keyed"])
+def test_the_keyless_deployment_announces_the_ladder_it_actually_returns(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch, keyed: bool
+) -> None:
+    """The one hand-written banner this design generalises, in the deployment that has none.
+
+    ``depth``, ``slippage`` and ``liquidity-depth`` all declare ``DERIVED``/``alpaca_l1``
+    over ``select_depth_source``, which returns the **synthetic** Yahoo ladder whenever the
+    Alpaca keys are unset — the default. ``banner_for`` suppresses ``DERIVED``, so the CLI's
+    stderr was empty and REST and MCP named ``alpaca_l1``, a method that had not run, over a
+    modelled answer. That is exactly what ``warning_for``'s docstring says it exists to
+    prevent, on the endpoint it was generalised from.
+
+    Both branches are driven, because a fix that announced ``SYNTHETIC`` unconditionally
+    would be the same defect pointed the other way: a keyed deployment would be told its real
+    quoted ladder was modelled.
+    """
+    if keyed:
+        monkeypatch.setenv("CROCODILE_ALPACA_API_KEY", "key")
+        monkeypatch.setenv("CROCODILE_ALPACA_API_SECRET", "secret")
+    else:
+        _unkey(monkeypatch)
+
+    expected = ("DERIVED", "alpaca_l1") if keyed else ("SYNTHETIC", "yahoo_1m_vap")
+    # The network surfaces take their settings from the caller that mounts them, so a test
+    # that only edits the environment would leave them keyless whatever the CLI saw. This is
+    # the same object `dispatch.build_context` hands the implementation.
+    settings = Settings(
+        data_dir=lake,
+        **({"alpaca_api_key": "key", "alpaca_api_secret": "secret"} if keyed else {}),
+    )
+
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["slippage", "--symbol", SYMBOL, "--side", "buy", "--size", "1.0",
+         "--asset-class", "equity", "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 0, result.output
+    assert (expected[0] in result.stderr) is not keyed, result.stderr
+
+    from starlette.testclient import TestClient
+
+    for body in (
+        TestClient(rest.build_app(settings=settings)).get(
+            "/api/v1/slippage",
+            params={"symbol": SYMBOL, "side": "buy", "size": "1.0", "asset_class": "equity"},
+        ).json(),
+        mcp.call_tool(
+            "slippage",
+            {"symbol": SYMBOL, "side": "buy", "size": 1.0, "asset_class": "equity"},
+            settings=settings,
+        ),
+    ):
+        assert body["provenance"]["prov"] == expected[0].lower()
+        assert body["provenance"]["prov_basis"] == expected[1]
+        assert expected[0] in body["warning"]
+        # The ceiling is still published, and only where it differs from what ran — which is
+        # what tells a caller that setting a key would upgrade this exact answer.
+        assert ("prov_ceiling" in body["provenance"]) is not keyed
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +360,10 @@ def test_rest_maps_a_missing_required_parameter_to_400(lake: pathlib.Path) -> No
     assert response.status_code == 400
 
 
-def test_rest_serves_the_alias_and_the_synthetic_warning(lake: pathlib.Path) -> None:
+def test_rest_serves_the_alias_and_the_synthetic_warning(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _unkey(monkeypatch)
     response = _client(lake).get(
         "/api/v1/simulate-price-impact",
         params={"symbol": SYMBOL, "side": "buy", "size": "1.0", "asset_class": "equity"},
@@ -273,10 +371,13 @@ def test_rest_serves_the_alias_and_the_synthetic_warning(lake: pathlib.Path) -> 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["result"]["expected_price"] > 0
-    # DERIVED since the equity half stopped claiming a VAP ladder it never opened. The
-    # payload carries it on every surface that can; only the CLI banner narrowed to
-    # SYNTHETIC — see test_the_cli_does_not_banner_a_derived_answer_but_the_payload_still_says_so.
-    assert "DERIVED" in body["warning"]
+    # SYNTHETIC, and the name of this test is accurate again. `DERIVED`/`alpaca_l1` is the
+    # ceiling; a keyless deployment gets the modelled Yahoo ladder, and the envelope now
+    # names the branch that ran rather than the one it could have taken. The ceiling is
+    # alongside it so a caller can see that a key would upgrade this answer.
+    assert "SYNTHETIC" in body["warning"]
+    assert body["provenance"]["prov_basis"] == "yahoo_1m_vap"
+    assert body["provenance"]["prov_ceiling_basis"] == "alpaca_l1"
 
 
 def test_rest_describes_its_query_parameters_in_openapi(lake: pathlib.Path) -> None:
@@ -331,14 +432,19 @@ def test_mcp_publishes_the_params_struct_as_its_input_schema() -> None:
     assert tool["assetClasses"] == ["crypto", "equity"]
 
 
-def test_mcp_warns_on_a_modelled_answer(lake: pathlib.Path) -> None:
+def test_mcp_warns_on_a_modelled_answer(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent reading a modelled number has to be told, and this is the default deployment."""
+    _unkey(monkeypatch)
     body = mcp.call_tool(
         "simulate-price-impact",
         {"symbol": SYMBOL, "side": "buy", "size": 1.0, "asset_class": "equity"},
         settings=_settings(lake),
     )
-    assert "DERIVED" in body["warning"]
-    assert body["provenance"]["prov_basis"] == "alpaca_l1"
+    assert "SYNTHETIC" in body["warning"]
+    assert body["provenance"]["prov_basis"] == "yahoo_1m_vap"
+    assert body["provenance"]["prov_ceiling_basis"] == "alpaca_l1"
 
 
 def test_mcp_refuses_a_tool_it_does_not_have() -> None:

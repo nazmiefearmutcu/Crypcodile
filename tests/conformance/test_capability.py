@@ -305,3 +305,54 @@ def test_indicator_names_are_what_apply_indicators_accepts() -> None:
     """The advertised list and the accepted list are one list."""
     for name in INDICATOR_NAMES:
         apply_indicators(_bars(), name)
+
+
+def _declared_impls() -> list[tuple[str, str, Impl]]:
+    """Every implementation in the registry, with the capability and asset class it serves."""
+    from crocodile.capabilities import load_all
+
+    load_all()
+    return [
+        (name, asset_class.value, impl)
+        for name, cap in sorted(REGISTRY.items())
+        for asset_class, impl in sorted(cap.impls.items(), key=lambda pair: pair[0].value)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The floor beside the ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_every_declared_fallback_is_weaker_than_the_ceiling_it_falls_from() -> None:
+    """A fallback that claimed *more* than the ceiling would be a second ceiling.
+
+    :class:`~crocodile.core.capability.Fallback` exists because ``prov`` is a maximum and a
+    deployment that cannot reach it was announcing it anyway. That only holds while the
+    fallback is genuinely below: ``DERIVED``/``alpaca_l1`` degrading to
+    ``SYNTHETIC``/``yahoo_1m_vap`` is the shape, and the reverse would let a keyless
+    deployment out-claim a keyed one.
+    """
+    from crocodile.core.schema.provenance import registered_bases, trust_rank
+
+    declared = [
+        (name, asset_class, impl)
+        for name, asset_class, impl in _declared_impls()
+        if impl.fallback is not None
+    ]
+    assert declared, "no fallback is declared; this gate would prove nothing"
+    for name, asset_class, impl in declared:
+        fallback = impl.fallback
+        assert fallback is not None  # narrowed for the type checker
+        where = f"{name}/{asset_class}"
+        assert fallback.basis in registered_bases(), (
+            f"{where} falls back to an unregistered basis {fallback.basis!r}; a basis with no "
+            f"confidence formula is a number chosen by feel"
+        )
+        assert trust_rank(fallback.prov) >= trust_rank(impl.prov), (
+            f"{where} falls back to something more trustworthy than its own ceiling"
+        )
+        assert trust_rank(fallback.prov) >= trust_rank(level_for(fallback.basis)), (
+            f"{where}'s fallback hands back more than it rests on"
+        )
+        assert callable(fallback.reachable), where

@@ -52,6 +52,7 @@ __all__ = [
     "Capability",
     "CapabilityContext",
     "CapabilityFn",
+    "Fallback",
     "Impl",
     "ReturnKind",
     "declare",
@@ -194,6 +195,49 @@ annotation does not already give.
 """
 
 
+class Fallback(msgspec.Struct, frozen=True):
+    """What an implementation degrades to when the deployment cannot reach its ceiling.
+
+    :attr:`Impl.prov` is a ceiling and declaring the best branch is right. The consequence,
+    left alone, is that a deployment which cannot take that branch announces the branch it
+    did not take: ``depth``, ``slippage`` and ``liquidity-depth`` all declare
+    ``DERIVED``/``alpaca_l1`` over ``select_depth_source``, which returns the **synthetic**
+    Yahoo ladder whenever the Alpaca keys are unset. ``banner_for`` suppresses ``DERIVED``,
+    so the default keyless deployment printed nothing on stderr, and REST and MCP named a
+    method that never ran — while the records themselves came back stamped
+    ``SYNTHETIC``/``yahoo_1m_vap``.
+
+    Declaring the floor beside the ceiling is what lets a projection announce the branch that
+    will actually answer without any surface knowing what a credential is. It is deliberately
+    *not* a second ``prov``: the ceiling still says what the implementation can do at its
+    best, and this says what it does when the deployment cannot let it.
+
+    The alternative was to demote the three declarations to ``SYNTHETIC``/``yahoo_1m_vap``.
+    That trades one false statement for another — a keyed deployment would then under-claim a
+    real quoted ladder as modelled, and ``prov`` would stop meaning "ceiling" for three
+    implementations and keep meaning it for the other eighty-eight.
+    """
+
+    prov: Provenance
+    """The level this implementation actually reaches when :attr:`reachable` is false."""
+
+    basis: str
+    """The registered method that actually runs then. A key into the provenance registry,
+    exactly as :attr:`Impl.basis` is, and held to the same rule: a basis with no registered
+    confidence formula is a confidence number chosen by feel."""
+
+    reachable: Callable[[Settings], bool]
+    """Whether *this deployment* can take the ceiling's branch.
+
+    A predicate over :class:`~crocodile.core.config.Settings` rather than a list of
+    environment variable names, because the question is the implementation's and only the
+    implementation knows how it is answered — ``select_depth_source`` accepts two spellings
+    of the Alpaca keys and a surface must not learn either. It is expected to be the *same
+    function the implementation calls*, which is what stops the announcement and the branch
+    from being two readings of one fact.
+    """
+
+
 class Impl(msgspec.Struct, frozen=True):
     """How one asset class satisfies a capability."""
 
@@ -222,6 +266,13 @@ class Impl(msgspec.Struct, frozen=True):
     number chosen by feel waiting to happen. Note this names the *inputs* — ``indicators``
     declares ``native`` because both asset classes report OHLCV natively — while
     :attr:`prov` describes what the implementation hands back.
+    """
+
+    fallback: Fallback | None = None
+    """What this implementation degrades to where the ceiling is out of reach, if it does.
+
+    ``None`` for the eighty-eight implementations whose answer does not depend on how the
+    deployment is configured. See :class:`Fallback` for why the three that do need one.
     """
 
 

@@ -52,6 +52,7 @@ __all__ = [
     "build_context",
     "build_params",
     "drive",
+    "effective_provenance",
     "invoke",
     "params_schema",
     "payload",
@@ -593,22 +594,57 @@ def stream_summary(pending: Any) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+def effective_provenance(impl: Impl, settings: Settings) -> tuple[Provenance, str]:
+    """The level and basis this deployment will actually produce, not the best it could.
+
+    :attr:`Impl.prov` is a ceiling, and every announcement in this module used to publish it
+    unconditionally. For the three implementations that reach the lake through
+    ``select_depth_source`` that made the *default* deployment lie: with no Alpaca keys the
+    switch returns the synthetic Yahoo ladder and stamps its records
+    ``SYNTHETIC``/``yahoo_1m_vap``, while REST and MCP published ``DERIVED``/``alpaca_l1``
+    and the CLI — where :func:`banner_for` suppresses ``DERIVED`` — printed nothing at all.
+    A modelled answer arriving with an empty stderr is the failure :func:`warning_for` exists
+    to end, on the one endpoint whose hand-written banner it was generalised from.
+
+    Resolved here rather than in each of the three announcements, because they must agree:
+    a payload that says ``synthetic`` under a terminal that said nothing is the same defect
+    with an extra step. The predicate belongs to the implementation
+    (:attr:`Fallback.reachable`) so that no surface has to know what a credential is.
+    """
+    fallback = impl.fallback
+    if fallback is None or fallback.reachable(settings):
+        return impl.prov, impl.basis
+    return fallback.prov, fallback.basis
+
+
 def provenance_block(cap: Capability, ctx: CapabilityContext) -> dict[str, Any]:
     """The block every network response carries, describing how the answer was obtained.
 
-    Derived from the declaration rather than measured per call: :attr:`Impl.prov` is a
-    ceiling, and the per-record truth is on each record's own provenance tail where it can
-    be measured. Publishing the ceiling is still worth doing — it is what lets a caller see
-    that an equity depth answer is modelled *before* reading a single row.
+    Derived from the declaration rather than measured per call: the per-record truth is on
+    each record's own provenance tail where it can be measured. Publishing this is still
+    worth doing — it is what lets a caller see that an equity depth answer is modelled
+    *before* reading a single row.
+
+    What is published is the **effective** level and basis rather than
+    :attr:`Impl.prov`'s ceiling, because a ceiling the deployment cannot reach is a method
+    that never ran. ``prov_ceiling`` carries the declaration alongside it, and only when the
+    two differ: an unconditional field would put a second provenance number in every
+    response for the eighty-eight implementations that have one answer, and the caller who
+    needs to know a key would upgrade this endpoint is exactly the caller reading a degraded
+    answer.
     """
     impl = implementation(cap, ctx)
+    prov, basis = effective_provenance(impl, ctx.settings)
     block: dict[str, Any] = {
         "capability": cap.name,
         "asset_class": ctx.asset_class.value,
-        "prov": impl.prov.value,
-        "prov_basis": impl.basis,
-        "method": describe(impl.basis),
+        "prov": prov.value,
+        "prov_basis": basis,
+        "method": describe(basis),
     }
+    if basis != impl.basis or prov is not impl.prov:
+        block["prov_ceiling"] = impl.prov.value
+        block["prov_ceiling_basis"] = impl.basis
     if ctx.row_limit is not None:
         # Published so a truncated answer reads as a stated ceiling rather than as the
         # whole lake. The legacy REST server wrapped a LIMIT and said nothing.
@@ -636,11 +672,12 @@ def warning_for(cap: Capability, ctx: CapabilityContext) -> str | None:
     moment someone remembers to write a banner for it.
     """
     impl = implementation(cap, ctx)
-    if impl.prov is Provenance.NATIVE:
+    prov, basis = effective_provenance(impl, ctx.settings)
+    if prov is Provenance.NATIVE:
         return None
     return (
-        f"{impl.prov.value.upper()} — {cap.name} for {ctx.asset_class.value} is not a "
-        f"venue-reported observation. Its inputs rest on {impl.basis!r}: {_headline(impl.basis)}"
+        f"{prov.value.upper()} — {cap.name} for {ctx.asset_class.value} is not a "
+        f"venue-reported observation. Its inputs rest on {basis!r}: {_headline(basis)}"
     )
 
 
@@ -663,9 +700,17 @@ def banner_for(cap: Capability, ctx: CapabilityContext) -> str | None:
     Nothing is lost on the surfaces that can carry it: :func:`warning_for` still announces
     every non-``NATIVE`` implementation in the payload, where it is a field a machine reader
     can consult rather than a line a human learns to skip.
+
+    The level tested is the **effective** one, which is what made this channel carry nothing
+    that reads a market. Four of the ninety-one implementations declare ``SYNTHETIC`` and all
+    four are ``caller_supplied`` calculators, so before :func:`effective_provenance` the one
+    banner this design exists to generalise — the equity depth ladder modelled from Yahoo 1m
+    bars — was silent in the default deployment, which is the only deployment most operators
+    have.
     """
     impl = implementation(cap, ctx)
-    if impl.prov in (Provenance.NATIVE, Provenance.DERIVED):
+    prov, _ = effective_provenance(impl, ctx.settings)
+    if prov in (Provenance.NATIVE, Provenance.DERIVED):
         return None
     return warning_for(cap, ctx)
 

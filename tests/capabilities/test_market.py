@@ -925,11 +925,17 @@ def test_depth_forwards_the_ladder_shape_to_the_source_and_the_symbol_to_the_sna
         return source
 
     monkeypatch.setattr(market, "select_depth_source", _select)
+    ctx = _ctx(asset_class=AssetClass.EQUITY)
     profile = market.depth(
-        _ctx(asset_class=AssetClass.EQUITY),
+        ctx,
         market.DepthParams(symbol="AAPL", method="typical", bins=12, top_n=3),
     )
-    assert built == {"bins": 12, "top_n": 3, "method": "typical"}
+    # ``settings`` joined the call when the surfaces started announcing which branch of this
+    # switch would run: the projection resolves the branch from ``ctx.settings`` and the
+    # switch has to resolve it from the same object, or the announcement and the branch are
+    # two readings of one fact — which is how a keyless deployment came to publish
+    # ``alpaca_l1`` over a ladder modelled from Yahoo bars.
+    assert built == {"bins": 12, "top_n": 3, "method": "typical", "settings": ctx.settings}
     assert source.asked == ["AAPL"]
     assert profile is source.profile
 
