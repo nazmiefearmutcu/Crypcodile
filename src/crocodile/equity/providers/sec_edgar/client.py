@@ -477,9 +477,48 @@ class SecEdgarClient:
                         )
 
     def _deduplicate_facts(self, facts: Iterable[Fundamental]) -> list[Fundamental]:
-        deduped: dict[tuple[str, str, str, int | None, str | None], Fundamental] = {}
+        """Keep the latest restatement of each fact, where *each fact* means the period.
+
+        The key is every field that identifies **which measurement** a row is, and none
+        that says what the measurement came out as: taxonomy, tag, unit, and the period
+        ``(start, end, fy, fp)``. Two rows sharing all of those are the same number
+        reported twice, and the later ``filed`` wins.
+
+        ``unit`` and ``start`` are in the key because :meth:`_normalize_facts` produces
+        both in multiples and neither is a restatement of the other:
+
+        * ``units.items()`` is iterated, so ``EarningsPerShareDiluted`` arrives once in
+          ``USD/shares`` and once in ``pure``, and ``NetIncomeLoss`` arrives in ``USD``
+          for the consolidated entity and in ``USD`` per segment taxonomy. Collapsing a
+          per-share figure onto a dollar figure keeps whichever the generator yielded
+          last, which is a $1.62 answer to "what were revenues".
+        * A 10-Q states duration facts over more than one window against one ``end``: a
+          quarterly ``NetIncomeLoss`` with ``start`` at the quarter open and a
+          year-to-date one with ``start`` at the fiscal-year open share ``end``, ``fy``,
+          ``fp`` *and* ``filed``, because they are on the same page of the same filing.
+          With ``start`` out of the key the survivor was decided by list order — measured
+          on a nine-month/quarterly pair, ``4_308_000_000`` returned where the filer
+          reported ``1_828_000_000``, a 2.36x overstatement of one quarter's earnings.
+
+        Neither collapse announces itself: the row that survives is a real fact that the
+        filer really reported, just not the one asked for, and ``deduplicate=True`` is the
+        default. The alternative considered was keying on ``accn`` as well, which would be
+        exact but would also defeat the purpose — a restatement is precisely a second
+        accession number for the same period, and dropping the earlier one is the job.
+        """
+        deduped: dict[
+            tuple[str, str, str, str, str | None, int | None, FundPeriod | None], Fundamental
+        ] = {}
         for fact in facts:
-            key = (fact.taxonomy, fact.tag, fact.end, fact.fy, fact.fp)
+            key = (
+                fact.taxonomy,
+                fact.tag,
+                fact.unit,
+                fact.end,
+                fact.start,
+                fact.fy,
+                fact.fp,
+            )
             existing = deduped.get(key)
             if existing is None:
                 deduped[key] = fact

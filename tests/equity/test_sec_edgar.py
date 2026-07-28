@@ -306,3 +306,170 @@ async def test_parse_company_facts_zip() -> None:
         assert f.taxonomy == "us-gaap"
         assert f.tag == "Revenues"
         assert f.val == 1000000.0
+
+
+@pytest.mark.asyncio
+async def test_dedup_keeps_both_windows_of_one_period_end() -> None:
+    """A 10-Q states the quarter and the year-to-date against one `end`, in one filing.
+
+    Both rows carry the same `taxonomy`, `tag`, `end`, `fy`, `fp` and `filed` — they are
+    on the same page of the same document — and differ only in `start`. With `start` out
+    of the dedup key they collapsed onto each other and the survivor was whichever the
+    generator yielded last, so `NetIncomeLoss` for the quarter answered 4_308_000_000
+    where the filer reported 1_828_000_000: the nine-month figure, 2.36x the quarter,
+    filed under the quarter's period with nothing on the row to say so.
+    """
+    mock_facts = {
+        "cik": 320193,
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            {
+                                "val": 4308000000.0,
+                                "start": "2022-10-02",
+                                "end": "2023-07-01",
+                                "fy": 2023,
+                                "fp": "Q3",
+                                "form": "10-Q",
+                                "filed": "2023-08-04",
+                                "accn": "0000320193-23-000077",
+                            },
+                            {
+                                "val": 1828000000.0,
+                                "start": "2023-04-02",
+                                "end": "2023-07-01",
+                                "fy": 2023,
+                                "fp": "Q3",
+                                "form": "10-Q",
+                                "filed": "2023-08-04",
+                                "accn": "0000320193-23-000077",
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
+    client = SecEdgarClient()
+    client._ticker_to_cik["AAPL"] = 320193
+    client._cik_to_primary_ticker[320193] = "AAPL"
+
+    with patch.object(client, "fetch_company_facts", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = mock_facts
+        facts = await client.get_fundamentals("AAPL", deduplicate=True)
+
+    # Before: `[4308000000.0]` — one row, the nine-month figure, under the quarter's key.
+    assert sorted(f.val for f in facts) == [1828000000.0, 4308000000.0]
+    assert {f.start: f.val for f in facts} == {
+        "2023-04-02": 1828000000.0,
+        "2022-10-02": 4308000000.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dedup_does_not_collapse_a_per_share_figure_onto_a_dollar_one() -> None:
+    """`_normalize_facts` iterates `units.items()`, so one tag arrives in several units.
+
+    With `unit` out of the dedup key, `EarningsPerShareDiluted` in `USD/shares` and the
+    same tag in `pure` shared one key and the survivor was decided by iteration order:
+    diluted EPS came back as `0.0126` where the filer reported `$1.26`, a hundredfold
+    understatement with nothing on the row to say the unit had changed under it. Both are
+    facts the filer stated; neither is a restatement of the other.
+    """
+    mock_facts = {
+        "cik": 320193,
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "pure": [
+                            {
+                                "val": 0.0126,
+                                "start": "2023-04-02",
+                                "end": "2023-07-01",
+                                "fy": 2023,
+                                "fp": "Q3",
+                                "form": "10-Q",
+                                "filed": "2023-08-04",
+                            }
+                        ],
+                        "USD/shares": [
+                            {
+                                "val": 1.26,
+                                "start": "2023-04-02",
+                                "end": "2023-07-01",
+                                "fy": 2023,
+                                "fp": "Q3",
+                                "form": "10-Q",
+                                "filed": "2023-08-04",
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    client = SecEdgarClient()
+    client._ticker_to_cik["AAPL"] = 320193
+    client._cik_to_primary_ticker[320193] = "AAPL"
+
+    with patch.object(client, "fetch_company_facts", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = mock_facts
+        facts = await client.get_fundamentals("AAPL", deduplicate=True)
+
+    assert {f.unit: f.val for f in facts} == {"USD/shares": 1.26, "pure": 0.0126}
+
+
+@pytest.mark.asyncio
+async def test_dedup_still_drops_a_restatement_of_the_same_period() -> None:
+    """The property the key exists for: same measurement twice, later `filed` wins.
+
+    Widening the key must not turn every restatement into a second row. These two agree
+    on unit and on the whole period and differ only in `val` and `filed`, which is what
+    a restatement is.
+    """
+    mock_facts = {
+        "cik": 320193,
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {
+                                "val": 1000000.0,
+                                "start": "2019-09-29",
+                                "end": "2020-09-30",
+                                "fy": 2020,
+                                "fp": "FY",
+                                "filed": "2020-10-30",
+                            },
+                            {
+                                "val": 1200000.0,
+                                "start": "2019-09-29",
+                                "end": "2020-09-30",
+                                "fy": 2020,
+                                "fp": "FY",
+                                "filed": "2021-10-30",
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    }
+
+    client = SecEdgarClient()
+    client._ticker_to_cik["AAPL"] = 320193
+    client._cik_to_primary_ticker[320193] = "AAPL"
+
+    with patch.object(client, "fetch_company_facts", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = mock_facts
+        facts = await client.get_fundamentals("AAPL", deduplicate=True)
+
+    assert [f.val for f in facts] == [1200000.0]
