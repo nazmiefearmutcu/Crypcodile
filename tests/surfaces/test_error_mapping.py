@@ -328,3 +328,79 @@ async def test_a_line_that_is_not_json_is_a_parse_error_with_a_null_id(
     answer = json.loads(written[0])
     assert answer["id"] is None
     assert answer["error"]["code"] == -32700
+
+
+# ---------------------------------------------------------------------------
+# A deployment that was never configured is not a broken server
+# ---------------------------------------------------------------------------
+
+
+_NEEDS_A_CONTACT_STRING = {"asset_class": "equity"}
+"""``markets``/equity reads SEC EDGAR, which blocks a request with no identifying User-Agent.
+
+``Settings.sec_user_agent`` is deliberately undefaulted — an invented address passes the
+string check and gives the regulator a dead mailbox — so an unconfigured install raises
+``ConfigError`` before contacting anything.
+"""
+
+
+def _unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("CROCODILE_SEC_USER_AGENT", "CRYPCODILE_SEC_USER_AGENT",
+                 "STOCKODILE_SEC_USER_AGENT"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_a_configuration_error_is_an_actionable_501_rather_than_a_bare_500(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before: ``500 Internal Server Error`` with no body, from the same exception the CLI
+    printed the fix for.
+
+    5xx is the one status class every backing-off client retries, so an unset environment
+    variable became a retry storm against an endpoint whose answer will never change until an
+    operator acts. 501 is what this projection already serves for a capability with no
+    implementation, and it is the same sentence.
+    """
+    _unconfigured(monkeypatch)
+    response = _client(lake).get("/api/v1/markets", params=_NEEDS_A_CONTACT_STRING)
+    assert response.status_code == 501, response.text
+    assert "CROCODILE_SEC_USER_AGENT" in response.json()["detail"]
+
+
+def test_the_three_surfaces_say_the_same_thing_about_an_unconfigured_deployment(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The property, rather than the status code: every surface names the variable to set."""
+    _unconfigured(monkeypatch)
+
+    from_cli = CliRunner().invoke(
+        cli.build_app(),
+        ["markets", "--asset-class", "equity", "--data-dir", str(lake)],
+    )
+    assert from_cli.exit_code == 1
+    assert "CROCODILE_SEC_USER_AGENT" in from_cli.output
+
+    from_rest = _client(lake).get("/api/v1/markets", params=_NEEDS_A_CONTACT_STRING)
+    assert "CROCODILE_SEC_USER_AGENT" in from_rest.json()["detail"]
+
+    from_mcp = stdio.handle_request(
+        {"jsonrpc": "2.0", "id": 21, "method": "tools/call",
+         "params": {"name": "markets", "arguments": dict(_NEEDS_A_CONTACT_STRING)}},
+        data_dir=lake,
+    )
+    assert "error" not in from_mcp, from_mcp
+    assert "CROCODILE_SEC_USER_AGENT" in from_mcp["result"]["content"][0]["text"]
+
+
+def test_a_connector_fault_is_still_ours_and_still_a_5xx(lake: pathlib.Path) -> None:
+    """The line the category is drawn on, stated so widening it later is a decision.
+
+    ``ConfigError`` is "detected before any source is contacted" and cannot fix itself.
+    A venue that timed out is a fault, a retry is the right behaviour, and 5xx is what says
+    so — which is why the category names one family and not ``CrocodileError``.
+    """
+    from crocodile.core.errors import ConfigError, CrocodileError, TransientConnectorError
+
+    assert issubclass(ConfigError, dispatch.NOT_CONFIGURED)
+    assert not issubclass(TransientConnectorError, dispatch.NOT_CONFIGURED)
+    assert not issubclass(CrocodileError, dispatch.NOT_CONFIGURED)

@@ -341,6 +341,8 @@ def _handler(
             )
         except dispatch.UNAVAILABLE as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except dispatch.NOT_CONFIGURED as exc:
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
         except dispatch.BAD_REQUEST as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -357,6 +359,12 @@ def _handler(
                     dispatch.invoke(cap, ctx, params), row_limit=ctx.row_limit
                 )
             except dispatch.UNAVAILABLE as exc:
+                raise HTTPException(status_code=501, detail=str(exc)) from exc
+            except dispatch.NOT_CONFIGURED as exc:
+                # The message names the variable to set. It reached the CLI and not this
+                # surface, which answered a bare 500 — and 5xx is the one class every
+                # backing-off client retries, so an unset environment variable became a
+                # retry storm against an endpoint whose answer will never change.
                 raise HTTPException(status_code=501, detail=str(exc)) from exc
             except dispatch.REFUSED as exc:
                 raise HTTPException(status_code=403, detail=str(exc)) from exc

@@ -31,7 +31,7 @@ from crocodile.core.capability import (
     run_to_completion,
 )
 from crocodile.core.config import Settings
-from crocodile.core.errors import CapabilityUnavailable
+from crocodile.core.errors import CapabilityUnavailable, ConfigError
 from crocodile.core.schema.provenance import Provenance, describe
 from crocodile.core.util.json_safe import json_safe_float
 
@@ -45,6 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "BAD_REQUEST",
     "NETWORK_ROW_LIMIT",
+    "NOT_CONFIGURED",
     "REFUSED",
     "UNAVAILABLE",
     "asset_class_option_values",
@@ -92,6 +93,28 @@ UNAVAILABLE: Final[tuple[type[BaseException], ...]] = (CapabilityUnavailable,)
 
 Not the caller's mistake and not a fault: the request is well formed and the answer does
 not exist yet, which is 501 on REST.
+"""
+
+NOT_CONFIGURED: Final[tuple[type[BaseException], ...]] = (ConfigError,)
+"""The request is fine and *this deployment* has not been given what answering it needs.
+
+``GET /api/v1/markets?asset_class=equity`` on an unconfigured install answered ``500
+Internal Server Error`` with no body, while the CLI printed the fix — "set
+``CROCODILE_SEC_USER_AGENT``…" — from the same exception. Two surfaces, one
+:class:`~crocodile.core.errors.ConfigError`, and only one of them told anybody anything.
+
+It is a category rather than a 500 with a body because of what 5xx *means to a client*: it
+is the one status class every backing-off library retries, so a missing environment variable
+became a retry storm against an endpoint that will answer identically forever. 501 is what
+this projection already serves for :data:`UNAVAILABLE`, and it is the same sentence: the
+request is well formed and this deployment has no answer for it. Whether the reason is "no
+implementation for that asset class" or "no credential for the implementation there is" is
+not a distinction a *caller* can act on differently — both are terminal, both are the
+operator's to fix — so it is one status with the actionable message in the body.
+
+Only ``ConfigError``, not ``CrocodileError``: a connector failing mid-request is a fault and
+a 5xx is honest about it, and retrying a venue that timed out is the right behaviour. This
+names the family whose docstring says it is "detected before any source is contacted".
 """
 
 REFUSED: Final[tuple[type[BaseException], ...]] = (PermissionError,)
