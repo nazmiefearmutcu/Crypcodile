@@ -14,9 +14,10 @@ is a merge rather than a fallback chain:
 
 SEC EDGAR ``company_tickers.json``
     The registrant index. It is the only source of a CIK and the only source of a
-    registrant-attested company name, and it is keyless — one static file, no token, no
-    pagination. It knows nothing about *where* a security trades, because a filer is not a
-    listing.
+    registrant-attested company name — both of which it therefore wins in the merge, the
+    second only since ``REFERENCE_PRIORITY`` was corrected to put it above OpenFIGI — and it
+    is keyless: one static file, no token, no pagination. It knows nothing about *where* a
+    security trades, because a filer is not a listing.
 Tiingo ``supported_tickers.zip``
     The listing index. It is the only source that names an exchange for every row and the
     only one that publishes a price currency, and its file is also keyless — the endpoint's
@@ -94,28 +95,56 @@ SOURCE_OPENFIGI: Final = "openfigi"
 REFERENCE_MERGE_BASIS: Final = "reference_merge"
 """The registered basis every row this module emits rests on."""
 
-REFERENCE_PRIORITY: Final[tuple[str, str, str]] = (SOURCE_TIINGO, SOURCE_OPENFIGI, SOURCE_SEC)
+REFERENCE_PRIORITY: Final[tuple[str, str, str]] = (SOURCE_TIINGO, SOURCE_SEC, SOURCE_OPENFIGI)
 """Who wins a field two sources both publish, highest first.
 
-The order is an argument about what each source *is*, not about which is nicest.
+The order is an argument about what each source *is*, not about which is nicest. Exactly
+three fields are contested — ``name``, ``exchange`` and ``security_type`` — and the order is
+the answer to those three and nothing else; ``cik``, the FIGIs, ``currency`` and
+``listing_date`` each have one publisher, so ``fill_nulls`` hands them over whatever the
+order is.
 
 Tiingo first because its rows are per **listing**. The question this universe answers is
 "what trades, where", and a Tiingo row is one ticker on one exchange in one currency — the
 grain of the answer. Its exchange name is also the human one (``NASDAQ``, ``NYSE``) rather
-than a code, which is what makes ``markets`` readable.
+than a code, which is what makes ``markets`` readable, and its ``asset_type`` is a listing's
+kind rather than an instrument's.
 
-OpenFIGI second because its identifiers are **assigned** rather than inferred: a FIGI is
+SEC second because it publishes exactly one contested field and is the right answer for it.
+Its rows are per **registrant** — one filer covers every share class it issues — which is
+why it has no exchange and no security type at all, and why the one thing it does report is
+the registrant's *legal name*. That is what
+:attr:`crocodile.core.schema.records.Instrument.name` is documented to hold, in
+``providers/sec_edgar/client.py``: "the only registrant-attested company name in the tree".
+It still wins every ``cik`` for the same reason it always did, because nothing else has one.
+
+OpenFIGI last because its identifiers are **assigned** rather than inferred: a FIGI is
 issued by a registrar and cannot be derived from anything else here, so where it speaks at
-all it is authoritative. It is second rather than first only because it is not run over the
-whole universe — a source that covers a slice cannot be the source that decides the shape of
-rows outside it. Its ``exch_code`` is a code (``UW``, ``UN``) and its ``name`` is a security
-description, so both lose to Tiingo's and to SEC's respectively where those exist, which is
-the right way round.
+all it is authoritative — and it is uncontested there, so last place costs it nothing. On
+the three contested fields it is the fallback and should be: its ``exch_code`` is a code
+(``UW``, ``UN``) rather than a venue name, and its ``name`` is a security description
+(``APPLE INC``) rather than a filer's legal name. It is also the only source not run over
+the whole universe — its keyless tier is twenty-five requests a minute — so a source that
+covers a slice cannot be the source that decides the shape of rows outside it.
 
-SEC last because its rows are per **registrant**. One filer covers every share class it
-issues, so its name is the legal entity's rather than the security's and it has no exchange
-at all. It still wins every ``cik``, because nothing else has one, which is the whole point
-of ``fill_nulls``: last place decides the fields nobody above it filled.
+**This order used to be** ``(TIINGO, OPENFIGI, SEC)``, **and the prose above it has always
+described this one.** Three places said OpenFIGI's name loses to SEC's — here, this module's
+header, and ``SecCompanyTicker``'s docstring — while ``fill_nulls`` is first-non-null-wins
+and OpenFIGI outranked SEC, so SEC's ``title`` was unreachable on any row OpenFIGI had
+matched. The test named ``test_sec_still_wins_the_name_over_openfigis_security_description``
+asserted ``name == "APPLE INC"`` under a comment conceding the opposite, which is how it
+survived: a test can certify the inverse of its own name and still be green.
+
+What that cost is worth stating, because it is the reason the code moved rather than the
+prose. ``Instrument.name`` carried two different quantities depending on which capability
+produced the row: an unenriched row from ``census`` or ``collect-market`` had SEC's legal
+name, and the same ticker out of ``universe`` — enriched, because a caller asked for a slice
+— had OpenFIGI's uppercase description. One ticker, two conventions, decided by a code path
+rather than by anything anyone chose. Moving SEC above OpenFIGI changes the resolution of
+``name`` and of nothing else, since the other two contested fields are Tiingo's where Tiingo
+speaks and OpenFIGI's where it does not, exactly as before. A ticker SEC does not register —
+a foreign issuer, some ETF share classes — still takes OpenFIGI's description, so the
+fallback is kept rather than discarded.
 """
 
 VOLUME_RANK_SQL: Final = (

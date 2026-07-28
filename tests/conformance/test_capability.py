@@ -6,6 +6,7 @@ rejected, that the import-time seeding survives being run twice, and that the ca
 implementation does what its declaration claims.
 """
 
+import re
 from collections.abc import Iterator
 
 import msgspec
@@ -204,18 +205,68 @@ def test_indicators_declares_a_native_input_basis() -> None:
         assert impl.prov is Provenance.DERIVED
 
 
+_SCHEDULING_EXCUSES = ("not built", "not yet", "todo", "later", "no free", "no data source")
+"""Phrases that describe a plan rather than a market. Six words, and six words is a floor."""
+
+_CLAIM_VOCABULARY = frozenset(
+    """
+    a an and are as at be because been but by can cannot chain class could data do does
+    either exist exists for from half has have here in is it its native no none not of on
+    onchain one only or other side so that the their there these this those to two version
+    was way which will with analog analogue analogues counterpart crypto cryptocurrency
+    equities equity asset capability market markets
+    """.split()
+)
+"""Every word the exemption itself supplies, which is why a justification made only of them
+says nothing.
+
+``IRREDUCIBLE`` already means "no equity analogue can exist for this crypto capability". A
+justification is the *argument* for that claim, so a sentence assembled entirely out of the
+claim's own vocabulary has restated the conclusion and stopped. This set is the claim's
+vocabulary, taken from how :data:`~crocodile.core.capability.IRREDUCIBLE`'s own docstring
+states it, plus ordinary grammatical glue — not a list of words somebody dislikes.
+"""
+
+
 def test_every_irreducible_justification_names_a_market_property() -> None:
-    """A guard on the bar, not just on emptiness.
+    """A guard on the bar, not just on emptiness — and an honest account of what a bar can do.
 
     "Not built yet" and "no free data source" are scheduling facts; the promise is that a
     synthetic method fills an absent source while saying so, so neither can buy an
-    exemption from the symmetry gate.
+    exemption from the symmetry gate. That was the whole rule, and a referee walked through
+    it: *"No equity analogue can exist; this is chain-native."* names no schedule, so it
+    passed, and it bought a deletion.
+
+    Two things are wrong with a blacklist and only one is fixable. The unfixable one is that
+    it grades words, and there are always more sentences than words — no list makes a
+    convincing-sounding excuse fail. What *is* fixable is the specific sentence the referee
+    reached for, because it is not merely unconvincing: it is the conclusion restated. "No
+    equity analogue can exist" is what an entry on this mapping already asserts, and
+    "chain-native" is the category the mapping is named for. A justification built only from
+    the claim's own vocabulary carries no information at all, and that is checkable without
+    grading anybody's prose.
+
+    So there are two rules, and neither is the mechanism. The mechanism is the census in
+    ``tests/conformance/test_pending_symmetry.py``, which asserts that this dict holds
+    exactly the seven entries a reviewer agreed to and that each one still carries the
+    argument it was pinned with. Prose is graded by people; what a gate can require is that
+    people were given the diff.
     """
-    excuses = ("not built", "not yet", "todo", "later", "no free", "no data source")
     for name, why in capability.IRREDUCIBLE.items():
         lowered = why.lower()
-        assert not any(e in lowered for e in excuses), (
+        assert not any(e in lowered for e in _SCHEDULING_EXCUSES), (
             f"{name} is exempted with a scheduling excuse, not a market property: {why!r}"
+        )
+        substantive = {
+            word
+            for word in re.findall(r"[a-z0-9]+", lowered)
+            if word not in _CLAIM_VOCABULARY
+        }
+        assert len(substantive) >= 2, (
+            f"{name} is exempted by restating the exemption: {why!r}. Every word of that is "
+            f"one IRREDUCIBLE already supplies — it means "
+            f"'no equity analogue can exist' by itself. Name the thing the market has on one "
+            f"side and not the other: a mempool, a sequencer, a pooled reserve, a peg."
         )
 
 
@@ -305,3 +356,48 @@ def test_indicator_names_are_what_apply_indicators_accepts() -> None:
     """The advertised list and the accepted list are one list."""
     for name in INDICATOR_NAMES:
         apply_indicators(_bars(), name)
+
+
+@pytest.mark.parametrize(
+    "why",
+    [
+        "No equity analogue can exist; this is chain-native.",
+        "Crypto-only; there is no equity counterpart.",
+        "This capability cannot exist for the equity asset class.",
+        "Chain-native data.",
+    ],
+)
+def test_a_justification_that_only_restates_the_exemption_is_rejected(
+    why: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first is the referee's, verbatim; the rest are the same move spelled differently.
+
+    Kept as a parametrised negative pin rather than as one case because the finding was not
+    that *this sentence* got through — it was that the bar graded a six-word blacklist, and
+    every sentence here clears that blacklist while asserting nothing an entry on
+    ``IRREDUCIBLE`` does not already assert.
+    """
+    monkeypatch.setitem(capability.IRREDUCIBLE, "fixture-laundered", why)
+    with pytest.raises(AssertionError, match="restating the exemption"):
+        test_every_irreducible_justification_names_a_market_property()
+
+
+@pytest.mark.parametrize(
+    "why",
+    [
+        "Requires a public mempool and atomic transaction ordering.",
+        "Measures an L2 sequencer; equities have no sequencer.",
+        "Stablecoin peg mechanics; no equity instrument behaves this way.",
+    ],
+)
+def test_a_justification_that_names_a_mechanism_is_accepted(
+    why: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule is only worth having if the seven live entries would survive being re-argued.
+
+    These are three of them, re-declared under a fixture name so the acceptance is asserted
+    rather than inferred from the suite being green. Each names something the market has on
+    one side and not the other, which is the property the mapping claims.
+    """
+    monkeypatch.setitem(capability.IRREDUCIBLE, "fixture-argued", why)
+    test_every_irreducible_justification_names_a_market_property()

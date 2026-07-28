@@ -47,6 +47,7 @@ __all__ = [
     "IRREDUCIBLE",
     "PENDING_SYMMETRY",
     "REGISTRY",
+    "SHARED_IMPLEMENTATION",
     "SPEC_METHODS",
     "AssetClass",
     "Capability",
@@ -310,6 +311,73 @@ lists: an entry must name a registered capability, and a capability implemented 
 asset classes has disproved its own entry and the entry has to go. Without the second, an
 equity half could land and then be deleted again with nothing raising, because the name was
 excused forever.
+"""
+
+
+SHARED_IMPLEMENTATION: Final[dict[str, str]] = {
+    # One lake. These read `ctx.catalog`, which holds both asset classes in one set of
+    # partitions, so the asset class is a *filter* inside one query rather than a different
+    # store to open. A second copy of any of them would be a second copy of the same SQL.
+    "catalog": "Describes the lake's own tables; there is one lake.",
+    "catalog-channels": "Lists the channels the lake partitions by; there is one lake.",
+    "catalog-dates": "Lists the dates the lake holds; there is one lake.",
+    "catalog-exchanges": "Lists the venues the lake holds rows for; there is one lake.",
+    "catalog-inventory": "Counts rows per partition of one lake.",
+    "catalog-scan": "Walks one lake's partition tree.",
+    "catalog-stats": "Aggregates one lake's row counts and byte sizes.",
+    "catalog-summary": "Summarises one lake's contents.",
+    "catalog-symbols": "Lists the symbols one lake holds rows for.",
+    "data-coverage": "Reports which dates one lake holds for a symbol.",
+    "export": "Writes rows out of one lake in a requested file format.",
+    "query": "Runs the caller's SQL against one lake.",
+    "replay": "Re-emits stored rows from one lake in timestamp order.",
+    "resample": "Re-buckets stored rows of one lake into a coarser interval.",
+    "resolve-symbols": "Maps a symbol spelling onto the rows one lake stores it under.",
+    "search": "Matches a needle against the symbols one lake holds.",
+    "indicators": "Arithmetic over OHLCV columns, which both asset classes store in the "
+    "same channel of the same lake with the same column names; the indicator does not "
+    "know or need to know which market produced the bars.",
+    # Reads no lake at all. `params` carries the whole input, so there is no store to
+    # differ about — the same argument as `caller_supplied`'s in the provenance registry.
+    "funding-predict": "A projection over rates the caller supplies in `params`; it opens "
+    "no store, so there is nothing for a second implementation to read differently.",
+}
+"""Capabilities where one function legitimately serves both asset classes, and why.
+
+The defect this exists to make visible has shipped in this codebase before. ``slippage``
+declared an equity half that was the crypto function bound twice: the declaration advertised
+a ``yahoo_1m_vap`` ladder while the bound function read ``book_snapshot``, which no equity
+provider writes, so every equity call raised and the symmetry gate reported a symmetric
+capability. ``set(cap.impls) == {CRYPTO, EQUITY}`` — which is all Gate 2 asks — is satisfied
+by two dict keys pointing at one callable, and a referee re-introduced exactly that against
+``census`` and passed the entire 3 300-test suite.
+
+So the gate asks for ``fn`` distinctness, and this is what tells it when sharing is the
+answer rather than the bug. It is a declaration and not a heuristic on purpose: the two
+states are indistinguishable from the outside. ``basis`` was the obvious guess and is wrong —
+``iv-surface`` declares ``native`` on both sides, so does ``ofi``, so does ``indicators``,
+and a gate keyed on "the two bases differ" would wave a rebind of the first two straight
+through while flagging the third. Whether one implementation can serve two markets is a
+claim about the capability, and a claim has to be made somewhere a reviewer reads.
+
+Two arguments qualify, and both are about there being **one thing to read**:
+
+- *One lake.* The ``catalog-*`` family and its neighbours answer about storage, not about a
+  market. Both asset classes live in one set of partitions, so the asset class narrows a
+  query rather than choosing a store, and :attr:`CapabilityContext.asset_class` is there for
+  exactly that narrowing.
+- *No lake.* ``funding-predict`` takes its inputs from ``params`` and opens nothing, which is
+  the same argument :func:`crocodile.core.schema.provenance` registers as ``caller_supplied``.
+
+What does **not** qualify is "the crypto one happens to run": that is the ``slippage``
+failure, and it is the one this list must never be used to excuse. A capability that reads
+market data has two markets' data to read, and one function cannot read both unless it was
+written to — in which case it belongs here with that written down.
+
+Membership is censused in ``tests/conformance/test_pending_symmetry.py`` for the reason every
+ledger here is: an exemption list nobody counts is a place to put things. That census is not
+an afterthought — an earlier review added a gate together with the exemption the gate itself
+suggested, and the exemption is what the next deletion was laundered through.
 """
 
 

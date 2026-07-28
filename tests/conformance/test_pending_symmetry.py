@@ -14,11 +14,36 @@ review gave ``peg-deviation`` an equity implementation at runtime and ran every 
 mentions ``IRREDUCIBLE``: all of them passed, over a capability that had just stopped being
 irreducible. A stale entry there means a regression to asymmetry is invisible forever,
 because the name was already excused forever.
+
+That review then declared the hole closed, and a later referee showed it was not. Deleting
+the equity half of ``iv-surface`` and writing the name onto ``IRREDUCIBLE`` in the same
+breath passed all 778 conformance tests, and so did the same pair of edits over ``ofi``,
+``census``, ``whale-alerts``, ``open-interest`` and ``liquidity-depth``. The gate the review
+added fires on ``set(cap.impls) == {CRYPTO, EQUITY}`` *and* a name on ``IRREDUCIBLE``, which
+is the state the reviewer produced by hand — adding an implementation to an already-excused
+name. Deleting first and excusing second never enters it. The gate was written for the
+experiment, not for the defect.
+
+So the load moved off "which excuse was reached for" and onto two facts nothing can restate:
+
+- **Every exemption ledger is censused.** ``PENDING_SYMMETRY`` had one and it worked — it is
+  why the delete-then-*schedule* route was caught while delete-then-excuse was not — so all
+  of them have one now, including the two this file adds, and a meta-gate fails if a ledger
+  appears in the registry module without a census here. A gate shipped together with the
+  exemption it suggests is the shape this codebase keeps re-finding.
+- **The asymmetry frontier itself is pinned.** Which capabilities serve which asset classes
+  is the property the ledgers exist to qualify, so it is asserted directly. That census does
+  not care which ledger a deletion is laundered through, or whether it is laundered at all,
+  or whether the ledger it uses had been invented yet.
+
+A third ledger arrives with them, and for a defect of the same family: ``SHARED_IMPLEMENTATION``
+records the capabilities where one function legitimately answers for both asset classes, so
+that everywhere else two dict keys may not point at one callable. See its rules below.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 import msgspec
 import pytest
@@ -28,6 +53,7 @@ from crocodile.core.capability import (
     IRREDUCIBLE,
     PENDING_SYMMETRY,
     REGISTRY,
+    SHARED_IMPLEMENTATION,
     SPEC_METHODS,
     AssetClass,
     Capability,
@@ -394,3 +420,594 @@ def test_phase_3_exit_the_ledger_must_be_empty() -> None:
         f"its capability the implementation it was missing, and leaves _LEDGER_AS_SHIPPED "
         f"in the same one."
     )
+
+
+# ---------------------------------------------------------------------------
+# The three assertions above, driven through states the live ledger cannot reach.
+# ---------------------------------------------------------------------------
+# `PENDING_SYMMETRY` and `_LEDGER_AS_SHIPPED` are both empty, so two of the three
+# comparisons in the census above read `{} - {}` and the third reads `{}.items()`.
+# Only the growth branch can fire from live state, which means the two branches
+# that report Phase 3 *delivering* — a name leaving, a name rescheduled — have never
+# run. That is the vacuous-green shape the mechanism section below the ledger's own
+# rules already answers for the gate-2 branch, applied to the census.
+
+
+def test_a_departed_entry_the_pin_still_holds_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What a half-done deletion looks like: the batch module dropped it, the pin did not."""
+    monkeypatch.setitem(_LEDGER_AS_SHIPPED, "fixture-departed", "M1")
+    with pytest.raises(AssertionError, match="fixture-departed"):
+        test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold()
+
+
+def test_a_rescheduled_entry_is_caught(
+    _isolate: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half-done edit: the name stayed, the method under it changed."""
+    monkeypatch.setitem(_LEDGER_AS_SHIPPED, "fixture-remapped", "M1")
+    PENDING_SYMMETRY["fixture-remapped"] = "M2"
+    with pytest.raises(AssertionError, match="rescheduled against a different method"):
+        test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold()
+
+
+def test_an_unpinned_new_entry_is_caught(_isolate: None) -> None:
+    """The branch that could already fire, pinned so a rewrite cannot lose it."""
+    PENDING_SYMMETRY["fixture-unpinned"] = "M1"
+    with pytest.raises(AssertionError, match="fixture-unpinned"):
+        test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold()
+
+
+# ---------------------------------------------------------------------------
+# Every exemption ledger is censused, and the ledgers are discovered rather than listed
+# ---------------------------------------------------------------------------
+
+
+_IRREDUCIBLE_AS_SHIPPED: dict[str, str] = {
+    "gas-vol": "Correlates price volatility with gas prices; gas is chain-native.",
+    "mev-sandwich": "Requires a public mempool and atomic transaction ordering.",
+    "sequencer-latency": "Measures an L2 sequencer; equities have no sequencer.",
+    "peg-deviation": "Stablecoin peg mechanics; no equity instrument behaves this way.",
+    "lending-stress": "On-chain lending-pool utilisation and liquidation thresholds.",
+    "onchain-price": "An AMM pool's price is a function of two pooled reserves; no equity "
+    "instrument is priced that way, and there is no chain to read one off.",
+    "base-market-data": "The same pool, with its swap volume. Same argument: the volume is "
+    "the pool's own swap log, which has no equity analogue either.",
+}
+"""The seven permanent exemptions, verbatim, so that an eighth cannot arrive quietly.
+
+This is the census ``IRREDUCIBLE`` did not have, and its absence is the whole of the
+critical finding. ``PENDING_SYMMETRY`` has had ``_LEDGER_AS_SHIPPED`` since Phase 2, which is
+exactly why a referee deleting an equity half and *scheduling* the name was caught in two
+tests while the same deletion *excused* on this list passed all 778. Three greps found the
+asymmetry: ``IRREDUCIBLE`` was mentioned in tests only by three hand-written negative pins in
+``tests/capabilities/test_ops.py``, none of which is a count.
+
+The justifications are pinned as text and not merely as keys. A permanent exemption is
+carried by its argument — which is what
+:func:`~tests.conformance.test_capability.test_every_irreducible_justification_names_a_market_property`
+grades and what a reviewer reads — so an entry whose argument is rewritten is a different
+entry, and the diff is the only place anyone will ever see it. The same reasoning
+``_LEDGER_AS_SHIPPED`` gives for pinning the *method* beside the name.
+
+No count is written here, for the reason its twin gives: a sentence naming a number is a
+merge conflict that resolves to a lie. The number that matters is the length of the literal.
+"""
+
+
+_SHARED_IMPLEMENTATION_AS_SHIPPED: dict[str, str] = dict(SHARED_IMPLEMENTATION)
+"""The one ledger pinned by copying rather than by transcription, and why that is not a hole.
+
+Every other census in this file restates its ledger, so that a source edit and a test edit
+have to meet in review. This one cannot, and pretending otherwise would be the more
+dangerous of the two options.
+
+``SHARED_IMPLEMENTATION`` is *derived from* the registry it excuses: an entry is legitimate
+exactly when the capability's two implementations really are one function, which
+:func:`test_no_shared_implementation_entry_is_stale` checks against ``REGISTRY`` on every
+run. A transcribed copy would therefore pin the same fact twice and go stale in a way that
+says nothing — the argument that matters is checked against the code, not against a second
+copy of the code.
+
+What a copy still buys is the meta-gate: this ledger is *in* :data:`_CENSUSES`, so
+:func:`test_every_ledger_in_the_registry_module_is_censused` counts it, and adding a fourth
+exemption dict to ``core/capability.py`` without a census here fails. Growth of this list is
+caught where growth of this list is actually dangerous — by
+:func:`test_no_shared_implementation_entry_is_stale`, which refuses an entry for a capability
+whose two implementations are distinct, and by the asymmetry census, which refuses the
+deletion an entry here might otherwise be reached for.
+"""
+
+
+_SPEC_METHODS_AS_SHIPPED: dict[str, str] = {
+    "M1": "Lift volsurface into core; equity chain from Yahoo, IV solved from mid if absent.",
+    "M2": "Aggregate the Yahoo option chain's open_interest per underlying.",
+    "M3": "Equity universe from SEC EDGAR x OpenFIGI x Tiingo, merged by CoverageResolver.",
+    "M4": "Form 4 insider transactions plus a new SEC EDGAR 13F-HR parser.",
+    "M5": "carry generalizes funding-apr; new keyless `treasury` provider for the risk-free leg.",
+    "M6": "Equity depth from the synthetic VAP ladder, upgraded by Alpaca L1 when keyed.",
+    "M7": "Order-flow imbalance derived from L1 quote changes.",
+    "M8": "Crypto depth from stored book snapshots — the ladder equity models, crypto reports.",
+}
+"""The eight methods, with their text.
+
+:func:`test_the_spec_methods_are_the_set_that_was_argued_for` already pins the key set and
+that each description is non-empty, which is the half that stops a ninth letter being
+invented. This pins the other half. A method is what ``PENDING_SYMMETRY`` schedules against,
+so silently widening one — "M6: equity depth from the VAP ladder" becoming "M6: equity depth,
+somehow" — would let a name keep its deadline while the plan under it changed, which is the
+remap ``_LEDGER_AS_SHIPPED`` refuses one field over.
+"""
+
+
+_CENSUSES: dict[str, Mapping[str, str]] = {
+    "IRREDUCIBLE": _IRREDUCIBLE_AS_SHIPPED,
+    "PENDING_SYMMETRY": _LEDGER_AS_SHIPPED,
+    "SHARED_IMPLEMENTATION": _SHARED_IMPLEMENTATION_AS_SHIPPED,
+    "SPEC_METHODS": _SPEC_METHODS_AS_SHIPPED,
+}
+"""Every name-to-argument ledger in the registry module, and what it was pinned to hold.
+
+Keyed by the constant's own name so :func:`test_every_ledger_in_the_registry_module_is_censused`
+can compare this against what the module actually declares rather than against a list
+somebody remembered to update.
+"""
+
+
+def _ledgers_in_the_registry_module() -> dict[str, dict[str, str]]:
+    """Every ``NAME: dict[str, str]`` constant :mod:`crocodile.core.capability` declares.
+
+    Discovered rather than enumerated, which is the point of the meta-gate: a list of
+    ledgers to census is itself a list that can go stale, and the finding this file answers
+    is precisely a gate that watched the ledgers somebody thought of.
+
+    ``REGISTRY`` is excluded because its values are capabilities rather than arguments — it
+    is the subject the ledgers make claims about, not a claim. It has a census of its own in
+    ``test_gates.py`` (``_REGISTRY_AS_SHIPPED``), which is the assertion that a *capability*
+    cannot leave; these are the assertions that an *excuse* cannot arrive.
+    """
+    found: dict[str, dict[str, str]] = {}
+    for name, value in vars(capability).items():
+        if name.startswith("_") or not name.isupper() or not isinstance(value, dict):
+            continue
+        if all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+            found[name] = value
+    return found
+
+
+def _census_offences(
+    live: Mapping[str, str], pinned: Mapping[str, str]
+) -> tuple[list[str], list[str], dict[str, tuple[str, str]]]:
+    """Split a ledger against its pin into arrivals, departures and rewrites."""
+    added = sorted(set(live) - set(pinned))
+    removed = sorted(set(pinned) - set(live))
+    reworded = {
+        name: (pinned[name], live[name])
+        for name in sorted(set(pinned) & set(live))
+        if pinned[name] != live[name]
+    }
+    return added, removed, reworded
+
+
+def _assert_censused(ledger: str) -> None:
+    """Assert one ledger holds exactly what it was pinned to hold, in all three directions."""
+    live = _ledgers_in_the_registry_module()[ledger]
+    pinned = _CENSUSES[ledger]
+    added, removed, reworded = _census_offences(live, pinned)
+
+    assert not added, (
+        f"{added} arrived on {ledger} and are unrecorded in tests/conformance/"
+        f"test_pending_symmetry.py. Excusing a capability is allowed and excusing it quietly "
+        f"is not: a referee deleted the equity half of iv-surface, wrote the name onto "
+        f"IRREDUCIBLE with a fabricated justification, and 778 conformance tests stayed "
+        f"green. Add the entry here, in the same commit, where the diff shows what stopped "
+        f"being symmetric and what was written down instead."
+    )
+    assert not removed, (
+        f"{removed} left {ledger} and are still pinned here. If the exemption was repaid — "
+        f"the implementation landed, the method shipped — delete it here too, so the "
+        f"remaining list keeps meaning what it says."
+    )
+    assert not reworded, (
+        f"the argument changed under these {ledger} entries: {reworded}. An exemption is "
+        f"carried by its argument, so rewriting one is a new claim and not an edit."
+    )
+
+
+@pytest.mark.parametrize("ledger", sorted(_CENSUSES))
+def test_every_ledger_holds_exactly_the_entries_it_was_pinned_to_hold(ledger: str) -> None:
+    """The mechanism ``PENDING_SYMMETRY`` had and the other ledgers did not.
+
+    An exemption list that can grow silently is a place to put things, and the referee's
+    experiment is what that costs: ``IRREDUCIBLE`` gained an entry, a capability lost an
+    implementation, and every gate that reads either one had a defensible reason to pass.
+    The delete-then-*schedule* spelling of the same experiment was caught, and it was caught
+    here — by ``_LEDGER_AS_SHIPPED``, the one census that existed.
+
+    Pinning is deliberately dumb. It grades no prose and understands no argument; it asserts
+    that a human edited two files in one commit, which is the one thing a gate can check
+    about a claim only a human can evaluate.
+    """
+    _assert_censused(ledger)
+
+
+def test_every_ledger_in_the_registry_module_is_censused() -> None:
+    """The gate that makes the next ledger arrive censused rather than arrive unwatched.
+
+    Two phases ago eleven branches each added a gate and each verified its own by breaking
+    it; the lesson recorded from that is that per-gate verification measures "can this gate
+    fail" and never "what do these gates together miss". This is one answer in that second
+    shape. Every gate above watches a ledger somebody thought to watch — and the finding
+    that reopened this file was a ledger nobody had.
+
+    So the ledgers are discovered from the module and compared against the censused set. A
+    fourth exemption dict added to ``core/capability.py`` fails here until it is pinned,
+    which is the failure a reviewer can act on rather than a silence they cannot see. The
+    census this file adds for ``SHARED_IMPLEMENTATION`` — a ledger written in the same commit
+    as the gate that reads it — is exactly the shape this test exists to make mandatory.
+    """
+    discovered = sorted(_ledgers_in_the_registry_module())
+    censused = sorted(_CENSUSES)
+    assert discovered == censused, (
+        f"crocodile.core.capability declares {discovered} as name-to-argument ledgers and "
+        f"this file censuses {censused}. Every ledger is an exemption somebody can widen, so "
+        f"every ledger is pinned; add the missing one to _CENSUSES with its entries."
+    )
+
+
+def test_an_entry_arriving_on_the_irreducible_list_is_caught(_isolate: None) -> None:
+    """The referee's experiment, second half, run as a test.
+
+    The first half — deleting the equity implementation — is caught by the asymmetry census
+    below. This is the half that made the deletion *invisible*, and on its own it is the
+    thing worth failing: a name arriving on the permanent exemption list is a claim that the
+    market cannot support a capability this product served yesterday.
+    """
+    IRREDUCIBLE["iv-surface"] = "No equity analogue can exist; this is chain-native."
+    with pytest.raises(AssertionError, match="iv-surface"):
+        _assert_censused("IRREDUCIBLE")
+
+
+def test_an_entry_leaving_the_irreducible_list_is_caught(_isolate: None) -> None:
+    """Departures fail too, so the census cannot be satisfied by deleting the pin's subject."""
+    del IRREDUCIBLE["peg-deviation"]
+    with pytest.raises(AssertionError, match="peg-deviation"):
+        _assert_censused("IRREDUCIBLE")
+
+
+def test_a_rewritten_irreducible_justification_is_caught(_isolate: None) -> None:
+    """The argument is the exemption; swapping it silently is how a bar erodes."""
+    IRREDUCIBLE["mev-sandwich"] = "Chain-native; there is no equity version of this."
+    with pytest.raises(AssertionError, match="the argument changed"):
+        _assert_censused("IRREDUCIBLE")
+
+
+def test_a_ledger_with_no_census_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fourth exemption dict, added to the registry module and pinned nowhere."""
+    monkeypatch.setattr(
+        capability, "FIXTURE_EXEMPTIONS", {"fixture-cap": "because"}, raising=False
+    )
+    with pytest.raises(AssertionError, match="FIXTURE_EXEMPTIONS"):
+        test_every_ledger_in_the_registry_module_is_censused()
+
+
+# ---------------------------------------------------------------------------
+# The frontier itself: which capabilities serve which asset classes
+# ---------------------------------------------------------------------------
+
+
+_ASYMMETRIC_AS_SHIPPED: dict[str, tuple[str, ...]] = {
+    "base-market-data": (AssetClass.CRYPTO,),
+    "gas-vol": (AssetClass.CRYPTO,),
+    "lending-stress": (AssetClass.CRYPTO,),
+    "mev-sandwich": (AssetClass.CRYPTO,),
+    "onchain-price": (AssetClass.CRYPTO,),
+    "peg-deviation": (AssetClass.CRYPTO,),
+    "sequencer-latency": (AssetClass.CRYPTO,),
+}
+"""Every capability that does not serve both asset classes, and which one it serves.
+
+Everything else in ``REGISTRY`` is symmetric, asserted rather than assumed: a name absent
+from this mapping and asymmetric at runtime is a failure, so the pin covers all 49 without
+listing 49.
+
+**Why this exists beside the ledger censuses rather than instead of them.** They watch the
+excuses; this watches the fact. Each of the last two reviews closed a route into
+``IRREDUCIBLE`` and the next referee found another one, because a gate keyed on *how* a
+deletion was justified has to be re-written for every new justification — and the codebase's
+own recorded lesson is that per-gate verification cannot measure what a set of gates misses.
+An equity half cannot leave without this changing, whichever ledger the name is written onto,
+whether it is written onto one at all, and whether that ledger had been invented yet.
+
+**Why asset classes and not implementation identity.** The two questions are different and
+both are asked: this says ``iv-surface`` still serves equities, and
+:func:`test_each_asset_class_is_served_by_its_own_implementation` says the thing serving them
+is not the crypto function bound twice. ``slippage`` shipped the second defect while
+satisfying the first, which is why one census cannot answer both.
+
+The seven names here are the seven on ``IRREDUCIBLE``, and that is a fact rather than a
+definition — the two lists are asserted to agree in
+:func:`test_the_asymmetry_census_and_the_exemption_ledgers_describe_the_same_seven` rather
+than one being derived from the other, because deriving it would make this census read its
+subject's excuse and inherit whatever that excuse permits.
+"""
+
+
+def _live_asymmetry() -> dict[str, tuple[str, ...]]:
+    return {
+        name: tuple(sorted(cap.impls))
+        for name, cap in REGISTRY.items()
+        if set(cap.impls) != {AssetClass.CRYPTO, AssetClass.EQUITY}
+    }
+
+
+def test_no_capability_changes_which_asset_classes_it_serves() -> None:
+    """A deletion that reaches for any excuse, and one that reaches for none, both fail here.
+
+    The referee's report, in one table: deleting the equity half of ``iv-surface`` failed 4
+    tests; deleting it *and* excusing it on ``IRREDUCIBLE`` failed none, over ``iv-surface``,
+    ``ofi``, ``census``, ``whale-alerts``, ``open-interest`` and ``liquidity-depth`` alike.
+    The four that fired for the bare deletion all read ``PENDING_SYMMETRY`` or Gate 2, and
+    every one of them is written to fall silent once a name is excused — which is correct
+    behaviour for a gate about scheduling and is the reason none of them can be the gate
+    about *shape*.
+
+    ``load_all()`` is called for the same reason Gate 2's registry census calls it: this
+    reads ``REGISTRY`` as though it were complete, and it is only complete once every batch
+    module has been imported.
+    """
+    from crocodile.capabilities import load_all
+
+    load_all()
+    live = _live_asymmetry()
+
+    lost = {
+        name: served for name, served in live.items() if name not in _ASYMMETRIC_AS_SHIPPED
+    }
+    assert not lost, (
+        f"{lost} serve fewer asset classes than they shipped with. A capability that stops "
+        f"answering for a market is the deletion this whole ledger exists to make visible, "
+        f"and no entry on IRREDUCIBLE, PENDING_SYMMETRY or any list invented later makes it "
+        f"a smaller change. Restore the implementation, or record the retirement here in the "
+        f"same commit."
+    )
+
+    gained = sorted(set(_ASYMMETRIC_AS_SHIPPED) - set(live))
+    assert not gained, (
+        f"{gained} are symmetric now and still pinned as asymmetric. That is work landing: "
+        f"delete them here, and delete whatever ledger entry excused them, which is the "
+        f"claim their implementation has just disproved."
+    )
+
+    changed = {
+        name: (was, live[name])
+        for name, was in _ASYMMETRIC_AS_SHIPPED.items()
+        if name in live and live[name] != was
+    }
+    assert not changed, (
+        f"these serve a different asset class than they were pinned to: {changed}. Swapping "
+        f"which market a capability answers for is not a refactor."
+    )
+
+
+def test_the_asymmetry_census_and_the_exemption_ledgers_describe_the_same_seven() -> None:
+    """Two independently maintained lists of the same seven names, asserted to agree.
+
+    Gate 2 says an asymmetric capability must be excused or scheduled;
+    :func:`test_the_irreducible_list_only_holds_capabilities_that_exist` says an excuse must
+    name something registered. Neither says the two sets are the *same* set, and the gap
+    between them is where a deletion sits while its excuse is being written. Asserting the
+    agreement is what makes the two censuses one fact from two directions rather than two
+    facts that can drift.
+    """
+    excused = set(IRREDUCIBLE) | set(PENDING_SYMMETRY)
+    pinned = set(_ASYMMETRIC_AS_SHIPPED)
+    assert pinned == excused, (
+        f"the asymmetry census holds {sorted(pinned)} and the exemption ledgers hold "
+        f"{sorted(excused)}. Every asymmetric capability is excused or scheduled and every "
+        f"excused or scheduled name is asymmetric; a difference either way is a name that "
+        f"has an argument and no gap, or a gap and no argument."
+    )
+
+
+def test_deleting_an_equity_half_is_caught_even_when_it_is_excused(_isolate: None) -> None:
+    """The referee's experiment end to end, over the capability it was first run on.
+
+    Both edits, in the order that passed: the implementation goes, then the name is written
+    onto ``IRREDUCIBLE`` with the justification the referee fabricated — which the old
+    six-word blacklist accepted, because it names no schedule.
+    """
+    cap = REGISTRY["iv-surface"]
+    REGISTRY["iv-surface"] = msgspec.structs.replace(
+        cap, impls={AssetClass.CRYPTO: cap.impls[AssetClass.CRYPTO]}
+    )
+    IRREDUCIBLE["iv-surface"] = "No equity analogue can exist; this is chain-native."
+
+    with pytest.raises(AssertionError, match="iv-surface"):
+        test_no_capability_changes_which_asset_classes_it_serves()
+
+
+def test_a_capability_that_grew_the_half_it_was_pinned_without_is_caught(_isolate: None) -> None:
+    """The other direction, which is work landing rather than work vanishing.
+
+    It fails too, and it should: an implementation arriving is the moment its exemption
+    stops being true, and the entry has to leave in the same commit or the *next* deletion
+    is invisible again.
+    """
+    REGISTRY["peg-deviation"] = _symmetric("peg-deviation")
+    with pytest.raises(AssertionError, match="peg-deviation"):
+        test_no_capability_changes_which_asset_classes_it_serves()
+
+
+# ---------------------------------------------------------------------------
+# One function cannot serve two markets
+# ---------------------------------------------------------------------------
+# `set(cap.impls) == {CRYPTO, EQUITY}` is two dict keys. Nothing above it asks what
+# the keys point at, so binding the crypto function under both is a symmetric
+# declaration by every measure any gate takes. This codebase has the defect on
+# record — `slippage` shipped an equity half that read `book_snapshot`, which no
+# equity provider writes — and a referee re-introduced it against `census` and passed
+# 3 300 tests. What caught the two capabilities it did not pass were hand-written
+# per-capability assertions in a batch module's own test file, which is coverage by
+# whoever happened to write one.
+
+
+def test_each_asset_class_is_served_by_its_own_implementation() -> None:
+    """Two markets, two implementations — unless the declaration argues otherwise.
+
+    The exception is real and is why this reads a ledger instead of banning sharing
+    outright: seventeen capabilities answer about the lake rather than about a market, and
+    ``funding-predict`` reads no store at all. For those, one function is the honest
+    declaration and a second copy would be a second copy of the same SQL.
+
+    What the gate must not do is *guess* which case it is looking at, and the obvious guess
+    fails. ``basis`` differing between the two implementations sounds like the signature of
+    two real halves, but ``iv-surface``, ``ofi``, ``term-structure``, ``vol-skew``,
+    ``risk-reversal``, ``open-interest``, ``basis``, ``backfill``, ``collect`` and
+    ``list-exchanges`` all declare ``native`` on both sides — every one of them would have
+    been waved through — while ``indicators``, which legitimately shares, declares ``native``
+    on both sides too. The distinguisher is a claim about the capability, so it is written
+    where claims are written: :data:`~crocodile.core.capability.SHARED_IMPLEMENTATION`.
+    """
+    from crocodile.capabilities import load_all
+
+    load_all()
+    offenders: dict[str, str] = {}
+    for name, cap in sorted(REGISTRY.items()):
+        if set(cap.impls) != {AssetClass.CRYPTO, AssetClass.EQUITY}:
+            continue
+        crypto, equity = cap.impls[AssetClass.CRYPTO], cap.impls[AssetClass.EQUITY]
+        if crypto.fn is not equity.fn:
+            continue
+        if not SHARED_IMPLEMENTATION.get(name, "").strip():
+            offenders[name] = f"{crypto.fn.__module__}.{crypto.fn.__qualname__}"
+
+    assert not offenders, (
+        f"{offenders} declare both asset classes and bind one function to both. That is a "
+        f"symmetric declaration over an implementation that can only serve one market — the "
+        f"shape slippage shipped, where the equity half read a book_snapshot no equity "
+        f"provider writes and every equity call raised while the registry read as symmetric. "
+        f"Write the missing implementation, or argue on SHARED_IMPLEMENTATION why one "
+        f"function is the answer here."
+    )
+
+
+def test_no_shared_implementation_entry_is_stale() -> None:
+    """An entry has to keep being true, or it is an exemption waiting for a rebind.
+
+    Three ways it stops being true and all three fail: the capability is gone, the
+    capability stopped serving both asset classes, or the two implementations are distinct
+    functions now — at which point the entry excuses a sharing that is not happening, and
+    would go on excusing it after somebody rebound them.
+    """
+    from crocodile.capabilities import load_all
+
+    load_all()
+    offenders: dict[str, str] = {}
+    for name, why in sorted(SHARED_IMPLEMENTATION.items()):
+        cap = REGISTRY.get(name)
+        if cap is None:
+            offenders[name] = "names no registered capability"
+        elif set(cap.impls) != {AssetClass.CRYPTO, AssetClass.EQUITY}:
+            offenders[name] = f"serves only {sorted(cap.impls)}"
+        elif cap.impls[AssetClass.CRYPTO].fn is not cap.impls[AssetClass.EQUITY].fn:
+            offenders[name] = "has two distinct implementations and needs no exemption"
+        elif not why.strip():
+            offenders[name] = "carries no argument"
+    assert not offenders, f"stale SHARED_IMPLEMENTATION entries: {offenders}"
+
+
+def _two_functions(name: str) -> Capability:
+    """A capability whose two asset classes are served by genuinely different callables."""
+    return Capability(
+        name=name,
+        summary="Two markets, two implementations.",
+        params=_Params,
+        returns=ReturnKind.TABLE,
+        impls={
+            AssetClass.CRYPTO: Impl(fn=len, prov=Provenance.NATIVE, basis="native"),
+            AssetClass.EQUITY: Impl(fn=sorted, prov=Provenance.NATIVE, basis="native"),
+        },
+    )
+
+
+def test_rebinding_the_crypto_function_as_the_equity_one_is_caught(_isolate: None) -> None:
+    """The referee's second experiment, over one of the six names nothing covered.
+
+    ``census`` is used because it is the name the referee ran the full suite against: 3 300
+    passed, 7 skipped, 0 failed. ``markets``, ``universe``, ``depth``, ``liquidity-depth``
+    and ``chaos-score`` were the other five with no per-capability assertion of their own.
+    """
+    cap = REGISTRY["census"]
+    REGISTRY["census"] = msgspec.structs.replace(
+        cap,
+        impls={
+            **cap.impls,
+            AssetClass.EQUITY: msgspec.structs.replace(
+                cap.impls[AssetClass.EQUITY], fn=cap.impls[AssetClass.CRYPTO].fn
+            ),
+        },
+    )
+    with pytest.raises(AssertionError, match="census"):
+        test_each_asset_class_is_served_by_its_own_implementation()
+
+
+def test_a_legitimately_shared_implementation_is_left_alone() -> None:
+    """The gate is only worth having if it does not fire on the seventeen that share on purpose.
+
+    ``query`` stands for them: one lake, one SQL path, and an entry that says so.
+    """
+    assert REGISTRY["query"].impls[AssetClass.CRYPTO].fn is (
+        REGISTRY["query"].impls[AssetClass.EQUITY].fn
+    )
+    test_each_asset_class_is_served_by_its_own_implementation()
+
+
+def test_the_rebind_cannot_be_laundered_by_widening_the_shared_list(
+    _isolate: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The move this whole task exists to answer, applied to the gate it just added.
+
+    Every gate here suggests its own exemption, and the finding two phases ago was that
+    eleven branches each added one and the twelfth deletion went straight into it. So the
+    rebind gate ships with the census already closed around it: excusing ``census`` on
+    ``SHARED_IMPLEMENTATION`` silences the rebind gate exactly as intended, and then the
+    census fails on the entry that silenced it.
+    """
+    cap = REGISTRY["census"]
+    REGISTRY["census"] = msgspec.structs.replace(
+        cap,
+        impls={
+            **cap.impls,
+            AssetClass.EQUITY: msgspec.structs.replace(
+                cap.impls[AssetClass.EQUITY], fn=cap.impls[AssetClass.CRYPTO].fn
+            ),
+        },
+    )
+    monkeypatch.setitem(SHARED_IMPLEMENTATION, "census", "One lake, honest.")
+
+    test_each_asset_class_is_served_by_its_own_implementation()
+    with pytest.raises(AssertionError, match="census"):
+        _assert_censused("SHARED_IMPLEMENTATION")
+
+
+def test_an_entry_for_a_capability_that_no_longer_shares_is_caught(
+    _isolate: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repaid exemption has to leave, on the rule both other ledgers already carry.
+
+    Writing the second implementation is the outcome this list exists to make someone
+    choose against. Leaving the entry behind afterwards means the *next* rebind of that
+    capability is excused before it happens, which is the hoarding hazard
+    ``IRREDUCIBLE``'s twin has had a gate for since Phase 2.
+    """
+    REGISTRY["fixture-unshared"] = _two_functions("fixture-unshared")
+    monkeypatch.setitem(SHARED_IMPLEMENTATION, "fixture-unshared", "One lake.")
+    with pytest.raises(AssertionError, match="needs no exemption"):
+        test_no_shared_implementation_entry_is_stale()
+
+
+def test_an_entry_naming_nothing_registered_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ``gas-tracker`` shape again: an exemption outliving the thing it excused."""
+    monkeypatch.setitem(SHARED_IMPLEMENTATION, "fixture-deleted", "One lake.")
+    with pytest.raises(AssertionError, match="names no registered capability"):
+        test_no_shared_implementation_entry_is_stale()
