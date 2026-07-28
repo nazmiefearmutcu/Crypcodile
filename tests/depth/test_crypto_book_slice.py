@@ -16,7 +16,11 @@ import polars as pl
 import pytest
 
 from crocodile.core.schema.enums import AssetClass
-from crocodile.core.schema.provenance import Provenance, confidence_for
+from crocodile.core.schema.provenance import (
+    ConfidenceInputError,
+    Provenance,
+    confidence_for,
+)
 from crocodile.core.schema.records import DepthProfile
 from crocodile.crypto.depth import LakeQuery, depth_from_book_snapshots
 
@@ -123,15 +127,61 @@ def test_the_slice_is_the_ladder_shape_the_equity_half_already_returns() -> None
 def test_the_record_claims_the_instant_asked_for_and_keeps_the_venues_own_stamp() -> None:
     """``local_ts`` is the instant the ladder describes; ``source_ts`` stays the venue's.
 
-    Which makes the age the confidence was computed over legible on the row rather than only
-    inside the formula — the ratio is relative to a window the caller declared, so anyone
-    re-grading it against a window of their own needs the raw gap.
+    Three instants, three fields, and none of them is spare: the requested instant, the
+    venue's stamp, and — in the test below — the stamp the age was actually measured from.
     """
     profile = _slice(
         _lake(_row(local_ts=_BASE_NS - 5 * _SECOND_NS, source_ts=_BASE_NS - 6 * _SECOND_NS))
     )
     assert profile.local_ts == _BASE_NS
     assert profile.source_ts == _BASE_NS - 6 * _SECOND_NS
+    assert profile.snapshot_ts == _BASE_NS - 5 * _SECOND_NS
+
+
+def test_the_age_the_confidence_was_computed_from_is_recoverable_from_the_record() -> None:
+    """The registration's mitigation for its caller-declared denominator, made true.
+
+    ``book_snapshot_slice`` concedes that over-declaring ``window_ns`` *raises* the score —
+    the opposite direction to ``ohlcv_from_ohlcv``'s ``tradeable_ns`` — and ships anyway on
+    the grounds that "the age is recoverable by anyone who wants to re-grade it against a
+    window of their own". It was not. ``local_ts`` is overwritten with the requested
+    instant, and ``source_ts`` is the venue's clock: a different number where it exists and
+    ``None`` for every Coinbase book, because that normalizer has no venue stamp to carry.
+
+    The referee's case, run here exactly: an hour-old Coinbase book under a
+    ``--max-age-ns 86400e9`` tolerance is published at ``prov_confidence=0.958``, and
+    before ``snapshot_ts`` the hour behind that number was not on the row in any form.
+    """
+    hour = 3600 * _SECOND_NS
+    day = 24 * hour
+    # Coinbase: source_ts is None, because the venue stamped nothing this normalizer keeps.
+    profile = _slice(_lake(_row(local_ts=_BASE_NS - hour, source_ts=None)), max_age_ns=day)
+
+    assert profile.prov_confidence == pytest.approx(1.0 - hour / day)
+    assert profile.prov_confidence == pytest.approx(0.9583333333333334)
+    assert profile.source_ts is None
+    assert profile.local_ts == _BASE_NS
+
+    recovered = getattr(profile, "snapshot_ts", None)
+    assert recovered is not None, (
+        "the age the confidence divided by window_ns is not on the record: "
+        f"local_ts={profile.local_ts} is the instant asked for and "
+        f"source_ts={profile.source_ts} is the venue's, so the hour is unrecoverable"
+    )
+    assert profile.local_ts - recovered == hour
+
+    # And the re-grade the mitigation promises: the same book against a minute's tolerance
+    # is not a 0.958 answer, and a reader holding the row can now say so.
+    with pytest.raises(ConfidenceInputError, match="exceeds"):
+        confidence_for(
+            profile.prov_basis,
+            {
+                "n_levels": profile.depth,
+                "n_requested": profile.depth,
+                "age_ns": profile.local_ts - recovered,
+                "window_ns": 60 * _SECOND_NS,
+            },
+        )
 
 
 def test_a_slice_is_derived_and_never_reads_as_synthetic() -> None:
@@ -205,16 +255,31 @@ def test_a_book_older_than_the_declared_window_is_refused_rather_than_served_sta
     assert _slice(_lake(older), max_age_ns=120 * _SECOND_NS).depth == 4
 
 
-def test_a_book_at_exactly_the_window_edge_is_admitted_and_scores_nothing() -> None:
-    """The edge is reachable, and 0.0 there is the freshness term meaning what it says.
+def test_a_book_at_exactly_the_window_edge_is_outside_it() -> None:
+    """The interval is ``(as_of_ns - max_age_ns, as_of_ns]``, and the SQL now says so.
 
-    Not the same claim as ``Provenance.UNAVAILABLE``: the record exists and its levels are
-    the venue's. The number says this answer used up every bit of the tolerance the caller
-    declared, which is the reading the registry's docstring gives 0.0 throughout.
+    It did not: the bound was `local_ts >= oldest_ns`, so a book exactly `max_age_ns` old
+    was admitted and left here at `prov_confidence=0.0` — against a docstring that named
+    the half-open interval twice, in the module text and in `Raises`.
+
+    0.0 is not a weak claim, it is the claim `unavailable` makes for a hole: fully
+    unsampled, no information. A four-level ladder of the venue's own resting size is not
+    that, and `1 - age/window` reaching zero annihilates the fill term however full the
+    ladder is, so the record would have carried a number contradicting its own `prov`.
+    `book_resample` paid for this once — it stopped scoring
+    `max(1 - lookahead_ns / interval_ns, 0.0)` because emitting a biased record at 0.0 is
+    how biased records reached the lake — and this is the same trade one basis over.
+
+    So the edge is refused, and `prov_confidence > 0.0` becomes a property of every slice
+    this function emits: the fill term's own zero is the empty book, refused already.
     """
     window = 60 * _SECOND_NS
-    profile = _slice(_lake(_row(local_ts=_BASE_NS - window)), max_age_ns=window)
-    assert profile.prov_confidence == 0.0
+    with pytest.raises(ValueError, match="no stored book snapshot"):
+        _slice(_lake(_row(local_ts=_BASE_NS - window)), max_age_ns=window)
+
+    # One nanosecond inside it is admitted, and scores the sliver of tolerance left.
+    profile = _slice(_lake(_row(local_ts=_BASE_NS - window + 1)), max_age_ns=window)
+    assert profile.prov_confidence > 0.0
     assert profile.prov is Provenance.DERIVED
     assert profile.depth == 4
 

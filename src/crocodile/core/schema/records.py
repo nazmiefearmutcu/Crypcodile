@@ -336,6 +336,28 @@ class DepthProfile(
     asks: list[Level]
     reference_price: float
     depth: int
+    snapshot_ts: int | None = None
+    """The ``local_ts`` of the stored observation this ladder was cut from, when it was cut
+    from one rather than built at the moment of the call.
+
+    ``local_ts`` on a re-stamped record is the instant the record *claims*, not the instant
+    anything was observed — ``book_snapshot_slice`` answers for an instant the caller names
+    and cuts the newest stored book at or before it. That re-stamp destroyed the only
+    number the record's own confidence was computed from. ``source_ts`` cannot stand in: it
+    is the venue's clock rather than ours, a different number wherever both exist, and
+    ``None`` for every Coinbase book because that normalizer has no venue stamp to carry.
+
+    So ``age_ns = local_ts - snapshot_ts`` is recoverable from the row, which is what
+    ``book_snapshot_slice`` offers in exchange for taking its freshness denominator from
+    the caller: over-declaring the window raises that score, and the answer to a reader who
+    thinks a window was too generous is that they can re-grade it. That answer was in the
+    registration before the field it needs was.
+
+    ``None`` — the default — says this profile was not cut from a stored observation, and
+    that ``local_ts`` therefore means what the header says it means. Both equity halves are
+    in that case: ``yahoo_1m_vap`` and ``alpaca_l1`` build a ladder at the moment they are
+    called, so there is no second instant to carry.
+    """
 
     @property
     def is_synthetic(self) -> bool:

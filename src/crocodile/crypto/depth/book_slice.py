@@ -123,9 +123,20 @@ def depth_from_book_snapshots(
         half returns: bids descending, asks ascending, ``reference_price`` at the midpoint,
         ``depth`` the level count, and the four ``prov_*`` fields built by
         :func:`~crocodile.core.schema.provenance.provenance_fields` from what was measured
-        here. ``local_ts`` is ``as_of_ns`` — the instant the record claims — and
-        ``source_ts`` is whatever the venue stamped on the snapshot it was cut from, so the
-        age the confidence was computed over stays legible on the row.
+        here. ``local_ts`` is ``as_of_ns`` — the instant the record claims — ``source_ts``
+        is whatever the venue stamped on the snapshot it was cut from, and ``snapshot_ts``
+        is that snapshot's own ``local_ts``, which is the number the age was measured from.
+
+        All three are needed and none of the other two will do. ``local_ts`` has been
+        overwritten with the requested instant, so it no longer holds the observation.
+        ``source_ts`` is the venue's clock rather than ours — a different number on every
+        row that has one, and ``None`` for every Coinbase book, because that normalizer has
+        no venue stamp to carry. ``snapshot_ts`` is what makes
+        ``age_ns = local_ts - snapshot_ts`` recoverable from the emitted row, which is the
+        mitigation ``book_snapshot_slice`` offers for taking its freshness denominator from
+        the caller: a reader who thinks the declared window was too generous can re-grade
+        the confidence against a window of their own. Before this field existed that
+        mitigation was stated and not delivered.
 
     Raises:
         ValueError: if ``top_n`` or ``max_age_ns`` is not positive, if no snapshot for
@@ -134,6 +145,18 @@ def depth_from_book_snapshots(
             zero-confidence record: ``DepthProfile.reference_price`` is required, and an
             empty book offers nothing to derive it from — writing a number there would be
             the fabricated measurement Gate 3b scans for.
+
+            The window bound is open at the old end, and the SQL below says so with a
+            strict ``>``. A snapshot exactly ``max_age_ns`` old scores ``1 - age/window``
+            = 0.0, and 0.0 annihilates the fill term however full the ladder is, so the
+            record would leave here declaring itself fully unsampled — the number
+            ``unavailable`` returns for a hole — while ``prov`` declares its levels the
+            venue's. ``book_resample`` paid for that combination once: it stopped scoring
+            ``max(1 - lookahead_ns / interval_ns, 0.0)`` because emitting a biased record
+            at 0.0 is how biased records reached the lake, and ``_capture_snapshot`` raises
+            instead. Excluding the edge makes ``prov_confidence > 0.0`` a property of every
+            slice this function emits: the fill term's own zero is the empty book, which is
+            already refused above.
     """
     if top_n <= 0:
         raise ValueError(f"top_n must be positive; got {top_n!r}")
@@ -148,7 +171,10 @@ def depth_from_book_snapshots(
         # The lookahead bound, in the WHERE clause rather than in a filter over rows that
         # already arrived: a later snapshot is not something this answer gets to see and
         # then discard, it is something it never reads. See the module docstring.
-        f"AND local_ts <= {int(as_of_ns)} AND local_ts >= {oldest_ns} "
+        # `>` and not `>=`: the interval is `(as_of_ns - max_age_ns, as_of_ns]`, open at
+        # the old end, and the Raises section above has why the edge is excluded rather
+        # than served at a confidence of zero.
+        f"AND local_ts <= {int(as_of_ns)} AND local_ts > {oldest_ns} "
         "ORDER BY local_ts DESC LIMIT 1"
     )
     try:
@@ -200,6 +226,9 @@ def depth_from_book_snapshots(
         local_ts=int(as_of_ns),
         asset_class=asset_class,
         source_ts=None if source_ts is None else int(source_ts),
+        # The stamp `age_ns` was measured from, carried so that measurement survives the
+        # re-stamp on the line above. See this function's Returns section.
+        snapshot_ts=snapshot_ts,
         bids=bids,
         asks=asks,
         reference_price=reference_price,
