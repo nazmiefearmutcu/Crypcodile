@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 # Make this example runnable from a source checkout even without an editable
-# install: put the repo's ``src/`` on sys.path so ``import crypcodile`` resolves.
+# install: put the repo's ``src/`` on sys.path so ``import crocodile`` resolves.
 _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))

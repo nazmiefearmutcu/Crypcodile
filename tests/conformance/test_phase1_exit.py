@@ -485,6 +485,10 @@ _CLEAN_PACKAGES = (
     "src/crocodile/contrib",
     "src/crocodile/capabilities",
     "src/crocodile/surfaces",
+    "src/crocodile/__init__.py",
+    "src/crocodile/_deprecated_cli.py",
+    "src/crypcodile",
+    "src/stockodile",
 )
 
 
@@ -495,14 +499,38 @@ def test_the_merged_core_is_lint_clean() -> None:
 
 
 def test_every_package_is_covered_by_one_of_the_two_lint_gates() -> None:
-    """A package on neither list is lint-unchecked, and nothing would say so."""
-    gated = {pathlib.PurePath(p).name for p in _CLEAN_PACKAGES} | {"crypto", "equity"}
-    packages = {
-        path.name
-        for path in _SRC.iterdir()
-        if path.is_dir() and (path / "__init__.py").is_file() and path.name != "__pycache__"
+    """A package on neither list is lint-unchecked, and nothing would say so.
+
+    This walked ``src/crocodile`` and therefore could not see the thing it was written to
+    catch. ``src/`` holds three top-level packages, not one: the ``crypcodile`` and
+    ``stockodile`` deprecation shims sit beside ``crocodile``, on neither list, and each
+    carried a finding that no gate in the tree had ever counted — ``ruff check src`` read
+    224 while both gates together accounted for 222. A coverage test scoped one directory
+    below the thing it claims to cover is the same vacuous shape as a gate over an empty
+    registry: green, and about nothing.
+
+    So the subject is ``src`` itself, and it recurses far enough to find a package that is
+    neither top-level nor inside one of the listed roots.
+    """
+    gated = {
+        pathlib.PurePath(p)
+        for p in (*_CLEAN_PACKAGES, "src/crocodile/crypto", "src/crocodile/equity")
     }
-    assert packages <= gated, f"packages under no ruff gate: {sorted(packages - gated)}"
+    src = _SRC.parent
+    ungated = sorted(
+        str(rel)
+        for module in src.rglob("*.py")
+        if "__pycache__" not in module.parts
+        for rel in [module.relative_to(src.parent)]
+        if not any(root == rel or root in pathlib.PurePath(rel).parents for root in gated)
+    )
+    assert not ungated, (
+        f"{len(ungated)} file(s) under no ruff gate: {ungated[:10]}. Add each to "
+        f"_CLEAN_PACKAGES (held to zero) or to the legacy ratchet — a file on neither is "
+        f"lint-unchecked and nothing else in the tree would report it. Files, not "
+        f"packages: `src/crocodile/_deprecated_cli.py` is in no subpackage and was "
+        f"invisible to the version of this test that walked directories."
+    )
 
 
 def test_the_legacy_surfaces_do_not_get_worse() -> None:

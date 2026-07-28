@@ -16,8 +16,9 @@ Usage::
 
 Prerequisites: collect options data first, e.g.::
 
-    uv run crypcodile collect \\
-      --exchange deribit \\
+    uv run crocodile collect \\
+      --asset-class crypto \\
+      --sources deribit \\
       --symbols BTC-PERPETUAL \\
       --channels options_chain \\
       --data-dir data
@@ -33,7 +34,7 @@ from pathlib import Path
 # Make this example runnable from a source checkout even without an editable
 # install (e.g. plain `python examples/analytics_iv_surface.py`, or whenever the
 # editable `.pth` is not honored): put the repo's ``src/`` on sys.path so that
-# ``import crypcodile`` resolves in this and any spawned subprocess.
+# ``import crocodile`` resolves in this and any spawned subprocess.
 _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
@@ -95,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     if not data_dir.exists():
         print(
             f"Data lake not found: {data_dir}\n"
-            "Run 'crypcodile collect' first to populate it.",
+            "Run 'crocodile collect' first to populate it.",
             file=sys.stderr,
         )
         return 0
@@ -139,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"\nNo options data found for underlying {args.underlying!r}.\n"
             "Collect options_chain data first:\n"
-            "  uv run crypcodile collect --exchange deribit "
+            "  uv run crocodile collect --asset-class crypto --sources deribit "
             "--channels options_chain --data-dir data"
         )
         return 0

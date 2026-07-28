@@ -34,7 +34,7 @@ uv pip install crocodile          # or: pip install crocodile
 ```
 
 The base install is the whole streaming core: every native connector, the
-Parquet lake, replay, and the 47-command CLI. Heavier surfaces are opt-in extras
+Parquet lake, replay, and the 64-command CLI. Heavier surfaces are opt-in extras
 so you never pay for a dependency tree you don't use:
 
 ```bash
@@ -47,57 +47,92 @@ uv pip install 'crocodile[full]'     # everything
 ```
 
 Prefer one command? [`install.sh`](install.sh) (macOS/Linux) and
-[`install.ps1`](install.ps1) (Windows) install `crocodile[full]`.
+[`install.ps1`](install.ps1) (Windows) install `crocodile[full]`. Note they still
+put the wrapper on your `PATH` under the old name, `crypcodile` — which is a real
+console script, deprecated and removed in 0.4, that prints a notice on stderr and
+forwards to the same CLI. Everything below is spelled `crocodile`.
 
 ## Five minutes
 
 ```bash
 # stream Deribit BTC-perp trades + book deltas into a local lake
-crocodile collect --exchange deribit --symbols BTC-PERPETUAL \
+crocodile collect --asset-class crypto --sources deribit --symbols BTC-PERPETUAL \
     --channels trade --channels book_delta --data-dir data
 
-# the lake is just partitioned Parquet — ask it anything in DuckDB SQL
-crocodile query "SELECT count(*) FROM records WHERE channel = 'trade'"
+# the lake is just partitioned Parquet — one DuckDB view per channel on disk
+crocodile query --asset-class crypto "SELECT count(*) AS n FROM trade"
 
 # replay that window later — identical bytes, every run
-crocodile replay --channels trade --symbols deribit:BTC-PERPETUAL
+crocodile replay --asset-class crypto --channels trade --symbols BTC-PERPETUAL \
+    --start-ns 0 --end-ns 9223372036854775807
 
 # open the order-flow visualizer on live Binance data  ([gui] extra)
 crocodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
-No lake yet? `replay` and `query` fall back to the bundled sample in
-[`test_data/`](test_data/), so a fresh clone works offline. There's also an
-interactive shell — `crocodile shell` — with history and tab-completion, and
-every command runs inside it.
+Three things in there are load-bearing and easy to get wrong:
+
+- **`--sources`, not `--exchange`/`--provider`.** The merge collapsed the two
+  forks' partitions into one `source=`, and the flag went with it. Lakes written
+  under the old `exchange=` prefix are read by `crocodile migrate-lake` first.
+- **`--asset-class` when the symbol does not name its market.** A bare
+  `BTC-PERPETUAL` could be either fork's, and guessing is how a request lands in
+  the wrong market's implementation and comes back with plausible numbers, so it
+  refuses instead.
+- **There is no `records` table.** The lake registers one view per `channel=`
+  directory it finds — `trade`, `book_snapshot`, `ohlcv` — so the channel is the
+  view name rather than a column. `crocodile catalog-channels` lists what a given
+  lake actually has.
+
+`replay` and `query` read the lake you point them at and nothing else; there is
+no bundled sample and no offline fallback, so both answer empty on a fresh clone
+until you have collected something. There's also an interactive shell —
+`crocodile shell` — with history and tab-completion, and every command runs
+inside it.
 
 ## Reaching the whole market
 
-Crypcodile speaks to **108 venues**: ten native connectors, hand-written for
-fidelity, plus the entire [ccxt](https://github.com/ccxt/ccxt) family (104
-exchanges) behind one universal connector. When a name exists in both, the
-native connector wins.
+Crypcodile speaks to **109 venues**: ten native connectors, hand-written for
+fidelity, plus the entire [ccxt](https://github.com/ccxt/ccxt) family behind one
+universal connector. When a name exists in both, the native connector wins, so
+the total is a union rather than a sum — six names overlap.
+
+The ccxt half is not a fixed number: the dependency is `ccxt>=4.5`, and 105 is
+what the version resolved here ships. `crocodile markets --asset-class crypto`
+prints the count your install actually has, and `crocodile census` reports it as
+`connectors.total_reachable`.
 
 | | Venues |
 |---|---|
 | **Native** | Binance · Bybit · Coinbase · Deribit · OKX · Base on-chain (Uniswap V3, Aerodrome) · GMX/Synthetix · Derive · Superchain · CoinGecko |
-| **Universal** | any of ccxt's 104 exchanges — Kraken, KuCoin, MEXC, Gate, HTX, Bitget, … |
+| **Universal** | every ccxt exchange id — Kraken, KuCoin, MEXC, Gate, HTX, Bitget, … |
 
 You don't have to name symbols. Name a *slice of the market* and Crypcodile
 resolves the concrete list from the live universe:
 
 ```bash
-# the 200 most-liquid pairs on Binance, streamed over a single WebSocket
-crocodile collect-market --exchange binance --top 200 --use-ws \
-    --channels trade --channels book_ticker
+# the 200 most-liquid spot pairs on Binance, streamed over a single WebSocket
+crocodile collect-market --asset-class crypto --sources binance --top 200 \
+    --kinds spot --use-ws --channels trade --channels book_ticker
 
 # every USDT perpetual across three venues at once, order books included
-crocodile collect-market --exchange bybit,okx,mexc --all \
-    --quote USDT --kind perpetual --channels book_snapshot --limit 400
+crocodile collect-market --asset-class crypto --sources bybit,okx,mexc \
+    --all-symbols --quote USDT --kinds perpetual --channels book_snapshot \
+    --max-symbols 400
 
 # the whole coin universe — 17k+ coins, including the long tail no CEX lists
-crocodile collect --exchange coingecko --symbols _ --channels ohlcv
+crocodile collect --asset-class crypto --sources coingecko --symbols _ \
+    --channels ohlcv
 ```
+
+`--max-symbols`, not `--limit`: everywhere else in the CLI `--limit` caps rows
+returned, and here it decided how much of a venue's market gets watched. Two
+meanings for one flag on a command that opens sockets is worth a rename.
+
+`--kinds` is written out above rather than left to default. Omitting it currently
+fails (`'()' is not a valid Kind`) — an empty tuple default reaches the parameter
+as the literal string, which also makes a bare `crocodile census` report zero
+venues. Name the kinds explicitly until that is fixed.
 
 Two design choices make that scale honestly. The ccxt path is **REST-poll-first**
 (works on every venue) but upgrades to a **single multi-symbol WebSocket** per
@@ -108,30 +143,52 @@ exchange's book. And `universe` ranks any venue's markets by live 24h volume, so
 
 ### The whole market, on one screen
 
-`crocodile census` measures the market live and writes a self-contained HTML
-dashboard — venue market counts (ccxt), the coin universe + market cap +
+`crocodile census` measures the market live and prints one JSON document —
+connector reach, venue market counts (ccxt), the coin universe + market cap +
 dominance (CoinGecko), and total value locked (DeFiLlama). Every figure comes
-from a keyless public feed; a recent run:
+from a keyless public feed. A run over the twelve major venues, 2026-07-28:
 
-> **108** reachable venues · **34,171** markets across the majors ·
-> **17,657** active coins · **$2.29T** market cap · **$75.8B** DeFi TVL
+> **109** reachable venues · **34,208** markets across the majors ·
+> **17,863** active coins · **$2.28T** market cap · **$75.4B** DeFi TVL
 
 ```bash
-crocodile census                  # → census.html + a terminal summary
+crocodile census --asset-class crypto \
+    --venues binance,bybit,okx,coinbase,kraken,kucoin,mexc,gate,htx,bitget,bingx,cryptocom
 ```
 
-## The 47 commands
+Name the venues: a bare `crocodile census` reports zero of them today, for the
+same empty-tuple reason as `--kinds` above, and zero venues is indistinguishable
+from a census that ran and found nothing.
+
+The census writes no file. It has no `--output`, and the HTML dashboard an
+earlier version of this section described is gone — a flag that names a file to
+write is a surface's business, not a capability's, so the capability returns the
+document and you redirect it wherever you want it.
+
+## The 64 commands
+
+Three numbers describe the same CLI, and which one you want depends on the
+question. **64** is what `--help` lists. **56** folds away eight retired
+spellings kept resolving for callers already wired to them. **49** is the
+capability registry — every command below except the seven launchers is a
+projection of one declaration, which is also what the REST route and the MCP
+tool are projections of.
 
 | Cluster | Commands |
 |---|---|
-| **Lake** | `collect` · `collect-market` · `backfill` · `replay` · `query` · `export` |
-| **Discovery** | `census` · `markets` · `universe` · `search` · `resolve-symbols` · `data-coverage` · `catalog*` (7) · `list-exchanges` |
-| **Options & funding** | `iv-surface` · `term-structure` · `vol-skew` · `risk-reversal` · `funding-apr` · `funding-predict` · `basis` · `open-interest` |
-| **Microstructure** | `ofi` · `slippage` · `whale-alerts` · `liquidity-depth` · `indicators` |
-| **On-chain / L2 risk** | `sequencer-latency` · `peg-deviation` · `chaos-score` · `lending-stress` · `gas-vol` · `smart-money` · `label-transfers` · `mev-sandwich` |
+| **Lake** | `collect` · `collect-market` · `backfill` · `replay` · `query` · `export` · `resample` |
+| **Discovery** | `census` · `markets` · `universe` · `search` · `resolve-symbols` · `data-coverage` · `list-exchanges` · `catalog` · `catalog-channels` · `catalog-dates` · `catalog-exchanges` · `catalog-inventory` · `catalog-scan` · `catalog-stats` · `catalog-summary` · `catalog-symbols` |
+| **Options & funding** | `iv-surface` · `term-structure` · `vol-skew` · `risk-reversal` · `funding-apr` · `funding-predict` · `basis` · `perp-basis` · `spot-future-basis` · `open-interest` |
+| **Microstructure** | `ofi` · `slippage` · `whale-alerts` · `liquidity-depth` · `depth` · `indicators` |
+| **On-chain / L2 risk** | `sequencer-latency` · `peg-deviation` · `chaos-score` · `lending-stress` · `gas-vol` · `smart-money` · `label-transfers` · `mev-sandwich` · `onchain-price` · `base-market-data` |
 | **Desktop** | `flowmap` · `gas-tracker` |
 | **Servers** | `mcp` · `api` |
-| **Shell** | `shell` · `update` |
+| **Operator** | `shell` · `update` · `migrate-lake` |
+| **Retired spellings** | `inventory_snapshot` · `list_data_channels` · `list_dates` · `list_exchanges_on_disk` · `list_symbols` · `query_market_data` · `search_symbols` · `simulate-price-impact` |
+
+The last row is a ledger that only shrinks. Each entry was on the wire under one
+of the two forks and resolves to a single declaration, so there is never a second
+implementation behind a second name.
 
 Ingest survives disconnects with sequence-gap bridging and a dead-letter queue
 ([`src/crocodile/core/ingest/`](src/crocodile/core/ingest/)); whatever reaches disk is
@@ -152,15 +209,18 @@ synthetic market for poking at the UI offline.
 crocodile flowmap --symbol binance-spot:BTCUSDT --historical-hours 2.0
 ```
 
-It renders on `QOpenGLWidget` with a pure-NumPy density engine behind it (pin a
-backend with `FLOWMAP_RENDERER=opengl|cpu`). The uncapped offscreen benchmark
-clears 100 FPS at 1920×1080 on Apple Silicon; the window itself sits at vsync.
+A pure-NumPy density engine draws it, and the window sits at vsync. There is no
+render benchmark in the tree to quote a frame rate from — `benchmarks/bench.py`
+measures the offline data path (normalize → store → query → resample → replay)
+and nothing about the GUI, so the numbers in
+[`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) are the reproducible ones.
 
 ## Analytics
 
 The lake feeds an options + microstructure library, reachable three ways — CLI,
-MCP tool, or plain Python over a `Catalog`. Two runnable examples in
-[`examples/`](examples/):
+MCP tool, or plain Python over a `Catalog`. Nine runnable scripts in
+[`examples/`](examples/); the ones under "Base L2" below run against the live
+chain and need no lake, the rest want one you have collected into:
 
 ```python
 from crocodile.crypto.analytics.funding import funding_apr
@@ -168,9 +228,14 @@ from crocodile.crypto.analytics.volsurface import iv_surface
 from crocodile.core.store.catalog import Catalog
 
 catalog = Catalog(data_dir="data")
-apr     = funding_apr(catalog, "binance:BTCUSDT", from_ns, to_ns)  # Polars DataFrame
-surface = iv_surface(catalog, "BTC", at_ns, rate=0.0)             # strike × expiry × IV
+apr     = funding_apr(catalog, "BTCUSDT", from_ns, to_ns)  # Polars DataFrame
+surface = iv_surface(catalog, "BTC", at_ns, rate=0.0)      # strike × expiry × IV
 ```
+
+Symbols here are the venue's own spelling, as stored. The canonical `source:RAW`
+form that the CLI reads to work out which market you mean is not what the lake's
+`symbol` column holds, so passing `binance:BTCUSDT` to a reader matches nothing
+and returns an empty frame rather than raising.
 
 The full set spans OFI, slippage, whale alerts, term structure, vol skew, risk
 reversal, spot–perp / spot–future basis, open interest, and an L2/DeFi-risk
@@ -212,11 +277,24 @@ uv sync --all-extras
 pytest tests/
 ```
 
-1,760 test functions across 141 files: a local mock-RPC server for
-degraded-network E2E runs (`tests/e2e/`), adversarial payload suites, and a
-regression file seeded by real exchange API anomalies. `mypy --strict` and Ruff
-gate `src/`. CI-friendly — Qt and Matplotlib run headless, and BLAS thread caps
-keep imports fast on Apple Silicon.
+2,512 test functions across 236 files, 3,307 cases once parametrisation expands
+them: a local mock-RPC server for degraded-network E2E runs (`tests/e2e/`),
+adversarial payload suites, a regression file seeded by real exchange API
+anomalies, and `tests/conformance/`, which asserts the arguments this codebase
+runs on rather than its behaviour. CI-friendly — Qt and Matplotlib run headless,
+and BLAS thread caps keep imports fast on Apple Silicon.
+
+Neither `mypy --strict` nor Ruff gates the whole of `src/`, and saying otherwise
+was the more expensive kind of wrong — it described a gate nobody would re-derive.
+What actually holds:
+
+- **Zero Ruff findings** in `core`, `contrib`, `capabilities`, `surfaces` and the
+  two deprecation shims — every line the merge wrote.
+- **A ratchet, currently 222,** over `crypto` and `equity`, the two inherited
+  trees. It only ever falls; `tests/conformance/test_phase1_exit.py` fails if it
+  rises, and a third test fails if any file lands under neither gate.
+- **`mypy --strict` clean** across 229 files, with `crocodile.crypto.*` and
+  `crocodile.equity.*` exempted in `pyproject.toml` until they are migrated.
 
 ## What it isn't
 
@@ -229,7 +307,8 @@ keep imports fast on Apple Silicon.
 ## Contributing
 
 PRs welcome. Skim [`CHANGELOG.md`](CHANGELOG.md) for direction, keep the
-`mypy --strict` and Ruff gates green, and make sure the E2E and adversarial
-suites pass before opening one.
+`mypy --strict` and Ruff gates described above green — new code goes in the
+zero-findings half, and the ratchet over the inherited half never rises — and
+make sure the E2E and adversarial suites pass before opening one.
 
 Apache-2.0 — see [LICENSE](LICENSE).

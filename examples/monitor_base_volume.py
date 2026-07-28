@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from web3 import Web3
 
-# Setup python path to import crypcodile
+# Setup python path to import crocodile
 _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
@@ -122,7 +122,7 @@ def main():
     print(f"| {'Timestamp':<19} | {'Side':<4} | {'Price (USDC)':<14} | {'Amount (WETH)':<14} |")
     print("="*70)
     for t in trades:
-        dt_str = datetime.fromtimestamp(t.exchange_ts / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
+        dt_str = datetime.fromtimestamp(t.source_ts / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
         side_str = "BUY" if t.side == Side.BUY else "SELL"
         print(f"| {dt_str:<19} | {side_str:<4} | {t.price:<14.2f} | {t.amount:<14.4f} |")
     print("="*70)
