@@ -63,11 +63,12 @@ full = [
 
 
 [project.scripts]
-# Phase 1 ships the two legacy CLIs unchanged under one distribution.
-# Phase 2 replaces both with a single projection over the capability registry,
-# at which point `crocodile-equity` disappears and `crocodile` covers both.
-crocodile        = "crocodile.crypto.legacy.cli:main"
-crocodile-equity = "crocodile.equity.legacy.cli:main"
+# One command for both asset classes, projected from the capability registry.
+# `crocodile-equity` is gone: it existed because there were two engines, and a
+# command whose whole meaning was "the other fork" has nothing left to name.
+# Every capability that serves equities is reachable here under the same name it
+# has for crypto, with `--asset-class equity` when the symbol does not say.
+crocodile        = "crocodile.surfaces.entrypoint:main"
 # The two old names stay callable for one minor version, through wrappers that
 # say so on stderr. Pointing them straight at `main` would have made them silent
 # aliases — the deprecation notice would exist only in this comment.
