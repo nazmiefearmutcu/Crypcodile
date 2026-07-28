@@ -31,7 +31,7 @@ from crocodile.core.capability import (
 )
 from crocodile.core.config import Settings
 from crocodile.core.schema.provenance import Provenance, level_for, provenance_fields
-from crocodile.core.schema.records import DepthProfile, OpenInterest
+from crocodile.core.schema.records import DepthProfile, OpenInterest, OptionsChain
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.instruments.registry import Instrument, Kind
@@ -546,8 +546,12 @@ def test_depth_is_the_only_capability_here_whose_missing_half_is_the_crypto_one(
     other one. Phase 3's exit gate is what forces somebody to look at that.
     """
     assert set(REGISTRY["depth"].impls) == {AssetClass.EQUITY}
-    for name in ("markets", "universe", "census", "open-interest"):
+    for name in ("markets", "universe", "census"):
         assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
+    # `open-interest` was in that list until M2 landed, and is out of it because the
+    # asymmetry is gone rather than because the test was narrowed: it is the batch's one
+    # settled name, and the assertion below is what makes leaving it here a failure.
+    assert set(REGISTRY["open-interest"].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
 
 
 # ---------------------------------------------------------------------------
@@ -588,7 +592,6 @@ def test_the_ledger_schedules_every_asymmetric_capability_in_this_batch() -> Non
         "markets": "M3",
         "universe": "M3",
         "census": "M3",
-        "open-interest": "M2",
         "depth": "M6",
     }
     for method in scheduled.values():
@@ -616,3 +619,139 @@ def test_a_table_capability_returns_a_polars_frame_so_a_surface_can_page_it() ->
         market.markets(_ctx(), market.MarketsParams(search="no-such-venue")), pl.DataFrame
     )
     assert isinstance(market.list_exchanges(_ctx(), market.ListExchangesParams()), list)
+
+
+# ---------------------------------------------------------------------------
+# open-interest, equity half — M2, closed
+# ---------------------------------------------------------------------------
+
+
+def _chain_row(ts: int, underlying: str, strike: float, value: float | None) -> OptionsChain:
+    """One Yahoo-shaped contract carrying its own ``openInterest`` and nothing else."""
+    symbol = f"yahoo:{underlying}-{int(strike)}-C"
+    return OptionsChain(
+        source="yahoo",
+        symbol=symbol,
+        symbol_raw=symbol.split(":", 1)[-1],
+        source_ts=ts,
+        local_ts=ts,
+        asset_class=AssetClass.EQUITY,
+        underlying=underlying,
+        underlying_price=100.0,
+        strike=strike,
+        expiry=_BASE_NS + 365 * 86_400 * 1_000_000_000,
+        opt_type="C",
+        open_interest=value,
+    )
+
+
+@pytest.fixture
+def _equity_lake(tmp_path: Path) -> Catalog:
+    """One poll of two underlyings' chains, so a substring filter has something to sort."""
+
+    async def _write() -> None:
+        sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for record in (
+            _chain_row(_BASE_NS + 1, "AAPL", 100.0, 40.0),
+            _chain_row(_BASE_NS + 1, "AAPL", 110.0, 20.0),
+            _chain_row(_BASE_NS + 1, "MSFT", 400.0, 7.0),
+        ):
+            await sink.put(record)
+        await sink.flush()
+
+    asyncio.run(_write())
+    return Catalog(tmp_path)
+
+
+def _equity_ctx(catalog: Catalog) -> CapabilityContext:
+    return CapabilityContext(
+        catalog=catalog, settings=Settings(), asset_class=AssetClass.EQUITY
+    )
+
+
+def _call_open_interest(catalog: Catalog, params: market.OpenInterestParams) -> pl.DataFrame:
+    """Through the registry, which is the path a surface takes to reach this half."""
+    frame = REGISTRY["open-interest"].impls[AssetClass.EQUITY].fn(_equity_ctx(catalog), params)
+    assert isinstance(frame, pl.DataFrame)
+    return frame
+
+
+def test_open_interest_for_equities_sums_the_chain_per_underlying(
+    _equity_lake: Catalog,
+) -> None:
+    """M2's sentence. No equity feed publishes an underlying's open interest as one number.
+
+    Yahoo publishes ``openInterest`` per contract, so the underlying's figure is the sum
+    over its chain — which is the whole of what the equity half adds before handing the
+    samples to the same alignment the crypto half uses.
+    """
+    frame = _call_open_interest(_equity_lake, market.OpenInterestParams())
+    assert frame.columns == ["local_ts", "yahoo", "total_oi"]
+    assert frame.height == 1
+    assert frame["total_oi"].to_list() == [67.0]
+
+
+def test_open_interest_treats_an_equity_pattern_the_way_it_treats_a_crypto_one(
+    _equity_lake: Catalog,
+) -> None:
+    """One ``symbols`` field, one meaning: case-insensitive literal substrings, OR-ed.
+
+    What each half matches them *against* is the series it counts per — a perpetual's
+    ``symbol`` there, an ``underlying`` here. A field that meant "pattern" for one asset
+    class and "identity" for the other would be the divergence under one name that
+    ``OpenInterestParams``' own docstring is a history of.
+    """
+    aapl = _call_open_interest(_equity_lake, market.OpenInterestParams(symbols=("aapl",)))
+    assert aapl["total_oi"].to_list() == [60.0]
+
+    both = _call_open_interest(
+        _equity_lake, market.OpenInterestParams(symbols=("AAPL", "MSFT"))
+    )
+    assert both["total_oi"].to_list() == [67.0]
+
+    unsplit = _call_open_interest(
+        _equity_lake, market.OpenInterestParams(symbols=("AAPL,MSFT",))
+    )
+    assert unsplit.height == 0
+
+
+def test_the_default_range_covers_the_whole_equity_lake_too(_equity_lake: Catalog) -> None:
+    """``end_ns`` defaults to the largest representable timestamp on both halves.
+
+    REST's ``start=0, end=0`` returned nothing for every lake, which reads as a market with
+    no open interest rather than as a caller who named no range — and the equity half
+    inherits the struct, so it would have inherited the bug.
+    """
+    defaulted = _call_open_interest(_equity_lake, market.OpenInterestParams())
+    explicit = _call_open_interest(
+        _equity_lake, market.OpenInterestParams(start_ns=0, end_ns=_BASE_NS + 10)
+    )
+    assert defaulted.height == explicit.height == 1
+
+
+def test_the_two_halves_of_open_interest_are_not_the_same_function() -> None:
+    """They read different channels and count different series; one object cannot do both.
+
+    Binding ``fn=open_interest`` for equities would have read the ``open_interest`` channel,
+    which no equity provider writes, and returned an empty board under a declaration
+    promising a real one — the shape ``slippage``'s equity half shipped in and the reason
+    this is asserted rather than assumed.
+    """
+    impls = REGISTRY["open-interest"].impls
+    assert set(impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+    assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn
+
+
+def test_both_halves_of_open_interest_declare_the_same_ceiling() -> None:
+    """DERIVED on ``native``, and the sum does not change either word.
+
+    The inputs are reported open interest on both sides — a perpetual's own figure, a
+    contract's own figure — which is what ``native`` names. The alignment, the forward fill
+    and the sum are this engine's work, which is what makes the board DERIVED rather than
+    NATIVE; and a sum of reported values is still not a model of anything, which is the
+    line SYNTHETIC sits the far side of.
+    """
+    for impl in REGISTRY["open-interest"].impls.values():
+        assert impl.prov is Provenance.DERIVED
+        assert impl.basis == "native"
+        assert level_for(impl.basis) is Provenance.NATIVE

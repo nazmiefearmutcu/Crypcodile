@@ -304,7 +304,6 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "liquidity-depth": "M6",
     "markets": "M3",
     "ofi": "M7",
-    "open-interest": "M2",
     "perp-basis": "M5",
     "smart-money": "M4",
     "spot-future-basis": "M5",
@@ -313,10 +312,11 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
 }
 """The entries the ledger currently holds, pinned so its size is a watched number.
 
-Phase 2 closed with 21. It is 17: M1 has been repaid, and its four names — ``iv-surface``,
-``term-structure``, ``vol-skew`` and ``risk-reversal`` — left in the commit that gave them
-equity halves. Deleting them here and from the ``PENDING_SYMMETRY.update`` block in
-``capabilities/analytics.py`` is one change and not two: leave the batch entry and
+Phase 2 closed with 21. It is 16: M1 and M2 have been repaid, and five names left in the
+commit that gave them equity halves — ``iv-surface``, ``term-structure``, ``vol-skew`` and
+``risk-reversal`` off M1, and ``open-interest`` off M2. Deleting them here and from the
+``PENDING_SYMMETRY.update`` blocks in ``capabilities/analytics.py`` and
+``capabilities/market.py`` is one change and not two: leave the batch entry and
 :func:`test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric` fails because
 the capability is symmetric; leave this one and
 :func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails because the

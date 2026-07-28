@@ -69,6 +69,7 @@ from crocodile.crypto.instruments.universe import (
     filter_instruments,
     top_symbols_by_volume,
 )
+from crocodile.equity.analytics.oi_aggregator import aggregate_option_open_interest
 from crocodile.equity.depth import select_depth_source
 from crocodile.equity.providers import factory as provider_factory
 
@@ -402,6 +403,36 @@ def open_interest(ctx: CapabilityContext, params: OpenInterestParams) -> pl.Data
     )
 
 
+def open_interest_equities(ctx: CapabilityContext, params: OpenInterestParams) -> pl.DataFrame:
+    """The same board, summed out of the option chain because no equity feed publishes it.
+
+    A perpetual's venue states its open interest as one number and the crypto half reads
+    it. A listed equity's is the sum over its option chain — Yahoo publishes
+    ``openInterest`` per contract and nothing per underlying — so the aggregation is the
+    equity half's own arithmetic, and it is the whole of the difference: both halves then
+    hand their samples to the one forward-fill in
+    :mod:`crocodile.core.analytics.open_interest` and return the same
+    ``local_ts``/per-source/``total_oi`` frame.
+
+    ``params.symbols`` keeps its meaning rather than acquiring an equity one. It is a tuple
+    of case-insensitive literal substring patterns on both sides; what each side matches
+    them against is the series it counts per, which is the perpetual's ``symbol`` there and
+    the ``underlying`` here. A field that meant "pattern" for one asset class and "identity"
+    for the other would be the divergence-under-one-name this registry exists to end, and
+    ``OpenInterestParams``' docstring has the history of the three surfaces that each
+    guessed differently.
+
+    ``ctx.catalog`` rather than ``ctx.query``, for the reason :func:`open_interest` gives:
+    the SQL is fixed and internal to the aggregator, not a string a caller supplied.
+    """
+    return aggregate_option_open_interest(
+        ctx.catalog,
+        list(params.symbols),
+        params.start_ns,
+        params.end_ns,
+    )
+
+
 def depth(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
     """A US-equity depth ladder, from real L1 when keyed and a modelled one when not.
 
@@ -499,6 +530,18 @@ OPEN_INTEREST = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(fn=open_interest, prov=Provenance.DERIVED, basis="native"),
+            # DERIVED and `native` on both sides, and for one argument rather than for
+            # symmetry's sake. The inputs are venue- and provider-reported open interest —
+            # a perpetual's own figure on one side, a contract's own figure on the other —
+            # so `native` names what is behind them; the alignment, the forward fill and,
+            # on this side, the sum over a chain are this implementation's work, which is
+            # what makes the board DERIVED rather than the NATIVE its inputs are. That the
+            # equity number is a sum where the crypto one is a reading changes the
+            # arithmetic and not the provenance: a sum of reported values is still not a
+            # model of anything, which is the line SYNTHETIC is on the far side of.
+            AssetClass.EQUITY: Impl(
+                fn=open_interest_equities, prov=Provenance.DERIVED, basis="native"
+            ),
         },
     )
 )
@@ -537,7 +580,10 @@ PENDING_SYMMETRY.update(
         # The census counts a venue universe and a coin universe. Its equity form counts
         # what M3 resolves.
         "census": "M3",
-        "open-interest": "M2",
+        # `open-interest` was here against M2 and is repaid: the equity half sums the
+        # stored Yahoo chain's per-contract `openInterest` per underlying, which is what
+        # M2 specified, and both halves now widen their samples through the one function
+        # in `core.analytics.open_interest` so the two boards are the same table.
         # `depth` is the one entry whose direction the ledger cannot express, and it is
         # recorded here rather than left to be discovered. Every method in SPEC_METHODS
         # closes an *equity* gap; `depth`'s missing half is the **crypto** one, because the
