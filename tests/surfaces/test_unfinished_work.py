@@ -19,7 +19,6 @@ import pathlib
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.core.capability import REGISTRY
 from crocodile.core.config import Settings
 from crocodile.surfaces import cli, dispatch, mcp, rest
 from tests.surfaces.conftest import END_NS, START_NS, SYMBOL
@@ -110,6 +109,48 @@ def test_a_network_surface_stops_materialising_at_its_own_row_ceiling(
     assert capped["provenance"]["row_limit"] == 5
 
 
+def test_an_unstarted_coroutine_is_awaited_by_the_network_surface_too(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other unstarted shape, on the surface that could not previously start one.
+
+    ``backfill`` returns its coroutine unstarted precisely because ``asyncio.run`` inside a
+    running event loop raises, and a FastAPI route is inside one — so an ``async def``
+    endpoint could only ever have answered this with ``RuntimeError``. The route does its
+    work in a worker thread, which owns no loop, and that is what makes one ``drive`` serve
+    all three surfaces instead of the CLI keeping its own.
+    """
+    from crocodile.core.capability import REGISTRY, Capability, Impl
+
+    original = dispatch.resolve("catalog-summary")
+
+    async def _work(ctx: object, params: object) -> dict[str, str]:
+        return {"awaited": "yes"}
+
+    monkeypatch.setitem(
+        REGISTRY,
+        "catalog-summary",
+        Capability(
+            name=original.name,
+            summary=original.summary,
+            params=original.params,
+            returns=original.returns,
+            aliases=original.aliases,
+            impls={
+                asset_class: Impl(fn=_work, prov=impl.prov, basis=impl.basis)
+                for asset_class, impl in original.impls.items()
+            },
+        ),
+    )
+    response = _client(lake).get("/api/v1/catalog-summary", params={"asset_class": "crypto"})
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == {"awaited": "yes"}
+
+    from_mcp = mcp.call_tool("catalog-summary", {"asset_class": "crypto"},
+                             settings=_settings(lake))
+    assert from_mcp["result"] == {"awaited": "yes"}
+
+
 def test_a_result_no_surface_can_encode_is_refused_rather_than_handed_back() -> None:
     """``_encodable`` swallowed the ``TypeError`` and returned the object unchanged.
 
@@ -122,4 +163,4 @@ def test_a_result_no_surface_can_encode_is_refused_rather_than_handed_back() -> 
         pass
 
     with pytest.raises(TypeError, match="depth"):
-        dispatch.payload(REGISTRY["depth"], _Unencodable())
+        dispatch.payload(dispatch.resolve("depth"), _Unencodable())
