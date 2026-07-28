@@ -14,10 +14,12 @@ stubbed catalog would exercise the adapter's argument order and nothing else.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import math
 from pathlib import Path
 from typing import Any
 
+import msgspec.structs
 import polars as pl
 import pytest
 
@@ -44,12 +46,14 @@ from crocodile.capabilities.analytics import (
 from crocodile.core.capability import REGISTRY, AssetClass, CapabilityContext
 from crocodile.core.config import Settings
 from crocodile.core.schema.enums import OptType, Side
-from crocodile.core.schema.provenance import Provenance
+from crocodile.core.schema.provenance import Provenance, provenance_fields
 from crocodile.core.schema.records import (
     BookSnapshot,
     DepthProfile,
     DerivativeTicker,
     Funding,
+    Holding13F,
+    InsiderTransaction,
     Liquidation,
     OptionsChain,
     Trade,
@@ -658,6 +662,12 @@ _SYMMETRIC = frozenset(
         "funding-predict",
         "perp-basis",
         "spot-future-basis",
+        # M4's three, which left PENDING_SYMMETRY together because one method closes all
+        # of them: Form 4 for the dated insider transactions and 13F-HR for the
+        # institutional positions.
+        "whale-alerts",
+        "smart-money",
+        "label-transfers",
     }
 )
 """Names this batch owns that no longer need a schedule, and why each stopped needing one.
@@ -1023,6 +1033,120 @@ def equity_ctx(tmp_path: Path) -> CapabilityContext:
         settings=Settings(data_dir=tmp_path),
         asset_class=AssetClass.EQUITY,
     )
+
+
+# ---------------------------------------------------------------------------
+# M4: the equity halves of whale-alerts, smart-money and label-transfers
+# ---------------------------------------------------------------------------
+# Three capabilities whose crypto halves read an on-chain transfer. Equity has none, and
+# the substitute is a filing — Form 4 for a dated insider transaction, 13F-HR for a
+# quarter-end institutional position. Every test below reaches the implementation through
+# `REGISTRY[...].impls[AssetClass.EQUITY]`, so a declaration wired to the wrong function
+# fails here rather than on whichever surface projects it first.
+
+_ISSUER = "EXCO"
+_INSIDER_CIK = "0001051401"
+_MANAGER_CIK = "0000933136"
+
+
+def _date_ns(day: str) -> int:
+    return int(
+        datetime.datetime.fromisoformat(day)
+        .replace(tzinfo=datetime.UTC)
+        .timestamp()
+        * 1_000_000_000
+    )
+
+
+def _insider(
+    day: str,
+    code: str,
+    direction: str | None,
+    shares: float | None,
+    price: float | None,
+    *,
+    name: str = "DOE JANE Q",
+    cik: str | None = _INSIDER_CIK,
+    ingested_at: int = _BASE_NS,
+) -> InsiderTransaction:
+    """One Form 4 line as the parser would have written it.
+
+    ``ingested_at`` defaults to one instant for every row on purpose: a filing history
+    arrives in a single fetch, so a decade of transactions really does share one
+    ``local_ts``. That is what makes the window question below a real one.
+    """
+    n_reported = int(shares is not None) + int(price is not None)
+    tail = provenance_fields("sec_form4", {"n_reported_amounts": n_reported})
+    return InsiderTransaction(
+        source="sec_edgar",
+        symbol=_ISSUER,
+        symbol_raw=_ISSUER,
+        local_ts=ingested_at,
+        source_ts=None,
+        asset_class=AssetClass.EQUITY,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
+        insider_name=name,
+        insider_cik=cik,
+        position="Chief Executive Officer",
+        transaction_type=code,
+        transaction_date=day,
+        shares=shares,
+        price=price,
+        value=shares * price if shares is not None and price is not None else None,
+        ownership="D",
+        acquired_disposed=direction,
+    )
+
+
+def _holding(report_date: str, cusip: str, value: float, *, manager: str = "Cascade Partners LP"):
+    tail = provenance_fields("sec_13f_hr", {"disclosure_lag_days": 30})
+    return Holding13F(
+        source="sec_edgar",
+        symbol=cusip.upper(),
+        symbol_raw=cusip,
+        local_ts=_BASE_NS,
+        source_ts=None,
+        asset_class=AssetClass.EQUITY,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
+        manager_name=manager,
+        manager_cik=_MANAGER_CIK,
+        issuer_name="EXAMPLE INDUSTRIES INC",
+        cusip=cusip,
+        value=value,
+        shares=1000.0,
+        shares_type="SH",
+        report_date=report_date,
+    )
+
+
+def _filings_lake(tmp_path: Path) -> CapabilityContext:
+    load_all()
+    asyncio.run(
+        _write(
+            tmp_path,
+            [
+                # Below the default threshold: 100 shares at $10.
+                _insider("2024-05-01", "P", "A", 100.0, 10.0),
+                # A whale sale, and the row every assertion below is really about.
+                _insider("2024-05-03", "S", "D", 196410.0, 183.2143),
+                # A gift: shares, no price, so no notional at all.
+                _insider("2024-05-06", "G", "D", 5000.0, None),
+                # Inside the same bulk fetch and outside the window every test asks for.
+                _insider("2023-01-04", "S", "D", 400000.0, 200.0),
+            ],
+        )
+    )
+    return CapabilityContext(
+        catalog=Catalog(tmp_path),
+        settings=Settings(data_dir=tmp_path),
+        asset_class=AssetClass.EQUITY,
+    )
 # M5: the four spread capabilities that gained an equity half, plus the forecaster
 # ---------------------------------------------------------------------------
 #
@@ -1348,3 +1472,357 @@ def test_the_three_carry_impls_declare_the_basis_that_names_the_treasury_leg() -
         assert impl.basis == "treasury_carry"
         assert impl.prov is Provenance.DERIVED
     assert REGISTRY["basis"].impls[AssetClass.EQUITY].basis == "native"
+
+
+def _equity(name: str, ctx: CapabilityContext, params: Any) -> Any:
+    return REGISTRY[name].impls[AssetClass.EQUITY].fn(ctx, params)
+
+
+def test_whale_alerts_for_equities_returns_the_same_columns_the_crypto_half_does(
+    ctx: CapabilityContext, tmp_path: Path
+) -> None:
+    """Symmetry is a shared params struct *and* a matching return shape.
+
+    A surface renders one table for both asset classes off one declaration, so a column that
+    exists on one side and not the other is a projection that has to branch. Asserted against
+    the crypto half's own output rather than against a list written twice.
+    """
+    crypto = _call("whale-alerts", ctx, WhaleAlertsParams(_PERP, _T1, _T4))
+    equity = _equity(
+        "whale-alerts",
+        _filings_lake(tmp_path),
+        WhaleAlertsParams(_ISSUER, _date_ns("2024-05-01"), _date_ns("2024-05-31")),
+    )
+    assert crypto.schema == equity.schema
+
+
+def test_whale_alerts_for_equities_keeps_the_reported_transaction_above_the_threshold(
+    tmp_path: Path,
+) -> None:
+    """One filing in the window clears 100 000 and the other two do not, for two reasons.
+
+    The purchase is genuinely small. The gift states shares and no price, so it has no
+    notional — and a notional of `None` is below every threshold rather than above the zero
+    one, which is the same treatment a transfer with no `usd_value` gets on the crypto side.
+    """
+    rows = _equity(
+        "whale-alerts",
+        _filings_lake(tmp_path),
+        WhaleAlertsParams(_ISSUER, _date_ns("2024-05-01"), _date_ns("2024-05-31")),
+    ).to_dicts()
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "Form 4"
+    assert rows[0]["side"] == "sell"
+    assert rows[0]["amount"] == 196410.0
+    assert math.isclose(rows[0]["usd_value"], 196410.0 * 183.2143)
+    assert rows[0]["timestamp"] == _date_ns("2024-05-03")
+
+
+def test_whale_alerts_for_equities_windows_on_the_transaction_date_not_the_ingest_time(
+    tmp_path: Path,
+) -> None:
+    """The trap a straight port of the crypto half walks into.
+
+    `track_whale_alerts` filters on `local_ts`, which is right for a trade — it is observed
+    as it prints. A filing history is fetched in one pass, so every row in the fixture shares
+    one `local_ts`; a window over that would return the whole decade or none of it depending
+    on when the fetch ran. The January 2023 sale is the biggest row in the lake and is
+    outside the window, so a `local_ts` filter would either include it here or exclude
+    everything.
+    """
+    ctx = _filings_lake(tmp_path)
+    in_may = _equity(
+        "whale-alerts",
+        ctx,
+        WhaleAlertsParams(_ISSUER, _date_ns("2024-05-01"), _date_ns("2024-05-31"), min_usd=0.0),
+    )
+    in_2023 = _equity(
+        "whale-alerts",
+        ctx,
+        WhaleAlertsParams(_ISSUER, _date_ns("2023-01-01"), _date_ns("2023-01-31")),
+    )
+    assert sorted(r["timestamp"] for r in in_may.to_dicts()) == [
+        _date_ns("2024-05-01"),
+        _date_ns("2024-05-03"),
+    ]
+    assert [r["usd_value"] for r in in_2023.to_dicts()] == [400000.0 * 200.0]
+
+
+def test_whale_alerts_for_equities_answers_an_empty_lake_with_an_empty_table(
+    tmp_path: Path,
+) -> None:
+    """A symbol nobody ingested is not an error, it is a symbol with no whales — and the
+    empty frame still carries the six columns, so a caller may select on them."""
+    load_all()
+    empty = CapabilityContext(
+        catalog=Catalog(tmp_path),
+        settings=Settings(data_dir=tmp_path),
+        asset_class=AssetClass.EQUITY,
+    )
+    frame = _equity("whale-alerts", empty, WhaleAlertsParams("NOSUCH", 0, _date_ns("2030-01-01")))
+    assert frame.is_empty()
+    assert frame.columns == ["timestamp", "event_type", "price", "amount", "usd_value", "side"]
+
+
+def test_whale_alerts_for_equities_reads_form_4_and_not_a_13f_position(
+    tmp_path: Path,
+) -> None:
+    """The 13F parser exists and this capability deliberately does not read it.
+
+    An information table states a position, not a transaction: no side, and no date for any
+    of the trades behind it. Reporting a large holding as an alert would answer "who holds
+    size" under a name that promises "who moved it". The lake here holds a $135M position
+    and one $36M sale, and only the sale is an alert.
+    """
+    load_all()
+    asyncio.run(
+        _write(
+            tmp_path,
+            [
+                _insider("2024-05-03", "S", "D", 196410.0, 183.2143),
+                _holding("2024-03-31", "30161N101", 135_360_898.0),
+            ],
+        )
+    )
+    ctx = CapabilityContext(
+        catalog=Catalog(tmp_path),
+        settings=Settings(data_dir=tmp_path),
+        asset_class=AssetClass.EQUITY,
+    )
+    rows = _equity(
+        "whale-alerts",
+        ctx,
+        WhaleAlertsParams(_ISSUER, _date_ns("2024-01-01"), _date_ns("2024-12-31")),
+    ).to_dicts()
+    assert [r["event_type"] for r in rows] == ["Form 4"]
+
+
+def _rows(records: list[Any]) -> tuple[dict[str, Any], ...]:
+    """Filing records as the dicts a caller passes in ``transfers``."""
+    return tuple(msgspec.structs.asdict(record) for record in records)
+
+
+def test_smart_money_for_equities_nets_a_filers_reported_purchases_against_their_sales(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """An acquisition is value moving to the filer and a disposition value moving away.
+
+    Which is exactly the ``from``/``to`` pair the crypto tracker already nets, so the
+    arithmetic is shared and only the translation is new: the filer bought $1 000 and sold
+    $3 000, so the net flow is -$2 000 over $4 000 of volume.
+    """
+    rows = _rows(
+        [
+            _insider("2024-05-01", "P", "A", 100.0, 10.0),
+            _insider("2024-05-03", "S", "D", 100.0, 30.0),
+        ]
+    )
+    out = _equity("smart-money", empty_ctx, SmartMoneyParams(rows, {_INSIDER_CIK: "the CEO"}))
+    assert len(out) == 1
+    assert out[0]["net_flow_usd"] == -2000.0
+    assert out[0]["total_volume_usd"] == 4000.0
+    assert out[0]["tx_count"] == 2
+    assert out[0]["label"] == "the CEO"
+    assert out[0]["last_active_ts"] == _date_ns("2024-05-03")
+
+
+def test_smart_money_for_equities_matches_a_watchlist_on_either_handle_a_filing_carries(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """A filing names its party twice, by CIK and by name, and a watchlist may use either.
+
+    Keying the tracker on one of them and matching the other is the bug shape that looks
+    like the filer did nothing, which is indistinguishable from a filer who really did.
+    """
+    rows = _rows([_insider("2024-05-03", "S", "D", 100.0, 30.0)])
+    by_cik = _equity("smart-money", empty_ctx, SmartMoneyParams(rows, {_INSIDER_CIK: "the CEO"}))
+    by_name = _equity(
+        "smart-money", empty_ctx, SmartMoneyParams(rows, {"doe jane q": "the CEO"})
+    )
+    assert [r["net_flow_usd"] for r in by_cik] == [-3000.0]
+    assert by_name == by_cik
+
+
+def test_smart_money_for_equities_ignores_a_filer_nobody_asked_about(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """The tracker's own contract, kept: an empty watchlist matches no row by construction."""
+    rows = _rows([_insider("2024-05-03", "S", "D", 100.0, 30.0)])
+    assert _equity("smart-money", empty_ctx, SmartMoneyParams(rows, {})) == []
+
+
+def test_smart_money_for_equities_leaves_an_unsigned_transaction_out_of_a_signed_total(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """Code ``G`` is one code and two directions — the donor disposes, the donee acquires.
+
+    A row that carries no ``acquired_disposed`` and whose code does not imply one cannot be
+    netted, and counting it in ``total_volume_usd`` while leaving it out of ``net_flow_usd``
+    would make two columns describe two different sets of rows under one ``tx_count``.
+    """
+    priced_gift = _insider("2024-05-06", "G", None, 100.0, 10.0)
+    rows = _rows([_insider("2024-05-03", "S", "D", 100.0, 30.0), priced_gift])
+    out = _equity("smart-money", empty_ctx, SmartMoneyParams(rows, {_INSIDER_CIK: "the CEO"}))
+    assert out[0]["tx_count"] == 1
+    assert out[0]["total_volume_usd"] == 3000.0
+
+
+def test_smart_money_for_equities_reads_a_flow_out_of_two_quarters_of_holdings(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """The 13F half of M4: a position is not a flow, and the difference between two is.
+
+    The manager added $15M to one position and trimmed $8M from another between March and
+    June, so the net is +$7M over $23M of volume — and neither number is on any single
+    information table.
+    """
+    rows = _rows(
+        [
+            _holding("2024-03-31", "30161N101", 135_000_000.0),
+            _holding("2024-06-30", "30161N101", 150_000_000.0),
+            _holding("2024-03-31", "02079K305", 20_000_000.0),
+            _holding("2024-06-30", "02079K305", 12_000_000.0),
+        ]
+    )
+    out = _equity(
+        "smart-money", empty_ctx, SmartMoneyParams(rows, {_MANAGER_CIK: "Cascade"})
+    )
+    assert len(out) == 1
+    assert out[0]["net_flow_usd"] == 7_000_000.0
+    assert out[0]["total_volume_usd"] == 23_000_000.0
+    assert out[0]["label"] == "Cascade"
+
+
+def test_smart_money_for_equities_reports_no_flow_from_a_single_quarter(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """A change cannot be observed before the first observation.
+
+    The tempting alternative is to read an initial appearance as a purchase of the whole
+    position, which would report a manager's entire book as bought in whichever quarter the
+    caller happened to fetch first. Empty is the true answer and it is worth a test, because
+    it is the answer somebody will try to "fix".
+    """
+    rows = _rows([_holding("2024-03-31", "30161N101", 135_000_000.0)])
+    assert _equity("smart-money", empty_ctx, SmartMoneyParams(rows, {_MANAGER_CIK: "C"})) == []
+
+
+def test_label_transfers_for_equities_labels_every_row_and_still_flags_only_the_watched(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """The claim the M4 ledger entry made: a CIK is already a label.
+
+    An unwatched Ethereum address gets ``""`` from the crypto half because a hex string is
+    all the row carries. A filing arrives carrying the filer's own reported name, so the
+    label is populated for every row — while ``is_known`` keeps meaning *matched the
+    watchlist*, which is what stops ``known_only`` becoming a filter that removes nothing.
+    """
+    rows = _rows(
+        [
+            _insider("2024-05-03", "S", "D", 100.0, 30.0),
+            _insider("2024-05-04", "P", "A", 50.0, 20.0, name="ROE RICHARD", cik="0009999999"),
+        ]
+    )
+    out = _equity(
+        "label-transfers", empty_ctx, LabelTransfersParams(rows, {_INSIDER_CIK: "the CEO"})
+    )
+    watched, unwatched = out
+    assert watched["is_known"] is True
+    assert unwatched["is_known"] is False
+    # A sale moves value away from the filer, a purchase towards them, so the two label
+    # columns follow the money rather than the layout of the filing.
+    assert (watched["from_label"], watched["to_label"]) == ("the CEO", _ISSUER)
+    assert (unwatched["from_label"], unwatched["to_label"]) == (_ISSUER, "ROE RICHARD")
+
+
+def test_label_transfers_for_equities_still_drops_the_unknown_rows_when_asked(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """``known_only`` reads ``is_known``, which is the column a "has a label" reading would
+    have made universally true."""
+    rows = _rows(
+        [
+            _insider("2024-05-03", "S", "D", 100.0, 30.0),
+            _insider("2024-05-04", "P", "A", 50.0, 20.0, name="ROE RICHARD", cik="0009999999"),
+        ]
+    )
+    params = LabelTransfersParams(rows, {_INSIDER_CIK: "the CEO"}, known_only=True)
+    kept = _equity("label-transfers", empty_ctx, params)
+    assert [row["insider_name"] for row in kept] == ["DOE JANE Q"]
+
+
+def test_label_transfers_for_equities_reads_the_filings_value_as_the_notional(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """``filter_transfers_by_usd`` is reused unchanged: it already reads ``value``.
+
+    The gift is the interesting row. It reports shares and no price, so it has no notional
+    at all, and ``min_usd=0.0`` drops it while ``min_usd=None`` keeps it — the same
+    distinction the crypto half draws for a transfer with an unparseable ``usd_value``, on a
+    source that produces the case far more often.
+    """
+    rows = _rows(
+        [
+            _insider("2024-05-03", "S", "D", 100.0, 30.0),
+            _insider("2024-05-06", "G", "D", 5000.0, None),
+        ]
+    )
+    watchlist: dict[str, Any] = {_INSIDER_CIK: "the CEO"}
+    assert len(_equity("label-transfers", empty_ctx, LabelTransfersParams(rows, watchlist))) == 2
+    thresholded = LabelTransfersParams(rows, watchlist, min_usd=0.0)
+    assert len(_equity("label-transfers", empty_ctx, thresholded)) == 1
+    high = LabelTransfersParams(rows, watchlist, min_usd=5000.0)
+    assert _equity("label-transfers", empty_ctx, high) == []
+
+
+def test_the_three_m4_capabilities_are_symmetric_and_off_the_ledger() -> None:
+    """The definition of done, asserted as one statement rather than inferred from a gate.
+
+    ``test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold`` catches a half-done
+    deletion, and ``test_gate2_every_capability_is_symmetric`` catches an unscheduled
+    asymmetry. Neither says *these three* are done, which is what M4 promised.
+    """
+    from crocodile.core.capability import PENDING_SYMMETRY
+
+    load_all()
+    for name in ("whale-alerts", "smart-money", "label-transfers"):
+        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}, name
+        assert name not in PENDING_SYMMETRY, name
+
+
+def test_the_two_asset_classes_of_the_m4_capabilities_are_not_the_same_function() -> None:
+    """The tell that an equity declaration was never exercised, which `slippage` shipped.
+
+    One function bound twice cannot be two implementations over two different documents, and
+    the parameter that would have said so — an asset class on the context — is not read by
+    any of these bodies.
+    """
+    load_all()
+    for name in ("whale-alerts", "smart-money", "label-transfers"):
+        impls = REGISTRY[name].impls
+        assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn, name
+
+
+def test_label_transfers_for_equities_names_an_institutional_filer_from_the_row_itself(
+    empty_ctx: CapabilityContext,
+) -> None:
+    """The 13F side of the same claim, and the case the ledger comment had in mind.
+
+    A quarter-end position reports no direction, so neither label column asserts a flow —
+    what the capability adds here is the identity, and the information table carries it: the
+    manager's own name off the cover page and a CIK that survives a rename. An unwatched
+    Ethereum address would have come back with two empty strings.
+    """
+    rows = _rows([_holding("2024-03-31", "30161N101", 135_000_000.0)])
+    unwatched = _equity("label-transfers", empty_ctx, LabelTransfersParams(rows, {}))[0]
+    assert unwatched["is_known"] is False
+    assert unwatched["from_label"] == "Cascade Partners LP"
+    assert unwatched["to_label"] == "EXAMPLE INDUSTRIES INC"
+
+    watched = _equity(
+        "label-transfers",
+        empty_ctx,
+        LabelTransfersParams(rows, {"cascade partners lp": "the whale"}),
+    )[0]
+    assert watched["is_known"] is True
+    assert watched["from_label"] == "the whale"

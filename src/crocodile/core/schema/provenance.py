@@ -866,6 +866,99 @@ def worst_provenance(levels: Iterable[Provenance]) -> Provenance:
     return max(materialised, key=_TRUST_ORDER.index)
 
 
+_FORM4_NOTIONAL_BOXES: Final[int] = 2
+"""The two Form 4 Table I boxes a USD notional needs: shares and price per share.
+
+Scoped to one basis like ``_YAHOO_1M_VAP_SESSION_BARS`` and ``_L1_QUOTED_SIDES`` above.
+It is a fact about the form, not about disclosure in general — a 13F information table
+has no price box at all, which is why it is scored on something else entirely.
+"""
+
+_FORM_13F_DISCLOSURE_WINDOW_DAYS: Final[int] = 45
+"""Days Rule 13f-1(a) allows between the quarter a table describes and its filing.
+
+Scoped the same way. It is the one denominator in this registry that a regulator wrote
+down rather than a market produced, which is the whole reason ``sec_13f_hr`` is allowed
+to measure a lag where ``book_resample`` refused to.
+"""
+
+
+@register_basis("sec_form4", level=Provenance.NATIVE, inputs=["insider"])
+def _sec_form4(inputs: Mapping[str, Any]) -> float:
+    """An insider's reported transaction: how much of the notional the line actually states.
+
+    ``n_reported_amounts / 2``, where the two are Table I's ``transactionShares`` and
+    ``transactionPricePerShare``. Both are independently omissible and both are genuinely
+    omitted: a gift (code ``G``) and an award (code ``A``) carry shares and no price, and a
+    holding-only line carries neither. ``whale-alerts`` thresholds on a USD notional, so a
+    line stating shares and no price is half of what the measurement it feeds requires — the
+    same shape as ``alpaca_l1``'s ``n_quoted_sides / 2``, and the same kind of denominator:
+    the form has those two boxes whether or not a filer fills them.
+
+    :attr:`Provenance.NATIVE`, not :attr:`Provenance.DERIVED`. Section 16(a) makes the
+    *insider* the reporter and the SEC the publisher, so the shares, the price and the date
+    are read off a filed document rather than reconstructed from anything. The confidence
+    grades sampling **within** that level, which is what lets a natively-reported line score
+    0.5 without any suggestion that the numbers on it are modelled.
+
+    **Why the two-business-day rule is not what is scored here, when it is what
+    ``sec_13f_hr`` scores.** Rule 16a-3(g) gives an insider two business days, and it is
+    tempting to read a late Form 4 as a worse sample. It is not, because the record carries
+    ``transaction_date``: the event's own instant is *on the row*, so a consumer asking "what
+    moved on the third" gets the right answer from a filing that landed on the tenth. Lateness
+    costs a reader latency, not sampling. A 13F carries no date for anything it reports, which
+    is exactly why the lag is a sampling deficiency there and only a delay here.
+    """
+    n = _require_int(inputs, "n_reported_amounts")
+    if not 0 <= n <= _FORM4_NOTIONAL_BOXES:
+        raise ConfidenceInputError(
+            f"input 'n_reported_amounts' must be between 0 and {_FORM4_NOTIONAL_BOXES}, got {n}"
+        )
+    return n / _FORM4_NOTIONAL_BOXES
+
+
+@register_basis("sec_13f_hr", level=Provenance.NATIVE, inputs=["holding_13f"])
+def _sec_13f_hr(inputs: Mapping[str, Any]) -> float:
+    """A quarter-end position: how much of the statutory 45 days it was withheld for.
+
+    ``max(1 - disclosure_lag_days / 45, 0.0)``, where ``disclosure_lag_days`` counts calendar
+    days from the quarter end the table describes to the day the filing became public. A table
+    filed the day after quarter end was invisible for one of the days Rule 13f-1 permits it to
+    be invisible and scores 44/45; one filed at the deadline scores 0.0, and an amendment
+    landing later clamps there.
+
+    **Why this is a sampling measure and not a complaint about lateness.**
+    ``_book_resample`` in this same registry declines to score staleness, and its two reasons
+    are the right test to apply. The first: "absence of updates is not absence of sampling" —
+    a quiet book genuinely did not change. That leg fails here. A withheld 13F describes a
+    portfolio that *existed* through the whole interval and that no one outside the manager
+    could observe; the position is not quiet, it is hidden, and an interval in which a real
+    fact was unobservable is unsampled by any reading of the word. The second: scoring it
+    "would need a reference for how often a book ought to tick, and no such reference
+    exists". That leg fails too, and more plainly — Rule 13f-1(a) wrote the reference down.
+    45 days is not a denominator invented to make a constant look measured; it is the window
+    a regulator set, and it exists whether or not any filer uses it, in the way a regular US
+    session contains 390 one-minute bars whether or not ``yahoo_1m_vap`` fetched any.
+
+    **Why the lag and not the form's own boxes**, which is what ``sec_form4`` scores. An
+    information table's Column 5 value and Column 4 share count are mandatory and are
+    present on essentially every row; there is nothing partial about them to grade. What is
+    partial is the *time* the row speaks for: the table states a position at one instant and
+    publishes no date for a single one of the trades that built it, so a quarter of activity
+    arrives as one undated number. That is the deficiency worth measuring, and the lag is the
+    part of it that is observable per record.
+
+    0.0 at the deadline is the reading ``unavailable`` and ``scraped_last_price`` carry and
+    means what it means there: no sampling evidence — here, none *for the present*. It is not
+    a claim that the position is false. The claim that a filer really reported these numbers
+    is ``prov``'s, and it stays :attr:`Provenance.NATIVE` at every value.
+    """
+    lag = _require_int(inputs, "disclosure_lag_days")
+    if lag < 0:
+        raise ConfidenceInputError(f"input 'disclosure_lag_days' must be non-negative, got {lag}")
+    return max(1.0 - lag / _FORM_13F_DISCLOSURE_WINDOW_DAYS, 0.0)
+
+
 @register_basis("book_resample", level=Provenance.DERIVED, inputs=["book_snapshot", "book_delta"])
 def _book_resample(_: Mapping[str, Any]) -> float:
     """Resampled book depth: 1.0, because the capture is exact at the instant it is stamped.

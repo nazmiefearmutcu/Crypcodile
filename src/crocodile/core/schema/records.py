@@ -375,6 +375,33 @@ class InsiderTransaction(
     price: float | None = None
     value: float | None = None
     ownership: str | None = None  # "D" or "I"
+    acquired_disposed: str | None = None  # "A" or "D"
+    """Which way the shares moved, from Form 4's ``transactionAcquiredDisposedCode``.
+
+    Optional because the Yahoo scrape that filled this record first cannot report it — that
+    page publishes a prose transaction label and no A/D column — and ``None`` says
+    "not reported" where either letter would be a guess.
+
+    It is a separate field rather than something a reader infers from
+    ``transaction_type``, and the reason is code ``G``. A gift is one transaction code and
+    two directions: the donor disposes and the donee acquires, and only this box says which
+    one this row is. Codes ``P``/``S``/``A``/``F``/``M`` do imply a direction, so a lookup
+    table would be right most of the time and silently wrong on the rest — which is the
+    shape of defect ``smart-money`` cannot survive, since its whole output is a signed flow.
+    """
+
+    insider_cik: str | None = None
+    """The reporting owner's ten-digit SEC identifier, when the source publishes one.
+
+    Carried because it is the identity a watchlist should key on. A person's name is spelled
+    however the filing agent typed it — ``COOK TIMOTHY D`` one quarter and ``Cook Timothy
+    D.`` the next — while a CIK is assigned once and never re-spelled, so a join on the name
+    silently misses filings a join on the CIK catches. This is the field behind the claim in
+    ``capabilities/analytics.py``'s ledger that ``label-transfers`` is the one capability
+    equities serve *better* than crypto: an unwatched Ethereum address is a hex string and
+    nothing else, whereas an unwatched filer arrives already carrying both a stable id and a
+    human-readable name.
+    """
 
 
 class Holding13F(
@@ -392,6 +419,15 @@ class Holding13F(
     voting_none: float | None = None
     report_date: str | None = None
     accession_number: str | None = None
+    manager_cik: str | None = None
+    """The filing manager's ten-digit SEC identifier, for the reason
+    :attr:`InsiderTransaction.insider_cik` carries one.
+
+    ``manager_name`` is free text on the cover page and moves — a manager that renames, or
+    an agent that drops ``, LLC``, produces a different string for the same institution
+    across two quarters, which is exactly the join ``smart-money`` makes when it differences
+    consecutive information tables. The CIK does not move.
+    """
 
 
 class ShortInterest(

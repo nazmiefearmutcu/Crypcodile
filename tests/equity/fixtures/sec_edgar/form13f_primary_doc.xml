@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/thirteenffiler"
+                 xmlns:com="http://www.sec.gov/edgar/common">
+    <headerData>
+        <submissionType>13F-HR</submissionType>
+        <filerInfo>
+            <liveTestFlag>LIVE</liveTestFlag>
+            <filer>
+                <credentials>
+                    <cik>0000933136</cik>
+                    <ccc>XXXXXXXX</ccc>
+                </credentials>
+            </filer>
+            <periodOfReport>03-31-2024</periodOfReport>
+        </filerInfo>
+    </headerData>
+    <formData>
+        <coverPage>
+            <reportCalendarOrQuarter>03-31-2024</reportCalendarOrQuarter>
+            <isAmendment>false</isAmendment>
+            <filingManager>
+                <name>Cascade Partners LP</name>
+                <address>
+                    <com:street1>3555 FARNAM STREET</com:street1>
+                    <com:city>OMAHA</com:city>
+                    <com:stateOrCountry>NE</com:stateOrCountry>
+                    <com:zipCode>68131</com:zipCode>
+                </address>
+            </filingManager>
+            <reportType>13F HOLDINGS REPORT</reportType>
+            <form13FFileNumber>028-01202</form13FFileNumber>
+        </coverPage>
+        <signatureBlock>
+            <name>A Signatory</name>
+            <title>Controller</title>
+            <phone>402-555-0100</phone>
+            <city>Omaha</city>
+            <stateOrCountry>NE</stateOrCountry>
+            <signatureDate>05-15-2024</signatureDate>
+        </signatureBlock>
+        <summaryPage>
+            <otherIncludedManagersCount>0</otherIncludedManagersCount>
+            <tableEntryTotal>3</tableEntryTotal>
+            <tableValueTotal>331708283</tableValueTotal>
+        </summaryPage>
+    </formData>
+</edgarSubmission>

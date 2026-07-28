@@ -296,13 +296,10 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "census": "M3",
     "chaos-score": "M6",
     "collect-market": "M3",
-    "label-transfers": "M4",
     "liquidity-depth": "M6",
     "markets": "M3",
     "ofi": "M7",
-    "smart-money": "M4",
     "universe": "M3",
-    "whale-alerts": "M4",
 }
 """What the ledger holds right now, pinned so its size is a watched number.
 

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+    <infoTable>
+        <nameOfIssuer>EXAMPLE INDUSTRIES INC</nameOfIssuer>
+        <titleOfClass>COM</titleOfClass>
+        <cusip>30161N101</cusip>
+        <value>150360898</value>
+        <shrsOrPrnAmt>
+            <sshPrnamt>800000000</sshPrnamt>
+            <sshPrnamtType>SH</sshPrnamtType>
+        </shrsOrPrnAmt>
+        <investmentDiscretion>DFND</investmentDiscretion>
+        <votingAuthority>
+            <Sole>800000000</Sole>
+            <Shared>0</Shared>
+            <None>0</None>
+        </votingAuthority>
+    </infoTable>
+    <infoTable>
+        <nameOfIssuer>SECOND HOLDING CORP</nameOfIssuer>
+        <titleOfClass>COM</titleOfClass>
+        <cusip>02079K305</cusip>
+        <value>12000000</value>
+        <shrsOrPrnAmt>
+            <sshPrnamt>75000</sshPrnamt>
+            <sshPrnamtType>SH</sshPrnamtType>
+        </shrsOrPrnAmt>
+        <investmentDiscretion>SOLE</investmentDiscretion>
+        <votingAuthority>
+            <Sole>75000</Sole>
+            <Shared>0</Shared>
+            <None>0</None>
+        </votingAuthority>
+    </infoTable>
+</informationTable>
