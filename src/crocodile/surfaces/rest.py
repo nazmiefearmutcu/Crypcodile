@@ -108,7 +108,7 @@ def _openapi_parameters(cap: Capability) -> list[dict[str, Any]]:
     structured = dispatch.structured_fields(cap)
     properties = schema.get("properties", {})
     parameters: list[dict[str, Any]] = [
-        {"name": name, "in": "query", "required": name in required, "schema": subschema}
+        _query_parameter(name, subschema, required=name in required)
         for name, subschema in properties.items()
         if name not in structured
     ]
@@ -121,6 +121,61 @@ def _openapi_parameters(cap: Capability) -> list[dict[str, Any]]:
         }
     )
     return parameters
+
+
+ARRAY_SERIALISATION: dict[str, Any] = {"style": "form", "explode": True}
+"""How this surface serialises an array in a query string: ``?k=a&k=b``.
+
+Stated on the parameter rather than left to OpenAPI's default — which is the same thing —
+because a default nobody wrote down is a default nothing can be checked against, and the
+disagreement this fixes was exactly that. The document said ``{"type": "array"}`` and the
+handler said ``dict(request.query_params)``, which keeps the **last** value of a repeated
+key: ``?rates=0.001&rates=0.002&rates=0.003&rates=0.004`` answered 200 with
+``predicted_funding_rate: 0.004`` and ``n_history: 1``. A client that read the published
+schema and did what it said got a wrong number and no error.
+
+The wire is what was made to agree with the schema, not the other way round: repeated keys
+are what the OpenAPI default *means*, every generated client already emits them, and the
+comma form the two forks served — ``?symbols=BTC,ETH`` — keeps working underneath because
+:func:`dispatch.build_params` splits a single string on commas. So a repeated key and a
+comma list are both accepted and both mean the same thing, and only one of them has to be
+published to be true.
+
+:func:`test_every_published_array_parameter_is_parsed_the_way_it_is_published` is what stops
+the two drifting again: it reads this declaration off the generated document and drives the
+route with it.
+"""
+
+
+def _query_parameter(name: str, subschema: dict[str, Any], *, required: bool) -> dict[str, Any]:
+    """One entry in the published parameter list, carrying its serialisation when it needs one."""
+    parameter: dict[str, Any] = {
+        "name": name,
+        "in": "query",
+        "required": required,
+        "schema": subschema,
+    }
+    if _is_array(subschema):
+        parameter |= ARRAY_SERIALISATION
+        parameter["description"] = (
+            "Repeat the key once per value. A single comma-separated value is also accepted."
+        )
+    return parameter
+
+
+def _is_array(subschema: dict[str, Any]) -> bool:
+    """Whether this published parameter is a sequence, through a nullable union or not.
+
+    ``msgspec.json.schema`` writes an optional sequence as ``anyOf`` with a ``null`` arm, so
+    reading only the top-level ``type`` would leave every optional array — which is most of
+    them — published without a serialisation and parsed with one.
+    """
+    if subschema.get("type") == "array":
+        return True
+    return any(
+        isinstance(arm, dict) and arm.get("type") == "array"
+        for arm in subschema.get("anyOf", ())
+    )
 
 
 def _openapi_request_body(cap: Capability) -> dict[str, Any]:
@@ -195,6 +250,39 @@ def _openapi_responses(cap: Capability) -> dict[str, Any]:
             },
         }
     }
+
+
+def _query_values(request: Request) -> dict[str, Any]:
+    """The query string as parameter values, keeping every value of a repeated key.
+
+    ``dict(request.query_params)`` was silently lossy: Starlette's ``QueryParams`` is a
+    multidict and collapsing it keeps only the last value, so the published array form —
+    ``?rates=0.001&rates=0.002&rates=0.003&rates=0.004``, which is what OpenAPI's default
+    serialisation and therefore every generated client emits — arrived as one number. The
+    response was ``200`` with ``n_history: 1``: a wrong answer, in range, with no error on it.
+    See :data:`ARRAY_SERIALISATION`.
+
+    A key that appears **once** stays a string rather than becoming a one-element list, and
+    that is deliberate rather than incidental: it is what keeps the comma form working, since
+    :func:`dispatch.build_params` splits a string for a sequence field and does not split a
+    list. So ``?symbols=BTC,ETH`` and ``?symbols=BTC&symbols=ETH`` reach the implementation
+    as the same tuple, which is the only outcome under which the two forks' existing callers
+    and a schema-following client are both right.
+
+    Repeating a key that is *not* declared as a sequence is left to
+    :func:`dispatch.build_params` to reject against the real type, rather than being resolved
+    here by taking one of them — a surface quietly choosing which of two values a caller meant
+    is the shape of failure this whole finding is.
+    """
+    collected: dict[str, Any] = {}
+    for key, value in request.query_params.multi_items():
+        if key not in collected:
+            collected[key] = value
+        elif isinstance(collected[key], list):
+            collected[key].append(value)
+        else:
+            collected[key] = [collected[key], value]
+    return collected
 
 
 async def _body_values(request: Request) -> dict[str, Any]:
@@ -291,7 +379,7 @@ def _handler(
         # fit in a URL can only be in the body, so a caller routinely needs both. The body
         # takes precedence on a collision because it is the richer of the two encodings —
         # a query string only ever has strings in it.
-        supplied = dict(request.query_params)
+        supplied = _query_values(request)
         supplied |= await _body_values(request)
         # Off the event loop, for two reasons that are really one. Every capability here is
         # blocking — DuckDB, Parquet, HTTP — so serving it inline stalls every other request
