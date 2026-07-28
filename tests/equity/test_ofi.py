@@ -173,10 +173,19 @@ def test_a_lake_of_bars_and_no_quotes_yields_nothing_rather_than_a_column_of_zer
     """The wrong turn this implementation had to avoid, asserted as behaviour.
 
     ``OHLCV.buy_volume`` and ``sell_volume`` are the obvious ingredients for an equity flow
-    statistic and they are set by no connector in this tree — every bar in the lake carries
-    ``0.0`` for both. An imbalance built on them would answer every call for every symbol
-    with zeros, which is a fabricated calm rather than a missing answer. A lake holding only
-    bars therefore has to produce *no rows*, not quiet ones.
+    statistic, and no equity writer in this tree fills them — an Alpaca bar carries neither.
+    An imbalance built on them would answer every call for every symbol with zeros, which is
+    a fabricated calm rather than a missing answer. A lake holding only bars therefore has to
+    produce *no rows*, not quiet ones.
+
+    The premise below was written as ``== 0.0`` and is now ``is None``, and the change is the
+    point rather than an adjustment to it. Both halves of this phase landed independently:
+    this test's branch avoided the two fields because they were an all-zeros trap, and the
+    follow-up branch removed the trap by making an unfilled split a typed hole instead of a
+    measured zero. Neither knew about the other, git merged both without a conflict — the
+    two edits are in different files — and the only thing that noticed was this line going
+    red. A premise asserted out loud is what turns somebody else's fix into a failing test
+    rather than into a test that quietly stops meaning anything.
     """
     from crocodile.core.schema.records import OHLCV
 
@@ -203,6 +212,7 @@ def test_a_lake_of_bars_and_no_quotes_yields_nothing_rather_than_a_column_of_zer
     with Catalog(path) as catalog:
         frame = calculate_quote_ofi(catalog, _TICKER, _BASE_NS, _BASE_NS + 600 * _SEC, "1m")
     assert frame.is_empty()
-    assert all(bar.buy_volume == 0.0 and bar.sell_volume == 0.0 for bar in bars), (
-        "the premise of this test: no writer fills the bar volume split"
+    assert all(bar.buy_volume is None and bar.sell_volume is None for bar in bars), (
+        "the premise of this test: an equity writer fills no bar volume split, and an "
+        "unfilled one is a hole rather than a zero"
     )
