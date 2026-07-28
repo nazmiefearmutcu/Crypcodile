@@ -58,13 +58,16 @@ import polars as pl
 
 from crocodile.core.config import Settings
 from crocodile.core.coverage.resolver import CoverageResolver
-from crocodile.core.errors import ConfigError
 from crocodile.core.schema.enums import AssetClass, SecurityType
 from crocodile.core.schema.provenance import ProvenanceFields, provenance_fields
 from crocodile.core.schema.records import Instrument
 from crocodile.equity.providers.openfigi.client import OpenFigiClient
 from crocodile.equity.providers.openfigi.models import FigiRecord, OpenFigiJob
-from crocodile.equity.providers.sec_edgar.client import SecCompanyTicker, SecEdgarClient
+from crocodile.equity.providers.sec_edgar.client import (
+    SecCompanyTicker,
+    SecEdgarClient,
+    require_user_agent,
+)
 from crocodile.equity.providers.tiingo.client import TiingoClient, TiingoTicker
 
 __all__ = [
@@ -634,29 +637,24 @@ def require_sec_user_agent(settings: Settings) -> str:
 
     This is the contract :attr:`Settings.sec_user_agent <crocodile.core.config.Settings>`
     hands to "whichever task wires the EDGAR client", and the equity universe is that task.
-    SEC's condition is that the User-Agent identify someone *contactable*, and it blocks
-    requests carrying none; ``SecEdgarClient``'s own default is a plausible-looking address
-    at a domain nobody reads, which satisfies the string check and gives the regulator a dead
-    mailbox. Refusing is the louder failure and the honest one.
+    The name is kept because two adapters call it and because the *timing* is what this
+    module contributes: it is called here rather than inside :func:`fetch_bulk_evidence` so
+    an adapter can refuse before it builds anything, which is what lets ``collect-market``
+    fail on configuration before a subscription exists rather than on first await.
 
-    Note what this is *not*: a credential. The universe stays keyless — SEC publishes
-    ``company_tickers.json`` to anyone who says who they are, and saying so is free. It lives
-    here rather than inside :func:`fetch_bulk_evidence` so an adapter can refuse before it
-    builds anything, which is what lets ``collect-market`` fail on configuration before a
-    subscription exists rather than on first await.
+    What it no longer contributes is the check. It used to hold a second, weaker copy —
+    ``if not settings.sec_user_agent``, with no ``.strip()`` — and since nothing routed
+    through :meth:`SecEdgarClient.from_settings`, the weaker copy was the one every caller
+    reached. The two disagreed on whitespace, so a blank-but-present value passed here and
+    failed sixty seconds later inside ``begin()`` with three spaces in the header. One
+    contract has one gate; :func:`~crocodile.equity.providers.sec_edgar.client.require_user_agent`
+    is it, and it lives in the module that writes the header because the import only runs
+    one way — this module reaches for ``SecEdgarClient``, not the reverse.
 
     Raises:
         ConfigError: naming the variable and what belongs in it.
     """
-    if not settings.sec_user_agent:
-        raise ConfigError(
-            "the equity reference universe reads SEC EDGAR, which requires a User-Agent "
-            "identifying a contactable party and blocks requests carrying none. Set "
-            "CROCODILE_SEC_USER_AGENT to something of the form "
-            "'YourApp/1.0 (you@example.com)'. It is not an API key and SEC issues none: the "
-            "file is public to anyone who says who they are."
-        )
-    return settings.sec_user_agent
+    return require_user_agent(settings)
 
 
 async def fetch_bulk_evidence(

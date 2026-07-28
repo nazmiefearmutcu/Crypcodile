@@ -5,6 +5,7 @@ from crocodile.equity.providers.sec_edgar.client import (
     SecCompanyTicker,
     SecEdgarClient,
     parse_company_tickers,
+    require_user_agent,
 )
 from crocodile.equity.providers.sec_edgar.form4 import Form4ParseError, parse_form4
 from crocodile.equity.providers.sec_edgar.form13f import (
@@ -25,4 +26,5 @@ __all__ = [
     "parse_13f_primary_document",
     "parse_company_tickers",
     "parse_form4",
+    "require_user_agent",
 ]

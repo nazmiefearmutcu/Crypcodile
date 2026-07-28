@@ -269,3 +269,48 @@ def test_a_dropped_equity_term_crosses_the_wire_as_null_rather_than_as_a_nan_tok
     assert volatility["normalised"] is None
     assert volatility["weight"] == 0.0
     assert payload["terms"]["sequencer_delay"]["weight"] == pytest.approx(1.0 / 3.0)
+
+
+# ---------------------------------------------------------------------------
+# The parameter whose units are not in its type
+# ---------------------------------------------------------------------------
+
+
+_RATE_CAPABILITIES = ["iv-surface", "term-structure", "vol-skew", "risk-reversal"]
+
+
+@pytest.mark.parametrize("name", _RATE_CAPABILITIES)
+def test_the_options_rate_says_which_compounding_convention_it_wants(name: str) -> None:
+    """``rate: float = 0.0`` is the same annotation for two incompatible conventions.
+
+    M1's options family is continuous — ``equity/analytics/options.py`` discounts with
+    ``exp(-r*t)`` — and M5's carry family is simple, which is also the convention of the
+    only rate this engine *publishes*: the Treasury par yield emitted as ``risk_free_rate``.
+    Both are decimal fractions, so there is no percent bug to catch; the hazard is an
+    operator reading one out of ``spot-future-basis`` and passing it into ``--rate``, which
+    is a one-line pipeline that answers plausibly and wrongly — 15 bp of discount factor at
+    a year, 62 bp at two.
+
+    The generated ``--rate`` shipped with no help text at all, so the field itself now
+    carries the convention and the conversion.
+    """
+    schema = dispatch.params_schema(dispatch.resolve(name))
+    description = schema["properties"]["rate"]["description"]
+    assert "CONTINUOUSLY" in description
+    assert "risk_free_rate" in description
+    assert "ln(1 + r_simple)" in description
+
+
+@pytest.mark.parametrize("name", _RATE_CAPABILITIES)
+def test_that_convention_reaches_the_command_line(name: str) -> None:
+    """A description in a schema nobody renders is a docstring with extra steps.
+
+    All three projections read ``params_schema``, so pinning the CLI — the surface that
+    would silently fall back to ``rate (float)`` — pins that the description is projected
+    rather than merely declared.
+    """
+    result = CliRunner().invoke(cli.build_app(), [name, "--help"])
+    assert result.exit_code == 0, result.output
+    rendered = " ".join(result.output.split())
+    assert "CONTINUOUSLY compounded" in rendered
+    assert "ln(1 + r_simple)" in rendered

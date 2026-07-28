@@ -60,6 +60,7 @@ __all__ = [
     "resolve_asset_class",
     "stream_summary",
     "structured_fields",
+    "symbol_field_names",
     "symbol_hints",
     "warning_for",
     "wire_names",
@@ -187,19 +188,54 @@ def _sources_by_asset_class() -> dict[AssetClass, frozenset[str]]:
     }
 
 
-_SYMBOL_FIELDS: Final = frozenset({"symbol", "symbols"})
-"""The params fields that carry a canonical symbol, and therefore evidence about a market.
+_SYMBOL_NAMES: Final = frozenset({"symbol", "symbols"})
+_SYMBOL_SUFFIXES: Final = ("_symbol", "_symbols")
 
-Named rather than sniffed. Reading *any* string containing a colon would let
-``SELECT * FROM t WHERE note = 'binance:x'`` choose which implementation runs ``query``,
-which is a request landing in a market because of a string literal.
 
-Both spellings, because the registry uses both and they mean the same thing: ``symbol`` is
-one and ``symbols`` is a set of them. Consulting only the singular is what made six
-two-implementation capabilities — ``catalog-scan``, ``resolve-symbols``, ``replay``,
-``export``, ``backfill``, ``collect`` — unreachable without an ``--asset-class`` the symbol
-had already determined.
-"""
+def symbol_field_names(params: type[msgspec.Struct]) -> frozenset[str]:
+    """The fields of ``params`` that carry a canonical symbol, by name *and* by type.
+
+    Derived rather than listed, which is the whole of the fix. This was a hand-written
+    ``frozenset({"symbol", "symbols"})``, and a hand-written set of "fields that are
+    symbols" rots on the next capability whose leg is spelled differently — as its own
+    docstring recorded, having already been widened once, for ``catalog-scan``,
+    ``resolve-symbols``, ``replay``, ``export``, ``backfill`` and ``collect``, all of which
+    spell it ``symbols``. It then went stale a second time the moment ``basis`` and
+    ``spot-future-basis`` grew equity halves: they name their legs ``spot_symbol``,
+    ``perp_symbol`` and ``future_symbol``, so nothing was read off them, and two
+    capabilities that had been resolving by "there is only one implementation" became
+    unreachable on all three surfaces at once. The branch that gave them the second
+    implementation does not touch this file, so nothing in its diff could have said so.
+
+    Still named rather than sniffed, and this is the constraint the derivation has to keep.
+    Reading *any* string containing a colon would let
+    ``SELECT * FROM t WHERE note = 'binance:x'`` choose which implementation runs
+    ``query`` — a request landing in a market because of a string literal. So the rule is a
+    naming convention the registry already follows without exception: the field is
+    ``symbol`` or ``symbols``, or it ends in ``_symbol`` or ``_symbols``.
+
+    **And the declared type must admit a string**, which is not decoration.
+    ``CollectMarketParams`` carries ``all_symbols: bool`` and ``max_symbols: int``; both
+    end in ``_symbols`` and neither is a symbol. The runtime ``isinstance`` filter in
+    :func:`symbol_hints` would have skipped them anyway, but the gate over this function
+    asks a stronger question — *does this capability expose a symbol at all* — and a
+    ``bool`` answering yes to it would exempt a capability from the very check that catches
+    the next ``spot_symbol``.
+    """
+    found: set[str] = set()
+    for field in msgspec.structs.fields(params):
+        if field.name not in _SYMBOL_NAMES and not field.name.endswith(_SYMBOL_SUFFIXES):
+            continue
+        if _admits_str(field.type):
+            found.add(field.name)
+    return frozenset(found)
+
+
+def _admits_str(annotation: Any) -> bool:
+    """Whether ``annotation`` is ``str``, or a union or collection that can hold one."""
+    if annotation is str:
+        return True
+    return any(_admits_str(arg) for arg in get_args(annotation))
 
 
 def symbol_hints(params: Any) -> tuple[str, ...]:
@@ -210,9 +246,10 @@ def symbol_hints(params: Any) -> tuple[str, ...]:
     arrived as a JSON list, a repeated flag or a comma-separated query parameter, and the
     surfaces no longer each need their own idea of how ``symbols`` is spelled.
     """
+    fields = symbol_field_names(type(params))
     found: list[str] = []
     for field in msgspec.structs.fields(params):
-        if field.name not in _SYMBOL_FIELDS:
+        if field.name not in fields:
             continue
         value = getattr(params, field.name, None)
         if isinstance(value, str):

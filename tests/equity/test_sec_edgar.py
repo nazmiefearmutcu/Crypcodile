@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from crocodile.core.errors import FatalConnectorError
 from crocodile.core.ratelimit import TokenBucketLimiter
 from crocodile.core.schema.records import Filing, Fundamental
 from crocodile.equity.providers.sec_edgar import (
@@ -18,6 +19,9 @@ from crocodile.equity.providers.sec_edgar import (
     SecEdgarClient,
     parse_company_tickers,
 )
+
+_APPLE = {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}
+"""One good row, for the cases that need the parse to succeed rather than to fail."""
 
 
 def test_normalize_cik() -> None:
@@ -91,19 +95,84 @@ def test_the_registrant_index_keeps_the_company_name() -> None:
     "payload",
     [
         pytest.param([], id="an array rather than the indexed object SEC publishes"),
+        pytest.param({}, id="an object with no rows in it at all"),
         pytest.param({"0": "not a row"}, id="a row that is not an object"),
-        pytest.param({"0": {"ticker": "AAPL"}}, id="a row with no cik"),
-        pytest.param({"0": {"cik_str": 320193, "ticker": ""}}, id="a row with no ticker"),
-        pytest.param({"0": {"cik_str": "not a number", "ticker": "X"}}, id="an unparseable cik"),
     ],
 )
-def test_a_row_that_names_nothing_mergeable_is_skipped_rather_than_raising(payload: object) -> None:
-    """A schema change should empty the universe loudly downstream, not crash the parse.
+def test_a_payload_with_no_rows_to_read_yields_nothing_rather_than_raising(
+    payload: object,
+) -> None:
+    """A ``TypeError`` out of a parser says nothing about what SEC changed.
 
-    The CIK and the ticker are the identity; a row missing either names nothing the reference
-    merge can key on, and a ``TypeError`` out of a parser says nothing about what SEC changed.
+    These carry no row-shaped values, so there is no field to name as the one that moved —
+    the honest report is an empty index, and the emptiness is loud downstream.
     """
     assert parse_company_tickers(payload) == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param({"ticker": "AAPL"}, id="a row with no cik"),
+        pytest.param({"cik_str": 320193, "ticker": ""}, id="a row with no ticker"),
+        pytest.param({"cik_str": "not a number", "ticker": "X"}, id="an unparseable cik"),
+    ],
+)
+def test_one_row_that_names_nothing_mergeable_is_skipped(bad: dict[str, object]) -> None:
+    """The CIK and the ticker are the identity; a row missing either names nothing the
+    reference merge can key on, and dropping it costs one registrant out of ten thousand."""
+    rows = parse_company_tickers(
+        {"0": bad, "1": {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"}}
+    )
+    assert [row.ticker for row in rows] == ["MSFT"]
+
+
+def test_a_payload_where_no_row_has_an_identity_names_the_column_that_moved() -> None:
+    """Every row malformed is not a bad row, it is a different file.
+
+    Base and M4 both did ``int(item["cik_str"])`` and raised ``KeyError: 'cik_str'``, which
+    names the field. Skipping every row instead produced an empty map, and from there three
+    quieter failures: ``_resolve_cik('AAPL')`` blamed the caller's ticker with *Unknown
+    symbol or CIK: AAPL*, ``ensure_ticker_map`` re-downloaded a ~1 MB index on every call
+    because ``{}`` is falsy, and ``get_13f_holdings('CIK0001067983')`` returned ``[]`` with
+    no error at all.
+    """
+    renamed = {
+        str(index): {"cik": 320193 + index, "tickerSymbol": "AAPL", "title": "Apple Inc."}
+        for index in range(3)
+    }
+    with pytest.raises(FatalConnectorError) as excinfo:
+        parse_company_tickers(renamed)
+    message = str(excinfo.value)
+    assert "cik_str" in message and "tickerSymbol" in message
+    assert COMPANY_TICKERS_URL in message
+
+
+@pytest.mark.asyncio
+async def test_the_registrant_index_is_downloaded_once_even_when_it_yields_nothing() -> None:
+    """``ensure_ticker_map`` asked whether the map was non-empty to decide whether it had
+    been fetched. A file that legitimately lists no registrants is falsy, so four lookups
+    were four downloads of a ~1 MB index under a 10 req/s bucket."""
+    client = SecEdgarClient()
+    with patch.object(client, "_request_json", new_callable=AsyncMock) as mock_req:
+        mock_req.return_value = {}
+        for _ in range(4):
+            await client.ensure_ticker_map()
+    assert mock_req.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_is_still_retried_on_the_next_lookup() -> None:
+    """The flag records a completed fetch, not an attempted one — a transport failure must
+    not latch the client into an empty map for the rest of its life."""
+    client = SecEdgarClient()
+    with patch.object(client, "_request_json", new_callable=AsyncMock) as mock_req:
+        mock_req.side_effect = [RuntimeError("connection reset"), {"0": _APPLE}]
+        with pytest.raises(RuntimeError):
+            await client.ensure_ticker_map()
+        await client.ensure_ticker_map()
+    assert mock_req.call_count == 2
+    assert client._ticker_to_cik == {"AAPL": 320193}
 
 
 @pytest.mark.asyncio

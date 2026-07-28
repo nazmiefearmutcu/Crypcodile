@@ -800,42 +800,49 @@ def _book_snapshot_slice(inputs: Mapping[str, Any]) -> float:
     fill = min(n_levels / n_requested, 1.0)
     freshness = 1.0 - age_ns / window_ns
     return fill * freshness
-_CARRY_LEGS: Final[int] = 3
-"""Legs a carry is defined over: a derivative price, a cash price, and a financing rate.
-
-Definitional rather than chosen, and scoped here for the same reason
-``_L1_QUOTED_SIDES`` is: it is the denominator of one basis and a statement about what
-that basis computes, not a constant about spreads in general. A two-leg spread — the
-``basis`` and ``perp-basis`` capabilities without a horizon — is not this measurement and
-does not use this basis.
-"""
-
-
 @register_basis(
     "treasury_carry",
     level=Provenance.DERIVED,
     inputs=["trade", "ohlcv", "index_value", "corp_action", "options_chain", "macro_series"],
 )
 def _treasury_carry(inputs: Mapping[str, Any]) -> float:
-    """A spread carried to an annual rate net of a published yield: legs present, yield fresh.
+    """A spread carried to an annual rate net of a published yield: how fresh the yield is.
 
-    ``(n_price_legs + max(1 - yield_age_ns / horizon_ns, 0)) / 3``, where
+    ``max(1 - yield_age_ns / horizon_ns, 0)``, where
 
-    * ``n_price_legs`` counts how many of the two price legs the row had — the derivative
-      leg and the cash leg it is measured against;
     * ``yield_age_ns`` is how long before the price pair the Treasury quote being
       subtracted was published;
     * ``horizon_ns`` is the period the carry is annualised over — time to expiry for a
       dated future, time to the next dividend event for a holding cost.
 
-    **Why three terms over three, rather than two factors multiplied.** The two price legs
-    are stored prints: a leg is there or it is not, and a leg that is there was not
-    partially observed. The yield leg is different in kind — it is always a *carried*
-    number, because the Treasury publishes the par curve once per business day at 3:30pm
-    ET while the price pair can be stamped at any instant, so the only honest question
-    about it is how much of the period being priced it actually speaks to. Scoring each
-    leg in ``[0, 1]`` and averaging says exactly that: three legs, two of them binary, one
-    of them graded.
+    **What this used to have, and why it does not.** It was
+    ``(n_price_legs + freshness) / 3``, three legs averaged, "two of them binary, one of
+    them graded". The two binary ones never moved. ``n_price_legs`` had no call site: it
+    was a keyword-only parameter of ``_carry_confidence`` with a default of ``2`` that all
+    three carry functions took, because a row of any of them cannot be built without both
+    price legs — the join that produces it drops anything unpaired. So the term was the
+    constant 2 and the score had a floor of 0.667 that no data could push it below. A
+    ``spot-future-basis`` row with ``risk_free_rate=None`` and ``carry_pct=None`` — no
+    financing leg at all, which is the whole of what this basis measures — reported 0.667
+    and passed the ``>= 0.5`` consumer filter this module cites elsewhere as the reason
+    ``ohlcv_from_ohlcv`` changed denominators. It also made two different rows
+    indistinguishable: one price leg with a perfect yield and two price legs with no yield
+    both scored 0.667.
+
+    That is precisely what ``book_resample`` was demoted for one screen down: "a constant
+    spelled as a division is a constant in the one place no call-site gate looks". The
+    difference is that ``book_resample`` had nothing left to measure and became a declared
+    constant, while this still has the term that was doing all the work. So the constant
+    terms are removed rather than the formula, and what is left says what it measures: a
+    carry is a spread minus a financing rate, both price legs are structurally present in
+    any emitted row, and the only thing that varies is how much of the priced period the
+    subtracted yield actually speaks to. An absent yield is now 0.0 rather than 0.667,
+    which is the honest reading of a carry with no financing leg.
+
+    Counting the legs for real was the alternative and it measures nothing: there is no
+    reachable state in which a row exists with fewer than two. It would also have been
+    wrong where it was loudest — ``equity_funding_apr`` passed ``n_price_legs=2`` for a row
+    that is a dividend and a share price and has no derivative leg at all.
 
     **Why the horizon is the denominator, and why nothing else could be.** The temptation
     is to divide the yield's age by the Treasury's publication interval — one business day
@@ -852,8 +859,8 @@ def _treasury_carry(inputs: Mapping[str, Any]) -> float:
     Saturating at zero rather than going negative says a yield older than the whole
     horizon speaks to none of the period being priced — the same information content as no
     yield at all, which is why an absent leg is passed in as ``yield_age_ns ==
-    horizon_ns`` rather than given a fourth term of its own. Absence and total staleness
-    are the same claim here, and a fourth term would let them disagree.
+    horizon_ns`` rather than given a second term of its own. Absence and total staleness
+    are the same claim here, and a second term would let them disagree.
 
     :attr:`Provenance.DERIVED` and not :attr:`Provenance.SYNTHETIC`. Every number that
     goes in was reported by somebody: the derivative's price by its venue, the cash leg by
@@ -869,13 +876,8 @@ def _treasury_carry(inputs: Mapping[str, Any]) -> float:
     ``risk_free_tenor_days`` and ``risk_free_date`` beside the carry, so which published
     number was subtracted is on the row rather than in this docstring.
     """
-    n_price_legs = _require_int(inputs, "n_price_legs")
     yield_age_ns = _require_int(inputs, "yield_age_ns")
     horizon_ns = _require_int(inputs, "horizon_ns")
-    if not 0 <= n_price_legs <= _CARRY_LEGS - 1:
-        raise ConfidenceInputError(
-            f"input 'n_price_legs' must be between 0 and {_CARRY_LEGS - 1}, got {n_price_legs}"
-        )
     if yield_age_ns < 0:
         raise ConfidenceInputError(
             f"input 'yield_age_ns' must be non-negative, got {yield_age_ns}; a yield "
@@ -883,8 +885,7 @@ def _treasury_carry(inputs: Mapping[str, Any]) -> float:
         )
     if horizon_ns <= 0:
         raise ConfidenceInputError(f"input 'horizon_ns' must be positive, got {horizon_ns}")
-    freshness = max(1.0 - yield_age_ns / horizon_ns, 0.0)
-    return (n_price_legs + freshness) / _CARRY_LEGS
+    return max(1.0 - yield_age_ns / horizon_ns, 0.0)
 
 
 _TRUST_ORDER: Final[tuple[Provenance, ...]] = (

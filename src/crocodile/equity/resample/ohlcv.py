@@ -835,12 +835,86 @@ _EMPTY_BAR_SCHEMA: dict[str, pl.DataType] = {
     "low": pl.Float64(),
     "close": pl.Float64(),
     "volume": pl.Float64(),
+    "buy_volume": pl.Float64(),
+    "sell_volume": pl.Float64(),
     "vwap": pl.Float64(),
     "trade_count": pl.Int64(),
     "prov": pl.String(),
     "prov_basis": pl.String(),
     "prov_confidence": pl.Float64(),
 }
+
+
+_NO_SPLIT: Final[tuple[pl.Expr, pl.Expr]] = (
+    pl.lit(None, dtype=pl.Float64).alias("buy_volume"),
+    pl.lit(None, dtype=pl.Float64).alias("sell_volume"),
+)
+"""The aggressor split a frame path emits when its input never stated one.
+
+``None`` and not ``0.0``, which is the distinction
+:func:`crocodile.core.resample.ohlcv._side_volume_sql` draws and pays for: a row saying
+``unknown`` is a source that looked and could not tell, and an absent ``side`` column is a
+source nobody asked. Both attribute no volume, and only the second is *also* what a bar
+looks like when no writer filled the field in.
+
+**Why these three functions emit the columns at all.** ``buy_volume`` and ``sell_volume``
+are canonical bar columns — :data:`~crocodile.core.resample._frame_prov.DESIRED_COLS` has
+declared them as such since the merge — and the record twins of these three were changed in
+the same phase to propagate and measure the split. Before that change the two agreed
+vacuously: records carried a defaulted ``0.0`` and frames carried nothing. Afterwards they
+disagreed on real data, in one module's own exports, with the DuckDB path giving a third
+answer. The commit that changed the records deferred this as "a separate decision about the
+frame contract"; the decision is that a frame is a bar in columns, so it answers the same
+question its record twin answers, in the same three ways — measured from a stated side,
+carried through from inputs that stated one, or ``None``.
+"""
+
+
+def _trade_side_split(df: pl.DataFrame) -> tuple[pl.Expr, pl.Expr]:
+    """Aggregates for the aggressor split of a trade frame.
+
+    Mirrors :func:`resample_trades_to_bars` exactly: a print whose side is anything other
+    than ``buy``/``sell`` — ``unknown``, or a spelling this tree does not use — is credited
+    to neither, so ``buy_volume + sell_volume <= volume`` and the gap is the volume no
+    source attributed. Matching on the enum's *value* because a lake-read frame carries the
+    string the parquet holds, while an in-memory frame may carry the ``Side`` member; both
+    compare equal to the same literal, since ``Side`` is a ``StrEnum``.
+    """
+    if "side" not in df.columns:
+        return _NO_SPLIT
+    side = pl.col("side").cast(pl.String(), strict=False)
+    return (
+        pl.col("amount").filter(side == Side.BUY.value).sum().fill_null(0.0).alias("buy_volume"),
+        pl.col("amount")
+        .filter(side == Side.SELL.value)
+        .sum()
+        .fill_null(0.0)
+        .alias("sell_volume"),
+    )
+
+
+_SPLIT_COLUMNS: Final[tuple[str, str]] = ("buy_volume", "sell_volume")
+
+
+def _bar_side_split(df: pl.DataFrame) -> tuple[pl.Expr, pl.Expr]:
+    """Aggregates that carry a bar frame's split through, or withhold it for the bucket.
+
+    All-or-nothing per bucket, which is what :func:`_open_side_split` does for the record
+    path and for the reason stated there: a partial sum understates by the silent bars'
+    whole volume and still satisfies ``buy + sell <= volume``, so the wrong answer is
+    indistinguishable from a genuinely lopsided period. Stricter than the ``trade_count``
+    rule beside it, deliberately — a missing count is bounded by the count, a missing split
+    by the bar's volume.
+    """
+    if not all(column in df.columns for column in _SPLIT_COLUMNS):
+        return _NO_SPLIT
+    return tuple(  # type: ignore[return-value]
+        pl.when(pl.col(column).null_count() > 0)
+        .then(pl.lit(None, dtype=pl.Float64))
+        .otherwise(pl.col(column).sum())
+        .alias(column)
+        for column in _SPLIT_COLUMNS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -894,6 +968,7 @@ def resample_trades_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
         pl.col("price").min().alias("low"),
         pl.col("price").last().alias("close"),
         pl.col("amount").sum().alias("volume"),
+        *_trade_side_split(df),
         pl.when(pl.col("amount").sum() > 0.0)
         .then((pl.col("price") * pl.col("amount")).sum() / pl.col("amount").sum())
         .otherwise(None)
@@ -963,6 +1038,12 @@ def resample_quotes_df(df: pl.DataFrame, interval: str, price_type: str = "mid")
         pl.col("price").min().alias("low"),
         pl.col("price").last().alias("close"),
         pl.lit(0.0).alias("volume"),
+        # No aggressor to attribute: nothing here was transacted, and the volume above is a
+        # structural zero. A zero split on a zero-volume bar is arithmetically
+        # unobjectionable and still wrong to write, for the reason
+        # `resample_quotes_to_bars` gives about its records: it is the same value a traded
+        # bar gets when nobody filled the field in.
+        *_NO_SPLIT,
         pl.col("price").mean().alias("vwap"),
         pl.len().cast(pl.Int64).alias("trade_count"),
     ]
@@ -1137,6 +1218,7 @@ def resample_bars_df(df: pl.DataFrame, interval: str) -> pl.DataFrame:
         pl.col("low").min().alias("low"),
         pl.col("close").last().alias("close"),
         pl.col("volume").sum().alias("volume"),
+        *_bar_side_split(df),
         pl.when(pl.col("volume").sum() > 0.0)
         .then((pl.col("vwap") * pl.col("volume")).sum() / pl.col("volume").sum())
         .otherwise(None)

@@ -20,7 +20,11 @@ from crocodile.core.errors import ConfigError
 from crocodile.core.schema.enums import AssetClass, SecurityType
 from crocodile.core.schema.provenance import Provenance
 from crocodile.equity.providers.openfigi.models import FigiRecord
-from crocodile.equity.providers.sec_edgar.client import SecCompanyTicker
+from crocodile.equity.providers.sec_edgar.client import (
+    SecCompanyTicker,
+    SecEdgarClient,
+    require_user_agent,
+)
 from crocodile.equity.providers.tiingo.client import TiingoTicker
 from crocodile.equity.reference import universe as reference
 
@@ -434,6 +438,56 @@ def test_a_missing_sec_contact_string_is_refused_rather_than_defaulted() -> None
 def test_a_configured_sec_contact_string_is_returned_unchanged() -> None:
     agent = "Crocodile/1.0 (ops@example.com)"
     assert reference.require_sec_user_agent(Settings(sec_user_agent=agent)) == agent
+
+
+@pytest.mark.parametrize("blank", ["   ", "\t", "\n", " \t\n "])
+def test_a_whitespace_only_contact_string_is_refused_by_both_entry_points(blank: str) -> None:
+    """One contract, one gate — and the weaker of the two copies was the wired one.
+
+    ``require_sec_user_agent`` tested ``if not settings.sec_user_agent`` with no ``.strip()``
+    while ``SecEdgarClient.from_settings`` stripped, and nothing routed through
+    ``from_settings``. So this value passed configuration validation and the failure moved
+    *inside* ``begin()``, which is the one place ``capabilities/ops.py`` says it must not be:
+    six requests, 2 + 4 + 8 + 16 + 30 seconds of backoff, sixty seconds to a 403, with
+    ``User-Agent: '   '`` actually on the wire. Both entry points are asserted because a
+    single-sourced check that only one of them calls is the defect, not the fix.
+    """
+    settings = Settings(sec_user_agent=blank)
+    with pytest.raises(ConfigError, match="CROCODILE_SEC_USER_AGENT"):
+        reference.require_sec_user_agent(settings)
+    with pytest.raises(ConfigError, match="CROCODILE_SEC_USER_AGENT"):
+        SecEdgarClient.from_settings(settings)
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "\t"])
+def test_the_two_entry_points_refuse_in_the_same_words(value: str | None) -> None:
+    """Not "both refuse" — refuse *identically*, which is what one gate means.
+
+    Two functions that agree today are two functions that can disagree tomorrow, and that is
+    the whole finding: they already had, on whitespace. Comparing the rendered message is
+    the assertion that survives a rewrite of either side, because two independent copies
+    cannot stay word-for-word equal by accident.
+
+    ``crocodile.equity.reference.universe`` imports ``SecEdgarClient``, so the check can only
+    live on the provider side; the reference module keeps the name its two adapters call and
+    the *timing* argument that puts it before anything is built.
+    """
+    settings = Settings(sec_user_agent=value)
+    with pytest.raises(ConfigError) as from_reference:
+        reference.require_sec_user_agent(settings)
+    with pytest.raises(ConfigError) as from_provider:
+        require_user_agent(settings)
+    with pytest.raises(ConfigError) as from_client:
+        SecEdgarClient.from_settings(settings)
+    assert str(from_reference.value) == str(from_provider.value) == str(from_client.value)
+
+
+def test_a_padded_contact_string_reaches_the_wire_trimmed() -> None:
+    """A header of ``' Acme ops@acme.example '`` is not the string SEC was told about."""
+    agent = "Acme/1.0 (ops@acme.example)"
+    settings = Settings(sec_user_agent=f"  {agent}  ")
+    assert reference.require_sec_user_agent(settings) == agent
+    assert SecEdgarClient.from_settings(settings).user_agent == agent
 
 
 class _FakeSec:

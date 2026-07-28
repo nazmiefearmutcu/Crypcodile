@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import logging
 from bisect import bisect_right
+from datetime import date, datetime, time
 from typing import Final, NamedTuple
 
 import polars as pl
@@ -99,6 +100,7 @@ from crocodile.core.analytics.carry import (
     hours_between,
     spread,
 )
+from crocodile.core.scheduler.calendar import MARKET_TZ
 from crocodile.core.schema.enums import CorpActionType
 from crocodile.core.schema.provenance import confidence_for
 from crocodile.core.store.catalog import Catalog
@@ -161,13 +163,41 @@ class RiskFreeQuote(NamedTuple):
     """
 
     rate: float
-    """The par yield as a decimal fraction (0.0412 is 4.12 %)."""
+    """The par yield as a decimal fraction (0.0412 is 4.12 %), **simply** compounded.
+
+    Bond-equivalent, which is how the Treasury quotes it and how
+    :mod:`crocodile.core.analytics.carry` consumes it — see that module's header for why the
+    carry arithmetic keeps the convention rather than converting: both legs of a carry stay
+    on one clock.
+
+    It is emitted on the wire as ``risk_free_rate``, and it is the only rate this engine
+    publishes. The options family's ``--rate`` is *continuous* (``exp(-r*t)``), so the two
+    are not interchangeable and the conversion is ``r_cont = ln(1 + r_simple)``. That is
+    stated on the option capabilities' ``rate`` field, where an operator wiring one into the
+    other is looking; it is repeated here because this is the end they would copy from.
+    """
 
     tenor_days: float
     """Nominal length of the curve point chosen, in days."""
 
     quote_ts: int
-    """Publication instant — the curve's own date at UTC midnight."""
+    """Publication instant — the curve's own date at 3:30 pm New York.
+
+    Not that date's UTC midnight, which is what the record stores and what this used to
+    carry. The provider's stamp is deliberate and correct as a *record*: the file states a
+    date and no time, and ``_parse_date`` says in as many words that midnight "is not a
+    claim that the curve was published at midnight". Reading it as one is this module's
+    error, and it inverts a category the registry treats as absolute. Treasury publishes the
+    par curve at 3:30 pm ET; a price stamped 09:30 ET on the same date is *before* that, so
+    subtracting that day's yield from it is lookahead, and ``_carry_confidence`` was scoring
+    the fourteen-and-a-half-hour gap as mild staleness — a number in ``[0, 1]`` for a record
+    ``_book_slice`` refuses outright, on the grounds that "there is no confidence at which
+    it is a legal record".
+
+    Correcting the instant is the whole fix: :meth:`RiskFreeCurve.at` already takes the most
+    recent quote published at or before the price, so a morning price now carries the
+    previous session's curve, which is the one that existed.
+    """
 
     date: str
     """That date, as the file spelled it after normalisation: ``YYYY-MM-DD``."""
@@ -246,6 +276,37 @@ _CURVE_SQL: Final = """
 """
 
 
+_PUBLICATION_TIME: Final = time(15, 30)
+"""When Treasury posts the daily par yield curve, in New York time.
+
+The figure ``treasury_carry``'s registration already states. It is not stored on the record
+— the file carries a date and nothing else — so it is applied here, by the only consumer
+that asks *when a yield became available* rather than *which day it is for*.
+"""
+
+
+def _published_ns(date_val: str, fallback_ns: int) -> int:
+    """The instant ``date_val``'s curve went up, or ``fallback_ns`` if the date is unusable.
+
+    ``MARKET_TZ`` rather than a fixed offset, because the offset is the thing that moves:
+    3:30 pm ET is 19:30 UTC for eight months of the year and 20:30 UTC for four, and a
+    constant would be wrong in one direction or the other for whichever half it did not
+    pick. The zone is imported from :mod:`crocodile.core.scheduler.calendar` rather than
+    declared again — one statement of what "the market's timezone" means.
+
+    The fallback is the record's own coalesced stamp, which is what this used to be
+    unconditionally. It is reached only when ``date_val`` is not an ISO date, and a curve
+    point that cannot say which day it is for is better placed at its ingest instant than
+    dropped, for the reason :func:`risk_free_curve` gives about ``coalesce``.
+    """
+    try:
+        day = date.fromisoformat(date_val)
+    except ValueError:
+        return fallback_ns
+    published = datetime.combine(day, _PUBLICATION_TIME, tzinfo=MARKET_TZ)
+    return int(published.timestamp()) * 1_000_000_000
+
+
 def risk_free_curve(catalog: Catalog, up_to_ns: int) -> RiskFreeCurve:
     """Load every Treasury curve point published at or before ``up_to_ns``.
 
@@ -258,6 +319,11 @@ def risk_free_curve(catalog: Catalog, up_to_ns: int) -> RiskFreeCurve:
     construction and a curve point whose publication date went missing is better placed at
     its ingest instant than dropped: the staleness it is then scored on is an overstatement
     of how fresh it is, which is the safe direction.
+
+    The coalesced stamp bounds the *query* — a row whose record is not in the lake yet
+    cannot be read — while the instant each quote is filed under is
+    :func:`_published_ns`, because "when the file was written" and "when the curve went up"
+    are two different facts and only the second says whether a price could have seen it.
     """
     catalog.refresh_views()
     try:
@@ -273,8 +339,13 @@ def risk_free_curve(catalog: Catalog, up_to_ns: int) -> RiskFreeCurve:
         symbol = str(row["symbol"])
         if tenor_days(symbol) is None:
             continue
+        date_val = str(row["date_val"])
         points.setdefault(symbol, []).append(
-            (int(row["quote_ts"]), str(row["date_val"]), float(row["value"]))
+            (
+                _published_ns(date_val, int(row["quote_ts"])),
+                date_val,
+                float(row["value"]),
+            )
         )
     for series in points.values():
         series.sort()
@@ -431,6 +502,23 @@ def equity_spot_future_carry(
     than dropped: the basis they report is a real spread that was really quoted, and the
     fact that it cannot be annualised is stated in the column rather than by the row's
     absence.
+
+    **Why a lake with no curve still gets rows here, and none from**
+    :func:`equity_forward_basis`. The two look like one decision made twice and are not.
+    Here the yield enters exactly one output column, so its absence has somewhere to be
+    reported: ``risk_free_rate`` is ``None``, ``carry_pct`` is ``None``, every other column
+    is a spread that was genuinely quoted, and ``prov_confidence`` is 0.0 — which is what
+    ``treasury_carry`` returns for a yield as stale as the horizon is long, and what an
+    absent leg is encoded as. Nothing on the row claims a financing rate. There, the yield
+    enters ``mark_price`` itself: parity is ``F = K + (C - P)(1 + rT)``, so a missing ``r``
+    does not blank a column, it silently changes the *forward* to the one a zero-rate market
+    would price — a number no column could carry a ``None`` for.
+
+    The rule both follow is therefore one rule: an absent leg is reported, and it is dropped
+    only when there is nowhere on the row to report it. That is
+    :func:`~crocodile.core.analytics.carry.carry_over_risk_free`'s own argument for
+    propagating ``None`` rather than defaulting to zero, applied to whichever column the
+    rate would otherwise have reached.
     """
     future = price_leg(catalog, future_symbol, start_ns, end_ns)
     cash = price_leg(catalog, spot_symbol, start_ns, end_ns)
@@ -488,13 +576,22 @@ def equity_spot_future_carry(
 
 
 def _carry_confidence(
-    *, at_ns: int, horizon_days: float, quote: RiskFreeQuote | None, n_price_legs: int = 2
+    *, at_ns: int, horizon_days: float, quote: RiskFreeQuote | None
 ) -> float:
     """Score one carry row through the registered ``treasury_carry`` formula.
 
-    The three observables it needs are assembled here and nowhere else, so there is one
-    place where "the yield leg was absent" is encoded as "the yield is exactly as stale as
-    the horizon is long" — the equivalence ``treasury_carry``'s registration argues for.
+    The two observables it needs are assembled here and nowhere else, so there is one place
+    where "the yield leg was absent" is encoded as "the yield is exactly as stale as the
+    horizon is long" — the equivalence ``treasury_carry``'s registration argues for.
+
+    There used to be a third, ``n_price_legs``, keyword-only with a default of ``2``. No
+    call site ever passed it, and none could have said anything else: all three carry
+    functions build a row out of a pairing that drops anything unpaired, so both price legs
+    are present in every emitted row by construction. A term that cannot move is a
+    constant, and this one put a floor of 0.667 under every score — including the score on
+    a row with no financing leg at all, which is the one thing this basis exists to
+    measure. See :func:`~crocodile.core.schema.provenance._treasury_carry` for the
+    arithmetic it took with it.
 
     ``horizon_days`` is clamped to at least one nanosecond because a non-positive horizon
     is already reported as ``annualized_pct = None``; the formula rejects a zero
@@ -505,21 +602,20 @@ def _carry_confidence(
     age_ns = horizon_ns if quote is None else max(at_ns - quote.quote_ts, 0)
     return confidence_for(
         CARRY_BASIS,
-        {
-            "n_price_legs": n_price_legs,
-            "yield_age_ns": min(age_ns, horizon_ns),
-            "horizon_ns": horizon_ns,
-        },
+        {"yield_age_ns": min(age_ns, horizon_ns), "horizon_ns": horizon_ns},
     )
 
 
 _CHAIN_SQL: Final = """
-    SELECT local_ts, expiry, strike, opt_type, bid_px, ask_px, mark_price, last_price
+    SELECT local_ts, expiry, strike, opt_type, underlying_price,
+           bid_px, ask_px, mark_price, last_price
     FROM options_chain
     WHERE UPPER(underlying) = UPPER(?)
       AND local_ts BETWEEN ? AND ?
     ORDER BY local_ts, expiry, strike
 """
+"""``underlying_price`` is selected because it is the cash leg — see
+:func:`equity_forward_basis` for why the separate price series is not."""
 
 
 def _option_mid(row: dict[str, object]) -> float | None:
@@ -559,9 +655,10 @@ def equity_forward_basis(
 
     Args:
         catalog: The lake.
-        symbol: The underlying, as ``options_chain.underlying`` spells it, and as the cash
-            price series is symboled. One symbol, which is the shared ``PerpBasisParams``
-            schema and the constraint the whole construction is built to honour.
+        symbol: The underlying, as ``options_chain.underlying`` spells it. One symbol,
+            which is the shared ``PerpBasisParams`` schema and the constraint the whole
+            construction is built to honour — and, since both legs now come off the chain,
+            one channel too.
         start_ns: Inclusive lower bound on ``local_ts``.
         end_ns: Inclusive upper bound on ``local_ts``.
 
@@ -571,7 +668,53 @@ def equity_forward_basis(
         ``strike``, ``risk_free_rate`` and ``prov_confidence``, which say which contract
         pair the forward came off and what it was discounted at.
 
-        ``pl.DataFrame()`` when there is no chain, no cash price, or no curve.
+        ``pl.DataFrame()`` when there is no chain, no curve, or no chain snapshot that
+        carries its own underlying price.
+
+    **The index leg is the chain row's own ``underlying_price``, and nothing else.** The
+    claim this function's own summary makes — a mark and an index *at the same instant* —
+    is only true if both come off one observation, which is exactly how the crypto twin
+    gets it: :func:`~crocodile.crypto.analytics.basis.perp_basis` reads ``mark_price`` and
+    ``index_price`` off a single ``derivative_ticker`` row and drops the row when either is
+    missing. It does not reach for a spot series when the record has no index, and neither
+    does this.
+
+    It used to. The cash leg was :func:`price_leg`'s nearest *prior* print, taken with an
+    unbounded search, and on one identical chain snapshot whose rows all carried a spot of
+    105.00 the answer moved with nothing but the age of the stored cash series: a
+    same-instant print gave a 0.57 % basis, a one-day-old daily bar gave 5.6 %, and a
+    year-old one gave 151 %. Every one of those rows was built from an option chain that
+    was carrying 105.00 in a column this function did not select. A basis is a *difference*
+    between two prices; two prices from different instants subtracted are not a basis, they
+    are two unrelated observations and a subtraction sign.
+
+    The provider half already settled this argument in the other direction:
+    ``yahoo/client.py`` stopped writing ``underlying_price=None`` and started writing the
+    quote out of *the same ``optionChain`` payload that produced the strikes*, because a
+    second quote call "would stamp a price from a different instant onto a chain snapshot".
+    A stored series read at query time is that same defect one layer down, so honouring the
+    argument means not re-introducing it here.
+
+    **Why there is no fallback to the price series, bounded or otherwise.** A bound needs a
+    number saying how stale a cash print may be before it stops describing the instant, and
+    that number is not published by anything. This registry has twice declined to invent
+    exactly that denominator — ``_aggregate_of_an_undeclared_stream`` refuses to say how
+    often a stream ought to tick, and ``book_resample`` refuses staleness as a confidence
+    term for the same reason — and the horizon, the only interval already on the row, is
+    the wrong one: it is how long the *financing* is applied for, and a 91-day horizon
+    would happily admit a 30-day-old cash print, which is the 32 % basis in the table
+    above. So the skew is removed rather than graded, and ``prov_confidence`` gains no term
+    for it because the observable it would score is now structurally zero at every emitted
+    row — the same shape ``book_resample`` describes when it lost its formula by making
+    ``lookahead_ns`` unreachable rather than by scoring it.
+
+    The cost is a chain whose provider writes no spot: it yields no rows where it used to
+    yield wrong ones. That is the empty-result contract this module already applies to a
+    missing curve, and the one equity chain provider in the tree writes the column.
+
+    The gain is the second failure mode closing too. A lake holding an ``options_chain``
+    and a curve and nothing else returned *zero* rows, because ``price_leg`` had nothing to
+    find — while every row in it carried a usable spot.
 
     **Why a missing curve means no rows rather than an undiscounted forward.** Setting
     ``r = 0`` gives ``F = K + (C - P)``, which is a perfectly computable number and a
@@ -584,6 +727,14 @@ def equity_forward_basis(
     with no curve has to report that rather than paper over it. The absence is reported by
     the empty result, which is the empty-result contract every function in this family
     already shares.
+
+    That is a different answer from the one :func:`equity_spot_future_carry` and
+    :func:`equity_funding_apr` give to what looks like the same question, and the difference
+    is which column the missing rate would have reached. There it reaches ``carry_pct``
+    alone, which can be ``None``; here it reaches ``mark_price``, and a forward priced at
+    ``r = 0`` is a forward — there is no null to put in it and no column beside it that
+    would say so. One rule, two consequences: an absent leg is reported, and it is dropped
+    only when the row has nowhere to report it.
 
     The nearest expiry strictly after the snapshot is used, and within it the strike
     closest to the cash price. Parity holds at every strike, so the choice is about noise
@@ -601,27 +752,17 @@ def equity_forward_basis(
     if len(chain) == 0:
         return pl.DataFrame()
 
-    cash = price_leg(catalog, symbol, start_ns, end_ns)
-    if len(cash) == 0:
-        return pl.DataFrame()
     curve = risk_free_curve(catalog, end_ns)
     if not curve:
         return pl.DataFrame()
 
-    cash_ts = cash["local_ts"].to_list()
-    cash_px = cash["price"].to_list()
-
     rows: list[dict[str, object]] = []
     for (at_raw,), snapshot in chain.group_by(["local_ts"], maintain_order=True):
         at_ns = int(at_raw)  # type: ignore[call-overload]
-        index = bisect_right(cash_ts, at_ns) - 1
-        if index < 0:
-            continue
-        spot = float(cash_px[index])
-        pair = _nearest_parity_pair(snapshot, at_ns=at_ns, spot=spot)
+        pair = _nearest_parity_pair(snapshot, at_ns=at_ns)
         if pair is None:
             continue
-        expiry_ns, strike, call_px, put_px = pair
+        expiry_ns, spot, strike, call_px, put_px = pair
         horizon_days = days_between(at_ns, expiry_ns)
         quote = curve.at(at_ns, horizon_days)
         if quote is None:
@@ -664,17 +805,49 @@ def equity_forward_basis(
     ).sort("local_ts")
 
 
+def _chain_spot(at_expiry: pl.DataFrame) -> float | None:
+    """The cash price these chain rows were quoted against, or ``None``.
+
+    Scoped to one expiry rather than to the whole snapshot because a provider fetches a
+    chain one expiry at a time — ``yahoo/client.py`` runs one request per expiration and
+    stamps them all with one ``local_ts`` — so the spot that came back with *these* strikes
+    is the one on *these* rows. This is the same scoping
+    :func:`~crocodile.core.analytics.volsurface._underlying_price_at` needs its
+    expiry-bounded statement for.
+
+    Rows of one expiry in one snapshot come from one payload, so the column is constant
+    across them and the first usable value is the value; the loop exists to skip nulls, not
+    to choose between disagreeing numbers. Non-positive is treated as absent for the reason
+    :func:`price_leg` gives — every consumer divides by it.
+    """
+    if "underlying_price" not in at_expiry.columns:
+        return None
+    for value in at_expiry["underlying_price"].to_list():
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0.0:
+            return float(value)
+    return None
+
+
 def _nearest_parity_pair(
-    snapshot: pl.DataFrame, *, at_ns: int, spot: float
-) -> tuple[int, float, float, float] | None:
-    """Return ``(expiry, strike, call, put)`` for the nearest expiry's most-ATM pair."""
+    snapshot: pl.DataFrame, *, at_ns: int
+) -> tuple[int, float, float, float, float] | None:
+    """Return ``(expiry, spot, strike, call, put)`` for the nearest expiry's most-ATM pair.
+
+    The spot is read before the strike is chosen because it is what "most ATM" is measured
+    against, and it comes off the same rows the strikes did — see
+    :func:`equity_forward_basis` for why it is not looked up anywhere else.
+    """
     live = snapshot.filter(pl.col("expiry") > at_ns)
     if len(live) == 0:
         return None
     expiry_ns = int(live["expiry"].min())  # type: ignore[arg-type]
+    at_expiry = live.filter(pl.col("expiry") == expiry_ns)
+    spot = _chain_spot(at_expiry)
+    if spot is None:
+        return None
     calls: dict[float, float] = {}
     puts: dict[float, float] = {}
-    for row in live.filter(pl.col("expiry") == expiry_ns).iter_rows(named=True):
+    for row in at_expiry.iter_rows(named=True):
         price = _option_mid(row)
         if price is None:
             continue
@@ -685,7 +858,7 @@ def _nearest_parity_pair(
     if len(shared) < _MIN_PARITY_STRIKES:
         return None
     strike = min(shared, key=lambda k: abs(k - spot))
-    return expiry_ns, strike, calls[strike], puts[strike]
+    return expiry_ns, spot, strike, calls[strike], puts[strike]
 
 
 _DIVIDEND_SQL: Final = """
@@ -695,8 +868,41 @@ _DIVIDEND_SQL: Final = """
       AND type = ?
       AND value IS NOT NULL
       AND local_ts BETWEEN ? AND ?
-    ORDER BY event_ts
+    ORDER BY event_ts, local_ts
 """
+"""Ordered by ingest within each event so :func:`_one_row_per_event` can keep the last."""
+
+
+def _one_row_per_event(events: pl.DataFrame) -> pl.DataFrame:
+    """Collapse repeated reports of one dividend to a single event.
+
+    The same collapse :func:`price_leg` applies twenty lines up
+    (``.unique(subset=["local_ts"], keep="last")``) and the same one the crypto twin
+    applies to funding settlements, whose docstring states why: rows sharing an event
+    timestamp are "collapsed to a single event **before** APR and the cumulative sum are
+    computed, so cumulative funding cannot explode".
+
+    It was missing here, and this module's own header says the channel invites it: dividends
+    arrive in ``corp_action`` "from three different providers", and a repeated ``backfill``
+    over the channel duplicates them on its own. The consequence was not a rounding error.
+    Two copies of one $1.00 dividend produce a second event zero hours after the first, so
+    ``interval_hours`` floors to 1 and ``apr_from_rate`` annualises a whole dividend over
+    one hour instead of over the real period — a 24-fold overstatement against a daily
+    interval, and unbounded as the interval being replaced gets longer.
+    ``cumulative_funding`` meanwhile scales with the copy count, which is the number a
+    consumer sums a position's carry out of.
+
+    ``keep="last"`` and not "first" or a mean: the latest ingest is the correction. That is
+    the rule :func:`price_leg` already uses for two prints at one instant, and a mean would
+    invent a dividend no provider declared.
+
+    Collapsing on ``event_ts`` rather than on ``local_ts`` is the point of the whole
+    exercise — ``local_ts`` is when *this process* wrote the row, so two copies of one
+    dividend differ in it by construction and grouping on it would collapse nothing.
+    """
+    return events.unique(subset=["event_ts"], keep="last", maintain_order=False).sort(
+        "event_ts"
+    )
 
 
 def equity_funding_apr(
@@ -749,7 +955,9 @@ def equity_funding_apr(
     ``interval_hours`` is Int64 to match the crypto frame's dtype, and a period shorter
     than an hour is floored to one — two dividends in the same hour is a data defect, and
     a zero there would raise out of :func:`~crocodile.core.analytics.carry.periods_per_year`
-    rather than report it.
+    rather than report it. The commonest such defect — the same dividend reported twice —
+    is removed before that floor is reached rather than floored into a multiplied APR; see
+    :func:`_one_row_per_event`.
     """
     catalog.refresh_views()
     try:
@@ -763,6 +971,7 @@ def equity_funding_apr(
         return pl.DataFrame()
     if len(events) == 0:
         return pl.DataFrame()
+    events = _one_row_per_event(events)
 
     prices = price_leg(catalog, symbol, start_ns, end_ns)
     if len(prices) == 0:

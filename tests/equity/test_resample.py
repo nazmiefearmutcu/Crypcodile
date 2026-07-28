@@ -1585,6 +1585,26 @@ def test_an_unclassified_print_is_credited_to_neither_side() -> None:
     assert bar.volume - bar.buy_volume - bar.sell_volume == pytest.approx(0.5)
 
 
+def test_a_tape_nobody_classified_states_a_zero_split_rather_than_a_hole() -> None:
+    """A stated ``0.0/0.0`` is the right answer here, and it is not the same as ``None``.
+
+    Every print states ``Side.UNKNOWN``, which is a source that looked and could not tell —
+    the distinction ``_side_volume_sql`` draws against an absent ``side`` column, where
+    nobody was asked. So the attribution really is zero on both sides, the contract
+    ``buy + sell <= volume`` holds, and the entire volume is recoverable as unattributed.
+    Emitting ``None`` instead would say the field was never filled in, which is a claim
+    about this engine rather than about the tape.
+    """
+    trades = [_sided_trade(i * 100_000_000, 1.0, Side.UNKNOWN) for i in range(3)]
+
+    bar = next(iter(resample_trades_to_bars(trades, "1s")))
+
+    assert bar.buy_volume == 0.0
+    assert bar.sell_volume == 0.0
+    assert bar.volume == 3.0
+    assert bar.volume - bar.buy_volume - bar.sell_volume == pytest.approx(3.0)
+
+
 def test_a_bar_built_from_quotes_states_no_split_at_all() -> None:
     """Nothing here was transacted, so there is no aggressor to attribute."""
     quotes = [_week_quote(i * 100_000_000) for i in range(2)]
@@ -1604,6 +1624,136 @@ def test_re_bucketing_carries_a_split_its_inputs_stated() -> None:
 
     assert out.buy_volume == 18.0
     assert out.sell_volume == 12.0
+
+
+def test_the_frame_paths_answer_the_split_the_same_way_their_record_twins_do() -> None:
+    """Three entry points into one module used to give three answers.
+
+    ``buy_volume`` and ``sell_volume`` are canonical bar columns, the record twins were
+    changed in this phase to measure and propagate the split, and the DuckDB path emits it
+    too — while the Polars frame paths emitted neither column. Before the record change the
+    two agreed vacuously (records carried a defaulted ``0.0``, frames carried nothing);
+    afterwards they disagreed on real data, inside one module's own exports.
+
+    The pairs below are the same buckets through both doors, so the assertion is the
+    agreement rather than a number copied twice.
+    """
+    trades = [
+        _sided_trade(0, 1.0, Side.BUY),
+        _sided_trade(100_000_000, 2.0, Side.SELL),
+        _sided_trade(200_000_000, 0.5, Side.UNKNOWN),
+    ]
+    record = next(iter(resample_trades_to_bars(trades, "1s")))
+    frame = resample_trades_df(
+        pl.DataFrame(
+            {
+                "local_ts": [t.local_ts for t in trades],
+                "price": [t.price for t in trades],
+                "amount": [t.amount for t in trades],
+                "side": [t.side.value for t in trades],
+                "symbol": [t.symbol for t in trades],
+            }
+        ),
+        "1s",
+    ).row(0, named=True)
+
+    assert (frame["buy_volume"], frame["sell_volume"]) == (record.buy_volume, record.sell_volume)
+    assert frame["buy_volume"] == 1.0
+    assert frame["sell_volume"] == 2.0
+    assert frame["volume"] - frame["buy_volume"] - frame["sell_volume"] == pytest.approx(0.5)
+
+
+def test_a_trade_frame_with_no_side_column_reports_no_aggressor() -> None:
+    """The distinction the SQL path pays for, applied to the Polars path.
+
+    A lake written by a provider that never classified the aggressor has no ``side`` column
+    at all. That is a source nobody asked, not a source that could not tell, and it must
+    reach a consumer as the same ``None`` a bar carries when no writer filled the field in.
+    """
+    frame = resample_trades_df(
+        pl.DataFrame(
+            {
+                "local_ts": [0, 100_000_000],
+                "price": [100.0, 101.0],
+                "amount": [1.0, 2.0],
+                "symbol": ["AAPL", "AAPL"],
+            }
+        ),
+        "1s",
+    ).row(0, named=True)
+
+    assert frame["volume"] == 3.0
+    assert frame["buy_volume"] is None
+    assert frame["sell_volume"] is None
+
+
+def test_a_quote_frame_states_no_split_the_way_its_record_twin_does() -> None:
+    """Nothing was transacted, so there is no aggressor — and a zero split on a
+    zero-volume bar is the same value a traded bar gets when nobody filled the field in."""
+    frame = resample_quotes_df(
+        pl.DataFrame(
+            {
+                "local_ts": [0, 100_000_000],
+                "bid_px": [99.0, 99.5],
+                "ask_px": [101.0, 100.5],
+                "symbol": ["AAPL", "AAPL"],
+            }
+        ),
+        "1s",
+    ).row(0, named=True)
+
+    assert frame["volume"] == 0.0
+    assert frame["buy_volume"] is None
+    assert frame["sell_volume"] is None
+
+
+def _split_frame(splits: list[tuple[float | None, float | None]]) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "local_ts": [i * _MINUTE_NS for i in range(len(splits))],
+            "open": [100.0] * len(splits),
+            "high": [100.0] * len(splits),
+            "low": [100.0] * len(splits),
+            "close": [100.0] * len(splits),
+            "volume": [10.0] * len(splits),
+            "buy_volume": [buy for buy, _ in splits],
+            "sell_volume": [sell for _, sell in splits],
+            "interval": ["1m"] * len(splits),
+            "symbol": ["binance:BTCUSDT"] * len(splits),
+        },
+        schema_overrides={"buy_volume": pl.Float64, "sell_volume": pl.Float64},
+    )
+
+
+def test_a_bar_frame_carries_the_split_its_inputs_stated() -> None:
+    frame = resample_bars_df(_split_frame([(6.0, 4.0)] * 3), "1h").row(0, named=True)
+    assert frame["buy_volume"] == 18.0
+    assert frame["sell_volume"] == 12.0
+
+
+def test_one_silent_bar_disqualifies_the_frame_buckets_split_too() -> None:
+    """All-or-nothing per bucket, exactly as ``_open_side_split`` does for the records.
+
+    A partial sum understates by the silent bars' whole volume and still satisfies
+    ``buy + sell <= volume``, so the wrong answer is indistinguishable from a genuinely
+    lopsided period.
+    """
+    frame = resample_bars_df(
+        _split_frame([(6.0, 4.0), (None, None), (6.0, 4.0)]), "1h"
+    ).row(0, named=True)
+    assert frame["buy_volume"] is None
+    assert frame["sell_volume"] is None
+    assert frame["volume"] == 30.0, "volume is still the sum; only the attribution is withheld"
+
+
+def test_a_bar_frame_with_no_split_columns_still_publishes_them_as_holes() -> None:
+    """The columns are canonical, so their absence from the *output* would be a third
+    schema; a frame whose inputs never stated a split says so in the column."""
+    frame = resample_bars_df(
+        _split_frame([(6.0, 4.0)] * 2).drop("buy_volume", "sell_volume"), "1h"
+    )
+    assert {"buy_volume", "sell_volume"} <= set(frame.columns)
+    assert frame.row(0, named=True)["buy_volume"] is None
 
 
 def test_one_silent_input_disqualifies_the_whole_buckets_split() -> None:

@@ -21,17 +21,56 @@ from crocodile.core.schema.provenance import (
 _EXPECTED_BASES = frozenset(
     {
         "alpaca_l1",
+        "amm_tick_curve",
         "book_resample",
+        "book_snapshot_slice",
+        "caller_supplied",
+        "farcaster_cast_search",
         "native",
         "ohlcv_from_ohlcv",
         "ohlcv_from_quotes",
         "ohlcv_from_trades",
         "reference_merge",
         "scraped_last_price",
+        "sec_13f_hr",
+        "sec_form4",
+        "treasury_carry",
         "unavailable",
         "yahoo_1m_vap",
     }
 )
+"""Every basis ``crocodile`` registers. All of them, and asserted by equality below.
+
+It was ten of seventeen and the assertion was ``_EXPECTED_BASES <= registered_bases()``, so
+the seven it omitted were unwatched: a subset check passes whatever the registry grows and
+whatever it keeps. Two of the seven are the two halves of one seam — ``sec_form4`` and
+``sec_13f_hr`` — registered in one branch while ``reference_merge``, the third SEC-fed
+basis, was on the list from another. The halves disagreed about whether to record
+themselves and the gate could not notice, because noticing is what a subset check declines
+to do.
+
+Equality is the point. A basis is a public claim about how a number was produced; adding one
+should be a line in this file that somebody wrote on purpose, and removing one should fail
+here rather than quietly widen what the tree may emit.
+"""
+
+
+def _shipped_bases() -> frozenset[str]:
+    """The bases ``crocodile`` itself registers, ignoring throwaways from other tests.
+
+    Reaching into ``_REGISTRY`` rather than reading ``registered_bases()`` because tests in
+    this file and elsewhere register bases in the same process — an equality gate over a
+    process-global registry would otherwise pass or fail on test ordering. The same filter
+    ``tests/conformance/test_gates.py`` applies for the same reason.
+    """
+    from crocodile.core.schema.provenance import _REGISTRY
+
+    load_all_bases()
+    return frozenset(
+        name
+        for name, registered in _REGISTRY.items()
+        if getattr(registered.fn, "__module__", "").startswith("crocodile.")
+    )
 _SESSION_BARS = 390
 
 
@@ -159,6 +198,11 @@ def test_registered_bases_is_a_frozenset():
     bases = registered_bases()
     assert isinstance(bases, frozenset)
     assert _EXPECTED_BASES <= bases
+    assert _shipped_bases() == _EXPECTED_BASES, (
+        "the registry and this list have diverged. A basis is a public claim about how a "
+        "number was produced; adding or removing one is a line in this file somebody "
+        "writes on purpose."
+    )
 
     def formula(_):
         """A basis registered after the snapshot was taken."""
@@ -218,9 +262,9 @@ def test_explicit_doc_is_preferred_over_the_docstring():
 
 def test_load_all_bases_is_idempotent_and_survives_bad_imports():
     load_all_bases()
-    assert _EXPECTED_BASES <= registered_bases()
+    assert _shipped_bases() == _EXPECTED_BASES
     load_all_bases()
-    assert _EXPECTED_BASES <= registered_bases()
+    assert _shipped_bases() == _EXPECTED_BASES
 
 
 # ---------------------------------------------------------------------------

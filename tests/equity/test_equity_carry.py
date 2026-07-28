@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from crocodile.core.analytics.carry import DAYS_PER_YEAR
+from crocodile.core.analytics.carry import DAYS_PER_YEAR, apr_from_rate
 from crocodile.core.schema.enums import AssetClass, CorpActionType, OptType, Side
 from crocodile.core.schema.records import (
     OHLCV,
@@ -114,7 +114,24 @@ def _index(symbol: str, ts: int, value: float) -> IndexValue:
     )
 
 
-def _option(ts: int, strike: float, opt: OptType, bid: float, ask: float) -> OptionsChain:
+def _option(
+    ts: int,
+    strike: float,
+    opt: OptType,
+    bid: float,
+    ask: float,
+    spot: float | None = 100.0,
+    expiry: int | None = None,
+) -> OptionsChain:
+    """One contract, carrying the spot out of the payload that produced it.
+
+    ``spot`` defaults to a real number rather than to ``None``, which is what it was
+    pinned at until this fixture was found to be structurally unable to see the field the
+    provider writes: every chain built here answered as if Yahoo had left the column empty,
+    so the one column the forward's index leg comes from was never exercised. ``None``
+    remains reachable by passing it, because a chain with no spot is a real state and now
+    has a real consequence.
+    """
     return OptionsChain(
         source="yahoo",
         symbol=f"{_STOCK}{strike:g}{opt.value}",
@@ -123,21 +140,26 @@ def _option(ts: int, strike: float, opt: OptType, bid: float, ask: float) -> Opt
         asset_class=AssetClass.EQUITY,
         source_ts=ts,
         underlying=_STOCK,
-        underlying_price=None,
+        underlying_price=spot,
         strike=strike,
-        expiry=_EXPIRY,
+        expiry=_EXPIRY if expiry is None else expiry,
         opt_type=opt,
         bid_px=bid,
         ask_px=ask,
     )
 
 
-def _dividend(ts: int, value: float) -> CorporateAction:
+def _dividend(ts: int, value: float, ingest_ts: int | None = None) -> CorporateAction:
+    """One declared dividend. ``ingest_ts`` is when this copy of it was written.
+
+    Two parameters because the collapse turns on the difference: ``ts`` becomes the event
+    instant two providers agree on, and ``ingest_ts`` is the ``local_ts`` they cannot share.
+    """
     return CorporateAction(
         source="tiingo",
         symbol=_STOCK,
         symbol_raw=_STOCK,
-        local_ts=ts,
+        local_ts=ts if ingest_ts is None else ingest_ts,
         asset_class=AssetClass.EQUITY,
         source_ts=ts,
         ex_date="2024-01-08",
@@ -148,6 +170,26 @@ def _dividend(ts: int, value: float) -> CorporateAction:
 
 def _curve_records(local_ts: int = _NOW) -> list[MacroSeries]:
     return parse_par_yield_csv(_CURVE_CSV, local_ts=local_ts)
+
+
+def _published_ns(date_val: str) -> int:
+    """When that day's par curve actually went up: 3:30 pm New York, DST included.
+
+    Computed here from the same market timezone the module uses rather than written out as
+    a UTC constant, because the constant is what the code under test got wrong — a literal
+    would be an hour off for two thirds of the year and would agree with a fixed-offset
+    implementation for the wrong reason.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import time as _time
+
+    from crocodile.core.scheduler.calendar import MARKET_TZ
+
+    published = _datetime.combine(
+        _date.fromisoformat(date_val), _time(15, 30), tzinfo=MARKET_TZ
+    )
+    return int(published.timestamp()) * _SEC_NS
 
 
 def _lake(tmp_path: Path, records: list[Record]) -> Catalog:
@@ -257,6 +299,43 @@ def test_a_price_earlier_than_every_published_quote_has_no_rate(tmp_path: Path) 
     catalog = _lake(tmp_path, _curve_records())
     curve = risk_free_curve(catalog, _NOW)
     assert curve.at(_NOW - 30 * _DAY_NS, 91.0) is None
+
+
+def test_a_quote_is_filed_under_the_hour_treasury_publishes_it_not_utc_midnight(
+    tmp_path: Path,
+) -> None:
+    """The record stores a date; midnight is not a claim about when the curve went up.
+
+    ``treasury/client.py`` says so in as many words, and this module read it as one anyway.
+    Treasury posts the par curve at 3:30 pm ET, so a price stamped at 09:30 ET on 2024-01-05
+    is *before* that day's curve existed — and subtracting it is lookahead, which the
+    provenance registry treats as categorical ("there is no confidence at which it is a
+    legal record") rather than as staleness to be scored in ``[0, 1]``.
+    """
+    catalog = _lake(tmp_path, _curve_records())
+    curve = risk_free_curve(catalog, _NOW)
+    assert curve.at(_published_ns("2024-01-05"), 91.0) is not None
+    morning = _published_ns("2024-01-05") - 6 * 3600 * _SEC_NS  # 09:30 ET, same session
+    quote = curve.at(morning, 91.0)
+    assert quote is not None
+    assert quote.date == "2024-01-04", "a morning price cannot see the afternoon's curve"
+
+
+def test_the_publication_hour_follows_the_market_timezone_across_the_dst_boundary(
+    tmp_path: Path,
+) -> None:
+    """3:30 pm ET is 20:30 UTC in winter and 19:30 UTC in summer.
+
+    A fixed offset would be an hour wrong for one half of the year in one direction or the
+    other, and the direction that is wrong admits the lookahead this is here to close.
+    """
+    winter = _lake(tmp_path / "w", parse_par_yield_csv("Date,3 Mo\n01/05/2024,5.46\n"))
+    summer = _lake(tmp_path / "s", parse_par_yield_csv("Date,3 Mo\n07/05/2024,5.46\n"))
+    winter_stamp = risk_free_curve(winter, _NOW + 400 * _DAY_NS).at(_NOW + 400 * _DAY_NS, 91.0)
+    summer_stamp = risk_free_curve(summer, _NOW + 400 * _DAY_NS).at(_NOW + 400 * _DAY_NS, 91.0)
+    assert winter_stamp is not None and summer_stamp is not None
+    assert (winter_stamp.quote_ts // _SEC_NS) % 86_400 == 20 * 3600 + 30 * 60
+    assert (summer_stamp.quote_ts // _SEC_NS) % 86_400 == 19 * 3600 + 30 * 60
 
 
 def test_the_lookup_is_by_publication_date_not_by_ingest_instant(tmp_path: Path) -> None:
@@ -423,16 +502,44 @@ def test_a_fresh_yield_scores_higher_than_a_stale_one(tmp_path: Path) -> None:
     assert 0.0 <= stale_confidence <= fresh_confidence <= 1.0
 
 
-def test_an_absent_yield_scores_the_two_price_legs_and_nothing_more(
+def test_a_carry_with_no_financing_leg_scores_zero_and_not_two_thirds(
     tmp_path: Path,
 ) -> None:
-    """Two of three legs, the third scoring zero — the encoding the basis argues for."""
+    """The row reports ``carry_pct = None``; the confidence has to agree with the column.
+
+    It did not. ``treasury_carry`` was ``(n_price_legs + freshness) / 3`` with
+    ``n_price_legs`` a ``def`` default of 2 that nothing ever passed, so the floor was
+    0.667 — comfortably over the ``>= 0.5`` filter this registry cites as the reason
+    ``ohlcv_from_ohlcv`` changed denominators, on a row whose whole subject, the financing
+    rate, is missing. Both price legs are present in any emitted row by construction, so
+    there was never anything for the term to count.
+    """
     catalog = _lake(
         tmp_path,
         [_trade(_SPOT, _T1, 100.0, "s1"), _trade(_FUTURE, _T2, 101.0, "f1")],
     )
     frame = equity_spot_future_carry(catalog, _FUTURE, _SPOT, *_WINDOW, _EXPIRY)
-    assert frame["prov_confidence"][0] == pytest.approx(2.0 / 3.0)
+    assert frame["risk_free_rate"][0] is None
+    assert frame["carry_pct"][0] is None
+    assert frame["prov_confidence"][0] == pytest.approx(0.0)
+
+
+def test_the_confidence_formula_reads_no_input_that_cannot_move(tmp_path: Path) -> None:
+    """A term with one reachable value is a constant, wherever it is spelled.
+
+    Gate 3c probes the registry for formulas whose *output* never moves. It cannot see a
+    formula that varies overall while one of its declared inputs is pinned by every call
+    site, which is what ``n_price_legs`` was.
+    """
+    from crocodile.core.schema.provenance import ConfidenceInputError, confidence_for
+
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("treasury_carry", {"horizon_ns": 10})
+    assert confidence_for("treasury_carry", {"yield_age_ns": 0, "horizon_ns": 10}) == 1.0
+    assert confidence_for("treasury_carry", {"yield_age_ns": 10, "horizon_ns": 10}) == 0.0
+    assert confidence_for(
+        "treasury_carry", {"yield_age_ns": 5, "horizon_ns": 10, "n_price_legs": 0}
+    ) == pytest.approx(0.5)
 
 
 def test_the_confidence_is_the_registered_formula_and_not_a_number_written_here(
@@ -443,12 +550,9 @@ def test_the_confidence_is_the_registered_formula_and_not_a_number_written_here(
     frame = equity_spot_future_carry(two_leg_lake, _FUTURE, _SPOT, *_WINDOW, _EXPIRY)
     row = frame.row(0, named=True)
     horizon_ns = _EXPIRY - int(row["local_ts"])
-    age_ns = int(row["local_ts"]) - 1_704_412_800_000_000_000  # 2024-01-05 UTC midnight
+    age_ns = int(row["local_ts"]) - _published_ns("2024-01-05")
     assert frame["prov_confidence"][0] == pytest.approx(
-        confidence_for(
-            "treasury_carry",
-            {"n_price_legs": 2, "yield_age_ns": age_ns, "horizon_ns": horizon_ns},
-        )
+        confidence_for("treasury_carry", {"yield_age_ns": age_ns, "horizon_ns": horizon_ns})
     )
 
 
@@ -546,18 +650,109 @@ def test_a_strike_quoted_on_only_one_side_cannot_close_parity(tmp_path: Path) ->
     assert equity_forward_basis(catalog, _STOCK, *_WINDOW).is_empty()
 
 
-def test_a_symbol_with_no_chain_or_no_cash_price_is_empty(tmp_path: Path) -> None:
-    no_chain = _lake(tmp_path / "a", [_trade(_STOCK, _T1, 100.0, "p1"), *_curve_records()])
+def test_a_symbol_with_no_chain_is_empty(tmp_path: Path) -> None:
+    """A cash price on its own is not half a forward — parity needs both option legs.
+
+    This used to assert a second thing: that a chain with no separate cash *series* was
+    also empty. It is not, and it should never have been — the chain carries the cash leg.
+    That case is now
+    ``test_a_lake_holding_only_a_chain_and_a_curve_still_answers``, which asserts the
+    opposite outcome for the same lake, and the case this one still covers is unchanged.
+    """
+    no_chain = _lake(tmp_path, [_trade(_STOCK, _T1, 100.0, "p1"), *_curve_records()])
     assert equity_forward_basis(no_chain, _STOCK, *_WINDOW).is_empty()
-    no_cash = _lake(
-        tmp_path / "b",
+
+
+def test_the_index_leg_is_the_chains_own_spot_and_not_a_stored_print(tmp_path: Path) -> None:
+    """One snapshot, one spot: the mark and the index come off the same observation.
+
+    The chain below carries 105.00 on every row while the stored cash series holds a
+    day-old bar at 100.00. Taking the stored print made the answer a function of how old
+    the cash series happened to be — the same snapshot read 0.0057 against a same-instant
+    print and 0.5600 against this one, ten times the basis, with no column moving to say
+    so. The crypto twin cannot express that: ``perp_basis`` reads mark and index off one
+    ``derivative_ticker`` row.
+    """
+    catalog = _lake(
+        tmp_path,
         [
-            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6),
-            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6),
+            _bar(_STOCK, _NOW - _DAY_NS, 100.0),
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=105.0),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=105.0),
             *_curve_records(),
         ],
     )
-    assert equity_forward_basis(no_cash, _STOCK, *_WINDOW).is_empty()
+    row = equity_forward_basis(catalog, _STOCK, *_WINDOW).row(0, named=True)
+    assert row["index_price"] == pytest.approx(105.0)
+    horizon = (_EXPIRY - _T2) / _DAY_NS
+    forward = 100.0 + 3.0 * (1.0 + _THREE_MONTH_ON_JAN_5 * horizon / DAYS_PER_YEAR)
+    assert row["basis_pct"] == pytest.approx((forward - 105.0) / 105.0)
+
+
+def test_a_lake_holding_only_a_chain_and_a_curve_still_answers(tmp_path: Path) -> None:
+    """Every row carried a usable spot while the function returned nothing.
+
+    ``price_leg`` was a precondition, so an ``options_chain`` partition with no ``trade``,
+    ``ohlcv`` or ``index_value`` beside it produced zero rows — an empty answer reported
+    for a lake that held both legs of the measurement.
+    """
+    catalog = _lake(
+        tmp_path,
+        [
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=100.0),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=100.0),
+            *_curve_records(),
+        ],
+    )
+    frame = equity_forward_basis(catalog, _STOCK, *_WINDOW)
+    assert len(frame) == 1
+    assert frame["index_price"][0] == pytest.approx(100.0)
+
+
+def test_a_chain_with_no_spot_of_its_own_is_no_forward(tmp_path: Path) -> None:
+    """The cost of the decision above, stated: no contemporaneous cash leg, no row.
+
+    A cash print from some other instant is available here and is deliberately not used —
+    a bound on how stale it may be would need a number nothing publishes, which is the
+    denominator ``_aggregate_of_an_undeclared_stream`` and ``book_resample`` both decline
+    to invent.
+    """
+    catalog = _lake(
+        tmp_path,
+        [
+            _trade(_STOCK, _T1, 100.0, "p1"),
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=None),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=None),
+            *_curve_records(),
+        ],
+    )
+    assert equity_forward_basis(catalog, _STOCK, *_WINDOW).is_empty()
+
+
+def test_the_spot_is_scoped_to_the_expiry_the_forward_is_read_off(tmp_path: Path) -> None:
+    """One ``local_ts`` can hold several expiries, each fetched in its own request.
+
+    ``yahoo/client.py`` issues one call per expiration and stamps them with one local
+    instant, so the spot that came back with *these* strikes is the one on *these* rows.
+    The nearest expiry is chosen first and its own spot is what the strike is measured
+    against — the far expiry's 200.00 below must not select the 200-strike.
+    """
+    near = _EXPIRY
+    far = _EXPIRY + 30 * _DAY_NS
+    catalog = _lake(
+        tmp_path,
+        [
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=100.0, expiry=near),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=100.0, expiry=near),
+            _option(_T2, 200.0, OptType.CALL, 9.4, 9.6, spot=200.0, expiry=far),
+            _option(_T2, 200.0, OptType.PUT, 1.4, 1.6, spot=200.0, expiry=far),
+            *_curve_records(),
+        ],
+    )
+    row = equity_forward_basis(catalog, _STOCK, *_WINDOW).row(0, named=True)
+    assert row["expiry"] == near
+    assert row["strike"] == pytest.approx(100.0)
+    assert row["index_price"] == pytest.approx(100.0)
 
 
 def test_an_expiry_already_past_the_snapshot_is_not_a_forward(tmp_path: Path) -> None:
@@ -640,6 +835,57 @@ def test_cumulative_funding_is_a_running_sum(dividend_lake: Catalog) -> None:
     ]
 
 
+def test_one_dividend_reported_twice_is_one_event(tmp_path: Path) -> None:
+    """``corp_action`` carries three providers' copies, and a repeated backfill adds more.
+
+    Without the collapse the second copy is an event zero hours after the first, so
+    ``interval_hours`` floors to 1 and the whole dividend is annualised over one hour
+    instead of over the real period, while ``cumulative_funding`` scales with the copy
+    count. The crypto twin collapses on the funding timestamp for exactly this reason, and
+    ``price_leg`` twenty lines up collapses two prints at one instant the same way.
+    """
+    price_and_curve = [_bar(_STOCK, _NOW - 12 * 3600 * _SEC_NS, 200.0), *_curve_records()]
+    once = _lake(tmp_path / "once", [*price_and_curve, _dividend(_NOW, 1.0)])
+    thrice = _lake(
+        tmp_path / "thrice",
+        [
+            *price_and_curve,
+            _dividend(_NOW, 1.0),
+            _dividend(_NOW, 1.0, ingest_ts=_NOW + 60 * _SEC_NS),
+            _dividend(_NOW, 1.0, ingest_ts=_NOW + 120 * _SEC_NS),
+        ],
+    )
+    expected = equity_funding_apr(once, _STOCK, *_WINDOW)
+    frame = equity_funding_apr(thrice, _STOCK, *_WINDOW)
+    assert len(expected) == 1
+    assert frame.to_dicts() == expected.to_dicts(), (
+        "how many times a dividend was written down is not a fact about the dividend"
+    )
+    # What the copies used to produce, stated as the ratio rather than as a magnitude that
+    # depends on the fixture's price: the second copy lands zero hours after the first,
+    # `interval_hours` floors to 1, and the same dividend is annualised over one hour
+    # instead of over the real period — here 24x, and unbounded as the copies bunch up.
+    assert frame["apr"][0] == pytest.approx(apr_from_rate(-1.0 / 200.0, 24))
+    assert apr_from_rate(-1.0 / 200.0, 1) == pytest.approx(24 * frame["apr"][0])
+
+
+def test_the_last_report_of_a_dividend_wins(tmp_path: Path) -> None:
+    """Providers that disagree are a correction, not an average nobody declared — the rule
+    :func:`price_leg` already applies to two prints at one instant."""
+    corrected = _lake(
+        tmp_path,
+        [
+            _bar(_STOCK, _NOW - 12 * 3600 * _SEC_NS, 200.0),
+            _dividend(_NOW, 1.0),
+            _dividend(_NOW, 2.0, ingest_ts=_NOW + 60 * _SEC_NS),
+            *_curve_records(),
+        ],
+    )
+    frame = equity_funding_apr(corrected, _STOCK, *_WINDOW)
+    assert len(frame) == 1
+    assert frame["dividend"][0] == pytest.approx(2.0)
+
+
 def test_carry_apr_is_financing_paid_minus_dividends_received(
     dividend_lake: Catalog,
 ) -> None:
@@ -660,13 +906,19 @@ def test_carry_apr_is_financing_paid_minus_dividends_received(
 
 def test_the_dividend_leg_still_answers_without_a_curve(tmp_path: Path) -> None:
     """This is the one of the three carry capabilities that degrades rather than empties:
-    the dividend yield is a real measurement whether or not financing is known."""
+    the dividend yield is a real measurement whether or not financing is known.
+
+    The row degrades and the confidence says so. It used to report 0.667 — the floor
+    ``n_price_legs`` put under every score — while ``risk_free_apr`` and ``carry_apr`` were
+    both ``None``, so the two halves of the row disagreed about whether a financing leg had
+    been found, and the number that disagreed was the one a ``>= 0.5`` filter reads.
+    """
     catalog = _lake(tmp_path, [_bar(_STOCK, _NOW - _SEC_NS, 200.0), _dividend(_NOW, 1.0)])
     row = equity_funding_apr(catalog, _STOCK, *_WINDOW).row(0, named=True)
     assert row["funding_rate"] == pytest.approx(-0.005)
     assert row["risk_free_apr"] is None
     assert row["carry_apr"] is None
-    assert row["prov_confidence"] == pytest.approx(2.0 / 3.0)
+    assert row["prov_confidence"] == pytest.approx(0.0)
 
 
 def test_a_symbol_with_no_dividends_or_no_price_is_empty(tmp_path: Path) -> None:

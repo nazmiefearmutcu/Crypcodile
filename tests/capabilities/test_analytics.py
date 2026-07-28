@@ -1219,7 +1219,14 @@ _M5_SPOT = "SPX"
 _M5_FUTURE = "ESH24"
 _M5_STOCK = "AAPL"
 _M5_EXPIRY = _T4 + 91 * _DAY_NS
-_M5_CURVE_CSV = "Date,1 Mo,3 Mo,6 Mo,1 Yr\n01/01/2024,5.53,5.46,5.24,4.84\n"
+_M5_CURVE_CSV = "Date,1 Mo,3 Mo,6 Mo,1 Yr\n12/29/2023,5.53,5.46,5.24,4.84\n"
+"""The last business day before the prices below, and dated a day earlier than it was.
+
+It said ``01/01/2024`` while every price in this fixture is stamped in the first four
+seconds of that same day. Treasury posts the par curve at 3:30 pm ET, so the carry was
+being read off a curve published twenty hours after the prices it was subtracted from —
+lookahead, which the equity carry now declines rather than scoring as staleness.
+"""
 
 
 def _m5_lake(tmp_path: Path) -> CapabilityContext:
@@ -1240,7 +1247,12 @@ def _m5_lake(tmp_path: Path) -> CapabilityContext:
             source="yahoo", symbol=f"{_M5_STOCK}{strike:g}{opt.value}",
             symbol_raw=f"{_M5_STOCK}{strike:g}{opt.value}", local_ts=_T3,
             asset_class=AssetClass.EQUITY, source_ts=_T3, underlying=_M5_STOCK,
-            underlying_price=None, strike=strike, expiry=_M5_EXPIRY, opt_type=opt,
+            # The spot out of the same payload the strikes came from, which is what the
+            # provider writes and what `perp-basis` reads as its index leg. It was `None`
+            # here, so the assertion below that `index_price == 100.0` was passing off the
+            # stored `_px(_M5_STOCK, _T2, 100.0)` bar — a different instant that happened
+            # to agree — and could not have noticed the chain's own column at all.
+            underlying_price=100.0, strike=strike, expiry=_M5_EXPIRY, opt_type=opt,
             bid_px=bid, ask_px=ask,
         )
 
@@ -1436,7 +1448,7 @@ def test_spot_future_basis_for_equities_reports_the_carry_the_crypto_half_cannot
     rows = _call_equity("spot-future-basis", ctx, params)
     row = rows.row(0, named=True)
     assert row["risk_free_rate"] == pytest.approx(0.0546)
-    assert row["risk_free_date"] == "2024-01-01"
+    assert row["risk_free_date"] == "2023-12-29"
     assert row["carry_pct"] == pytest.approx(row["annualized_pct"] - row["risk_free_rate"])
     # The five columns the crypto half returns are all still here, in its order, so a
     # caller does not have to know which market answered before it can read the answer.

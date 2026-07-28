@@ -35,7 +35,7 @@ means making it once, in the open.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Annotated, Any, Final
 
 import msgspec
 import polars as pl
@@ -313,6 +313,42 @@ class FundingPredictParams(msgspec.Struct, frozen=True):
     window_size: int = 5
 
 
+_RATE_DESCRIPTION: Final = (
+    "Annual risk-free rate as a decimal fraction (0.0546 is 5.46 %), CONTINUOUSLY "
+    "compounded. Not the same convention as the `risk_free_rate` column that "
+    "`spot-future-basis` and `funding-apr` emit: that is a US Treasury par yield, which is "
+    "simple/bond-equivalent. Convert with r_cont = ln(1 + r_simple)."
+)
+"""Help text for the options family's ``rate``, published on all three surfaces.
+
+The generated ``--rate`` shipped with no help at all, and the field is where two live
+conventions meet. M1 declares this one **continuous** — ``equity/analytics/options.py``
+discounts with ``exp(-r*t)`` and ``crypto/analytics/volsurface.py`` says so — while M5
+declares **simple**: ``core/analytics/carry.py``'s header states "Simple, not compounded,
+throughout" and ``equity/analytics/carry.py`` discounts with ``1 + r*days/365``. The only
+number this engine *publishes* for the rate is M5's, on the wire as ``risk_free_rate``, and
+it is the simple one.
+
+There is no percent bug — both sides are decimal fractions. The hazard is entirely that an
+operator reads a rate out of one capability and passes it into another, which is a
+one-line pipeline and produces a plausible wrong answer: 15 bp of discount factor at one
+year, 62 bp at two, and a one-year ATM call priced off a simple 5.46 % and inverted as
+continuous solves to 18.5 bp less vol than it was priced at. Nothing on either row would
+say so, so the field says it instead — which is why this is a wire-visible description
+rather than a docstring: a docstring is not where an operator building that pipeline is
+looking.
+
+Neither convention is changed. Each is correct for its own family and each is argued where
+it is declared; the Black-Scholes family is continuous everywhere it is written down, and
+the Treasury publishes a bond-equivalent yield that the carry arithmetic consumes unchanged
+so that both legs of a carry sit on one clock. Converting either to match the other would
+move stored numbers to remove a hazard that naming it removes.
+"""
+
+_Rate = Annotated[float, msgspec.Meta(description=_RATE_DESCRIPTION)]
+"""The options family's rate field, one spelling shared by four params structs."""
+
+
 class IvSurfaceParams(msgspec.Struct, frozen=True):
     """Parameters for ``iv-surface`` — one underlying at one instant.
 
@@ -330,7 +366,7 @@ class IvSurfaceParams(msgspec.Struct, frozen=True):
 
     underlying: str
     at_ns: int
-    rate: float = 0.0
+    rate: _Rate = 0.0
 
 
 class TermStructureParams(msgspec.Struct, frozen=True):
@@ -342,7 +378,7 @@ class TermStructureParams(msgspec.Struct, frozen=True):
 
     underlying: str
     at_ns: int
-    rate: float = 0.0
+    rate: _Rate = 0.0
 
 
 class VolSkewParams(msgspec.Struct, frozen=True):
@@ -351,7 +387,7 @@ class VolSkewParams(msgspec.Struct, frozen=True):
     underlying: str
     expiry_ns: int
     at_ns: int
-    rate: float = 0.0
+    rate: _Rate = 0.0
 
 
 class RiskReversalParams(msgspec.Struct, frozen=True):
@@ -364,7 +400,7 @@ class RiskReversalParams(msgspec.Struct, frozen=True):
     underlying: str
     expiry_ns: int
     at_ns: int
-    rate: float = 0.0
+    rate: _Rate = 0.0
     target_delta: float = 0.25
 
 
