@@ -8,16 +8,48 @@ import os
 import time
 from collections.abc import AsyncGenerator, Generator, Iterable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import msgspec
 
+from crocodile.core.errors import ConfigError
 from crocodile.core.ratelimit import TokenBucketLimiter
 from crocodile.core.schema.enums import AssetClass, FundPeriod
-from crocodile.core.schema.records import Filing, Fundamental
+from crocodile.core.schema.records import Filing, Fundamental, Holding13F, InsiderTransaction
+from crocodile.equity.providers.sec_edgar.form4 import Form4ParseError, parse_form4
+from crocodile.equity.providers.sec_edgar.form13f import (
+    Form13FParseError,
+    parse_13f_information_table,
+    parse_13f_primary_document,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from crocodile.core.config import Settings
 
 log = logging.getLogger(__name__)
+
+FORM4_FORMS = frozenset({"4", "4/A"})
+"""The Section 16(a) forms this client parses as ownership documents.
+
+Forms 3 and 5 share the ``ownershipDocument`` schema and are deliberately absent. A Form 3
+is an initial statement of holdings and reports no transaction at all; a Form 5 is an
+annual catch-up whose lines are the ones exempt from the two-business-day rule, so their
+``transaction_date`` and their filing date can be eleven months apart — which is exactly the
+gap ``sec_form4``'s docstring argues is *not* a sampling deficiency for a Form 4 because a
+Form 4's own date is timely. Reading the two under one basis would make that argument false
+for a fraction of the rows and there would be no column saying which fraction.
+"""
+
+FORM_13F_FORMS = frozenset({"13F-HR", "13F-HR/A"})
+"""Holdings reports and their amendments. ``13F-NT`` is a notice that the positions are
+reported by somebody else and carries no information table, so it is not fetched."""
+
+_XSL_RENDERED_PREFIX = "xsl"
+"""EDGAR serves an XSL-rendered HTML view of an ownership document under a sibling
+directory whose name starts with this — ``xslF345X03/wf-form4_1234.xml`` — and the raw XML
+at the same basename in the filing's root. ``primaryDocument`` in the submissions index
+names the rendered one, which parses as HTML and yields no transactions at all."""
 
 
 def _safe_float(val: Any) -> float | None:
@@ -88,6 +120,36 @@ class SecEdgarClient:
         self._cik_to_tickers: dict[int, list[str]] = {}
         self._cik_to_primary_ticker: dict[int, str] = {}
 
+    @classmethod
+    def from_settings(cls, settings: Settings, **kwargs: Any) -> SecEdgarClient:
+        """Build a client whose User-Agent came from configuration rather than from a guess.
+
+        This is the supported constructor, and it exists because the ``__init__`` default is
+        not a usable one. ``crocodile.core.config.Settings.sec_user_agent`` is deliberately
+        undefaulted, and its docstring states the contract this method implements: SEC
+        requires the header to identify someone *contactable*, so an invented address
+        satisfies the string check while giving the regulator a dead mailbox — which fails
+        silently rather than loudly, and is worse than refusing to guess. The literal in
+        ``__init__`` is exactly such an address; it is left in place because the ingest paths
+        that predate this method still pass through it, and it is not a value any new call
+        site should inherit.
+
+        Reading ``os.environ`` here instead would be the sixteen-scattered-reads problem
+        :mod:`crocodile.core.config` exists to end, one module deeper.
+
+        Raises:
+            ConfigError: ``sec_user_agent`` is unset or blank.
+        """
+        user_agent = (settings.sec_user_agent or "").strip()
+        if not user_agent:
+            raise ConfigError(
+                "SEC EDGAR requires a User-Agent naming a contactable party, e.g. "
+                "'Acme Research ops@acme.example'. Set CROCODILE_SEC_USER_AGENT; requests "
+                "without one are blocked, and an invented address is worse than none "
+                "because it fails silently."
+            )
+        return cls(user_agent=user_agent, **kwargs)
+
     def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=60.0, connect=10.0, sock_read=30.0)
@@ -135,6 +197,40 @@ class SecEdgarClient:
             return msgspec.json.decode(content)
         finally:
             resp.close()
+
+    async def _request_text(self, url: str) -> str:
+        """Fetch ``url`` as text, for the two attachments that are XML rather than JSON.
+
+        Separate from :meth:`_request_json` rather than a flag on it: the ownership and
+        information-table documents are not JSON, and ``msgspec.json.decode`` over an XML
+        body raises a decode error naming a byte offset, which is a long way from "this
+        filing's attachment is not where the index said".
+        """
+        resp = await self._request(url)
+        try:
+            resp.raise_for_status()
+            return (await resp.read()).decode("utf-8", errors="replace")
+        finally:
+            resp.close()
+
+    async def _resolve_cik(self, symbol: str) -> int:
+        """Return the CIK for a ticker or for a CIK spelled as one.
+
+        The same two-step ``get_filings`` and ``get_fundamentals`` each do inline. It is a
+        method here because the two new fetchers below would otherwise be the third and
+        fourth copies, and the fallback branch is the interesting half: a caller passing
+        ``CIK0001067983`` for a filer that has no ticker at all — every 13F filer that is
+        not itself listed — depends on it.
+        """
+        await self.ensure_ticker_map()
+        symbol_upper = symbol.upper()
+        cik = self._ticker_to_cik.get(symbol_upper)
+        if cik is not None:
+            return cik
+        try:
+            return int(symbol_upper.replace("CIK", ""))
+        except ValueError as err:
+            raise ValueError(f"Unknown symbol or CIK: {symbol}") from err
 
     async def fetch_ticker_map(self) -> None:
         """Fetch the ticker-to-CIK mapping from the SEC website."""
@@ -359,6 +455,143 @@ class SecEdgarClient:
         if deduplicate:
             return self._deduplicate_facts(raw_facts)
         return list(raw_facts)
+
+    @staticmethod
+    def filing_directory(cik: int, accession_number: str) -> str:
+        """Return the EDGAR archive directory a filing's attachments live in."""
+        return (
+            f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_number.replace('-', '')}"
+        )
+
+    @staticmethod
+    def raw_ownership_document_url(cik: int, filing: Filing) -> str:
+        """Return the URL of a Form 4's *machine-readable* attachment.
+
+        ``Filing.primary_document`` names the XSL-rendered view — ``xslF345X03/wf-form4_….xml``
+        — which is served as HTML for a browser. Parsing that yields a well-formed document
+        with no ``ownershipDocument`` in it, so the failure is an empty transaction list
+        rather than an error, which is the shape this whole tree treats as the dangerous one.
+        The raw XML sits at the same basename in the filing's root directory, so the
+        rendered-view segment is stripped when there is one.
+        """
+        document = filing.primary_document
+        head, _, tail = document.partition("/")
+        if tail and head.startswith(_XSL_RENDERED_PREFIX):
+            document = tail
+        return f"{SecEdgarClient.filing_directory(cik, filing.accession_number)}/{document}"
+
+    async def get_insider_transactions(
+        self, symbol: str, *, limit: int = 40
+    ) -> list[InsiderTransaction]:
+        """Fetch and parse this issuer's recent Form 4 filings.
+
+        Args:
+            symbol: Ticker or CIK of the **issuer**, not of the insider. Form 4 is indexed
+                against both, and the issuer is the side a market-data question asks from.
+            limit: How many of the most recent Form 4 filings to fetch, newest first. A
+                bound rather than "all of them" because each filing is its own request and a
+                large issuer files hundreds a year; ``get_filings`` already returns them in
+                the index's own order, which is reverse-chronological.
+
+        Returns:
+            Every Table I transaction across those filings, oldest filing last. A filing
+            whose attachment cannot be parsed is logged and skipped rather than failing the
+            batch: one malformed document out of forty is a gap, and raising would turn it
+            into a total loss of the other thirty-nine.
+        """
+        cik = await self._resolve_cik(symbol)
+        filings = [f for f in await self.get_filings(symbol) if f.form in FORM4_FORMS][:limit]
+        local_ts = time.time_ns()
+
+        records: list[InsiderTransaction] = []
+        for filing in filings:
+            url = self.raw_ownership_document_url(cik, filing)
+            try:
+                records.extend(parse_form4(await self._request_text(url), local_ts=local_ts))
+            except (Form4ParseError, aiohttp.ClientError) as exc:
+                log.warning(
+                    "sec_edgar: skipping Form 4 %s for %s: %s: %s",
+                    filing.accession_number,
+                    symbol,
+                    type(exc).__name__,
+                    exc,
+                )
+        return records
+
+    async def get_13f_holdings(self, symbol: str, *, limit: int = 4) -> list[Holding13F]:
+        """Fetch and parse a filing manager's recent 13F-HR information tables.
+
+        Args:
+            symbol: Ticker or CIK of the **manager**. Most 13F filers are not themselves
+                listed, so this is usually a CIK — ``CIK0001067983`` for Berkshire Hathaway's
+                filer identity — which is why :meth:`_resolve_cik` has to accept one.
+            limit: How many of the most recent 13F-HR filings to fetch. Four is a year, and a
+                year is the smallest window in which ``smart-money`` can difference anything:
+                one information table is a position and two consecutive ones are a flow.
+
+        Returns:
+            Every reported position across those filings. As with Form 4, a filing whose
+            attachments cannot be read is logged and skipped rather than failing the batch.
+        """
+        cik = await self._resolve_cik(symbol)
+        filings = [f for f in await self.get_filings(symbol) if f.form in FORM_13F_FORMS][:limit]
+        local_ts = time.time_ns()
+
+        records: list[Holding13F] = []
+        for filing in filings:
+            try:
+                records.extend(await self._parse_one_13f(cik, filing, local_ts))
+            except (Form13FParseError, aiohttp.ClientError, KeyError, ValueError) as exc:
+                log.warning(
+                    "sec_edgar: skipping 13F %s for %s: %s: %s",
+                    filing.accession_number,
+                    symbol,
+                    type(exc).__name__,
+                    exc,
+                )
+        return records
+
+    async def _parse_one_13f(
+        self, cik: int, filing: Filing, local_ts: int
+    ) -> list[Holding13F]:
+        """Fetch both of a 13F-HR's attachments and parse them into holdings.
+
+        The filing's ``index.json`` is fetched rather than the filenames being guessed. A
+        cover page is reliably ``primary_doc.xml``, but the information table is named by the
+        filing agent — ``form13fInfoTable.xml``, ``infotable.xml``, ``0001067983-24-000011.xml``
+        and a dozen others are all live — so the only way to find it that does not silently
+        return nothing for whole families of filers is to read the directory.
+        """
+        directory = self.filing_directory(cik, filing.accession_number)
+        index = await self._request_json(f"{directory}/index.json")
+        names = [
+            str(item.get("name", ""))
+            for item in index.get("directory", {}).get("item", [])
+            if str(item.get("name", "")).lower().endswith(".xml")
+        ]
+
+        primary = next((n for n in names if n.lower() == "primary_doc.xml"), None)
+        if primary is None:
+            raise Form13FParseError(f"{filing.accession_number} has no primary_doc.xml")
+        cover = parse_13f_primary_document(await self._request_text(f"{directory}/{primary}"))
+
+        # Whatever else is XML and is not the cover page or EDGAR's own submission index.
+        # Two candidates would mean a filing carrying two information tables, which the form
+        # does not permit; taking the first keeps the failure a missing amendment rather than
+        # a doubled portfolio.
+        table = next(
+            (n for n in names if n != primary and not n.lower().endswith("-index.xml")), None
+        )
+        if table is None:
+            raise Form13FParseError(f"{filing.accession_number} carries no information table")
+
+        return parse_13f_information_table(
+            await self._request_text(f"{directory}/{table}"),
+            cover=cover,
+            filing_date=filing.filing_date,
+            accession_number=filing.accession_number,
+            local_ts=local_ts,
+        )
 
     async def download_company_facts_zip(self, dest_path: str | Path) -> None:
         """Download the bulk company facts ZIP file."""
