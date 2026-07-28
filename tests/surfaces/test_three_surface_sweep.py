@@ -154,6 +154,35 @@ def test_a_raw_sql_capability_answers_the_same_on_all_three(lake: pathlib.Path) 
     assert str(START_NS) in from_cli.stdout
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT count(*) AS n FROM trade -- how many",
+        "SELECT count(*) AS n FROM trade --",
+        "SELECT count(*) AS n FROM trade -- trailing ) AS x LIMIT 1",
+    ],
+    ids=["comment", "bare-marker", "comment-containing-sql"],
+)
+def test_a_trailing_line_comment_is_not_a_syntax_error_on_the_network_surfaces(
+    lake: pathlib.Path, sql: str
+) -> None:
+    """The surface's own LIMIT wrapper must not be swallowed by the caller's comment.
+
+    ``--`` runs to the end of the line, and the wrapper folded the statement onto one line —
+    so the closing parenthesis, the alias and the LIMIT all landed *inside* the comment.
+    Before: the CLI (no cap, no wrapper) answered, and REST and MCP answered
+    ``400 Parser Error: syntax error at end of input``, blaming the caller for SQL the
+    surface broke. A commented statement is what anyone pastes out of an editor.
+    """
+    from_rest = _client(lake).get("/api/v1/query", params={"sql": sql, "asset_class": "crypto"})
+    assert from_rest.status_code == 200, from_rest.text
+    from_mcp = mcp.call_tool("query", {"sql": sql, "asset_class": "crypto"},
+                             settings=_settings(lake))
+    from_cli = _cli(lake, "query", sql, "--asset-class", "crypto")
+    assert from_cli.exit_code == 0, from_cli.output
+    assert from_rest.json()["rows"] == from_mcp["rows"] == [{"n": 40}]
+
+
 def test_the_network_posture_holds_across_the_sweep(lake: pathlib.Path) -> None:
     """Same statement, same lake, and only the local surface is allowed to run it."""
     guarded = "SELECT 'delete me' AS note"

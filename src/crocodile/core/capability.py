@@ -155,7 +155,17 @@ class CapabilityContext:
             stripped = sql.strip().rstrip(";").strip()
             # Wrapping rather than truncating the frame: the point of the cap on a
             # network surface is to not materialise the rows in the first place.
-            sql = f"SELECT * FROM ({stripped}) AS _q LIMIT {int(self.row_limit)}"
+            #
+            # The newlines are load-bearing and are not formatting. SQL's ``--`` comment runs
+            # to the end of the *line*, so folding the statement onto one line put everything
+            # after it — the closing parenthesis, the alias, the LIMIT — inside the comment.
+            # ``SELECT count(*) FROM trade -- how many`` therefore succeeded on the CLI, which
+            # sets no cap and does not wrap, and answered ``400 Parser Error: syntax error at
+            # end of input`` on REST and MCP: the caller blamed for SQL this surface broke,
+            # on the one capability whose text is entirely theirs. A trailing block comment
+            # (``/* … */``) never had the problem, which is what made it look like a parser
+            # quirk rather than a wrapper bug.
+            sql = f"SELECT * FROM (\n{stripped}\n) AS _q LIMIT {int(self.row_limit)}"
         return self.catalog.query(sql, readonly=self.readonly)
 
 
