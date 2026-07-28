@@ -15,19 +15,20 @@ surface*, made once here, rather than an omission repeated at forty-eight call s
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from typing import Annotated, Any, get_args
 
 import msgspec
 import typer
 
-from crocodile.core.capability import REGISTRY, AssetClass, Capability
+from crocodile.core.capability import REGISTRY, AssetClass, Capability, ReturnKind
 from crocodile.core.config import Settings
 from crocodile.core.errors import CrocodileError
 from crocodile.core.store.catalog import Catalog
 from crocodile.surfaces import dispatch
 
-__all__ = ["RESERVED_OPTIONS", "build_app", "command_names"]
+__all__ = ["POSITIONAL", "RESERVED_OPTIONS", "build_app", "command_names", "positional_field"]
 
 RESERVED_OPTIONS: frozenset[str] = frozenset({"asset_class", "data_dir"})
 """Option names this surface adds itself, which a params field may therefore not use.
@@ -36,6 +37,24 @@ Not a style rule: a params field called ``data_dir`` would silently shadow the o
 chooses the lake, and the shadowing would be invisible in the declaration. Checked at build
 time so the collision is a startup failure rather than a capability that reads the wrong
 directory.
+"""
+
+_REPORTED: tuple[type[BaseException], ...] = (
+    CrocodileError,
+    *dispatch.BAD_REQUEST,
+    *dispatch.REFUSED,
+)
+"""What this surface reports as a message and an exit code rather than as a traceback.
+
+The three categories :mod:`~crocodile.surfaces.dispatch` classifies, plus every
+``CrocodileError``, because on a command line there is no distinction to draw between them:
+each one is a sentence for the operator and ``exit 1``. What is deliberately *not* here is
+everything else — a bug in an implementation still prints its traceback, because that is
+the one audience who can act on it.
+
+``duckdb.CatalogException`` is why this is a named tuple rather than
+``(CrocodileError, ValueError)``: a mistyped table name printed forty lines of traceback at
+an operator who had simply spelled a table wrong.
 """
 
 _SCALARS: tuple[type, ...] = (str, int, float, bool)
@@ -65,6 +84,35 @@ def _option_decl(name: str, kind: type) -> str:
     return f"{flag}/--no-{name.replace('_', '-')}" if kind is bool else flag
 
 
+POSITIONAL = "_positional"
+"""The synthesised name of the optional positional argument. Not a params field name.
+
+Leading underscore because it must never collide with one: a struct field called
+``_positional`` would silently take over the argument that fills a different field.
+"""
+
+
+def positional_field(cap: Capability) -> str | None:
+    """The one parameter this capability may also take positionally, if there is one.
+
+    A capability with **exactly one** required parameter, spellable as text, gets it as an
+    optional positional argument as well as an option. That is how the legacy CLI took every
+    one of them — ``crypcodile query "SELECT 1"``, ``crypcodile search BTC`` — and losing it
+    was not a decision anyone made, it fell out of synthesising keyword-only options from a
+    struct.
+
+    One required parameter, or none. Two would make the order something a caller has to
+    memorise, and ``crocodile indicators deribit:BTC-PERPETUAL 1700000000000000000
+    1700003600000000000`` is a line nobody can read back. A structured parameter is excluded
+    for the opposite reason: it is a document rather than a word, and a shell hands those
+    over on a pipe, which is what :func:`_from_stdin` is for.
+    """
+    required = [field for field in msgspec.structs.fields(cap.params) if field.required]
+    if len(required) != 1 or required[0].name in dispatch.structured_fields(cap):
+        return None
+    return required[0].name
+
+
 def _parameters(cap: Capability) -> list[inspect.Parameter]:
     """Build the Typer signature for one capability: its params, then this surface's own.
 
@@ -74,7 +122,31 @@ def _parameters(cap: Capability) -> list[inspect.Parameter]:
     """
     descriptions = dispatch.params_schema(cap).get("properties", {})
     parameters: list[inspect.Parameter] = []
+    positional = positional_field(cap)
+    if positional is not None:
+        # First in the signature, because ``inspect.Signature`` refuses a positional
+        # parameter after a keyword-only one. It defaults to ``None`` so that every existing
+        # invocation — which passes the option — keeps working unchanged.
+        parameters.append(
+            inspect.Parameter(
+                POSITIONAL,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=None,
+                annotation=Annotated[
+                    str | None,
+                    typer.Argument(
+                        metavar=positional.upper(),
+                        help=f"{positional}, positionally. Also readable from stdin.",
+                    ),
+                ],
+            )
+        )
     for field in msgspec.structs.fields(cap.params):
+        if field.name == POSITIONAL:
+            raise ValueError(
+                f"{cap.name}: params field {field.name!r} collides with the positional "
+                f"argument this surface synthesises"
+            )
         if field.name in RESERVED_OPTIONS:
             raise ValueError(
                 f"{cap.name}: params field {field.name!r} collides with the "
@@ -86,7 +158,14 @@ def _parameters(cap: Capability) -> list[inspect.Parameter]:
         option = typer.Option(_option_decl(field.name, kind), help=help_text)
         default: Any = inspect.Parameter.empty
         annotation: Any = Annotated[kind, option]
-        if not field.required:
+        if field.name == positional:
+            # Required, but not required *as an option*: Click would reject the command line
+            # before the runner ever sees the positional or the pipe that supplies it. The
+            # requirement is still enforced — `build_params` refuses a struct with a missing
+            # field, naming it, after all three ways of supplying it have been tried.
+            default = None
+            annotation = Annotated[kind | None, option]
+        elif not field.required:
             default = field.default if field.default is not msgspec.NODEFAULT else None
             # A field with a real default keeps its declared type so ``--help`` shows the
             # value; one that defaults to None (or to a factory) becomes optional.
@@ -135,13 +214,14 @@ def _runner(cap: Capability) -> Any:
     def run(**kwargs: Any) -> None:
         asset_class: AssetClass | None = kwargs.pop("asset_class", None)
         data_dir: Path | None = kwargs.pop("data_dir", None)
+        _fill_positional(cap, kwargs)
         settings = Settings.from_env()
         try:
             params = dispatch.build_params(cap, kwargs)
             resolved = dispatch.resolve_asset_class(
-                cap, explicit=asset_class, symbol=kwargs.get("symbol")
+                cap, explicit=asset_class, symbols=dispatch.symbol_hints(params)
             )
-        except (CrocodileError, ValueError) as exc:
+        except _REPORTED as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
 
@@ -154,15 +234,17 @@ def _runner(cap: Capability) -> Any:
                 readonly=False,
                 row_limit=None,
             )
-            warning = dispatch.warning_for(cap, ctx)
-            if warning:
-                typer.echo(warning, err=True)
+            banner = dispatch.banner_for(cap, ctx)
+            if banner:
+                typer.echo(banner, err=True)
             try:
-                result = _drive(dispatch.invoke(cap, ctx, params))
-            except (CrocodileError, ValueError) as exc:
+                pending = dispatch.invoke(cap, ctx, params)
+                # See the module docstring: local operator, own lake, so nothing is capped.
+                result = dispatch.drive(pending, row_limit=None)
+            except _REPORTED as exc:
                 typer.echo(f"Error: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
-            typer.echo(_render(cap, result))
+            typer.echo(_render(cap, result, pending))
 
     runner: Any = run
     runner.__name__ = cap.name.replace("-", "_")
@@ -175,37 +257,78 @@ def _runner(cap: Capability) -> Any:
     return runner
 
 
-def _drive(result: Any) -> Any:
-    """Run to completion anything the capability handed back unstarted.
+def _fill_positional(cap: Capability, kwargs: dict[str, Any]) -> None:
+    """Resolve the one parameter this surface accepts three ways into the one it passes on.
 
-    ``backfill`` returns an *unstarted coroutine* and ``collect`` an unstarted
-    :class:`~crocodile.capabilities.ops.Subscription`, both deliberately: an implementation
-    cannot know whether its caller already owns an event loop, and ``asyncio.run`` from
-    inside a FastAPI route raises. The CLI is the surface that owns no loop, so it is the
-    surface that starts one — and it must, because without this the command printed
-    ``<coroutine object backfill at 0x…>``, exited 0, and moved no data. A zero exit code
-    over work that never ran is the quietest possible failure.
+    Precedence is option, then positional, then stdin, and it is that way round because it
+    goes from most explicit to least: a caller who typed ``--sql`` said which value they
+    meant, and a pipe is what is left when nothing was said at all.
     """
-    import asyncio
-    import inspect
+    positional = kwargs.pop(POSITIONAL, None)
+    field = positional_field(cap)
+    if field is None:
+        return
+    if kwargs.get(field) is None:
+        kwargs[field] = positional
+    if kwargs.get(field) is None:
+        kwargs[field] = _from_stdin()
 
-    begin = getattr(result, "run", None)
-    if callable(begin) and not isinstance(result, type):
-        return asyncio.run(begin())
-    if inspect.iscoroutine(result):
-        return asyncio.run(result)
-    return result
+
+def _from_stdin() -> str | None:
+    """A piped value, or ``None`` if there is no pipe and nothing on it.
+
+    Guarded on ``isatty`` so an interactive ``crocodile query`` reports the missing argument
+    instead of sitting silently waiting for a terminal that has nothing to send. A pipe is
+    how a shell hands over a value too long to type, and ``echo "SELECT …" | crypcodile
+    query`` is what the legacy CLI accepted; whitespace-only input is treated as nothing,
+    because ``< /dev/null`` is not an argument.
+    """
+    import sys
+
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return None
+        piped = sys.stdin.read().strip()
+    except (AttributeError, ValueError, OSError):
+        return None
+    return piped or None
 
 
-def _render(cap: Capability, result: Any) -> str:
-    """Print a table as a table and a scalar as one line, per the declaration."""
+def _render(cap: Capability, result: Any, pending: Any = None) -> str:
+    """Print a table as a table and everything else as JSON, per the declaration.
+
+    ``pending`` is what the capability handed back before :func:`dispatch.drive` finished it,
+    and it is only consulted for a ``STREAM``: a subscription run returns ``None``, so
+    rendering the return value printed the word ``None`` after a collection run and reported
+    neither what was collected nor for how long.
+
+    JSON rather than ``str(...)`` for everything that is not a polars frame. A Python
+    ``repr`` of a dict is single-quoted, which is neither JSON nor the bordered frame the
+    legacy CLI printed, so it could be read by neither ``jq`` nor a person — and this is the
+    only surface whose output is routinely piped into another program.
+    """
+    if cap.returns is ReturnKind.STREAM:
+        return _stream_line(pending)
     shaped = dispatch.payload(cap, result)
     if "rows" in shaped:
         rows = shaped["rows"]
         if hasattr(result, "to_dicts"):
             return "No data found for the given parameters." if not rows else str(result)
-        return str(rows)
-    return str(shaped["result"])
+        return json.dumps(rows, indent=2)
+    return json.dumps(shaped["result"], indent=2)
+
+
+def _stream_line(pending: Any) -> str:
+    """What a finished subscription has to report, which is not its return value."""
+    summary = dispatch.stream_summary(pending)
+    if summary is None:
+        return "Stream finished."
+    bound = summary["duration_seconds"]
+    return (
+        f"Collected {', '.join(summary['channels']) or 'no channels'} from "
+        f"{', '.join(summary['sources']) or 'no sources'} into the lake"
+        + (f" for {bound}s." if bound is not None else " until cancelled.")
+    )
 
 
 def build_app() -> typer.Typer:

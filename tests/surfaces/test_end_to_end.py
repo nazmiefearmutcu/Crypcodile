@@ -15,8 +15,9 @@ import pathlib
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.core.capability import AssetClass, CapabilityContext
+from crocodile.core.capability import REGISTRY, AssetClass, CapabilityContext
 from crocodile.core.config import Settings
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.store.catalog import Catalog
 from crocodile.surfaces import cli, dispatch, mcp, rest
 from tests.surfaces.conftest import END_NS, START_NS, SYMBOL
@@ -81,17 +82,23 @@ def test_the_cli_answers_to_a_retired_spelling(lake: pathlib.Path) -> None:
     assert "expected_price" in result.output
 
 
-def test_the_cli_warns_when_the_implementation_is_not_native(lake: pathlib.Path) -> None:
-    """Equity slippage rests on a book the venue did not publish, and the surface says so.
+def test_the_cli_does_not_banner_a_derived_answer_but_the_payload_still_says_so(
+    lake: pathlib.Path,
+) -> None:
+    """Migrated: this asserted ``DERIVED`` on the terminal, and the rule narrowed under it.
 
-    The banner generalises the one the equity REST depth route shipped by hand for a single
-    endpoint. Here it comes from the basis registration, so every non-native answer carries
-    one.
+    Two changes landed on the same behaviour from different branches. The equity half of
+    ``slippage`` used to be the crypto function — reading the crypto ``book_snapshot`` this
+    lake writes while declaring a VAP basis it never touched — and now walks the ladder
+    ``depth`` serves, declaring the same ``DERIVED``/``alpaca_l1`` ceiling because it is the
+    same book. Independently, ``banner_for`` stopped announcing ``DERIVED`` on stderr: a
+    derived answer is computed from native inputs, so being told an RSI was computed is not
+    news, and printing it on every successful call broke scripts asserting empty stderr
+    *and* taught operators to skip the channel the ``SYNTHETIC`` banner arrives on.
 
-    ``DERIVED``/``alpaca_l1`` rather than ``SYNTHETIC``/``yahoo_1m_vap``: the equity half
-    used to be the crypto function, reading the crypto ``book_snapshot`` this lake writes
-    while declaring a VAP basis it never touched. It walks the ladder ``depth`` serves now,
-    and declares the same ceiling ``depth`` does, because it is the same book.
+    So the subject survives and the assertion moves: the terminal stays quiet, and the
+    provenance is still there for a reader that wants it. ``warning_for`` is unchanged and
+    REST and MCP carry every non-native answer in the payload.
     """
     runner = CliRunner()
     result = runner.invoke(
@@ -100,8 +107,22 @@ def test_the_cli_warns_when_the_implementation_is_not_native(lake: pathlib.Path)
          "--asset-class", "equity", "--data-dir", str(lake)],
     )
     assert result.exit_code == 0, result.output
-    assert "DERIVED" in result.output
-    assert "alpaca_l1" in result.output
+    assert "DERIVED" not in result.output
+
+    cap = REGISTRY["slippage"]
+    impl = cap.impls[AssetClass.EQUITY]
+    assert impl.prov is Provenance.DERIVED
+    assert impl.basis == "alpaca_l1"
+
+    catalog = Catalog(lake)
+    try:
+        ctx = CapabilityContext(
+            catalog=catalog, settings=_settings(lake), asset_class=AssetClass.EQUITY
+        )
+        warning = dispatch.warning_for(cap, ctx) or ""
+    finally:
+        catalog.close()
+    assert "DERIVED" in warning and "alpaca_l1" in warning
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +184,9 @@ def test_rest_serves_the_alias_and_the_synthetic_warning(lake: pathlib.Path) -> 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["result"]["expected_price"] > 0
-    # DERIVED since the equity half stopped claiming a VAP ladder it never opened; see
-    # test_the_cli_warns_when_the_implementation_is_not_native.
+    # DERIVED since the equity half stopped claiming a VAP ladder it never opened. The
+    # payload carries it on every surface that can; only the CLI banner narrowed to
+    # SYNTHETIC — see test_the_cli_does_not_banner_a_derived_answer_but_the_payload_still_says_so.
     assert "DERIVED" in body["warning"]
 
 

@@ -247,7 +247,12 @@ async def capabilities() -> dict[str, list[str]]:
     queries, and ``simulate-payment`` and ``admin/payments`` are ledger administration
     behind a key.
     """
-    paths = {f"GET {path}" for path in rest.route_paths()}
+    # The method comes off the built route rather than being written here: four capabilities
+    # take parameters a query string cannot carry and are POST-only, and announcing `GET` for
+    # every one of them would be exactly the stale hand-written claim this route replaced.
+    paths = {
+        f"{method} {path}" for path, methods in rest.route_methods().items() for method in methods
+    }
     paths |= {f"GET {path}" for path, _name, _handler in _OPERATIONAL}
     paths.add("GET /api/v1/capabilities")
     return {"rest": sorted(paths), "mcp_tools_hint": sorted(mcp.tool_names())}
@@ -436,6 +441,10 @@ def build_server(*, settings: Settings | None = None, data_dir: Path | None = No
     for route in rest.build_app(settings=resolved, data_dir=data_dir).routes:
         if str(getattr(route, "path", "")).startswith(f"{rest.API_PREFIX}/"):
             app.routes.append(route)
+
+    # The capability routes serve two methods each and FastAPI writes one operationId per
+    # route, so this app needs the same correction the projection's own app applies.
+    rest.publish_one_operation_id_per_method(app)
 
     for path, name, handler in _OPERATIONAL:
         app.add_api_route(path, handler, methods=["GET"], name=name)

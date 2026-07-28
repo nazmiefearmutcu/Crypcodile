@@ -1,0 +1,203 @@
+"""Which failures are the caller's, which are policy, and which are ours.
+
+Three answers, one classification, three surfaces reading it. Getting this wrong is not a
+cosmetic problem: a 500 is retried by every client that backs off on 5xx and pages whoever
+owns the alerting, so serving a deliberate refusal or a SQL typo as one turns a caller's
+mistake into an operator's night.
+
+Two failures were measured at the exit review:
+
+* ``_refuse_readonly`` raises ``PermissionError`` *because* "a REST projection maps it to
+  403 and a caller must not retry" — and no surface caught it, so ``backfill`` and
+  ``collect`` answered 500 and MCP answered ``-32603``.
+* A DuckDB error in ``query`` went 400 in the legacy server and 500 here, because
+  ``duckdb.CatalogException`` is neither ``CrocodileError`` nor ``ValueError``. Every user
+  SQL typo became a 5xx.
+"""
+
+from __future__ import annotations
+
+import pathlib
+from typing import Any
+
+import duckdb
+import pytest
+from typer.testing import CliRunner
+
+from crocodile.core.capability import REGISTRY, Capability, Impl
+from crocodile.core.config import Settings
+from crocodile.surfaces import cli, dispatch, mcp, rest, stdio
+from tests.surfaces.conftest import END_NS, START_NS, SYMBOL
+
+
+def _settings(lake: pathlib.Path) -> Settings:
+    return Settings(data_dir=lake)
+
+
+def _client(lake: pathlib.Path):  # starlette's TestClient, imported lazily
+    from starlette.testclient import TestClient
+
+    return TestClient(rest.build_app(settings=_settings(lake)), raise_server_exceptions=False)
+
+
+_BACKFILL = {
+    "source": "deribit",
+    "channel": "trade",
+    "symbols": SYMBOL,
+    "start_ns": str(START_NS),
+    "end_ns": str(END_NS),
+    "asset_class": "crypto",
+}
+_COLLECT = {
+    "sources": "deribit",
+    "symbols": SYMBOL,
+    "channels": "trade",
+    "duration_seconds": "1",
+    "asset_class": "crypto",
+}
+
+
+# ---------------------------------------------------------------------------
+# A refusal is not a crash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("name", "arguments"), [("backfill", _BACKFILL), ("collect", _COLLECT)])
+def test_a_write_refused_by_the_surfaces_posture_is_403(
+    lake: pathlib.Path, name: str, arguments: dict[str, str]
+) -> None:
+    """The parameters were fine; this surface is not trusted to run the capability."""
+    response = _client(lake).get(f"/api/v1/{name}", params=arguments)
+    assert response.status_code == 403, response.text
+    assert "read-only" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(("name", "arguments"), [("backfill", _BACKFILL), ("collect", _COLLECT)])
+def test_mcp_reports_a_refusal_as_a_tool_error_rather_than_a_protocol_error(
+    lake: pathlib.Path, name: str, arguments: dict[str, str]
+) -> None:
+    """``-32603 Internal error`` tells an agent the call broke, not that it was refused."""
+    response = stdio.handle_request(
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": name, "arguments": dict(arguments)}},
+        data_dir=lake,
+    )
+    assert "error" not in response, response
+    assert "read-only" in response["result"]["content"][0]["text"]
+
+
+def test_the_cli_reports_a_refusal_instead_of_a_traceback(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI is not read-only, so the refusal it can meet is the filesystem's."""
+    original = REGISTRY["catalog-summary"]
+
+    def _refuse(ctx: Any, params: Any) -> dict[str, Any]:
+        raise PermissionError("the lake directory is not readable by this account")
+
+    monkeypatch.setitem(
+        REGISTRY,
+        "catalog-summary",
+        Capability(
+            name=original.name,
+            summary=original.summary,
+            params=original.params,
+            returns=original.returns,
+            aliases=original.aliases,
+            impls={
+                asset_class: Impl(fn=_refuse, prov=impl.prov, basis=impl.basis)
+                for asset_class, impl in original.impls.items()
+            },
+        ),
+    )
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["catalog-summary", "--asset-class", "crypto", "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 1
+    assert "not readable" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+# ---------------------------------------------------------------------------
+# SQL that does not compile against this lake
+# ---------------------------------------------------------------------------
+
+
+_BAD_SQL = {"sql": "SELECT * FROM no_such_table", "asset_class": "crypto"}
+
+
+def test_sql_that_does_not_compile_is_a_bad_request(lake: pathlib.Path) -> None:
+    """The legacy server answered 400 here; 500 trips alerting for a caller's typo."""
+    response = _client(lake).get("/api/v1/query", params=_BAD_SQL)
+    assert response.status_code == 400, response.text
+    assert "no_such_table" in response.json()["detail"]
+
+
+def test_the_cli_reports_bad_sql_instead_of_a_traceback(lake: pathlib.Path) -> None:
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["query", "--sql", "SELECT * FROM no_such_table", "--asset-class", "crypto",
+         "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 1, result.output
+    assert "no_such_table" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_mcp_reports_bad_sql_as_a_tool_error(lake: pathlib.Path) -> None:
+    response = stdio.handle_request(
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+         "params": {"name": "query", "arguments": dict(_BAD_SQL)}},
+        data_dir=lake,
+    )
+    assert "error" not in response, response
+    assert "no_such_table" in response["result"]["content"][0]["text"]
+
+
+def test_the_classification_names_the_statement_and_not_the_environment() -> None:
+    """A DuckDB failure is only the caller's when it is about their statement.
+
+    The legacy route caught ``Exception`` and answered 400 for all of them, which is the
+    opposite failure: a lake that cannot be read is not a bad request, and reporting it as
+    one tells the caller to fix a query that was fine.
+    """
+    assert issubclass(duckdb.CatalogException, dispatch.BAD_REQUEST)
+    assert issubclass(duckdb.ParserException, dispatch.BAD_REQUEST)
+    assert issubclass(duckdb.ConversionException, dispatch.BAD_REQUEST)
+    assert not issubclass(duckdb.IOException, dispatch.BAD_REQUEST)
+    assert not issubclass(duckdb.OutOfMemoryException, dispatch.BAD_REQUEST)
+
+
+def test_a_bug_in_an_implementation_is_still_a_500(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction, and the reason none of this is ``except Exception``.
+
+    Widening the catch until every failure is the caller's is how a broken server reports
+    itself as a bad request and nobody is paged.
+    """
+    original = REGISTRY["catalog-summary"]
+
+    def _break(ctx: Any, params: Any) -> dict[str, Any]:
+        raise RuntimeError("a genuine bug")
+
+    monkeypatch.setitem(
+        REGISTRY,
+        "catalog-summary",
+        Capability(
+            name=original.name,
+            summary=original.summary,
+            params=original.params,
+            returns=original.returns,
+            aliases=original.aliases,
+            impls={
+                asset_class: Impl(fn=_break, prov=impl.prov, basis=impl.basis)
+                for asset_class, impl in original.impls.items()
+            },
+        ),
+    )
+    response = _client(lake).get("/api/v1/catalog-summary", params={"asset_class": "crypto"})
+    assert response.status_code == 500, response.text
+    with pytest.raises(RuntimeError, match="a genuine bug"):
+        mcp.call_tool("catalog-summary", {"asset_class": "crypto"}, settings=_settings(lake))

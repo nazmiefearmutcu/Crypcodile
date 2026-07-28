@@ -8,12 +8,16 @@ capabilities were promoted away and nothing raised.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import pytest
 import pytest_asyncio
 
+from crocodile.core import capability as capability_module
+from crocodile.core.capability import REGISTRY, Capability, Impl
 from crocodile.core.schema.enums import AssetClass, Side
 from crocodile.core.schema.records import BookSnapshot, Record, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
@@ -120,3 +124,56 @@ def _equity_depth_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "crocodile.capabilities.analytics.select_depth_source", lambda **_: _FixedLadder()
     )
+@dataclasses.dataclass(frozen=True)
+class FakeSubscription:
+    """Shaped like :class:`~crocodile.capabilities.ops.Subscription`, connecting to nothing.
+
+    A real ``collect`` opens a websocket to a live venue, which is not a thing a test may do.
+    What is under test is what a *surface* does with the object, and that is decided entirely
+    by the three fields a surface is allowed to read off it plus the run it has to start.
+    """
+
+    sources: tuple[str, ...]
+    channels: tuple[str, ...]
+    duration_seconds: float | None
+
+    async def run(self) -> None:
+        return None
+
+
+@pytest.fixture
+def collecting_nothing() -> Iterator[None]:
+    """Replace ``collect``'s implementations with one that opens no sockets.
+
+    ``STREAM`` is the one return shape whose real implementation cannot be exercised in a
+    test, which is exactly why it kept shipping broken — so it is substituted at the registry
+    rather than skipped, and everything above the implementation is the real thing.
+    """
+    original = REGISTRY["collect"]
+
+    def _fake(ctx: Any, params: Any) -> FakeSubscription:
+        from crocodile.capabilities.ops import _refuse_readonly
+
+        _refuse_readonly(ctx, "collect")
+        return FakeSubscription(
+            sources=tuple(params.sources),
+            channels=tuple(params.channels),
+            duration_seconds=params.duration_seconds,
+        )
+
+    REGISTRY["collect"] = Capability(
+        name=original.name,
+        summary=original.summary,
+        params=original.params,
+        returns=original.returns,
+        aliases=original.aliases,
+        impls={
+            asset_class: Impl(fn=_fake, prov=impl.prov, basis=impl.basis)
+            for asset_class, impl in original.impls.items()
+        },
+    )
+    capability_module._DECLARED_NAMES.add(original.name)
+    try:
+        yield
+    finally:
+        REGISTRY["collect"] = original

@@ -91,7 +91,9 @@ def call_tool(
     explicit = AssetClass(explicit_raw) if explicit_raw else None
 
     params = dispatch.build_params(cap, supplied)
-    resolved = dispatch.resolve_asset_class(cap, explicit=explicit, symbol=supplied.get("symbol"))
+    resolved = dispatch.resolve_asset_class(
+        cap, explicit=explicit, symbols=dispatch.symbol_hints(params)
+    )
     resolved_settings = settings if settings is not None else Settings.from_env()
 
     with Catalog(dispatch.data_dir_for(resolved_settings, data_dir)) as catalog:
@@ -102,7 +104,8 @@ def call_tool(
             readonly=True,
             row_limit=dispatch.NETWORK_ROW_LIMIT,
         )
-        body = dispatch.payload(cap, dispatch.invoke(cap, ctx, params))
+        result = dispatch.drive(dispatch.invoke(cap, ctx, params), row_limit=ctx.row_limit)
+        body = dispatch.payload(cap, result)
         body["provenance"] = dispatch.provenance_block(cap, ctx)
         warning = dispatch.warning_for(cap, ctx)
         if warning:

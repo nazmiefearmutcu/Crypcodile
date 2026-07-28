@@ -44,10 +44,14 @@ def test_the_capabilities_route_lists_exactly_what_is_mounted(client: TestClient
     """
     body = client.get("/api/v1/capabilities").json()
 
+    # Method *and* path, because four capabilities take parameters a query string cannot
+    # carry and answer only on POST. Describing them as GET would be a self-description that
+    # sends a caller to a 405.
     mounted = {
-        f"GET {route.path}"
+        f"{method} {route.path}"
         for route in client.app.routes  # type: ignore[attr-defined]
-        if "GET" in (getattr(route, "methods", None) or ())
+        for method in (getattr(route, "methods", None) or ())
+        if method not in {"HEAD", "OPTIONS"}
     }
     missing = set(body["rest"]) - mounted
     assert not missing, f"described but not mounted: {sorted(missing)}"
@@ -62,6 +66,7 @@ def test_the_capabilities_route_lists_exactly_what_is_mounted(client: TestClient
         "GET /openapi.json",
         "GET /redoc",
         "GET /api/v1/admin/payments",
+        "POST /api/v1/simulate-payment",
     }, sorted(undescribed)
 
 
@@ -79,8 +84,10 @@ def test_every_capability_route_is_described_by_the_capabilities_route(
 ) -> None:
     """A capability added tomorrow appears here without anyone editing this module."""
     described = set(client.get("/api/v1/capabilities").json()["rest"])
-    for path in rest.route_paths():
-        assert f"GET {path}" in described, path
+    for path, methods in rest.route_methods().items():
+        assert methods, f"{path} answers on no method at all"
+        for method in methods:
+            assert f"{method} {path}" in described, f"{method} {path}"
 
 
 # ---------------------------------------------------------------------------

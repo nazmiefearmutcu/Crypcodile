@@ -11,8 +11,14 @@ The one thing the surfaces are *allowed* to disagree about is trust, and
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, get_args, get_origin
+import asyncio
+import inspect
+import itertools
+from collections.abc import Iterator, Sequence
+from types import NoneType, UnionType
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, get_args, get_origin
 
+import duckdb
 import msgspec
 
 from crocodile.capabilities import load_all
@@ -37,16 +43,24 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from crocodile.core.store.catalog import Catalog
 
 __all__ = [
+    "BAD_REQUEST",
     "NETWORK_ROW_LIMIT",
+    "REFUSED",
+    "UNAVAILABLE",
     "asset_class_option_values",
+    "banner_for",
     "build_context",
     "build_params",
+    "drive",
     "invoke",
     "params_schema",
     "payload",
     "provenance_block",
     "resolve",
     "resolve_asset_class",
+    "stream_summary",
+    "structured_fields",
+    "symbol_hints",
     "warning_for",
     "wire_names",
 ]
@@ -58,6 +72,54 @@ The number the legacy REST server already used, on every one of its fifteen
 ``_*_MAX_LIMIT`` constants. It is one constant here because fifteen copies of one policy
 is the shape this package exists to remove, and because a per-capability limit is a
 per-capability branch in a projector.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Whose fault a failure is
+# ---------------------------------------------------------------------------
+#
+# Three categories, declared once and read by all three projectors, because the question
+# they are answering is the same one in three vocabularies: a status code, an exit code, a
+# JSON-RPC result. Anything not named here is *ours* — a 500, a traceback, a protocol error
+# — and that default is the point. The legacy REST server caught ``Exception`` and answered
+# 400, which is the opposite failure: a lake that cannot be read reported as a bad request
+# tells the caller to fix a query that was fine, and pages nobody.
+
+UNAVAILABLE: Final[tuple[type[BaseException], ...]] = (CapabilityUnavailable,)
+"""This capability has no implementation for the asset class that was resolved.
+
+Not the caller's mistake and not a fault: the request is well formed and the answer does
+not exist yet, which is 501 on REST.
+"""
+
+REFUSED: Final[tuple[type[BaseException], ...]] = (PermissionError,)
+"""The request is fine and this surface is not trusted to run it.
+
+``capabilities.ops._refuse_readonly`` chose ``PermissionError`` over ``ValueError``
+precisely so this category could exist — its docstring says "a REST projection maps [it] to
+403 and a caller must not retry" — and then no surface caught it, so a deliberate policy
+refusal was served as a 500 and became indistinguishable from a crash. A crash invites a
+retry; this must not be retried, because nothing about it will be different next time.
+"""
+
+BAD_REQUEST: Final[tuple[type[BaseException], ...]] = (
+    ValueError,
+    duckdb.ProgrammingError,
+    duckdb.DataError,
+)
+"""The caller asked for something that cannot be answered as asked.
+
+``ValueError`` is what an implementation raises for an unknown indicator or a symbol with
+no stored book, and what ``build_params`` raises for a value that does not fit the schema.
+
+The two DuckDB families are the ``query`` capability's, and they are named rather than
+caught wholesale: DB-API says ``ProgrammingError`` is a statement problem (a missing table,
+a syntax error, a bad column) and ``DataError`` a value problem, while ``OperationalError``
+— ``IOException``, ``OutOfMemoryException`` — is the environment's. Only the first two are
+the caller's. Before this, ``duckdb.CatalogException`` was neither ``CrocodileError`` nor
+``ValueError``, so every user SQL typo answered 500: alerting fires, and every client that
+backs off on 5xx retries a statement that will never compile.
 """
 
 
@@ -125,22 +187,61 @@ def _sources_by_asset_class() -> dict[AssetClass, frozenset[str]]:
     }
 
 
+_SYMBOL_FIELDS: Final = frozenset({"symbol", "symbols"})
+"""The params fields that carry a canonical symbol, and therefore evidence about a market.
+
+Named rather than sniffed. Reading *any* string containing a colon would let
+``SELECT * FROM t WHERE note = 'binance:x'`` choose which implementation runs ``query``,
+which is a request landing in a market because of a string literal.
+
+Both spellings, because the registry uses both and they mean the same thing: ``symbol`` is
+one and ``symbols`` is a set of them. Consulting only the singular is what made six
+two-implementation capabilities — ``catalog-scan``, ``resolve-symbols``, ``replay``,
+``export``, ``backfill``, ``collect`` — unreachable without an ``--asset-class`` the symbol
+had already determined.
+"""
+
+
+def symbol_hints(params: Any) -> tuple[str, ...]:
+    """Every canonical symbol a built request carries, for :func:`resolve_asset_class`.
+
+    Read off the *built params struct* rather than off the raw request, which is what lets
+    one rule cover three transports: by this point a sequence is a sequence, whether it
+    arrived as a JSON list, a repeated flag or a comma-separated query parameter, and the
+    surfaces no longer each need their own idea of how ``symbols`` is spelled.
+    """
+    found: list[str] = []
+    for field in msgspec.structs.fields(params):
+        if field.name not in _SYMBOL_FIELDS:
+            continue
+        value = getattr(params, field.name, None)
+        if isinstance(value, str):
+            found.append(value)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            found.extend(item for item in value if isinstance(item, str))
+    return tuple(found)
+
+
 def resolve_asset_class(
     cap: Capability,
     *,
     explicit: AssetClass | None = None,
-    symbol: str | None = None,
+    symbols: Sequence[str] = (),
 ) -> AssetClass:
     """Decide which of ``cap.impls`` serves this request.
 
     In order, and the order is the point — each step is a *stronger* claim than the next:
 
     1. What the caller said. An explicit choice is never overridden.
-    2. What the symbol says. A canonical symbol is ``source:RAW``, and the source
+    2. What the symbols say. A canonical symbol is ``source:RAW``, and the source
        registries know which market each source serves, so ``deribit:BTC-PERPETUAL`` is
-       evidence rather than a guess. A source both registries claim resolves to neither:
-       an overlap is a real ambiguity and picking one silently is how a request lands in
-       the wrong market's implementation and comes back with plausible numbers.
+       evidence rather than a guess. A source both registries claim resolves to neither —
+       ``alpaca`` is a crypto exchange *and* an equity provider — because an overlap is a
+       real ambiguity and picking one silently is how a request lands in the wrong market's
+       implementation and comes back with plausible numbers. Symbols that name *different*
+       markets refuse for the same reason and more sharply: one request has one
+       implementation, so resolving by position would send the equity symbols into the
+       crypto one, which answers plausibly and empty.
     3. Whether there is a choice at all. A capability with one implementation — which is
        what every entry on ``PENDING_SYMMETRY`` looks like until Phase 3 — has nothing to
        decide.
@@ -149,8 +250,9 @@ def resolve_asset_class(
     would make every unrecognised equity symbol quietly return an empty crypto answer.
 
     Raises:
-        ValueError: the asset class cannot be established, or was named explicitly and
-            this capability does not implement it.
+        ValueError: the asset class cannot be established, or the symbols disagree about it.
+        CapabilityUnavailable: an asset class was named explicitly and this capability does
+            not implement it.
     """
     if explicit is not None:
         if explicit not in cap.impls:
@@ -161,22 +263,34 @@ def resolve_asset_class(
             )
         return explicit
 
-    if symbol and ":" in symbol:
+    by_asset_class = _sources_by_asset_class()
+    claimed: set[AssetClass] = set()
+    for symbol in symbols:
+        if not symbol or ":" not in symbol:
+            continue
         source = symbol.rsplit(":", 1)[0].strip().lower()
-        claimed = [
+        matched = [
             asset_class
-            for asset_class, sources in _sources_by_asset_class().items()
+            for asset_class, sources in by_asset_class.items()
             if source in sources and asset_class in cap.impls
         ]
-        if len(claimed) == 1:
-            return claimed[0]
+        if len(matched) == 1:
+            claimed.add(matched[0])
+    if len(claimed) == 1:
+        return next(iter(claimed))
+    if len(claimed) > 1:
+        raise ValueError(
+            f"{cap.name!r} was given symbols from two markets "
+            f"({sorted(a.value for a in claimed)}): {list(symbols)}. One request is served "
+            f"by one implementation, so split it rather than have one market answer for both"
+        )
 
     if len(cap.impls) == 1:
         return next(iter(cap.impls))
 
     raise ValueError(
         f"cannot tell which market {cap.name!r} should serve"
-        + (f" for symbol {symbol!r}" if symbol else "")
+        + (f" for symbols {list(symbols)}" if symbols else "")
         + f"; name it explicitly as one of {sorted(a.value for a in cap.impls)}"
     )
 
@@ -221,23 +335,48 @@ def build_params(cap: Capability, values: dict[str, Any]) -> Any:
     "not supplied" as ``None`` gets the struct's own default instead of overwriting it with
     a null.
 
-    A string arriving for a *sequence* field is split on commas, because a command line and
-    a query string have no lists either. Without this, fifteen of the registry's capabilities
-    were unreachable from two of their three surfaces: ``--symbols BTCUSDT`` and
+    A string arriving for a *sequence of scalars* is split on commas, because a command line
+    and a query string have no lists either. Without this, fifteen of the registry's
+    capabilities were unreachable from two of their three surfaces: ``--symbols BTCUSDT`` and
     ``?symbols=BTC`` both failed with ``Expected 'array', got 'str'``, which is a capability
     that is declared, projected, listed by Gate 4 and impossible to call. Comma separation is
     not invented here — it is what both forks' REST servers and both CLIs took, and what
     ``_PARAM_RENAMES`` in the surface-parity gate already documents for ``open-interest``.
 
+    A string arriving for a *structured* field is JSON. Splitting ``[{"a": 1}, {"b": 2}]`` on
+    commas produces ``['[{"a"', '1}', '{"b"', '2}]']``, which is the same unreachability one
+    step further along: ``gas-vol``, ``mev-sandwich``, ``smart-money`` and ``label-transfers``
+    take arrays of objects, and a transport that can only hand over text — a command line —
+    has no other way to spell one. What those four take is a JSON document either way; this
+    only says so where the transport lost the type.
+
+    A name the capability does not declare is **refused**, not dropped. ``msgspec.convert``
+    ignores what it does not recognise, so ``GET /api/v1/catalog-inventory?source=nope``
+    answered 200 with the whole inventory: the field is spelled ``exchange``, ``source`` is
+    the lake's own partition key and therefore the obvious guess, and a filter that is
+    silently ignored narrows nothing and does not say so. The caller reads the entire lake
+    as the answer to a question about one exchange. The refusal lists what the capability
+    does accept, so a near miss is one line from being fixed rather than a hunt through a
+    schema.
+
     Raises:
-        ValueError: a value does not fit the declared schema, or a required one is missing.
-            msgspec's own message names the field and the type, and is not reworded.
+        ValueError: a name is not a parameter of this capability, a value does not fit the
+            declared schema, a required one is missing, or a structured field was handed text
+            that is not JSON. msgspec's own message names the field and the type, and is not
+            reworded.
     """
+    known = {field.name for field in msgspec.structs.fields(cap.params)}
+    unknown = sorted(set(values) - known)
+    if unknown:
+        raise ValueError(
+            f"{cap.name}: {', '.join(unknown)} "
+            f"{'is not a parameter' if len(unknown) == 1 else 'are not parameters'} of this "
+            f"capability; it takes {sorted(known)}"
+        )
     sequences = _sequence_fields(cap.params)
+    structured = structured_fields(cap)
     supplied = {
-        key: [part.strip() for part in value.split(",") if part.strip()]
-        if key in sequences and isinstance(value, str)
-        else value
+        key: _from_text(cap, key, value, sequence=key in sequences, structured=key in structured)
         for key, value in values.items()
         if value is not None
     }
@@ -245,6 +384,24 @@ def build_params(cap: Capability, values: dict[str, Any]) -> Any:
         return msgspec.convert(supplied, type=cap.params, strict=False)
     except msgspec.ValidationError as exc:
         raise ValueError(f"{cap.name}: {exc}") from exc
+
+
+def _from_text(
+    cap: Capability, key: str, value: Any, *, sequence: bool, structured: bool
+) -> Any:
+    """Recover a value a text-only transport had to flatten. Anything else passes through."""
+    if not isinstance(value, str):
+        return value
+    if structured:
+        try:
+            return msgspec.json.decode(value)
+        except msgspec.DecodeError as exc:
+            raise ValueError(
+                f"{cap.name}: {key} takes a JSON document and {value!r} is not one: {exc}"
+            ) from exc
+    if sequence:
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return value
 
 
 def _sequence_fields(params: type[msgspec.Struct]) -> frozenset[str]:
@@ -261,6 +418,55 @@ def _sequence_fields(params: type[msgspec.Struct]) -> frozenset[str]:
             if isinstance(origin, type) and issubclass(origin, (list, tuple, set, frozenset)):
                 found.add(field.name)
     return frozenset(found)
+
+
+def structured_fields(cap: Capability) -> frozenset[str]:
+    """Field names whose declared type has no faithful spelling in a URL.
+
+    A scalar is spellable, and so is a sequence of scalars: ``?symbols=BTC,ETH`` is a
+    convention both forks already served. An array of *objects* is not — ``?trades=`` would
+    have to carry an escaped JSON document through a length limit, an access log and a
+    browser history — and neither is a mapping.
+
+    This is the whole of what tells a projection that a capability wants a body. It is read
+    off the parameter declaration because that is the only place the answer exists: a list of
+    capability names in a projector would be the fourth copy of the registry this package
+    exists to remove, and it would be wrong the first time a parameter changed type.
+    """
+    return frozenset(
+        field.name
+        for field in msgspec.structs.fields(cap.params)
+        if not _url_expressible(field.type)
+    )
+
+
+def _url_expressible(annotation: Any) -> bool:
+    """Whether a value of this type can be written in a query string or on a command line."""
+    origin = get_origin(annotation)
+    if origin is not None and origin in (list, tuple, set, frozenset):
+        return all(_scalar(arg) for arg in get_args(annotation) if arg is not Ellipsis)
+    if _is_union(annotation):
+        return all(_url_expressible(arg) for arg in get_args(annotation) if arg is not NoneType)
+    return _scalar(annotation)
+
+
+def _scalar(annotation: Any) -> bool:
+    """Whether this is a single value: a string, a number, a flag, or a literal among them.
+
+    ``Literal`` counts because a ``Literal["error", "first"]`` is spelled as one of its
+    strings, and a ``StrEnum`` counts because it *is* a ``str`` — which is what makes the
+    check ``issubclass`` rather than an identity test against a tuple of types.
+    """
+    if get_origin(annotation) is Literal:
+        return True
+    if _is_union(annotation):
+        return all(_scalar(arg) for arg in get_args(annotation) if arg is not NoneType)
+    return isinstance(annotation, type) and issubclass(annotation, (str, int, float, bool))
+
+
+def _is_union(annotation: Any) -> bool:
+    """``X | None`` and ``Union[X, None]`` are the same thing and are spelled two ways."""
+    return get_origin(annotation) in (Union, UnionType)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +527,67 @@ def invoke(cap: Capability, ctx: CapabilityContext, params: Any) -> Any:
     return implementation(cap, ctx).fn(ctx, params)
 
 
+def drive(result: Any, *, row_limit: int | None) -> Any:
+    """Finish anything a capability handed back unstarted or unconsumed.
+
+    Three return shapes in the registry are *work* rather than an answer, and all three are
+    deliberate: an implementation cannot know whether its caller already owns an event loop,
+    and ``asyncio.run`` from inside a running one raises — so ``backfill`` returns an
+    unstarted coroutine, a ``STREAM`` returns an unstarted
+    :class:`~crocodile.capabilities.ops.Subscription`, and ``replay`` returns a lazy iterator
+    because the whole point of its k-way merge is to stay O(channels) in memory.
+
+    This lives here rather than in one projector because the hazard is not one surface's.
+    The first two were fixed inside the CLI, and that is exactly why the third shipped
+    unnoticed on all three at once: ``replay`` printed ``<itertools.islice object at 0x…>``
+    and exited **0** on the CLI, answered 500 on REST, and failed ``json.dumps`` on MCP.
+    A zero exit code over work that never ran is the quietest possible failure, and a
+    projection that answers it in one place answers it once.
+
+    ``row_limit`` bounds the materialisation, because a lazy result is only safe on a network
+    surface while somebody bounds it: ``replay`` reads through :meth:`Catalog.scan` rather
+    than :meth:`CapabilityContext.query`, so the ``LIMIT`` wrapper that caps raw SQL never
+    sees it and draining the iterator is how one request materialises a lake. ``None`` — the
+    CLI's posture, on the machine that owns the lake — drains it all.
+    """
+    begin = getattr(result, "run", None)
+    if callable(begin) and not isinstance(result, type):
+        return asyncio.run(begin())
+    if inspect.iscoroutine(result):
+        return asyncio.run(result)
+    if isinstance(result, Iterator):
+        # ``Iterator`` and not ``Iterable``: a str, a dict, a list and a polars frame are all
+        # iterable and none of them is unconsumed work. What is being caught here is the
+        # generator/islice family, which has a ``__next__`` and one shot at being read.
+        return list(result) if row_limit is None else list(itertools.islice(result, row_limit))
+    return result
+
+
+def stream_summary(pending: Any) -> dict[str, Any] | None:
+    """Describe an unstarted subscription, or ``None`` if this is not one.
+
+    A ``STREAM`` run returns ``None`` when it finishes — there is no last element to report —
+    so a surface that renders only the return value prints ``None`` after an hour of
+    collection and says nothing about what it collected. Everything worth reporting is known
+    *before* the run starts, which is the whole reason a ``Subscription`` exists, so it is
+    read off here while it still exists.
+
+    Duck-typed rather than an ``isinstance`` against
+    :class:`~crocodile.capabilities.ops.Subscription`: importing that module here would drag
+    every connector and every analytics dependency into a surface that is often only being
+    asked to list its commands, which is the cost ``dispatch`` defers everywhere else.
+    """
+    sources = getattr(pending, "sources", None)
+    channels = getattr(pending, "channels", None)
+    if not callable(getattr(pending, "run", None)) or sources is None or channels is None:
+        return None
+    return {
+        "sources": list(sources),
+        "channels": list(channels),
+        "duration_seconds": getattr(pending, "duration_seconds", None),
+    }
+
+
 # ---------------------------------------------------------------------------
 # The response envelope
 # ---------------------------------------------------------------------------
@@ -368,6 +635,32 @@ def warning_for(cap: Capability, ctx: CapabilityContext) -> str | None:
     )
 
 
+def banner_for(cap: Capability, ctx: CapabilityContext) -> str | None:
+    """The subset of :func:`warning_for` that belongs on a terminal's error stream.
+
+    Only when the answer was *modelled* — when the quantity was produced from a different
+    data class than the one it reports, which is what :attr:`Provenance.SYNTHETIC` means. An
+    equity depth ladder is invented from 1m bars and an operator has to be told before they
+    read the numbers.
+
+    ``DERIVED`` is deliberately not announced here, and the difference is what a banner is
+    for. A derived answer is computed from native inputs, which is what an indicator *is*:
+    the caller asked for ``--indicator rsi`` by name, so being told that an RSI was computed
+    is not news. Printing it on every successful call made two things worse at once — a
+    script asserting empty stderr broke on a command that worked, and an operator who sees
+    the banner on every call stops reading the one that matters, which is the SYNTHETIC one
+    arriving on the same channel.
+
+    Nothing is lost on the surfaces that can carry it: :func:`warning_for` still announces
+    every non-``NATIVE`` implementation in the payload, where it is a field a machine reader
+    can consult rather than a line a human learns to skip.
+    """
+    impl = implementation(cap, ctx)
+    if impl.prov in (Provenance.NATIVE, Provenance.DERIVED):
+        return None
+    return warning_for(cap, ctx)
+
+
 def _headline(basis: str) -> str:
     """The first line of a basis's description, which is what fits in a banner.
 
@@ -383,19 +676,45 @@ def _headline(basis: str) -> str:
 
 
 def _jsonable(value: Any) -> Any:
-    """Make one cell safe to serialise.
+    """Make one cell safe to serialise, on every surface's encoder rather than on one.
 
     JSON has no ``NaN`` and no ``Infinity``. Polars produces both from ordinary analytics —
     a Bollinger band over a constant window, a ratio with a zero denominator — and
     ``json.dumps`` emits them as bare ``NaN`` tokens that most clients reject as malformed.
-    ``None`` is the honest encoding: the number does not exist.
+    ``None`` is the honest encoding: the number does not exist. The rule itself is
+    :func:`crocodile.core.util.json_safe.json_safe_float` rather than an ``isfinite`` written
+    here. Both deleted REST servers and both deleted MCP servers re-exported that function
+    precisely so there would be one answer, and a fourth copy in the projection would undo
+    what the re-export was for.
 
-    The rule itself is :func:`crocodile.core.util.json_safe.json_safe_float` rather than an
-    ``isfinite`` written here. Both deleted REST servers and both deleted MCP servers
-    re-exported that function precisely so there would be one answer, and a fourth copy in
-    the projection would undo what the re-export was for.
+    Narrowing only ``float`` was not enough, and the gap divided the surfaces exactly the way
+    ``DepthProfile`` did. Every lake read carries a ``date`` cell — the partition column — and
+    FastAPI's encoder knows what to do with one while ``json.dumps`` does not, so
+    ``catalog-scan`` answered 200 on REST and raised ``Object of type date is not JSON
+    serializable`` on MCP. A ``date``, a ``Decimal``, a ``UUID`` and a nested Struct are all
+    values a capability may legitimately return; which of them a given transport happens to
+    understand is not something a caller should have to know.
+
+    ``msgspec.to_builtins`` supplies the conversion for anything that is not already a JSON
+    primitive, and the walk continues into the result so a non-finite float *inside* a
+    converted structure is still caught. Sequence types are preserved rather than flattened
+    to lists: both encoders write a tuple as an array, so changing it would only churn the
+    shape a caller sees.
     """
-    return json_safe_float(value) if isinstance(value, float) else value
+    if isinstance(value, float):
+        return json_safe_float(value)
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        converted = [_jsonable(item) for item in value]
+        return tuple(converted) if isinstance(value, tuple) else converted
+    builtin = msgspec.to_builtins(value)
+    # ``to_builtins`` returns a str for a date and a dict for a Struct, so one more pass
+    # finishes the walk. The type check is what makes that pass terminate rather than
+    # recur forever on a value msgspec handed straight back.
+    return _jsonable(builtin) if type(builtin) is not type(value) else builtin
 
 
 def payload(cap: Capability, result: Any) -> dict[str, Any]:
@@ -405,17 +724,20 @@ def payload(cap: Capability, result: Any) -> dict[str, Any]:
     off the declaration rather than off the value's Python type, which is what stops a
     one-row frame from being served as a table by one surface and as an object by another —
     ``slippage`` returns exactly that and is declared ``SCALAR``.
+
+    Whatever comes out is plain JSON data all the way down, because the three surfaces do not
+    share an encoder and the one thing they must share is what they are asked to encode.
     """
     rows = _rows(result)
     if cap.returns is ReturnKind.TABLE:
-        return {"rows": rows if rows is not None else _encodable(result)}
+        return {"rows": rows if rows is not None else _encodable(cap, result)}
     if rows is not None:
         return {"result": rows[0] if rows else None}
-    return {"result": _encodable(result)}
+    return {"result": _encodable(cap, result)}
 
 
-def _encodable(result: Any) -> Any:
-    """Render a ``msgspec.Struct`` result as plain data.
+def _encodable(cap: Capability, result: Any) -> Any:
+    """Render a result as plain data, or say loudly that it cannot be.
 
     ``depth`` returns a ``DepthProfile``, which is a Struct and is this codebase's wire type
     — but only for *msgspec's* encoder. FastAPI serialises with pydantic, which refuses an
@@ -427,13 +749,25 @@ def _encodable(result: Any) -> Any:
     ``to_builtins`` and not ``json.encode``: the result has to stay a Python object for the
     CLI to render and for MCP to embed, and it is msgspec's own recursive walk, so a Struct
     nested inside a dict or a list is converted too.
+
+    The failure is **raised**. Swallowing it and handing the object back is what let a lazy
+    ``replay`` reach three different callers as three different symptoms — an ``islice`` repr
+    on stdout under exit 0, a 500 with no detail, and a JSON-RPC internal error — none of
+    which names the capability or the type. Anything unstarted is :func:`drive`'s to finish
+    before it gets here, so reaching this branch means the projection has a bug, and a bug
+    says so where it happens.
+
+    Raises:
+        TypeError: the result is not encodable by any surface.
     """
     try:
-        return msgspec.to_builtins(result)
-    except (TypeError, NotImplementedError):
-        # Not encodable at all — a Subscription, a generator. Handed back untouched so the
-        # surface that asked for it decides, rather than being flattened into a string here.
-        return result
+        return _jsonable(msgspec.to_builtins(result))
+    except (TypeError, NotImplementedError) as exc:
+        raise TypeError(
+            f"{cap.name} returned a {type(result).__name__}, which no surface can encode; "
+            f"a capability returns data, and work handed back unstarted must be driven to "
+            f"completion before it reaches the envelope"
+        ) from exc
 
 
 def _rows(result: Any) -> list[dict[str, Any]] | None:
