@@ -622,9 +622,36 @@ _DECLARED = (
 
 
 def test_the_batch_declares_every_capability_it_owns() -> None:
-    """A name that quietly failed to register would make every test above skip its subject."""
+    """Both directions, because the subset check only ever closed one.
+
+    ``set(_DECLARED) <= set(REGISTRY)`` catches a name that failed to register, which is
+    what makes every parametrised test above skip its subject. It says nothing about a
+    capability that registers and is listed here nowhere — and ``_DECLARED`` is the subject
+    of every per-capability gate in this file, so such a capability is asserted about by
+    none of them. A completeness review registered a fixture capability and found 57 of the
+    58 architectural gates green, the exception being a hand-maintained census whose own
+    message told it how to opt in.
+
+    The registry side is derived from ``Impl.fn.__module__`` rather than typed out, so this
+    is a comparison against the module's declarations and not against a second copy of this
+    tuple. :func:`~tests.conformance.test_capability_batches.
+    test_no_capability_is_registered_outside_the_batches_that_are_tested` holds the same
+    line across all five batches at once.
+    """
     load_all()
-    assert set(_DECLARED) <= set(REGISTRY)
+    declared_in_module = {
+        name
+        for name, cap in REGISTRY.items()
+        if any(
+            impl.fn.__module__ == "crocodile.capabilities.analytics"
+            for impl in cap.impls.values()
+        )
+    }
+    assert set(_DECLARED) == declared_in_module, (
+        f"declared in capabilities/analytics.py and untested here: "
+        f"{sorted(declared_in_module - set(_DECLARED))}; listed here and not declared "
+        f"there: {sorted(set(_DECLARED) - declared_in_module)}"
+    )
 
 
 @pytest.mark.parametrize("name", _DECLARED)
