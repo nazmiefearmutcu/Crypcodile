@@ -84,6 +84,39 @@ def _option_decl(name: str, kind: type) -> str:
     return f"{flag}/--no-{name.replace('_', '-')}" if kind is bool else flag
 
 
+def _option_default(declared: Any) -> Any:
+    """Return a declared default in the spelling *this transport* would have collected it in.
+
+    A default has to survive the same round trip a typed value does. :func:`_option_type`
+    widens every non-scalar field to ``str`` because Click has no lists, so the value Click
+    hands back for ``--symbols BTC,ETH`` is the text ``"BTC,ETH"`` and
+    :func:`dispatch.build_params` splits it. A *default* went round a different way: it was
+    handed to Click as the tuple ``()``, Click stringified it to ``"()"`` — Click's contract
+    for a non-string default on a string parameter — and the splitter turned that into the
+    one-element list ``['()']``.
+
+    The damage was not a message. ``open-interest`` and ``census`` filter on that list, so
+    every default invocation asked for the literal pattern ``()``, matched nothing, printed
+    "No data found for the given parameters." and **exited 0** — the same request answering
+    twelve thousand rows on REST. ``universe`` and ``collect-market`` parse it as an
+    enumeration and were unreachable from this surface entirely, with ``'()' is not a valid
+    Kind``. Four fields, one line, and the only visible symptom was an empty answer that
+    reads exactly like an empty lake.
+
+    So a sequence default is written the way a caller would type it, and an *empty* sequence
+    is written as no value at all — which is what it means. ``build_params`` drops ``None``
+    rather than passing it through, so the struct's own default is what reaches the
+    implementation, and the declaration stays the single statement of what the parameter is.
+    ``--help`` gains from it too: a non-empty default now shows ``binance,okx`` instead of
+    ``('binance', 'okx')``, which is a value a reader can paste back.
+    """
+    if declared is msgspec.NODEFAULT:
+        return None
+    if isinstance(declared, (list, tuple, set, frozenset)):
+        return ",".join(str(item) for item in declared) or None
+    return declared
+
+
 POSITIONAL = "_positional"
 """The synthesised name of the optional positional argument. Not a params field name.
 
@@ -166,9 +199,10 @@ def _parameters(cap: Capability) -> list[inspect.Parameter]:
             default = None
             annotation = Annotated[kind | None, option]
         elif not field.required:
-            default = field.default if field.default is not msgspec.NODEFAULT else None
+            default = _option_default(field.default)
             # A field with a real default keeps its declared type so ``--help`` shows the
-            # value; one that defaults to None (or to a factory) becomes optional.
+            # value; one that defaults to None (or to a factory, or to an empty sequence,
+            # which is this transport's way of spelling "no filter") becomes optional.
             if default is None:
                 annotation = Annotated[kind | None, option]
         parameters.append(

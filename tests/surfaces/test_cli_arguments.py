@@ -19,7 +19,7 @@ import pathlib
 import pytest
 from typer.testing import CliRunner
 
-from crocodile.surfaces import cli, dispatch
+from crocodile.surfaces import cli, dispatch, rest
 from tests.surfaces.conftest import SYMBOL
 
 # ---------------------------------------------------------------------------
@@ -269,3 +269,135 @@ def test_a_dropped_equity_term_crosses_the_wire_as_null_rather_than_as_a_nan_tok
     assert volatility["normalised"] is None
     assert volatility["weight"] == 0.0
     assert payload["terms"]["sequencer_delay"]["weight"] == pytest.approx(1.0 / 3.0)
+
+
+# ---------------------------------------------------------------------------
+# The default that was not a default
+# ---------------------------------------------------------------------------
+
+
+def _sequence_defaults() -> list[tuple[str, str]]:
+    """Every ``(capability, field)`` whose declared default is an empty sequence.
+
+    Enumerated off the registry rather than listed, because the four that exist today —
+    ``open-interest.symbols``, ``census.venues``, ``universe.kinds``,
+    ``collect-market.kinds`` — are not the property under test. The property is that *no*
+    such field reaches Click as a tuple, and a hand-written list of four would go stale the
+    first time a fifth was declared.
+    """
+    import msgspec
+
+    from crocodile.core.capability import REGISTRY
+
+    dispatch.wire_names()
+    return [
+        (name, field.name)
+        for name, cap in sorted(REGISTRY.items())
+        for field in msgspec.structs.fields(cap.params)
+        if isinstance(field.default, (list, tuple, set, frozenset))
+    ]
+
+
+def test_no_synthesised_option_carries_a_sequence_as_its_click_default() -> None:
+    """Click stringifies a non-string default, and ``()`` stringifies to ``"()"``.
+
+    Before: four options were built with ``default=()``, which Click rendered as the literal
+    two-character string and ``build_params`` split into ``['()']``.
+    """
+    from crocodile.core.capability import REGISTRY
+
+    assert _sequence_defaults(), "no sequence-defaulted field is declared; this proves nothing"
+    offenders = [
+        (name, parameter.name, parameter.default)
+        for name in sorted(REGISTRY)
+        for parameter in cli._parameters(REGISTRY[name])
+        if isinstance(parameter.default, (list, tuple, set, frozenset))
+    ]
+    assert not offenders, offenders
+
+
+def test_an_empty_sequence_default_reaches_the_capability_as_its_own_default(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The round trip, driven through Click, which is the layer that broke it.
+
+    Building the params dict by hand cannot see this bug: ``()`` is not a string, so
+    ``build_params`` hands it straight to msgspec and the struct is correct. The corruption
+    happens *inside Click*, which renders a non-string default for a string parameter with
+    ``str()`` — so the only way to observe it is to run a real command line and read what the
+    implementation was actually called with.
+
+    ``dispatch.invoke`` is replaced rather than allowed to run: what is under test is the
+    struct that reaches an implementation, and two of these four capabilities open a socket.
+    """
+    import msgspec
+
+    from crocodile.core.capability import REGISTRY
+
+    dispatch.wire_names()
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        dispatch, "invoke", lambda cap, ctx, params: seen.setdefault(cap.name, params)
+    )
+    monkeypatch.setattr(dispatch, "drive", lambda result, *, row_limit: None)
+
+    for name, field in _sequence_defaults():
+        cap = REGISTRY[name]
+        required = [
+            argument
+            for declared in msgspec.structs.fields(cap.params)
+            if declared.required
+            for argument in (f"--{declared.name.replace('_', '-')}", "1")
+        ]
+        result = CliRunner().invoke(
+            cli.build_app(),
+            [name, *required, "--asset-class", "crypto", "--data-dir", str(lake)],
+        )
+        assert name in seen, f"{name} never reached an implementation: {result.output}"
+        actual = getattr(seen[name], field)
+        assert actual == (), f"{name}.{field} reached the implementation as {actual!r}"
+
+
+def test_the_cli_and_rest_answer_the_same_unfiltered_open_interest_board(
+    oversized_lake: pathlib.Path,
+) -> None:
+    """The defect as a caller met it: exit 0 over an empty answer REST had rows for.
+
+    ``open-interest``'s ``symbols`` is a tuple of case-insensitive substring patterns and
+    empty means every symbol, so the two surfaces are being asked the identical question with
+    the identical (absent) filter. Before the fix the CLI printed "No data found for the
+    given parameters." and exited **0** while REST returned the board — and an exit code of 0
+    over a silently empty answer is the quietest failure this codebase has a history with.
+    """
+    from starlette.testclient import TestClient
+
+    from crocodile.core.config import Settings
+
+    client = TestClient(rest.build_app(settings=Settings(data_dir=oversized_lake)))
+    rows = client.get("/api/v1/open-interest", params={"asset_class": "crypto"}).json()["rows"]
+    assert rows, "the fixture writes an open-interest board; REST must return it"
+
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["open-interest", "--asset-class", "crypto", "--data-dir", str(oversized_lake)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "No data found" not in result.output, result.output
+    # Polars prints ``shape: (rows, columns)`` in its frame header.
+    assert f"({len(rows)}," in result.output, result.output
+
+
+def test_an_enumerated_sequence_default_no_longer_makes_a_capability_unreachable(
+    oversized_lake: pathlib.Path,
+) -> None:
+    """``universe`` and ``collect-market`` parse ``kinds`` as an enumeration.
+
+    Before: ``'()' is not a valid Kind``, on every invocation that did not name one, which is
+    a capability that is declared, projected, listed by Gate 4 and impossible to call.
+    """
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["universe", "--source", "deribit", "--asset-class", "crypto",
+         "--data-dir", str(oversized_lake)],
+    )
+    assert "is not a valid Kind" not in result.output, result.output
