@@ -8,6 +8,7 @@ Gate 4 — every capability appears in all three surfaces (Phase 2).
 
 import ast
 import inspect
+import itertools
 import operator
 import pathlib
 import re
@@ -1965,24 +1966,92 @@ def _observed_keys(fn) -> list[str]:
     return keys
 
 
-def _probe_results(basis: str, keys: list[str]) -> set[float]:
-    """Vary one key at a time over :data:`_PROBE_VALUES` and collect the answers.
+_MAX_PROBE_GRID = 100_000
+"""Ceiling on the assignments below, so a wide formula fails loudly rather than hangs.
 
-    One at a time, because the two-key formulas are ratios: scaling every key together
-    leaves ``book_resample``'s ``1 - lookahead/interval`` unchanged, and a probe that
-    moves nothing would read a real formula as a constant.
+The widest formula in the registry reads four keys, which is 2 401 points and runs in
+milliseconds. A seventh key would be 823 543, and a gate that silently takes a minute is a
+gate somebody eventually deletes — so the search refuses instead, and whoever writes that
+formula decides what to do about it in the open.
+"""
+
+
+def _held_assignments(others: list[str]) -> Iterator[dict[str, int]]:
+    """Every assignment of ``others`` drawn from :data:`_PROBE_VALUES`."""
+    for combo in itertools.product(_PROBE_VALUES, repeat=len(others)):
+        yield dict(zip(others, combo, strict=True))
+
+
+def _sweep(basis: str, held: dict[str, int], key: str) -> set[float]:
+    """Answers ``basis`` gives as ``key`` moves over the probe values, everything else fixed."""
+    from crocodile.core.schema.provenance import ConfidenceInputError, confidence_for
+
+    results: set[float] = set()
+    for value in _PROBE_VALUES:
+        try:
+            results.add(confidence_for(basis, {**held, key: value}))
+        except ConfidenceInputError:
+            continue
+    return results
+
+
+def _variation_witness(
+    basis: str, keys: list[str], key: str
+) -> tuple[dict[str, int], set[float]] | None:
+    """Find one assignment of the other keys under which ``key`` moves the answer.
+
+    A *witness*, not a single fixed baseline, and that is the whole of the change this
+    function represents. The gate's name claims a formula varies with every input it
+    declares, and the honest way to test one input is to hold the others somewhere and move
+    it — but "somewhere" cannot be an arbitrary constant, because a clamped term is flat over
+    part of its range and a fixed baseline lands inside one.
+
+    Both live examples are the multiplicative kind, and neither is a defect. Hold every key
+    of ``book_snapshot_slice`` at 1 and ``age_ns == window_ns``, so ``freshness`` is exactly
+    zero and the product is zero whatever ``n_levels`` does — the fill term is real, and the
+    baseline switched it off. Worse, *no* uniform baseline can switch it back on, because
+    ``age`` and ``window`` are equal in all of them. ``ohlcv_from_ohlcv``'s ``covered_ns`` is
+    the same story with ``sampled_ns``. So the search is over assignments rather than over
+    one of them: ``{n_requested: 1, age_ns: 0, window_ns: 1}`` witnesses ``n_levels``,
+    ``{sampled_ns: 1, tradeable_ns: 2}`` witnesses ``covered_ns``, and every declared input
+    of every registered formula has a witness today.
+
+    Saturation is therefore handled by asking the right question rather than by an exemption
+    list. "This input never moves the answer" is the defect; "this input does not move the
+    answer *here*" is what a clamp is for, and a gate that could not tell them apart would
+    have to be loosened until it stopped saying anything — which is the state it was found in.
+    """
+    others = [name for name in keys if name != key]
+    grid = len(_PROBE_VALUES) ** len(others)
+    assert grid <= _MAX_PROBE_GRID, (
+        f"{basis} reads {len(keys)} inputs, so witnessing one takes {grid} assignments. "
+        f"Narrow the formula or narrow _PROBE_VALUES; do not widen the ceiling to make this "
+        f"quiet."
+    )
+    for held in _held_assignments(others):
+        results = _sweep(basis, held, key)
+        if len(results) > 1:
+            return held, results
+    return None
+
+
+def _probe_results(basis: str, keys: list[str]) -> set[float]:
+    """Every answer ``basis`` gives over the whole probe grid.
+
+    Used by the constant check, which asks the opposite question from the one above: not
+    "does some input move this" but "does *anything*", so it wants the widest sweep there is
+    rather than a witness. It used to vary one key at a time from a fixed baseline of 1,
+    which is the same blind spot :func:`_variation_witness` documents — a declared constant
+    that had quietly grown a clamped formula could have read as constant from that baseline.
     """
     from crocodile.core.schema.provenance import ConfidenceInputError, confidence_for
 
     results: set[float] = set()
-    for key in keys:
-        for value in _PROBE_VALUES:
-            inputs = dict.fromkeys(keys, 1)
-            inputs[key] = value
-            try:
-                results.add(confidence_for(basis, inputs))
-            except ConfidenceInputError:
-                continue
+    for held in _held_assignments(keys):
+        try:
+            results.add(confidence_for(basis, held))
+        except ConfidenceInputError:
+            continue
     return results
 
 
@@ -1990,18 +2059,43 @@ def _probe_results(basis: str, keys: list[str]) -> set[float]:
     "basis", sorted(set(_shipped_registry()) - set(CONSTANT_BY_DEFINITION))
 )
 def test_gate3c_a_registered_formula_varies_with_its_inputs(basis: str) -> None:
-    """A confidence that cannot change is a constant, whatever it is spelled as."""
-    fn = _shipped_registry()[basis].fn
+    """Every input a formula declares must move its answer, not merely one of them."""
+    _assert_every_declared_input_moves_the_answer(basis, _shipped_registry()[basis].fn)
+
+
+def _assert_every_declared_input_moves_the_answer(basis: str, fn: object) -> None:
+    """The gate's body, per input, so a fixture basis can be run through the same assertion.
+
+    This used to assert what its name did not. ``_probe_results`` accumulated one flat set
+    across every key and the gate asked ``len(results) > 1`` — which is "varies with *at
+    least one* input". A formula with one live input and three decorative ones passed with
+    the same green as a formula where all four were load-bearing, and the failure message
+    still listed all four keys as though they had been checked.
+
+    That is not hypothetical. A referee found ``treasury_carry``'s ``n_price_legs`` frozen at
+    its ``def`` default because no call site passes it, so one of that formula's three terms
+    is dead in production while the old gate reported the formula as varying — on the
+    strength of the other two.
+
+    Note what this gate can and cannot see, because the ``treasury_carry`` finding sits
+    across the line. It probes the *formula*, so it can say every declared input is
+    load-bearing in the arithmetic. It cannot say a call site actually passes one: an input
+    that varies here and is never supplied is a reachability fact about the caller, and
+    reaching for it would mean this gate scanning call sites, which is Gate 3's job and a
+    different scanner. The honest division is that this one refuses a decorative *parameter*
+    and Gate 3's neighbours refuse a decorative *call*.
+    """
     keys = _observed_keys(fn)
     assert keys, (
         f"{basis} reads no inputs, so its confidence cannot vary. Measure something "
         f"observable, or declare it in CONSTANT_BY_DEFINITION with the argument."
     )
-    results = _probe_results(basis, keys)
-    assert len(results) > 1, (
-        f"{basis} returned {results} for every probe over {keys}; its confidence does "
-        f"not depend on its inputs. A number that never moves is a constant living in "
-        f"the registry, which is the one place no other gate looks."
+    dead = [key for key in keys if _variation_witness(basis, keys, key) is None]
+    assert not dead, (
+        f"{basis} declares {keys} and its answer does not move with {dead} under any "
+        f"assignment of the others. An input that cannot change the number is decoration: "
+        f"either it belongs in the formula and does not appear in it, or it does not belong "
+        f"in the formula and should not be read. Remove it, or make it count."
     )
 
 
@@ -2031,3 +2125,79 @@ def test_gate3c_the_constant_list_holds_no_stale_entry() -> None:
     """A name that left the registry must not leave its exemption behind."""
     unknown = sorted(set(CONSTANT_BY_DEFINITION) - set(_shipped_registry()))
     assert not unknown, f"CONSTANT_BY_DEFINITION names unregistered bases: {unknown}"
+
+
+# ---------------------------------------------------------------------------
+# Gate 3c's own mechanism, exercised — a decorative input, and a clamped one
+# ---------------------------------------------------------------------------
+# Every registered formula passes today, so the assertion above never takes its
+# failing branch against live state. That is the shape this file keeps finding, and
+# it is how the gate came to assert "varies with at least one input" under a name
+# claiming all of them: nothing in the tree could tell the two readings apart.
+# `tests/conformance/conftest.py` snapshots the provenance registry per test, so a
+# fixture basis registered here leaves nothing behind.
+
+
+def _register_fixture_basis(basis: str, fn: Callable[[Mapping[str, object]], float]) -> object:
+    from crocodile.core.schema.provenance import Provenance as _Provenance
+    from crocodile.core.schema.provenance import register_basis
+
+    register_basis(basis, level=_Provenance.DERIVED, inputs=["ohlcv"])(fn)
+    from crocodile.core.schema.provenance import _REGISTRY
+
+    return _REGISTRY[basis].fn
+
+
+def test_gate3c_a_decorative_input_is_caught() -> None:
+    """One live input, one read and ignored — the case the old flat set could not see.
+
+    The formula varies, so ``len(results) > 1`` held and the gate was green. Its name
+    promised more than that, and this is the difference asserted rather than argued.
+    """
+
+    def _two_thirds_decoration(inputs: Mapping[str, object]) -> float:
+        """Bars sampled out of a full session; the other two reads are the fixture."""
+        live = int(inputs["n_bars"])  # type: ignore[call-overload]
+        inputs["window"]  # read and discarded, which is what makes it decoration
+        inputs["tolerance"]
+        return min(live / 391, 1.0)
+
+    fn = _register_fixture_basis("fixture_decorative", _two_thirds_decoration)
+    with pytest.raises(AssertionError, match="does not move with"):
+        _assert_every_declared_input_moves_the_answer("fixture_decorative", fn)
+
+
+def test_gate3c_an_input_that_only_moves_the_answer_off_a_clamp_is_accepted() -> None:
+    """The false positive a single fixed baseline produces, asserted as a pass.
+
+    ``n_levels`` here is live, and it is invisible from ``{n_levels: 1, age: 1, window: 1}``
+    because the freshness factor is exactly zero there — which is ``book_snapshot_slice``'s
+    real shape, reduced to the two terms that collide. The witness search finds
+    ``age=0, window=1`` and the input reads as live, which it is.
+    """
+
+    def _fill_times_freshness(inputs: Mapping[str, object]) -> float:
+        """How full the ladder is, times how fresh it is — book_snapshot_slice's shape."""
+        n_levels = int(inputs["n_levels"])  # type: ignore[call-overload]
+        age = int(inputs["age_ns"])  # type: ignore[call-overload]
+        window = int(inputs["window_ns"])  # type: ignore[call-overload]
+        if window <= 0:
+            from crocodile.core.schema.provenance import ConfidenceInputError
+
+            raise ConfidenceInputError("window_ns must be positive")
+        return min(n_levels / 10, 1.0) * max(1.0 - age / window, 0.0)
+
+    fn = _register_fixture_basis("fixture_clamped", _fill_times_freshness)
+    _assert_every_declared_input_moves_the_answer("fixture_clamped", fn)
+
+
+def test_gate3c_a_formula_that_reads_nothing_is_caught() -> None:
+    """The pre-existing branch, kept covered now that the assertion around it moved."""
+
+    def _flat(_: Mapping[str, object]) -> float:
+        """A number with no observable behind it."""
+        return 0.5
+
+    fn = _register_fixture_basis("fixture_flat", _flat)
+    with pytest.raises(AssertionError, match="reads no inputs"):
+        _assert_every_declared_input_moves_the_answer("fixture_flat", fn)
