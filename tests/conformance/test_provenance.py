@@ -345,6 +345,175 @@ def test_alpaca_l1_refuses_a_side_count_that_could_not_have_been_measured():
 
 
 # ---------------------------------------------------------------------------
+# book_snapshot_slice — a stored venue book re-cut and re-stamped
+# ---------------------------------------------------------------------------
+
+_SLICE_WINDOW_NS = 60 * 1_000_000_000
+
+
+def _slice_inputs(**overrides: int) -> dict[str, int]:
+    """A full, fresh, exactly-filled ladder — the state that scores 1.0 — with one thing moved."""
+    inputs = {
+        "n_levels": 20,
+        "n_requested": 20,
+        "age_ns": 0,
+        "window_ns": _SLICE_WINDOW_NS,
+    }
+    inputs.update(overrides)
+    return inputs
+
+
+def test_a_full_ladder_read_at_the_instant_it_was_observed_is_fully_sampled():
+    """Both deficiencies at zero is the only state that scores 1.0, and it is reachable.
+
+    Reachable matters: a formula whose maximum no real call can produce is a formula that
+    silently rescales every answer. A collector subscribed at or below the requested depth,
+    read at a stamped instant, is an ordinary state of this lake.
+    """
+    assert confidence_for("book_snapshot_slice", _slice_inputs()) == 1.0
+
+
+def test_the_fill_term_is_the_ladder_the_store_could_supply_against_the_one_asked_for():
+    """Below 1.0 only when the request outruns the store, which is where the two bases meet.
+
+    ``book_resample`` argues that truncating to a caller's ``top_n`` is not a deficiency, and
+    it is right about its own case: it holds the whole reconstructed book, so it can always
+    answer. A slice cannot — the trimming happened upstream, at whatever depth the collector
+    subscribed. So this term is 1.0 in exactly ``book_resample``'s case and below it only in
+    the case ``book_resample`` never has.
+    """
+    assert confidence_for("book_snapshot_slice", _slice_inputs(n_levels=10)) == 0.5
+    assert confidence_for("book_snapshot_slice", _slice_inputs(n_levels=0)) == 0.0
+    # More levels than were asked for is a full answer, not an over-full one.
+    assert confidence_for("book_snapshot_slice", _slice_inputs(n_levels=200)) == 1.0
+
+
+def test_the_freshness_term_is_how_much_of_the_declared_tolerance_the_answer_used_up():
+    """Linear from the requested instant to the edge of the window the caller named."""
+    quarter = confidence_for("book_snapshot_slice", _slice_inputs(age_ns=_SLICE_WINDOW_NS // 4))
+    assert quarter == pytest.approx(0.75)
+    half = confidence_for("book_snapshot_slice", _slice_inputs(age_ns=_SLICE_WINDOW_NS // 2))
+    assert half == pytest.approx(0.5)
+    assert confidence_for("book_snapshot_slice", _slice_inputs(age_ns=_SLICE_WINDOW_NS)) == 0.0
+
+
+def test_a_wider_declared_window_grades_the_same_book_higher_and_the_docstring_says_so():
+    """The one uncomfortable property, asserted rather than left to be discovered.
+
+    ``ohlcv_from_ohlcv``'s caller-declared ``tradeable_ns`` only ever *lowers* a score when
+    over-declared, which is the safe direction. This denominator runs the other way. It is
+    taken because both alternatives are worse — the interval to the next stored snapshot
+    cannot be read without looking past the instant the record claims, and a fixed constant
+    would be a number invented to stand for how often a book ought to tick — and the
+    registration argues exactly that. A test that pins the awkward direction is what stops
+    the argument being quietly dropped later.
+    """
+    age = 30 * 1_000_000_000
+    strict = confidence_for("book_snapshot_slice", _slice_inputs(age_ns=age))
+    lenient = confidence_for(
+        "book_snapshot_slice", _slice_inputs(age_ns=age, window_ns=10 * _SLICE_WINDOW_NS)
+    )
+    assert lenient > strict
+    assert "over-declaring" in describe("book_snapshot_slice").lower(), (
+        "the direction hazard is the reason this denominator needed an argument; a "
+        "registration that loses it reads as though the choice were free"
+    )
+
+
+def test_the_two_terms_multiply_so_a_short_stale_ladder_is_charged_for_both():
+    """A mean would let one good half hide the other, which is the state they differ by."""
+    both = confidence_for(
+        "book_snapshot_slice", _slice_inputs(n_levels=10, age_ns=_SLICE_WINDOW_NS // 2)
+    )
+    assert both == pytest.approx(0.25)
+
+
+def test_a_snapshot_stamped_after_the_instant_it_describes_has_no_confidence_at_all():
+    """Lookahead is refused rather than scored, which is ``book_resample``'s lesson exactly.
+
+    That basis stopped scoring ``max(1 - lookahead_ns / interval_ns, 0.0)`` because emitting a
+    biased record at 0.0 is how biased records reached the lake; ``_capture_snapshot`` raises
+    instead. A slice bounds itself in SQL, and this is the second tripwire on the same rule —
+    an age that went negative means the bound was lost somewhere between the two.
+    """
+    with pytest.raises(ConfidenceInputError, match="lookahead"):
+        confidence_for("book_snapshot_slice", _slice_inputs(age_ns=-1))
+
+
+def test_a_book_older_than_the_window_should_never_have_reached_the_formula():
+    with pytest.raises(ConfidenceInputError, match="exceeds"):
+        confidence_for("book_snapshot_slice", _slice_inputs(age_ns=_SLICE_WINDOW_NS + 1))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("n_levels", -1), ("n_requested", 0), ("n_requested", -3), ("window_ns", 0)],
+)
+def test_the_slice_formula_refuses_an_input_that_could_not_have_been_measured(field, value):
+    with pytest.raises(ConfidenceInputError, match=field):
+        confidence_for("book_snapshot_slice", _slice_inputs(**{field: value}))
+
+
+_SLICE_PROBES: dict[str, tuple[dict[str, int], ...]] = {
+    "n_levels": ({"n_levels": 0}, {"n_levels": 10}, {"n_levels": 20}),
+    "n_requested": ({"n_requested": 10}, {"n_requested": 40}),
+    "age_ns": ({"age_ns": 0}, {"age_ns": _SLICE_WINDOW_NS // 2}),
+    # The window only moves the answer while there is an age to divide by it, which is
+    # itself the shape of the term: a book read at the instant it was stamped is fresh
+    # under any tolerance.
+    "window_ns": (
+        {"age_ns": _SLICE_WINDOW_NS // 2, "window_ns": _SLICE_WINDOW_NS},
+        {"age_ns": _SLICE_WINDOW_NS // 2, "window_ns": 4 * _SLICE_WINDOW_NS},
+    ),
+}
+"""Per-input probes, each holding the other three at a value that leaves the term visible."""
+
+
+@pytest.mark.parametrize("field", sorted(_SLICE_PROBES))
+def test_every_input_the_slice_formula_declares_actually_moves_its_answer(field):
+    """Gate 3c probes the whole formula; this probes each key, which is the stronger claim.
+
+    The gate varies one key at a time with the others pinned to 1, and passes as soon as
+    *some* probe differs — so a formula carrying one live input and three decorative ones
+    would clear it. Reading an input the answer does not depend on is the same decoration a
+    constant spelled as a division is, one axis over.
+    """
+    answers = {
+        confidence_for("book_snapshot_slice", _slice_inputs(**probe))
+        for probe in _SLICE_PROBES[field]
+    }
+    assert len(answers) > 1, f"book_snapshot_slice reads {field} without depending on it"
+
+
+def test_the_slice_is_derived_because_nothing_in_it_is_modelled_and_nothing_is_the_venues():
+    """Two claims, and the level has to be the one that makes both of them.
+
+    Not NATIVE: the venue published a book at its own instant and to its own depth, and this
+    record is that book re-cut and re-stamped. Not SYNTHETIC: unlike ``yahoo_1m_vap``, where
+    traded volume stands in for resting size, every number here is resting size the venue
+    published. DERIVED is where ``alpaca_l1`` and ``book_resample`` already sit for the same
+    two reasons, and it is what the equity half of ``depth`` declares — so the capability has
+    one ceiling rather than two.
+    """
+    assert level_for("book_snapshot_slice") is Provenance.DERIVED
+    tail = provenance_fields("book_snapshot_slice", _slice_inputs())
+    assert tail.prov is Provenance.DERIVED
+    assert tail.prov_inputs == ["book_snapshot"]
+
+
+def test_the_slice_registration_argues_against_the_two_bases_it_is_not():
+    """The description is the body of the warning REST and MCP emit for a non-native record.
+
+    Which is why "it needed a new basis" has to be answerable from the registration itself
+    rather than from a commit message: a reader who sees ``book_snapshot_slice`` on a row and
+    wonders why it is not ``book_resample`` gets the answer where the row points.
+    """
+    argument = describe("book_snapshot_slice")
+    assert "native" in argument and "book_resample" in argument
+    assert "yahoo_1m_vap" in argument
+
+
+# ---------------------------------------------------------------------------
 # The three bar aggregations
 # ---------------------------------------------------------------------------
 

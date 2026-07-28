@@ -631,6 +631,116 @@ def _farcaster_cast_search(_: Mapping[str, Any]) -> float:
     return 0.0
 
 
+@register_basis("book_snapshot_slice", level=Provenance.DERIVED, inputs=["book_snapshot"])
+def _book_snapshot_slice(inputs: Mapping[str, Any]) -> float:
+    """A ladder cut out of a stored venue book: how full the ladder is, times how fresh it is.
+
+    ``min(n_levels / n_requested, 1.0) * (1 - age_ns / window_ns)``, where
+
+    * ``n_levels`` counts the levels the stored snapshot actually put into the ladder, both
+      sides together, after dead levels are dropped and the requested depth is applied;
+    * ``n_requested`` is the ladder the caller asked for, ``2 * top_n``;
+    * ``age_ns`` is how far *before* the instant the slice claims to describe the snapshot
+      it was cut from was observed;
+    * ``window_ns`` is how stale the caller said a book may be and still describe that
+      instant.
+
+    **Why neither neighbouring basis covers this, which is why it exists.** ``native`` says
+    a venue reported this value. The venue reported *a book*, at its own instant and to
+    whatever depth it was subscribed at; what a slice hands back is that book re-cut to a
+    requested depth and re-stamped at a requested instant, and neither edit is the venue's.
+    ``book_resample`` is the nearer miss and misses in the opposite direction: it is a
+    declared constant because a boundary capture is exact at the instant it is stamped — the
+    resampler *chooses* the boundary and flushes it before applying the record that crosses
+    it, so nothing is left over to score. A slice chooses no instant. The caller names one
+    and the lake holds whatever it holds at or before it, so the two deficiencies that are
+    structurally impossible in a resampled capture are precisely the two that vary here.
+
+    **Why the fill term does not contradict ``book_resample``'s note on truncation.** That
+    entry argues, correctly, that ``top_n`` truncation is not a deficiency: a caller asking
+    for five levels and receiving the best five has been answered. It holds the whole
+    reconstructed book, so it can always answer. This does not: the truncation that matters
+    happened upstream, at whatever depth the collector subscribed the venue's book at, and it
+    is already in the Parquet file. Asking for twenty-five levels and receiving the ten the
+    lake stored is not an answer trimmed to the request, it is a ladder the lake could not
+    fill. So the two agree rather than disagree — this term is 1.0 in exactly the case
+    ``book_resample`` describes, and below it only when the request outruns the store.
+
+    **Why staleness is scored here and declined there.** ``book_resample`` declines it
+    because a quiet interval is not an unsampled one: if no update arrives between two
+    boundaries the book genuinely did not change, and there is no reference for how often a
+    book ought to tick. That argument is about a *chosen* boundary. Here the record claims an
+    instant the caller chose and was built from an observation made before it, and the gap
+    between the two is not the market being quiet — it is this answer describing one moment
+    with another moment's book.
+
+    **Where the denominator comes from, and the one uncomfortable thing about it.**
+    ``window_ns`` is declared by the caller, on ``ohlcv_from_ohlcv``'s precedent: only the
+    caller knows what "still describes this instant" means for what they are doing, a minute
+    for a risk report and a second for an execution decision. The precedent does not carry
+    cleanly, and saying so is cheaper than pretending it does. Over-declaring
+    ``tradeable_ns`` *lowers* that score, which is the safe direction; over-declaring
+    ``window_ns`` raises this one, so a caller who widens their tolerance grades the same
+    stale book higher. It is taken anyway because both alternatives are worse. The natural
+    structural reference — the interval to the *next* stored snapshot — cannot be read
+    without looking past the instant this record claims to describe, which
+    :mod:`crocodile.core.resample.book` forbids and which this basis exists downstream of. A
+    fixed constant would be a number invented to stand for how often a book ought to tick,
+    which is the move ``_aggregate_of_an_undeclared_stream`` refuses one indirection out. The
+    mitigation is that the number is read *relative to a claim the caller made*: widening the
+    window weakens the claim as fast as it raises the score, and both the requested instant
+    and the snapshot's own stamp are on the emitted record, so the age is recoverable by
+    anyone who wants to re-grade it against a window of their own.
+
+    **Why the terms multiply.** They are independent ways the same answer fails to be the
+    book at the instant asked for — a ladder can be short, stale, or both — and a slice that
+    is both is worse than either, which is what a product says and a mean does not. It is the
+    same reasoning ``ohlcv_from_ohlcv`` gives for multiplying extent by adequacy, applied to
+    depth and to time instead of to two halves of one window.
+
+    **What is deliberately not an input.** Whether the stored snapshot was the venue's whole
+    book or a truncated top-N is not observable from the record: ``BookSnapshot`` carries the
+    levels it carries and no flag saying whether anything was cut, and a collector that
+    subscribed twenty levels writes exactly what a venue that publishes twenty writes.
+    Scoring it would mean guessing, and the fill term already measures the only consequence
+    either case has — a stored ten asked for twenty-five scores 0.4 whichever of the two
+    trimmed it.
+
+    :attr:`Provenance.DERIVED`, the same level ``alpaca_l1`` and ``book_resample`` carry and
+    the same one the equity half of ``depth`` declares. Every price and size in the ladder
+    was published by the venue in a real book, so nothing here is modelled — which is what
+    keeps it out of :attr:`Provenance.SYNTHETIC`, where ``yahoo_1m_vap`` sits because traded
+    volume stands in for resting size and ``amm_tick_curve`` sits because liquidity in range
+    stands in for orders anyone placed. Saturating the fill term at the requested depth says
+    the ladder is as full as the store can make it, not that a slice has become a venue
+    product; that claim is ``prov``'s, and it stays ``DERIVED`` at every value.
+    """
+    n_levels = _require_int(inputs, "n_levels")
+    n_requested = _require_int(inputs, "n_requested")
+    age_ns = _require_int(inputs, "age_ns")
+    window_ns = _require_int(inputs, "window_ns")
+    if n_levels < 0:
+        raise ConfidenceInputError(f"input 'n_levels' must be non-negative, got {n_levels}")
+    if n_requested <= 0:
+        raise ConfidenceInputError(f"input 'n_requested' must be positive, got {n_requested}")
+    if window_ns <= 0:
+        raise ConfidenceInputError(f"input 'window_ns' must be positive, got {window_ns}")
+    if age_ns < 0:
+        raise ConfidenceInputError(
+            f"input 'age_ns' must be non-negative, got {age_ns}; a snapshot stamped after "
+            f"the instant the slice claims to describe is lookahead rather than staleness, "
+            f"and there is no confidence at which it is a legal record"
+        )
+    if age_ns > window_ns:
+        raise ConfidenceInputError(
+            f"input 'age_ns' ({age_ns}) exceeds 'window_ns' ({window_ns}); a snapshot older "
+            f"than the window the caller declared should not have been admitted at all"
+        )
+    fill = min(n_levels / n_requested, 1.0)
+    freshness = 1.0 - age_ns / window_ns
+    return fill * freshness
+
+
 _TRUST_ORDER: Final[tuple[Provenance, ...]] = (
     Provenance.NATIVE,
     Provenance.DERIVED,
