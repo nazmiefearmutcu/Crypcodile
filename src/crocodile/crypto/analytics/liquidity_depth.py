@@ -1,12 +1,16 @@
 import logging
 import time
+
 import polars as pl
+
+from crocodile.core.analytics.liquidity_depth import band_columns, depth_within_bands
 from crocodile.core.store.catalog import Catalog
 
 log = logging.getLogger(__name__)
 
+
 def calculate_block_liquidity_depth(catalog: Catalog, symbol: str) -> pl.DataFrame:
-    """Calculate order book depth (bid/ask sizes) at ±1%, ±2%, ±5% levels per block from historical records.
+    """Order book depth (bid/ask size) within 1%, 2% and 5% of mid, per block.
 
     Args:
         catalog: A :class:`~crocodile.core.store.catalog.Catalog` instance.
@@ -22,6 +26,13 @@ def calculate_block_liquidity_depth(catalog: Catalog, symbol: str) -> pl.DataFra
         - bid_depth_5pct: Cumulative bid size within -5% from mid-price (Float64)
         - ask_depth_5pct: Cumulative ask size within +5% from mid-price (Float64)
         Ordered by block ascending.
+
+    The band sums are :func:`~crocodile.core.analytics.liquidity_depth.depth_within_bands`,
+    which is where they moved when M6 gave the same question an equity caller: the ladder
+    ``crocodile.equity.depth`` produces is a different book, but "how much size stands
+    within *n* percent of the middle" is not a different question. The six literal band
+    edges that used to be written out here (``* 0.99``, ``* 1.01``, ``* 0.98`` …) are now
+    derived from one fraction per band, so the two sides of a band cannot drift apart.
     """
     try:
         catalog.refresh_views()
@@ -31,15 +42,7 @@ def calculate_block_liquidity_depth(catalog: Catalog, symbol: str) -> pl.DataFra
         df = pl.DataFrame()
 
     empty_df = pl.DataFrame(
-        schema={
-            "block": pl.Int64,
-            "bid_depth_1pct": pl.Float64,
-            "ask_depth_1pct": pl.Float64,
-            "bid_depth_2pct": pl.Float64,
-            "ask_depth_2pct": pl.Float64,
-            "bid_depth_5pct": pl.Float64,
-            "ask_depth_5pct": pl.Float64,
-        }
+        schema={"block": pl.Int64, **{name: pl.Float64 for name in band_columns()}}
     )
 
     if df.is_empty():
@@ -56,10 +59,7 @@ def calculate_block_liquidity_depth(catalog: Catalog, symbol: str) -> pl.DataFra
     # Sort by local_ts and keep the latest snapshot for each block
     df = df.sort("local_ts").unique(subset=["sequence_id"], keep="last")
 
-    blocks = []
-    b_1, a_1 = [], []
-    b_2, a_2 = [], []
-    b_5, a_5 = [], []
+    rows: list[dict[str, float]] = []
 
     for row in df.iter_rows(named=True):
         seq_id = row["sequence_id"]
@@ -87,35 +87,15 @@ def calculate_block_liquidity_depth(catalog: Catalog, symbol: str) -> pl.DataFra
             continue
 
         mid_price = (bids[0][0] + asks[0][0]) / 2.0
+        if mid_price <= 0.0:
+            # A non-positive mid collapses every multiplicative band onto it, so the sums
+            # would come back zero and read as a book with no near depth. Skipping the
+            # snapshot says nothing about it instead of saying something false.
+            continue
 
-        bid_1 = sum(b[1] for b in bids if b[0] >= mid_price * 0.99)
-        ask_1 = sum(a[1] for a in asks if a[0] <= mid_price * 1.01)
+        rows.append({"block": seq_id, **depth_within_bands(bids, asks, mid_price)})
 
-        bid_2 = sum(b[1] for b in bids if b[0] >= mid_price * 0.98)
-        ask_2 = sum(a[1] for a in asks if a[0] <= mid_price * 1.02)
-
-        bid_5 = sum(b[1] for b in bids if b[0] >= mid_price * 0.95)
-        ask_5 = sum(a[1] for a in asks if a[0] <= mid_price * 1.05)
-
-        blocks.append(seq_id)
-        b_1.append(bid_1)
-        a_1.append(ask_1)
-        b_2.append(bid_2)
-        a_2.append(ask_2)
-        b_5.append(bid_5)
-        a_5.append(ask_5)
-
-    if not blocks:
+    if not rows:
         return empty_df
 
-    res_df = pl.DataFrame({
-        "block": blocks,
-        "bid_depth_1pct": b_1,
-        "ask_depth_1pct": a_1,
-        "bid_depth_2pct": b_2,
-        "ask_depth_2pct": a_2,
-        "bid_depth_5pct": b_5,
-        "ask_depth_5pct": a_5,
-    }).sort("block")
-
-    return res_df
+    return pl.DataFrame(rows, schema=empty_df.schema).sort("block")
