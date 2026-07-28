@@ -35,6 +35,10 @@ So the load moved off "which excuse was reached for" and onto two facts nothing 
   is the property the ledgers exist to qualify, so it is asserted directly. That census does
   not care which ledger a deletion is laundered through, or whether it is laundered at all,
   or whether the ledger it uses had been invented yet.
+
+A third ledger arrives with them, and for a defect of the same family: ``SHARED_IMPLEMENTATION``
+records the capabilities where one function legitimately answers for both asset classes, so
+that everywhere else two dict keys may not point at one callable. See its rules below.
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ from crocodile.core.capability import (
     IRREDUCIBLE,
     PENDING_SYMMETRY,
     REGISTRY,
+    SHARED_IMPLEMENTATION,
     SPEC_METHODS,
     AssetClass,
     Capability,
@@ -489,6 +494,30 @@ merge conflict that resolves to a lie. The number that matters is the length of 
 """
 
 
+_SHARED_IMPLEMENTATION_AS_SHIPPED: dict[str, str] = dict(SHARED_IMPLEMENTATION)
+"""The one ledger pinned by copying rather than by transcription, and why that is not a hole.
+
+Every other census in this file restates its ledger, so that a source edit and a test edit
+have to meet in review. This one cannot, and pretending otherwise would be the more
+dangerous of the two options.
+
+``SHARED_IMPLEMENTATION`` is *derived from* the registry it excuses: an entry is legitimate
+exactly when the capability's two implementations really are one function, which
+:func:`test_no_shared_implementation_entry_is_stale` checks against ``REGISTRY`` on every
+run. A transcribed copy would therefore pin the same fact twice and go stale in a way that
+says nothing — the argument that matters is checked against the code, not against a second
+copy of the code.
+
+What a copy still buys is the meta-gate: this ledger is *in* :data:`_CENSUSES`, so
+:func:`test_every_ledger_in_the_registry_module_is_censused` counts it, and adding a fourth
+exemption dict to ``core/capability.py`` without a census here fails. Growth of this list is
+caught where growth of this list is actually dangerous — by
+:func:`test_no_shared_implementation_entry_is_stale`, which refuses an entry for a capability
+whose two implementations are distinct, and by the asymmetry census, which refuses the
+deletion an entry here might otherwise be reached for.
+"""
+
+
 _SPEC_METHODS_AS_SHIPPED: dict[str, str] = {
     "M1": "Lift volsurface into core; equity chain from Yahoo, IV solved from mid if absent.",
     "M2": "Aggregate the Yahoo option chain's open_interest per underlying.",
@@ -513,6 +542,7 @@ remap ``_LEDGER_AS_SHIPPED`` refuses one field over.
 _CENSUSES: dict[str, Mapping[str, str]] = {
     "IRREDUCIBLE": _IRREDUCIBLE_AS_SHIPPED,
     "PENDING_SYMMETRY": _LEDGER_AS_SHIPPED,
+    "SHARED_IMPLEMENTATION": _SHARED_IMPLEMENTATION_AS_SHIPPED,
     "SPEC_METHODS": _SPEC_METHODS_AS_SHIPPED,
 }
 """Every name-to-argument ledger in the registry module, and what it was pinned to hold.
@@ -611,9 +641,9 @@ def test_every_ledger_in_the_registry_module_is_censused() -> None:
 
     So the ledgers are discovered from the module and compared against the censused set. A
     fourth exemption dict added to ``core/capability.py`` fails here until it is pinned,
-    which is the failure a reviewer can act on rather than a silence they cannot see. A gate
-    shipped together with the exemption it suggests has to arrive with its census in the
-    same commit, which is what this makes mandatory rather than customary.
+    which is the failure a reviewer can act on rather than a silence they cannot see. The
+    census this file adds for ``SHARED_IMPLEMENTATION`` — a ledger written in the same commit
+    as the gate that reads it — is exactly the shape this test exists to make mandatory.
     """
     discovered = sorted(_ledgers_in_the_registry_module())
     censused = sorted(_CENSUSES)
@@ -806,3 +836,178 @@ def test_a_capability_that_grew_the_half_it_was_pinned_without_is_caught(_isolat
     REGISTRY["peg-deviation"] = _symmetric("peg-deviation")
     with pytest.raises(AssertionError, match="peg-deviation"):
         test_no_capability_changes_which_asset_classes_it_serves()
+
+
+# ---------------------------------------------------------------------------
+# One function cannot serve two markets
+# ---------------------------------------------------------------------------
+# `set(cap.impls) == {CRYPTO, EQUITY}` is two dict keys. Nothing above it asks what
+# the keys point at, so binding the crypto function under both is a symmetric
+# declaration by every measure any gate takes. This codebase has the defect on
+# record — `slippage` shipped an equity half that read `book_snapshot`, which no
+# equity provider writes — and a referee re-introduced it against `census` and passed
+# 3 300 tests. What caught the two capabilities it did not pass were hand-written
+# per-capability assertions in a batch module's own test file, which is coverage by
+# whoever happened to write one.
+
+
+def test_each_asset_class_is_served_by_its_own_implementation() -> None:
+    """Two markets, two implementations — unless the declaration argues otherwise.
+
+    The exception is real and is why this reads a ledger instead of banning sharing
+    outright: seventeen capabilities answer about the lake rather than about a market, and
+    ``funding-predict`` reads no store at all. For those, one function is the honest
+    declaration and a second copy would be a second copy of the same SQL.
+
+    What the gate must not do is *guess* which case it is looking at, and the obvious guess
+    fails. ``basis`` differing between the two implementations sounds like the signature of
+    two real halves, but ``iv-surface``, ``ofi``, ``term-structure``, ``vol-skew``,
+    ``risk-reversal``, ``open-interest``, ``basis``, ``backfill``, ``collect`` and
+    ``list-exchanges`` all declare ``native`` on both sides — every one of them would have
+    been waved through — while ``indicators``, which legitimately shares, declares ``native``
+    on both sides too. The distinguisher is a claim about the capability, so it is written
+    where claims are written: :data:`~crocodile.core.capability.SHARED_IMPLEMENTATION`.
+    """
+    from crocodile.capabilities import load_all
+
+    load_all()
+    offenders: dict[str, str] = {}
+    for name, cap in sorted(REGISTRY.items()):
+        if set(cap.impls) != {AssetClass.CRYPTO, AssetClass.EQUITY}:
+            continue
+        crypto, equity = cap.impls[AssetClass.CRYPTO], cap.impls[AssetClass.EQUITY]
+        if crypto.fn is not equity.fn:
+            continue
+        if not SHARED_IMPLEMENTATION.get(name, "").strip():
+            offenders[name] = f"{crypto.fn.__module__}.{crypto.fn.__qualname__}"
+
+    assert not offenders, (
+        f"{offenders} declare both asset classes and bind one function to both. That is a "
+        f"symmetric declaration over an implementation that can only serve one market — the "
+        f"shape slippage shipped, where the equity half read a book_snapshot no equity "
+        f"provider writes and every equity call raised while the registry read as symmetric. "
+        f"Write the missing implementation, or argue on SHARED_IMPLEMENTATION why one "
+        f"function is the answer here."
+    )
+
+
+def test_no_shared_implementation_entry_is_stale() -> None:
+    """An entry has to keep being true, or it is an exemption waiting for a rebind.
+
+    Three ways it stops being true and all three fail: the capability is gone, the
+    capability stopped serving both asset classes, or the two implementations are distinct
+    functions now — at which point the entry excuses a sharing that is not happening, and
+    would go on excusing it after somebody rebound them.
+    """
+    from crocodile.capabilities import load_all
+
+    load_all()
+    offenders: dict[str, str] = {}
+    for name, why in sorted(SHARED_IMPLEMENTATION.items()):
+        cap = REGISTRY.get(name)
+        if cap is None:
+            offenders[name] = "names no registered capability"
+        elif set(cap.impls) != {AssetClass.CRYPTO, AssetClass.EQUITY}:
+            offenders[name] = f"serves only {sorted(cap.impls)}"
+        elif cap.impls[AssetClass.CRYPTO].fn is not cap.impls[AssetClass.EQUITY].fn:
+            offenders[name] = "has two distinct implementations and needs no exemption"
+        elif not why.strip():
+            offenders[name] = "carries no argument"
+    assert not offenders, f"stale SHARED_IMPLEMENTATION entries: {offenders}"
+
+
+def _two_functions(name: str) -> Capability:
+    """A capability whose two asset classes are served by genuinely different callables."""
+    return Capability(
+        name=name,
+        summary="Two markets, two implementations.",
+        params=_Params,
+        returns=ReturnKind.TABLE,
+        impls={
+            AssetClass.CRYPTO: Impl(fn=len, prov=Provenance.NATIVE, basis="native"),
+            AssetClass.EQUITY: Impl(fn=sorted, prov=Provenance.NATIVE, basis="native"),
+        },
+    )
+
+
+def test_rebinding_the_crypto_function_as_the_equity_one_is_caught(_isolate: None) -> None:
+    """The referee's second experiment, over one of the six names nothing covered.
+
+    ``census`` is used because it is the name the referee ran the full suite against: 3 300
+    passed, 7 skipped, 0 failed. ``markets``, ``universe``, ``depth``, ``liquidity-depth``
+    and ``chaos-score`` were the other five with no per-capability assertion of their own.
+    """
+    cap = REGISTRY["census"]
+    REGISTRY["census"] = msgspec.structs.replace(
+        cap,
+        impls={
+            **cap.impls,
+            AssetClass.EQUITY: msgspec.structs.replace(
+                cap.impls[AssetClass.EQUITY], fn=cap.impls[AssetClass.CRYPTO].fn
+            ),
+        },
+    )
+    with pytest.raises(AssertionError, match="census"):
+        test_each_asset_class_is_served_by_its_own_implementation()
+
+
+def test_a_legitimately_shared_implementation_is_left_alone() -> None:
+    """The gate is only worth having if it does not fire on the seventeen that share on purpose.
+
+    ``query`` stands for them: one lake, one SQL path, and an entry that says so.
+    """
+    assert REGISTRY["query"].impls[AssetClass.CRYPTO].fn is (
+        REGISTRY["query"].impls[AssetClass.EQUITY].fn
+    )
+    test_each_asset_class_is_served_by_its_own_implementation()
+
+
+def test_the_rebind_cannot_be_laundered_by_widening_the_shared_list(
+    _isolate: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The move this whole task exists to answer, applied to the gate it just added.
+
+    Every gate here suggests its own exemption, and the finding two phases ago was that
+    eleven branches each added one and the twelfth deletion went straight into it. So the
+    rebind gate ships with the census already closed around it: excusing ``census`` on
+    ``SHARED_IMPLEMENTATION`` silences the rebind gate exactly as intended, and then the
+    census fails on the entry that silenced it.
+    """
+    cap = REGISTRY["census"]
+    REGISTRY["census"] = msgspec.structs.replace(
+        cap,
+        impls={
+            **cap.impls,
+            AssetClass.EQUITY: msgspec.structs.replace(
+                cap.impls[AssetClass.EQUITY], fn=cap.impls[AssetClass.CRYPTO].fn
+            ),
+        },
+    )
+    monkeypatch.setitem(SHARED_IMPLEMENTATION, "census", "One lake, honest.")
+
+    test_each_asset_class_is_served_by_its_own_implementation()
+    with pytest.raises(AssertionError, match="census"):
+        _assert_censused("SHARED_IMPLEMENTATION")
+
+
+def test_an_entry_for_a_capability_that_no_longer_shares_is_caught(
+    _isolate: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repaid exemption has to leave, on the rule both other ledgers already carry.
+
+    Writing the second implementation is the outcome this list exists to make someone
+    choose against. Leaving the entry behind afterwards means the *next* rebind of that
+    capability is excused before it happens, which is the hoarding hazard
+    ``IRREDUCIBLE``'s twin has had a gate for since Phase 2.
+    """
+    REGISTRY["fixture-unshared"] = _two_functions("fixture-unshared")
+    monkeypatch.setitem(SHARED_IMPLEMENTATION, "fixture-unshared", "One lake.")
+    with pytest.raises(AssertionError, match="needs no exemption"):
+        test_no_shared_implementation_entry_is_stale()
+
+
+def test_an_entry_naming_nothing_registered_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ``gas-tracker`` shape again: an exemption outliving the thing it excused."""
+    monkeypatch.setitem(SHARED_IMPLEMENTATION, "fixture-deleted", "One lake.")
+    with pytest.raises(AssertionError, match="names no registered capability"):
+        test_no_shared_implementation_entry_is_stale()
