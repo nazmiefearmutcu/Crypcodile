@@ -297,7 +297,6 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "census": "M3",
     "chaos-score": "M6",
     "collect-market": "M3",
-    "depth": "M6",
     "funding-apr": "M5",
     "funding-predict": "M5",
     "iv-surface": "M1",

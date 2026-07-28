@@ -330,17 +330,25 @@ down. A deadline that names a method nobody specified is a deadline nobody owns.
 
 M1 to M7 are design §9.1's, and they share an assumption the design never states: that the
 gap always runs equity-ward. Porting the surfaces found the counterexample. ``depth``
-exists only for equities — M6 *is* its equity half, already built — so the half it is
-missing is the **crypto** one, and the ledger had no vocabulary for that direction.
-M8 is that vocabulary. It is not a new promise so much as an admission: crypto emits
-``BookSnapshot`` records natively, so the ladder equities have to model is one crypto
-already reports, and the only reason it is absent is that nobody wrote it.
+existed only for equities — M6 *is* its equity half, already built — so the half it was
+missing was the **crypto** one, and the ledger had no vocabulary for that direction.
+M8 is that vocabulary. It was not a new promise so much as an admission: crypto emits
+``BookSnapshot`` records natively, so the ladder equities have to model was one crypto
+already reported, and the only reason it was absent is that nobody had written it.
 
-Note the confidence formula M8 needs does not exist yet — slicing a ladder out of a
-stored venue book is neither ``native`` (the venue published a book, not this ladder) nor
-``book_resample`` (which measures a boundary lookahead this has none of). The method
-names the plan; the formula arrives with the implementation, which is the order the
-registry requires.
+M8's confidence formula did not exist when M8 was written, and that was the whole of the
+difficulty: a ladder sliced out of a stored venue book is neither ``native`` — the venue
+published a book, at its own instant and to its own depth, not this ladder — nor
+``book_resample``, which is a declared constant precisely because a resampler picks its own
+boundary and so has no staleness and no unfillable request to score. The method named the
+plan and the formula arrived with the implementation, which is the order the registry
+requires. It is ``book_snapshot_slice`` in :mod:`crocodile.core.schema.provenance` — how
+much of the requested ladder the store actually held, times how much of the caller's
+declared staleness tolerance the answer used up — and with it ``depth`` became symmetric and
+left :data:`PENDING_SYMMETRY` entirely rather than being remapped from M6 to M8. The ledger
+forbids that remap on purpose: a method is the plan that closes a gap, so swapping one is a
+re-plan rather than a correction, and a capability with both halves needs no schedule at
+all.
 """
 
 

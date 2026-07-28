@@ -591,6 +591,16 @@ def test_gate3_no_source_file_hand_writes_a_confidence():
 # passed every gate in this file.
 
 DERIVES_RECORDS: dict[str, str] = {
+    "crypto/depth/book_slice.py": (
+        "Builds a DepthProfile out of a stored BookSnapshot. The venue published a book, "
+        "at its own instant and to its own depth; what this emits is that book re-cut to a "
+        "requested ladder and re-stamped at a requested instant, so a silent record here "
+        "would claim a venue published a ladder it never published. Declared even though "
+        "the discovery rule below only walks `resample` packages, because this is the shape "
+        "that rule was written for and the fabrication scanner further down cannot see it: "
+        "nothing is fabricated, every number is the venue's, and the defect would be "
+        "entirely in what the record says about itself."
+    ),
     "core/resample/book.py": (
         "Reconstructs a BookSnapshot from an OrderBook replayed over other records; "
         "nothing it emits was reported by a venue. This is now the only book resampler: "
