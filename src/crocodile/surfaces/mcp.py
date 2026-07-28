@@ -91,7 +91,9 @@ def call_tool(
     explicit = AssetClass(explicit_raw) if explicit_raw else None
 
     params = dispatch.build_params(cap, supplied)
-    resolved = dispatch.resolve_asset_class(cap, explicit=explicit, symbol=supplied.get("symbol"))
+    resolved = dispatch.resolve_asset_class(
+        cap, explicit=explicit, symbols=dispatch.symbol_hints(params)
+    )
     resolved_settings = settings if settings is not None else Settings.from_env()
 
     with Catalog(dispatch.data_dir_for(resolved_settings, data_dir)) as catalog:

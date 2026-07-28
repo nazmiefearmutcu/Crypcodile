@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import itertools
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Any, Final, get_args, get_origin
 
 import duckdb
@@ -57,6 +57,7 @@ __all__ = [
     "resolve",
     "resolve_asset_class",
     "stream_summary",
+    "symbol_hints",
     "warning_for",
     "wire_names",
 ]
@@ -183,22 +184,61 @@ def _sources_by_asset_class() -> dict[AssetClass, frozenset[str]]:
     }
 
 
+_SYMBOL_FIELDS: Final = frozenset({"symbol", "symbols"})
+"""The params fields that carry a canonical symbol, and therefore evidence about a market.
+
+Named rather than sniffed. Reading *any* string containing a colon would let
+``SELECT * FROM t WHERE note = 'binance:x'`` choose which implementation runs ``query``,
+which is a request landing in a market because of a string literal.
+
+Both spellings, because the registry uses both and they mean the same thing: ``symbol`` is
+one and ``symbols`` is a set of them. Consulting only the singular is what made six
+two-implementation capabilities — ``catalog-scan``, ``resolve-symbols``, ``replay``,
+``export``, ``backfill``, ``collect`` — unreachable without an ``--asset-class`` the symbol
+had already determined.
+"""
+
+
+def symbol_hints(params: Any) -> tuple[str, ...]:
+    """Every canonical symbol a built request carries, for :func:`resolve_asset_class`.
+
+    Read off the *built params struct* rather than off the raw request, which is what lets
+    one rule cover three transports: by this point a sequence is a sequence, whether it
+    arrived as a JSON list, a repeated flag or a comma-separated query parameter, and the
+    surfaces no longer each need their own idea of how ``symbols`` is spelled.
+    """
+    found: list[str] = []
+    for field in msgspec.structs.fields(params):
+        if field.name not in _SYMBOL_FIELDS:
+            continue
+        value = getattr(params, field.name, None)
+        if isinstance(value, str):
+            found.append(value)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            found.extend(item for item in value if isinstance(item, str))
+    return tuple(found)
+
+
 def resolve_asset_class(
     cap: Capability,
     *,
     explicit: AssetClass | None = None,
-    symbol: str | None = None,
+    symbols: Sequence[str] = (),
 ) -> AssetClass:
     """Decide which of ``cap.impls`` serves this request.
 
     In order, and the order is the point — each step is a *stronger* claim than the next:
 
     1. What the caller said. An explicit choice is never overridden.
-    2. What the symbol says. A canonical symbol is ``source:RAW``, and the source
+    2. What the symbols say. A canonical symbol is ``source:RAW``, and the source
        registries know which market each source serves, so ``deribit:BTC-PERPETUAL`` is
-       evidence rather than a guess. A source both registries claim resolves to neither:
-       an overlap is a real ambiguity and picking one silently is how a request lands in
-       the wrong market's implementation and comes back with plausible numbers.
+       evidence rather than a guess. A source both registries claim resolves to neither —
+       ``alpaca`` is a crypto exchange *and* an equity provider — because an overlap is a
+       real ambiguity and picking one silently is how a request lands in the wrong market's
+       implementation and comes back with plausible numbers. Symbols that name *different*
+       markets refuse for the same reason and more sharply: one request has one
+       implementation, so resolving by position would send the equity symbols into the
+       crypto one, which answers plausibly and empty.
     3. Whether there is a choice at all. A capability with one implementation — which is
        what every entry on ``PENDING_SYMMETRY`` looks like until Phase 3 — has nothing to
        decide.
@@ -207,8 +247,9 @@ def resolve_asset_class(
     would make every unrecognised equity symbol quietly return an empty crypto answer.
 
     Raises:
-        ValueError: the asset class cannot be established, or was named explicitly and
-            this capability does not implement it.
+        ValueError: the asset class cannot be established, or the symbols disagree about it.
+        CapabilityUnavailable: an asset class was named explicitly and this capability does
+            not implement it.
     """
     if explicit is not None:
         if explicit not in cap.impls:
@@ -219,22 +260,34 @@ def resolve_asset_class(
             )
         return explicit
 
-    if symbol and ":" in symbol:
+    by_asset_class = _sources_by_asset_class()
+    claimed: set[AssetClass] = set()
+    for symbol in symbols:
+        if not symbol or ":" not in symbol:
+            continue
         source = symbol.rsplit(":", 1)[0].strip().lower()
-        claimed = [
+        matched = [
             asset_class
-            for asset_class, sources in _sources_by_asset_class().items()
+            for asset_class, sources in by_asset_class.items()
             if source in sources and asset_class in cap.impls
         ]
-        if len(claimed) == 1:
-            return claimed[0]
+        if len(matched) == 1:
+            claimed.add(matched[0])
+    if len(claimed) == 1:
+        return next(iter(claimed))
+    if len(claimed) > 1:
+        raise ValueError(
+            f"{cap.name!r} was given symbols from two markets "
+            f"({sorted(a.value for a in claimed)}): {list(symbols)}. One request is served "
+            f"by one implementation, so split it rather than have one market answer for both"
+        )
 
     if len(cap.impls) == 1:
         return next(iter(cap.impls))
 
     raise ValueError(
         f"cannot tell which market {cap.name!r} should serve"
-        + (f" for symbol {symbol!r}" if symbol else "")
+        + (f" for symbols {list(symbols)}" if symbols else "")
         + f"; name it explicitly as one of {sorted(a.value for a in cap.impls)}"
     )
 

@@ -83,7 +83,7 @@ def _handler(
         try:
             params = dispatch.build_params(cap, supplied)
             resolved = dispatch.resolve_asset_class(
-                cap, explicit=asset_class, symbol=supplied.get("symbol")
+                cap, explicit=asset_class, symbols=dispatch.symbol_hints(params)
             )
         except dispatch.UNAVAILABLE as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc

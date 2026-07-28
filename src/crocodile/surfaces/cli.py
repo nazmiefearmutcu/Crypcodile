@@ -158,7 +158,7 @@ def _runner(cap: Capability) -> Any:
         try:
             params = dispatch.build_params(cap, kwargs)
             resolved = dispatch.resolve_asset_class(
-                cap, explicit=asset_class, symbol=kwargs.get("symbol")
+                cap, explicit=asset_class, symbols=dispatch.symbol_hints(params)
             )
         except _REPORTED as exc:
             typer.echo(f"Error: {exc}", err=True)
