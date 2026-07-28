@@ -1504,6 +1504,15 @@ CONSTANT_BY_DEFINITION: dict[str, tuple[float, str]] = {
         "yield open == high == low == close, and what says so is num_trades = 1 and a "
         "volume that is a structural zero, not a ratio with an invented base.",
     ),
+    "caller_supplied": (
+        1.0,
+        "A pure function is exact over whatever it was handed, so there is no sampling "
+        "loss inside this engine to grade — and the sampling story of inputs the caller "
+        "produced is not ours to assert. A lower number would be this engine grading a "
+        "stranger's data it cannot observe. The honesty is in the basis name, which "
+        "separates these from anything the lake produced; `native` could not, which is "
+        "why two porting agents independently reported it as claiming too much.",
+    ),
     "scraped_last_price": (
         0.0,
         "The page publishes a price and never a size, for any symbol at any time, so the "

@@ -269,7 +269,12 @@ in the tree.
 
 
 IRREDUCIBLE: Final[dict[str, str]] = {
-    "gas-tracker": "L1/L2 gas markets have no equity analogue.",
+    # `gas-tracker` was here and is not a capability at all. It takes no parameters,
+    # returns nothing, observes nothing, and belongs to no asset class: it opens a Qt
+    # window and enters an event loop, so it cannot reach REST or MCP even in principle.
+    # Its justification was an argument about gas *data*, which `gas-vol` already carries.
+    # The evidence is `flowmap`, which is the same kind of thing and was never on this
+    # list. An exemption that covers a launcher makes the list mean two things.
     "gas-vol": "Correlates price volatility with gas prices; gas is chain-native.",
     "mev-sandwich": "Requires a public mempool and atomic transaction ordering.",
     "sequencer-latency": "Measures an L2 sequencer; equities have no sequencer.",
@@ -296,11 +301,26 @@ SPEC_METHODS: Final[dict[str, str]] = {
     "M5": "carry generalizes funding-apr; new keyless `treasury` provider for the risk-free leg.",
     "M6": "Equity depth from the synthetic VAP ladder, upgraded by Alpaca L1 when keyed.",
     "M7": "Order-flow imbalance derived from L1 quote changes.",
+    "M8": "Crypto depth from stored book snapshots — the ladder equity models, crypto reports.",
 }
-"""The seven methods design §9.1 commits to for closing the equity gap, by their spec ids.
+"""The methods that close a declared gap, by their spec ids.
 
 Here so that :data:`PENDING_SYMMETRY` can only point at a plan that was actually written
 down. A deadline that names a method nobody specified is a deadline nobody owns.
+
+M1 to M7 are design §9.1's, and they share an assumption the design never states: that the
+gap always runs equity-ward. Porting the surfaces found the counterexample. ``depth``
+exists only for equities — M6 *is* its equity half, already built — so the half it is
+missing is the **crypto** one, and the ledger had no vocabulary for that direction.
+M8 is that vocabulary. It is not a new promise so much as an admission: crypto emits
+``BookSnapshot`` records natively, so the ladder equities have to model is one crypto
+already reports, and the only reason it is absent is that nobody wrote it.
+
+Note the confidence formula M8 needs does not exist yet — slicing a ladder out of a
+stored venue book is neither ``native`` (the venue published a book, not this ladder) nor
+``book_resample`` (which measures a boundary lookahead this has none of). The method
+names the plan; the formula arrives with the implementation, which is the order the
+registry requires.
 """
 
 

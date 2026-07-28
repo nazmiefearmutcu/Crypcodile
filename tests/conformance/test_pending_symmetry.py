@@ -104,9 +104,17 @@ def test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric() -> None
     assert not settled, f"these are symmetric now and no longer need scheduling: {settled}"
 
 
-def test_the_spec_methods_are_the_seven_the_design_committed_to() -> None:
-    """Pinning the set stops a new letter being invented to buy more time."""
-    assert sorted(SPEC_METHODS) == ["M1", "M2", "M3", "M4", "M5", "M6", "M7"]
+def test_the_spec_methods_are_the_set_that_was_argued_for() -> None:
+    """Pinning the set stops a new letter being invented to buy more time.
+
+    Renamed from ``..._the_seven_the_design_committed_to``: it is eight. M8 was added
+    when porting the surfaces found the design's unstated assumption — that a gap always
+    runs equity-ward — and its counterexample, ``depth``, whose missing half is the crypto
+    one. The count moving is exactly what this test exists to make someone justify, so
+    the number lives here rather than in the name, where it read as a fact rather than
+    as a thing being asserted.
+    """
+    assert sorted(SPEC_METHODS) == ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"]
     for method, what in SPEC_METHODS.items():
         assert what.strip(), f"{method} carries no description"
 
@@ -141,8 +149,15 @@ def test_scheduling_against_an_invented_method_is_caught(_isolate: None) -> None
 
 
 def test_a_name_on_both_lists_is_caught(_isolate: None) -> None:
-    PENDING_SYMMETRY["gas-tracker"] = "M1"
-    with pytest.raises(AssertionError, match="gas-tracker"):
+    """The fixture is any live IRREDUCIBLE name; it used to be `gas-tracker`.
+
+    That entry was removed — it opens a Qt window, so it is a launcher rather than a
+    capability, and an exemption list that covers one makes the list mean two things.
+    `mev-sandwich` stands in because it is what IRREDUCIBLE is actually for: it needs a
+    public mempool, which is a property of the market and not of the schedule.
+    """
+    PENDING_SYMMETRY["mev-sandwich"] = "M1"
+    with pytest.raises(AssertionError, match="mev-sandwich"):
         test_no_capability_is_both_scheduled_and_irreducible()
 
 

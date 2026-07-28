@@ -520,6 +520,30 @@ def _ohlcv_from_ohlcv(inputs: Mapping[str, Any]) -> float:
     return extent * adequacy
 
 
+@register_basis("caller_supplied", level=Provenance.NATIVE, inputs=[])
+def _caller_supplied(_: Mapping[str, Any]) -> float:
+    """Inputs the caller handed in rather than the lake produced: 1.0, by definition.
+
+    Eight capabilities compute over numbers that arrive in their ``params`` — ``gas-vol``,
+    ``mev-sandwich``, ``lending-stress``, ``chaos-score``, ``funding-predict``,
+    ``smart-money``, ``label-transfers`` and ``peg-deviation``'s pure mode. Two porting
+    agents reached for ``native`` for want of anything better and both said in writing
+    that it claims more than the code can check: ``native`` means *a venue reported this*,
+    and no venue was involved.
+
+    What is true instead is narrower and worth stating. A pure function is exact over
+    whatever it was handed, so there is no sampling loss *inside* this engine to grade —
+    which is what ``prov_confidence`` measures. The sampling story of the inputs belongs
+    to whoever produced them and is not ours to assert; a lower number here would be this
+    engine grading a stranger's data, which it cannot observe and must not guess at.
+
+    So the level stays :attr:`Provenance.NATIVE` and the value stays 1.0, and the honesty
+    lives in the basis *name*: ``WHERE prov_basis = 'caller_supplied'`` separates these
+    from anything the lake produced, which ``native`` could not.
+    """
+    return 1.0
+
+
 @register_basis("scraped_last_price", level=Provenance.SYNTHETIC, inputs=[])
 def _scraped_last_price(_: Mapping[str, Any]) -> float:
     """A last price lifted off a web page, reported as a trade: 0.0, by definition.
