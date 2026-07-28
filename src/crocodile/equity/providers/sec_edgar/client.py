@@ -45,6 +45,14 @@ FORM_13F_FORMS = frozenset({"13F-HR", "13F-HR/A"})
 """Holdings reports and their amendments. ``13F-NT`` is a notice that the positions are
 reported by somebody else and carries no information table, so it is not fetched."""
 
+_MAX_REQUEST_ATTEMPTS = 5
+"""Retries per request, counting the connect and the body read against one budget.
+
+One budget rather than one each because the two failures are the same failure seen at two
+points on the wire — a stalled EDGAR — and a per-stage budget multiplies into a wait no
+caller asked for: five connect attempts each allowed five reads is twenty-five backoffs
+capped at thirty seconds apiece."""
+
 _XSL_RENDERED_PREFIX = "xsl"
 """EDGAR serves an XSL-rendered HTML view of an ownership document under a sibling
 directory whose name starts with this — ``xslF345X03/wf-form4_1234.xml`` — and the raw XML
@@ -223,42 +231,53 @@ class SecEdgarClient:
         if self.session is not None and not self.session.closed:
             await self.session.close()
 
-    async def _request(
-        self, url: str, client_timeout: aiohttp.ClientTimeout | None = None
-    ) -> aiohttp.ClientResponse:
+    async def _request_bytes(self, url: str) -> bytes:
+        """Fetch ``url`` and read its body, with the read inside the retry rather than after it.
+
+        ``session.get`` returns as soon as the response *headers* arrive. The body is still
+        on the wire, and ``ClientTimeout(total=60.0, sock_read=30.0)`` governs reading it as
+        much as connecting: on a slow EDGAR morning the request that fails is the one that
+        got a 200 and then stalled. Reading after the retry loop had already returned meant
+        that failure had five unused attempts sitting above it, and a single stalled body
+        ended a forty-filing batch.
+
+        The status check keeps the shape it had — a 403 or 429 is EDGAR throttling and is
+        worth backing off for — but a status the server *meant* is not retried. A 404 for a
+        filing that is not there cannot become a 200 by waiting, and five backoffs before
+        saying so turns a correct answer into a minute of silence. That is why
+        :class:`aiohttp.ClientResponseError` is re-raised rather than falling into the
+        general handler; the throttle branch raises the same type only once the budget is
+        spent, having already retried.
+        """
         attempts = 0
         while True:
             await self._limiter.acquire()
             headers = {"User-Agent": self.user_agent}
+            resp: aiohttp.ClientResponse | None = None
             try:
                 session = self._get_session()
-                resp = await session.get(url, headers=headers, timeout=client_timeout)
+                resp = await session.get(url, headers=headers, timeout=None)
                 if resp.status in (403, 429):
                     attempts += 1
-                    if attempts > 5:
-                        resp.close()
+                    if attempts > _MAX_REQUEST_ATTEMPTS:
                         resp.raise_for_status()
-                    resp.close()
-                    # Exponential backoff
-                    delay = min(30.0, 1.0 * (2**attempts))
-                    await asyncio.sleep(delay)
-                    continue
-                return resp
+                else:
+                    resp.raise_for_status()
+                    return await resp.read()
+            except aiohttp.ClientResponseError:
+                raise
             except Exception:
                 attempts += 1
-                if attempts > 5:
+                if attempts > _MAX_REQUEST_ATTEMPTS:
                     raise
-                delay = min(30.0, 1.0 * (2**attempts))
-                await asyncio.sleep(delay)
+            finally:
+                if resp is not None:
+                    resp.close()
+            # Exponential backoff
+            await asyncio.sleep(min(30.0, 1.0 * (2**attempts)))
 
     async def _request_json(self, url: str) -> Any:
-        resp = await self._request(url)
-        try:
-            resp.raise_for_status()
-            content = await resp.read()
-            return msgspec.json.decode(content)
-        finally:
-            resp.close()
+        return msgspec.json.decode(await self._request_bytes(url))
 
     async def _request_text(self, url: str) -> str:
         """Fetch ``url`` as text, for the two attachments that are XML rather than JSON.
@@ -268,12 +287,7 @@ class SecEdgarClient:
         body raises a decode error naming a byte offset, which is a long way from "this
         filing's attachment is not where the index said".
         """
-        resp = await self._request(url)
-        try:
-            resp.raise_for_status()
-            return (await resp.read()).decode("utf-8", errors="replace")
-        finally:
-            resp.close()
+        return (await self._request_bytes(url)).decode("utf-8", errors="replace")
 
     async def _resolve_cik(self, symbol: str) -> int:
         """Return the CIK for a ticker or for a CIK spelled as one.
@@ -599,6 +613,14 @@ class SecEdgarClient:
             whose attachment cannot be parsed is logged and skipped rather than failing the
             batch: one malformed document out of forty is a gap, and raising would turn it
             into a total loss of the other thirty-nine.
+
+            ``TimeoutError`` is caught alongside :class:`aiohttp.ClientError` and is not
+            covered by it. In aiohttp 3.14.0 ``asyncio.TimeoutError`` *is*
+            ``builtins.TimeoutError``, and ``issubclass(TimeoutError, aiohttp.ClientError)``
+            is ``False`` — only ``ServerTimeoutError`` and its two subclasses sit under
+            ``ClientError``, and the ``total`` timeout does not raise those. So the one
+            network failure most likely to hit a forty-request batch was the one shape this
+            handler did not cover, and it took the other thirty-nine filings with it.
         """
         cik = await self._resolve_cik(symbol)
         filings = [f for f in await self.get_filings(symbol) if f.form in FORM4_FORMS][:limit]
@@ -609,7 +631,7 @@ class SecEdgarClient:
             url = self.raw_ownership_document_url(cik, filing)
             try:
                 records.extend(parse_form4(await self._request_text(url), local_ts=local_ts))
-            except (Form4ParseError, aiohttp.ClientError) as exc:
+            except (Form4ParseError, aiohttp.ClientError, TimeoutError) as exc:
                 log.warning(
                     "sec_edgar: skipping Form 4 %s for %s: %s: %s",
                     filing.accession_number,
@@ -632,7 +654,9 @@ class SecEdgarClient:
 
         Returns:
             Every reported position across those filings. As with Form 4, a filing whose
-            attachments cannot be read is logged and skipped rather than failing the batch.
+            attachments cannot be read is logged and skipped rather than failing the batch,
+            and — as there — ``TimeoutError`` is listed because ``aiohttp.ClientError`` does
+            not cover it.
         """
         cik = await self._resolve_cik(symbol)
         filings = [f for f in await self.get_filings(symbol) if f.form in FORM_13F_FORMS][:limit]
@@ -642,7 +666,13 @@ class SecEdgarClient:
         for filing in filings:
             try:
                 records.extend(await self._parse_one_13f(cik, filing, local_ts))
-            except (Form13FParseError, aiohttp.ClientError, KeyError, ValueError) as exc:
+            except (
+                Form13FParseError,
+                aiohttp.ClientError,
+                TimeoutError,
+                KeyError,
+                ValueError,
+            ) as exc:
                 log.warning(
                     "sec_edgar: skipping 13F %s for %s: %s: %s",
                     filing.accession_number,
