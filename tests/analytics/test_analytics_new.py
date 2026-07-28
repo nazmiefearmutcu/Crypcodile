@@ -46,13 +46,29 @@ def test_parse_interval_to_ns() -> None:
     assert parse_interval_to_ns("5m") == 300_000_000_000
     assert parse_interval_to_ns("2h") == 7_200_000_000_000
     assert parse_interval_to_ns("1d") == 86_400_000_000_000
-    
-    with pytest.raises(ValueError, match="Interval string cannot be empty"):
-        parse_interval_to_ns("")
-    with pytest.raises(ValueError, match="Invalid interval duration value"):
-        parse_interval_to_ns("as")
-    with pytest.raises(ValueError, match="Unknown interval unit"):
-        parse_interval_to_ns("10w")
+
+    for bad in ("", "as", "1x", "1mo"):
+        with pytest.raises(ValueError, match="Cannot parse interval"):
+            parse_interval_to_ns(bad)
+
+
+def test_both_halves_of_ofi_accept_the_same_interval_vocabulary() -> None:
+    """Migrated: this used to pin ``10w`` raising ``Unknown interval unit 'w'``.
+
+    That was one wire schema with two grammars. ``OfiParams.interval`` is one ``str`` field
+    projected to one CLI option, one query parameter and one MCP property, and
+    ``ofi --interval 1w`` answered for equities — whose half parses with the shared
+    resampler parser — while raising here. A gate keyed on the *type* of a params field
+    cannot see a split inside one type, which is why it survived the merge.
+
+    Widened rather than narrowed: a weekly bin is a real question the equity half already
+    answers, and routing through the shared parser is what makes ``1w`` the same width and
+    the same Monday-anchored grid it is everywhere else.
+    """
+    from crocodile.core.resample._interval import parse_interval
+
+    for spelling in ("1s", "5m", "2h", "1d", "10w"):
+        assert parse_interval_to_ns(spelling) == parse_interval(spelling).ns
 
 
 # ---------------------------------------------------------------------------
