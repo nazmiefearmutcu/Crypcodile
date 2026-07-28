@@ -19,7 +19,7 @@ import pytest_asyncio
 from crocodile.core import capability as capability_module
 from crocodile.core.capability import REGISTRY, Capability, Impl
 from crocodile.core.schema.enums import AssetClass, Side
-from crocodile.core.schema.records import BookSnapshot, Record, Trade
+from crocodile.core.schema.records import BookSnapshot, OpenInterest, Record, Trade
 from crocodile.core.store.parquet_sink import ParquetSink
 
 SYMBOL = "deribit:BTC-PERPETUAL"
@@ -74,6 +74,74 @@ async def lake(tmp_path: pathlib.Path) -> AsyncIterator[pathlib.Path]:
     yield tmp_path
 
 
+OVERSIZED_ROWS = 12_000
+"""How many rows the oversized lake holds: more than ``NETWORK_ROW_LIMIT``, deliberately.
+
+The exact number matters less than the inequality, and the inequality is the whole point.
+``test_rest_publishes_the_row_ceiling_it_applied`` asserted that the published ceiling
+equalled the constant — against the forty-row lake above, where no ceiling can bind — so a
+capability that never applied one passed a test named for applying it. A gate about a cap
+has to drive a lake bigger than the cap or it is measuring the constant against itself.
+"""
+
+_OI_SOURCES = ("deribit", "binance-futures")
+"""Two venues, so an unfiltered ``open-interest`` board has more than one column to fill."""
+
+
+def _oversized_trade(index: int) -> Trade:
+    """One of :data:`OVERSIZED_ROWS` trades, a minute apart, so 1m bars are one per trade."""
+    return Trade(
+        source="deribit",
+        symbol=SYMBOL,
+        symbol_raw="BTC-PERPETUAL",
+        local_ts=START_NS + index * _TRADE_SPACING_NS,
+        asset_class=AssetClass.CRYPTO,
+        source_ts=None,
+        id=str(index),
+        price=42_000.0 + (index % 7) * 25.0,
+        amount=0.25,
+        side=Side.BUY if index % 2 else Side.SELL,
+    )
+
+
+def _open_interest(source: str, index: int) -> OpenInterest:
+    return OpenInterest(
+        source=source,
+        symbol=f"{source}:BTC-PERPETUAL",
+        symbol_raw="BTC-PERPETUAL",
+        local_ts=START_NS + index * _TRADE_SPACING_NS,
+        asset_class=AssetClass.CRYPTO,
+        source_ts=None,
+        open_interest=1_000.0 + index,
+    )
+
+
+@pytest_asyncio.fixture
+async def oversized_lake(tmp_path: pathlib.Path) -> AsyncIterator[pathlib.Path]:
+    """A lake with more rows than a network surface will return, plus an open-interest board.
+
+    Two properties nothing else in this package has, and both of them are needed to see a
+    defect rather than to assume one:
+
+    * more than :data:`~crocodile.surfaces.dispatch.NETWORK_ROW_LIMIT` rows for a single
+      symbol, so a published row ceiling either binds or is a false claim; and
+    * ``open_interest`` records on two sources, so ``open-interest`` with no ``--symbols``
+      has a non-empty answer to fail to return.
+
+    Written once per test rather than shared at session scope because every surface here
+    opens its own :class:`~crocodile.core.store.catalog.Catalog` over the directory and a
+    ``tmp_path`` per test is what keeps them from seeing each other's writes.
+    """
+    sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=20_000, flush_interval_seconds=9999)
+    for index in range(OVERSIZED_ROWS):
+        await sink.put(_oversized_trade(index))
+    for source in _OI_SOURCES:
+        for index in range(20):
+            await sink.put(_open_interest(source, index))
+    await sink.flush()
+    yield tmp_path
+
+
 @pytest.fixture
 def indicator_query() -> dict[str, str]:
     """The arguments every surface below sends, so the three are asking the same thing."""
@@ -121,9 +189,18 @@ def _equity_depth_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
         async def snapshot(self, symbol: str) -> DepthProfile:
             return profile
 
-    monkeypatch.setattr(
-        "crocodile.capabilities.analytics.select_depth_source", lambda **_: _FixedLadder()
-    )
+    # Both importers, not one. ``market`` binds its own name for ``depth`` and only
+    # ``analytics`` was stubbed, so "*no* test in this package should be making that call"
+    # was true of two capabilities out of three: driving ``depth``/equity reached Yahoo and
+    # came back with ``YahooError``, which is a bare ``Exception`` subclass outside the
+    # Crocodile hierarchy and therefore unclassified on every surface — a 500 on REST. That
+    # is a real finding about the provider's error type and it is not this fixture's to fix;
+    # what is this fixture's is that the finding was invisible because the call was never
+    # made from here.
+    for module in ("analytics", "market"):
+        monkeypatch.setattr(
+            f"crocodile.capabilities.{module}.select_depth_source", lambda **_: _FixedLadder()
+        )
 @dataclasses.dataclass(frozen=True)
 class FakeSubscription:
     """Shaped like :class:`~crocodile.capabilities.ops.Subscription`, connecting to nothing.

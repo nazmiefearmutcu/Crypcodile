@@ -67,6 +67,7 @@ from crocodile.core.capability import (
     AssetClass,
     Capability,
     CapabilityContext,
+    Fallback,
     Impl,
     ReturnKind,
     declare,
@@ -88,7 +89,7 @@ from crocodile.crypto.instruments.universe import (
     top_symbols_by_volume,
 )
 from crocodile.equity.analytics.oi_aggregator import aggregate_option_open_interest
-from crocodile.equity.depth import select_depth_source
+from crocodile.equity.depth import alpaca_is_keyed, select_depth_source
 from crocodile.equity.providers import factory as provider_factory
 from crocodile.equity.reference import universe as reference
 
@@ -515,13 +516,13 @@ def open_interest_equities(ctx: CapabilityContext, params: OpenInterestParams) -
 def depth(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
     """A US-equity depth ladder, from real L1 when keyed and a modelled one when not.
 
-    ``select_depth_source`` reads ``ALPACA_API_KEY``/``ALPACA_API_SECRET`` from the process
-    environment rather than from ``ctx.settings``, which carries both. That is a deviation
-    from the rule :class:`~crocodile.core.capability.CapabilityContext` states, and it is
-    left as it is rather than papered over here: the switch is shared with the two legacy
-    surfaces that still call it, and a copy of the decision in this adapter would be a
-    second place for the two to disagree about which source is live. Rewiring it through
-    ``Settings`` is one change in one function, and it belongs with the surface migration.
+    ``select_depth_source`` used to read ``ALPACA_API_KEY``/``ALPACA_API_SECRET`` off the
+    process environment rather than from ``ctx.settings``, which was called a deviation from
+    the rule :class:`~crocodile.core.capability.CapabilityContext` states and left alone
+    because the switch was shared. The surface migration this docstring said would close it
+    is what closed it: ``ctx.settings`` goes in, the switch still honours the bare spelling
+    so nobody's keys go dark, and the *predicate* is exported as ``alpaca_is_keyed`` so the
+    projection announcing this answer branches on the same call the implementation does.
 
     The declaration's ``prov`` is the *ceiling* — what this implementation produces on its
     best day, which is the keyed Alpaca L1 branch — and never a reading of today's
@@ -530,9 +531,15 @@ def depth(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
     of book was quoted, ``yahoo_1m_vap`` how much of a session the profile was binned out
     of. Declaring the keyless floor instead would understate a keyed deployment exactly as
     badly as declaring the ceiling overstates a keyless one, and only one of the two is
-    fixed by a field that is documented as a maximum.
+    fixed by a field that is documented as a maximum — which is why the floor is declared
+    *beside* the ceiling, as :class:`~crocodile.core.capability.Fallback`, rather than
+    replacing it. Before that existed the keyless deployment — the default one — announced
+    nothing on the CLI and named ``alpaca_l1`` on REST and MCP while returning a ladder
+    modelled from Yahoo 1m bars.
     """
-    source = select_depth_source(bins=params.bins, top_n=params.top_n, method=params.method)
+    source = select_depth_source(
+        bins=params.bins, top_n=params.top_n, method=params.method, settings=ctx.settings
+    )
     return run_to_completion(lambda: source.snapshot(params.symbol))
 
 
@@ -1019,6 +1026,14 @@ DEPTH = declare(
             # number in the profile was quoted by the venue, but the venue quoted a top of
             # book rather than a ladder — and it is the best of the two branches
             # `select_depth_source` can take.
+            #
+            # The *other* branch is what a keyless deployment gets, and until `fallback`
+            # existed nothing said so: the ladder came back stamped SYNTHETIC/`yahoo_1m_vap`
+            # while the surfaces published DERIVED/`alpaca_l1` and the CLI — where
+            # `banner_for` suppresses DERIVED — printed nothing at all. This is the one
+            # hand-written banner the projection was generalised from, silent in the default
+            # deployment. `alpaca_is_keyed` is the predicate `select_depth_source` itself
+            # branches on, so the announcement cannot disagree with the branch.
             AssetClass.EQUITY: Impl(
                 fn=depth,
                 prov=Provenance.DERIVED,
@@ -1026,6 +1041,11 @@ DEPTH = declare(
                 # Nothing: `select_depth_source` fetches from Alpaca or models a ladder
                 # from Yahoo bars, and neither branch touches the lake.
                 reads=(),
+                fallback=Fallback(
+                    prov=Provenance.SYNTHETIC,
+                    basis="yahoo_1m_vap",
+                    reachable=alpaca_is_keyed,
+                ),
             ),
             # DERIVED on both halves, and the two arrive at it from opposite directions.
             # Equity's best branch is a real quote reshaped into a ladder; crypto's is a

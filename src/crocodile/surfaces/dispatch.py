@@ -11,7 +11,6 @@ The one thing the surfaces are *allowed* to disagree about is trust, and
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import itertools
 from collections.abc import Iterator, Sequence
@@ -29,9 +28,10 @@ from crocodile.core.capability import (
     CapabilityContext,
     Impl,
     ReturnKind,
+    run_to_completion,
 )
 from crocodile.core.config import Settings
-from crocodile.core.errors import CapabilityUnavailable
+from crocodile.core.errors import CapabilityUnavailable, ConfigError
 from crocodile.core.schema.provenance import Provenance, describe
 from crocodile.core.util.json_safe import json_safe_float
 
@@ -45,6 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "BAD_REQUEST",
     "NETWORK_ROW_LIMIT",
+    "NOT_CONFIGURED",
     "REFUSED",
     "UNAVAILABLE",
     "asset_class_option_values",
@@ -52,10 +53,12 @@ __all__ = [
     "build_context",
     "build_params",
     "drive",
+    "effective_provenance",
     "invoke",
     "params_schema",
     "payload",
     "provenance_block",
+    "requires_explicit_asset_class",
     "resolve",
     "resolve_asset_class",
     "stream_summary",
@@ -92,6 +95,28 @@ UNAVAILABLE: Final[tuple[type[BaseException], ...]] = (CapabilityUnavailable,)
 
 Not the caller's mistake and not a fault: the request is well formed and the answer does
 not exist yet, which is 501 on REST.
+"""
+
+NOT_CONFIGURED: Final[tuple[type[BaseException], ...]] = (ConfigError,)
+"""The request is fine and *this deployment* has not been given what answering it needs.
+
+``GET /api/v1/markets?asset_class=equity`` on an unconfigured install answered ``500
+Internal Server Error`` with no body, while the CLI printed the fix — "set
+``CROCODILE_SEC_USER_AGENT``…" — from the same exception. Two surfaces, one
+:class:`~crocodile.core.errors.ConfigError`, and only one of them told anybody anything.
+
+It is a category rather than a 500 with a body because of what 5xx *means to a client*: it
+is the one status class every backing-off library retries, so a missing environment variable
+became a retry storm against an endpoint that will answer identically forever. 501 is what
+this projection already serves for :data:`UNAVAILABLE`, and it is the same sentence: the
+request is well formed and this deployment has no answer for it. Whether the reason is "no
+implementation for that asset class" or "no credential for the implementation there is" is
+not a distinction a *caller* can act on differently — both are terminal, both are the
+operator's to fix — so it is one status with the actionable message in the body.
+
+Only ``ConfigError``, not ``CrocodileError``: a connector failing mid-request is a fault and
+a 5xx is honest about it, and retrying a venue that timed out is the right behaviour. This
+names the family whose docstring says it is "detected before any source is contacted".
 """
 
 REFUSED: Final[tuple[type[BaseException], ...]] = (PermissionError,)
@@ -336,9 +361,45 @@ def resolve_asset_class(
     )
 
 
-def asset_class_option_values() -> list[str]:
-    """The accepted spellings of an explicit asset class, for help text and schemas."""
-    return [a.value for a in AssetClass]
+def asset_class_option_values(cap: Capability | None = None) -> list[str]:
+    """The accepted spellings of an explicit asset class, for help text and schemas.
+
+    Narrowed to what ``cap`` actually implements when one is given. A route or tool that
+    publishes ``equity`` for a capability with no equity half is describing a request that
+    can only ever answer 501, and the published schema is the only thing a generated client
+    has to go on.
+    """
+    classes = AssetClass if cap is None else cap.impls
+    return sorted(a.value for a in classes)
+
+
+def requires_explicit_asset_class(cap: Capability) -> bool:
+    """Whether a caller *must* name the asset class for this capability to be answerable.
+
+    :func:`resolve_asset_class` resolves in three steps and only the first two can succeed
+    without the caller saying anything: an explicit choice, or a canonical ``source:RAW``
+    symbol the source registries can place. A capability with two implementations and no
+    symbol field has neither, so omitting the class is a hard refusal — and 32 of the 57 wire
+    names are in exactly that position.
+
+    Published rather than discovered. The MCP ``inputSchema`` did not mention ``asset_class``
+    at all, and the REST document listed it ``required: false`` on all of them, so the one
+    input that makes those calls answerable appeared nowhere a client could read it: a
+    generated client's only route to the truth was a 400 at runtime.
+
+    Read off :func:`symbol_field_names` rather than restated, so a capability that gains a
+    symbol parameter stops being listed as requiring the option on the same day.
+
+    This function and that one landed in the same phase from different branches, and the
+    first draft here read a module-level ``_SYMBOL_FIELDS`` frozenset that the other branch
+    had already replaced with the derived form. Git merged both without a conflict — one
+    added a caller, the other removed a name — and the result was an ``F821`` in a file
+    neither branch's own suite could fail on. Naming the function rather than a constant is
+    what makes the dependency visible to the next merge.
+    """
+    if len(cap.impls) < 2:
+        return False
+    return not symbol_field_names(cap.params)
 
 
 # ---------------------------------------------------------------------------
@@ -590,12 +651,24 @@ def drive(result: Any, *, row_limit: int | None) -> Any:
     than :meth:`CapabilityContext.query`, so the ``LIMIT`` wrapper that caps raw SQL never
     sees it and draining the iterator is how one request materialises a lake. ``None`` — the
     CLI's posture, on the machine that owns the lake — drains it all.
+
+    Both awaits go through :func:`~crocodile.core.capability.run_to_completion` rather than a
+    bare ``asyncio.run``, and that is the same one-line bug this module documents twice
+    elsewhere: ``asyncio.run`` inside a running event loop raises ``RuntimeError``, and MCP
+    *is* one — ``operate.mcp`` opens a loop and ``stdio.serve_stdio`` calls ``handle_request``
+    inline on it, with no worker thread between. The REST projection is safe only because its
+    endpoint hands the work to ``run_in_threadpool``; nothing gave MCP the same protection,
+    and nothing forbids a read-only capability returning a coroutine. It was latent rather
+    than harmless: the four implementations that reach here — ``backfill`` twice, ``collect``,
+    ``collect-market`` — are all writes, so ``_refuse_readonly`` fires first on that surface.
+    A bug that only one refusal stands in front of is a bug with a schedule.
     """
     begin = getattr(result, "run", None)
     if callable(begin) and not isinstance(result, type):
-        return asyncio.run(begin())
+        return run_to_completion(begin)
     if inspect.iscoroutine(result):
-        return asyncio.run(result)
+        pending = result
+        return run_to_completion(lambda: pending)
     if isinstance(result, Iterator):
         # ``Iterator`` and not ``Iterable``: a str, a dict, a list and a polars frame are all
         # iterable and none of them is unconsumed work. What is being caught here is the
@@ -634,25 +707,76 @@ def stream_summary(pending: Any) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+def effective_provenance(impl: Impl, settings: Settings) -> tuple[Provenance, str]:
+    """The level and basis this deployment will actually produce, not the best it could.
+
+    :attr:`Impl.prov` is a ceiling, and every announcement in this module used to publish it
+    unconditionally. For the three implementations that reach the lake through
+    ``select_depth_source`` that made the *default* deployment lie: with no Alpaca keys the
+    switch returns the synthetic Yahoo ladder and stamps its records
+    ``SYNTHETIC``/``yahoo_1m_vap``, while REST and MCP published ``DERIVED``/``alpaca_l1``
+    and the CLI — where :func:`banner_for` suppresses ``DERIVED`` — printed nothing at all.
+    A modelled answer arriving with an empty stderr is the failure :func:`warning_for` exists
+    to end, on the one endpoint whose hand-written banner it was generalised from.
+
+    Resolved here rather than in each of the three announcements, because they must agree:
+    a payload that says ``synthetic`` under a terminal that said nothing is the same defect
+    with an extra step. The predicate belongs to the implementation
+    (:attr:`Fallback.reachable`) so that no surface has to know what a credential is.
+    """
+    fallback = impl.fallback
+    if fallback is None or fallback.reachable(settings):
+        return impl.prov, impl.basis
+    return fallback.prov, fallback.basis
+
+
 def provenance_block(cap: Capability, ctx: CapabilityContext) -> dict[str, Any]:
     """The block every network response carries, describing how the answer was obtained.
 
-    Derived from the declaration rather than measured per call: :attr:`Impl.prov` is a
-    ceiling, and the per-record truth is on each record's own provenance tail where it can
-    be measured. Publishing the ceiling is still worth doing — it is what lets a caller see
-    that an equity depth answer is modelled *before* reading a single row.
+    Derived from the declaration rather than measured per call: the per-record truth is on
+    each record's own provenance tail where it can be measured. Publishing this is still
+    worth doing — it is what lets a caller see that an equity depth answer is modelled
+    *before* reading a single row.
+
+    What is published is the **effective** level and basis rather than
+    :attr:`Impl.prov`'s ceiling, because a ceiling the deployment cannot reach is a method
+    that never ran. ``prov_ceiling`` carries the declaration alongside it, and only when the
+    two differ: an unconditional field would put a second provenance number in every
+    response for the eighty-eight implementations that have one answer, and the caller who
+    needs to know a key would upgrade this endpoint is exactly the caller reading a degraded
+    answer.
     """
     impl = implementation(cap, ctx)
+    prov, basis = effective_provenance(impl, ctx.settings)
     block: dict[str, Any] = {
         "capability": cap.name,
-        "asset_class": ctx.asset_class.value,
-        "prov": impl.prov.value,
-        "prov_basis": impl.basis,
-        "method": describe(impl.basis),
+        # ``any`` for a capability whose answer does not depend on which implementation ran.
+        # ``search?q=EQ&asset_class=crypto`` returned three ``stooq:`` equity symbols and
+        # stamped ``"crypto"`` — a value the caller was *forced* to supply, that selected
+        # nothing, echoed back as though it had. Same for ``catalog-symbols`` and
+        # ``catalog-exchanges``, and for the ten other capabilities in that batch. Echoing an
+        # input is not reporting a fact, and a caller filtering answers by this field would
+        # have partitioned a cross-market answer by the argument they happened to send.
+        "asset_class": "any" if cap.cross_market else ctx.asset_class.value,
+        "prov": prov.value,
+        "prov_basis": basis,
+        "method": describe(basis),
     }
+    if basis != impl.basis or prov is not impl.prov:
+        block["prov_ceiling"] = impl.prov.value
+        block["prov_ceiling_basis"] = impl.basis
     if ctx.row_limit is not None:
         # Published so a truncated answer reads as a stated ceiling rather than as the
         # whole lake. The legacy REST server wrapped a LIMIT and said nothing.
+        #
+        # It says "at most this many rows are in the answer", and until :func:`payload`
+        # started enforcing it that was false for 30 of the 33 TABLE capabilities: only
+        # ``query``, ``catalog-scan`` and ``replay`` reached a cap at all — the first two
+        # through :meth:`CapabilityContext.query`'s LIMIT wrapper, the third through
+        # :func:`drive`'s islice — and every other implementation built its own statement or
+        # went through ``Catalog.scan``, so ``GET /api/v1/resample`` answered twelve thousand
+        # rows over a published ceiling of ten thousand. The OpenAPI document repeated the
+        # claim to every generated client.
         block["row_limit"] = ctx.row_limit
     return block
 
@@ -668,11 +792,12 @@ def warning_for(cap: Capability, ctx: CapabilityContext) -> str | None:
     moment someone remembers to write a banner for it.
     """
     impl = implementation(cap, ctx)
-    if impl.prov is Provenance.NATIVE:
+    prov, basis = effective_provenance(impl, ctx.settings)
+    if prov is Provenance.NATIVE:
         return None
     return (
-        f"{impl.prov.value.upper()} — {cap.name} for {ctx.asset_class.value} is not a "
-        f"venue-reported observation. Its inputs rest on {impl.basis!r}: {_headline(impl.basis)}"
+        f"{prov.value.upper()} — {cap.name} for {ctx.asset_class.value} is not a "
+        f"venue-reported observation. Its inputs rest on {basis!r}: {_headline(basis)}"
     )
 
 
@@ -695,9 +820,17 @@ def banner_for(cap: Capability, ctx: CapabilityContext) -> str | None:
     Nothing is lost on the surfaces that can carry it: :func:`warning_for` still announces
     every non-``NATIVE`` implementation in the payload, where it is a field a machine reader
     can consult rather than a line a human learns to skip.
+
+    The level tested is the **effective** one, which is what made this channel carry nothing
+    that reads a market. Four of the ninety-one implementations declare ``SYNTHETIC`` and all
+    four are ``caller_supplied`` calculators, so before :func:`effective_provenance` the one
+    banner this design exists to generalise — the equity depth ladder modelled from Yahoo 1m
+    bars — was silent in the default deployment, which is the only deployment most operators
+    have.
     """
     impl = implementation(cap, ctx)
-    if impl.prov in (Provenance.NATIVE, Provenance.DERIVED):
+    prov, _ = effective_provenance(impl, ctx.settings)
+    if prov in (Provenance.NATIVE, Provenance.DERIVED):
         return None
     return warning_for(cap, ctx)
 
@@ -758,8 +891,8 @@ def _jsonable(value: Any) -> Any:
     return _jsonable(builtin) if type(builtin) is not type(value) else builtin
 
 
-def payload(cap: Capability, result: Any) -> dict[str, Any]:
-    """Shape a return value according to :attr:`Capability.returns`.
+def payload(cap: Capability, result: Any, *, row_limit: int | None = None) -> dict[str, Any]:
+    """Shape a return value according to :attr:`Capability.returns`, under this surface's cap.
 
     A ``TABLE`` becomes ``rows``, a ``SCALAR`` becomes ``result``. The distinction is read
     off the declaration rather than off the value's Python type, which is what stops a
@@ -768,13 +901,70 @@ def payload(cap: Capability, result: Any) -> dict[str, Any]:
 
     Whatever comes out is plain JSON data all the way down, because the three surfaces do not
     share an encoder and the one thing they must share is what they are asked to encode.
+
+    ``row_limit`` is where the network surfaces' published ceiling is *made true*, and the
+    choice of this function over the read is the whole of the argument. Two designs were on
+    the table:
+
+    *Push the cap into the read.* Strictly better as work: rows that are never returned are
+    never computed. It requires every implementation to reach the lake through
+    :meth:`CapabilityContext.query <crocodile.core.capability.CapabilityContext.query>`, and
+    30 of the 33 ``TABLE`` capabilities do not — ``open-interest`` hands a catalog to an
+    aggregator that owns its statement, ``resample`` and ``replay`` go through
+    ``Catalog.scan``, ``depth`` walks a network ladder, ``ofi`` computes over a frame. Doing
+    it would mean editing 30 implementations across four batch modules, each edit a chance
+    for one capability's numbers to change quietly, and — this is the part that decides it —
+    it would leave the property as **30 separate claims**, each of which can be forgotten
+    again by the next implementation. Being forgotten 30 times is how the defect arrived.
+
+    *Cap every answer where every answer passes.* This. One place, one gate, and the claim
+    ``provenance.row_limit`` makes is enforced by construction rather than by 30 authors
+    remembering. The cost is stated rather than hidden: the frame is computed in full and
+    then cut, so the ceiling is a bound on the *response*, not on the work. Bounding the work
+    is what an implementation's own ``limit`` parameter is for — ``catalog-scan``, ``replay``
+    and ``export`` each take one — and pushing the cap deeper later is a pure optimisation
+    that cannot change what the published number means, because the number already means what
+    it says.
+
+    ``truncated`` is added only when the cap actually bound. Without it a caller who receives
+    exactly ``row_limit`` rows cannot tell a full answer of that size from a cut one, which is
+    the ambiguity the published ceiling exists to remove.
     """
+    truncated = False
+    if cap.returns is ReturnKind.TABLE:
+        result, truncated = _under_ceiling(result, row_limit)
     rows = _rows(result)
     if cap.returns is ReturnKind.TABLE:
-        return {"rows": rows if rows is not None else _encodable(cap, result)}
+        body: dict[str, Any] = {"rows": rows if rows is not None else _encodable(cap, result)}
+        if truncated:
+            body["truncated"] = True
+        return body
     if rows is not None:
         return {"result": rows[0] if rows else None}
     return {"result": _encodable(cap, result)}
+
+
+def _under_ceiling(result: Any, row_limit: int | None) -> tuple[Any, bool]:
+    """Cut ``result`` to ``row_limit`` rows, and say whether that changed anything.
+
+    Cutting the *frame* rather than the converted dicts, because ``_rows`` walks every cell
+    of every row through :func:`_jsonable` and the rows past the ceiling are being thrown
+    away: a 12 000-row answer under a 10 000 ceiling would otherwise pay for 12 000
+    conversions to publish 10 000. ``head`` is polars' own slice and copies no data.
+
+    A list is handled beside the frame because a ``TABLE`` implementation is allowed to return
+    one — nothing in the registry declares that it returns a frame — and a ceiling that only
+    holds for the common representation is a ceiling with an undocumented exception in it.
+    """
+    if row_limit is None:
+        return result, False
+    head = getattr(result, "head", None)
+    height = getattr(result, "height", None)
+    if callable(head) and isinstance(height, int):
+        return (head(row_limit), True) if height > row_limit else (result, False)
+    if isinstance(result, list) and len(result) > row_limit:
+        return result[:row_limit], True
+    return result, False
 
 
 def _encodable(cap: Capability, result: Any) -> Any:

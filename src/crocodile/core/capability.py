@@ -53,6 +53,7 @@ __all__ = [
     "Capability",
     "CapabilityContext",
     "CapabilityFn",
+    "Fallback",
     "Impl",
     "ReturnKind",
     "declare",
@@ -156,7 +157,17 @@ class CapabilityContext:
             stripped = sql.strip().rstrip(";").strip()
             # Wrapping rather than truncating the frame: the point of the cap on a
             # network surface is to not materialise the rows in the first place.
-            sql = f"SELECT * FROM ({stripped}) AS _q LIMIT {int(self.row_limit)}"
+            #
+            # The newlines are load-bearing and are not formatting. SQL's ``--`` comment runs
+            # to the end of the *line*, so folding the statement onto one line put everything
+            # after it — the closing parenthesis, the alias, the LIMIT — inside the comment.
+            # ``SELECT count(*) FROM trade -- how many`` therefore succeeded on the CLI, which
+            # sets no cap and does not wrap, and answered ``400 Parser Error: syntax error at
+            # end of input`` on REST and MCP: the caller blamed for SQL this surface broke,
+            # on the one capability whose text is entirely theirs. A trailing block comment
+            # (``/* … */``) never had the problem, which is what made it look like a parser
+            # quirk rather than a wrapper bug.
+            sql = f"SELECT * FROM (\n{stripped}\n) AS _q LIMIT {int(self.row_limit)}"
         return self.catalog.query(sql, readonly=self.readonly)
 
 
@@ -183,6 +194,49 @@ rather than by convention. ``params`` is typed ``Any`` because each implementati
 it to its own struct, and a per-capability generic buys nothing a declaration-site
 annotation does not already give.
 """
+
+
+class Fallback(msgspec.Struct, frozen=True):
+    """What an implementation degrades to when the deployment cannot reach its ceiling.
+
+    :attr:`Impl.prov` is a ceiling and declaring the best branch is right. The consequence,
+    left alone, is that a deployment which cannot take that branch announces the branch it
+    did not take: ``depth``, ``slippage`` and ``liquidity-depth`` all declare
+    ``DERIVED``/``alpaca_l1`` over ``select_depth_source``, which returns the **synthetic**
+    Yahoo ladder whenever the Alpaca keys are unset. ``banner_for`` suppresses ``DERIVED``,
+    so the default keyless deployment printed nothing on stderr, and REST and MCP named a
+    method that never ran — while the records themselves came back stamped
+    ``SYNTHETIC``/``yahoo_1m_vap``.
+
+    Declaring the floor beside the ceiling is what lets a projection announce the branch that
+    will actually answer without any surface knowing what a credential is. It is deliberately
+    *not* a second ``prov``: the ceiling still says what the implementation can do at its
+    best, and this says what it does when the deployment cannot let it.
+
+    The alternative was to demote the three declarations to ``SYNTHETIC``/``yahoo_1m_vap``.
+    That trades one false statement for another — a keyed deployment would then under-claim a
+    real quoted ladder as modelled, and ``prov`` would stop meaning "ceiling" for three
+    implementations and keep meaning it for the other eighty-eight.
+    """
+
+    prov: Provenance
+    """The level this implementation actually reaches when :attr:`reachable` is false."""
+
+    basis: str
+    """The registered method that actually runs then. A key into the provenance registry,
+    exactly as :attr:`Impl.basis` is, and held to the same rule: a basis with no registered
+    confidence formula is a confidence number chosen by feel."""
+
+    reachable: Callable[[Settings], bool]
+    """Whether *this deployment* can take the ceiling's branch.
+
+    A predicate over :class:`~crocodile.core.config.Settings` rather than a list of
+    environment variable names, because the question is the implementation's and only the
+    implementation knows how it is answered — ``select_depth_source`` accepts two spellings
+    of the Alpaca keys and a surface must not learn either. It is expected to be the *same
+    function the implementation calls*, which is what stops the announcement and the branch
+    from being two readings of one fact.
+    """
 
 
 class Impl(msgspec.Struct, frozen=True):
@@ -250,6 +304,13 @@ class Impl(msgspec.Struct, frozen=True):
     field.
     """
 
+    fallback: Fallback | None = None
+    """What this implementation degrades to where the ceiling is out of reach, if it does.
+
+    ``None`` for the eighty-eight implementations whose answer does not depend on how the
+    deployment is configured. See :class:`Fallback` for why the three that do need one.
+    """
+
 
 class Capability(msgspec.Struct, frozen=True):
     """One capability, declared once for both asset classes."""
@@ -278,6 +339,30 @@ class Capability(msgspec.Struct, frozen=True):
 
     Missing an asset class is a build failure unless the name appears in
     :data:`IRREDUCIBLE`.
+    """
+
+    cross_market: bool = False
+    """Whether the answer is the same whichever implementation serves it.
+
+    Thirteen capabilities read the lake *as a lake* rather than as a market: ``search``,
+    ``query``, ``catalog-symbols``, ``catalog-exchanges`` and the rest of
+    :mod:`crocodile.capabilities.catalog`, whose module never mentions ``ctx.asset_class``
+    because there is nothing for it to mean. ``search?q=EQ&asset_class=crypto`` answered 200
+    with three ``stooq:`` equity symbols and stamped ``provenance.asset_class: "crypto"`` —
+    a value that selected nothing, echoed back as though it had.
+
+    The envelope reads this and says ``"any"`` instead. That is the whole of what the flag
+    does today: it does not change which implementation runs, because for these it cannot
+    matter, and it deliberately does not try to make the parameter optional — that lives in
+    ``surfaces.dispatch.resolve_asset_class``, which refuses when it cannot tell, and
+    relaxing it there is a separate decision about a function three surfaces share.
+
+    Declared rather than sniffed, and then *checked*: a conforming capability has one
+    implementation function and one ``(prov, basis)`` across its asset classes, which is
+    mechanically true of an answer that does not depend on the market, and the surfaces drive
+    both classes and compare the rows. Sniffing the same condition would silently catch
+    capabilities that share a function *and* read ``ctx.asset_class`` inside it —
+    ``apply_indicators`` is one, and :class:`CapabilityContext` documents why it does.
     """
 
     aliases: tuple[str, ...] = ()

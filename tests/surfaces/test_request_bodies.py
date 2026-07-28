@@ -209,8 +209,12 @@ def test_the_openapi_document_describes_the_response_envelope(lake: pathlib.Path
     scalar_schema = scalar["content"]["application/json"]["schema"]
     table_schema = table["content"]["application/json"]["schema"]
     assert set(scalar_schema["properties"]) == {"result", "provenance", "warning"}
-    assert set(table_schema["properties"]) == {"rows", "provenance", "warning"}
+    # ``truncated`` joined the table envelope when the published row ceiling stopped being a
+    # claim and started being applied: a caller who receives exactly ``row_limit`` rows
+    # otherwise cannot tell a full answer of that size from a cut one.
+    assert set(table_schema["properties"]) == {"rows", "truncated", "provenance", "warning"}
     assert table_schema["properties"]["rows"]["type"] == "array"
+    assert table_schema["properties"]["truncated"]["type"] == "boolean"
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +251,122 @@ def test_a_comma_separated_sequence_of_scalars_still_splits(lake: pathlib.Path) 
         dispatch.resolve("resolve-symbols"), {"symbols": f"{SYMBOL},{SYMBOL}"}
     )
     assert params.symbols == (SYMBOL, SYMBOL)
+
+
+# ---------------------------------------------------------------------------
+# The array form a client reads off the schema
+# ---------------------------------------------------------------------------
+
+
+def _array_parameters(document: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Every published query parameter whose schema is a sequence, with its path."""
+    found: list[tuple[str, dict[str, Any]]] = []
+    for path, item in document["paths"].items():
+        operation = item.get("get")
+        if operation is None:
+            continue
+        for parameter in operation.get("parameters", []):
+            if rest._is_array(parameter.get("schema", {})):
+                found.append((path, parameter))
+    return found
+
+
+def test_every_published_array_parameter_is_parsed_the_way_it_is_published(
+    lake: pathlib.Path,
+) -> None:
+    """The schema and the wire, compared rather than assumed to match.
+
+    Before: the document said ``{"type": "array"}``, whose OpenAPI serialisation is repeated
+    keys, and the handler did ``dict(request.query_params)``, which keeps only the last. Every
+    array parameter on every route was published in a form the surface silently truncated.
+
+    Read off the generated document rather than off a list, so a capability that gains a
+    sequence parameter is covered the day it is declared.
+    """
+    client = _client(lake)
+    published = _array_parameters(client.get("/openapi.json").json())
+    assert published, "no array parameter is published; this gate would prove nothing"
+
+    for path, parameter in published:
+        assert parameter["explode"] is True, (path, parameter["name"])
+        assert parameter["style"] == "form", (path, parameter["name"])
+
+    seen: dict[str, Any] = {}
+    real = dispatch.build_params
+
+    def _spy(cap: Any, values: dict[str, Any]) -> Any:
+        seen[cap.name] = dict(values)
+        return real(cap, values)
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(dispatch, "build_params", _spy)
+        for path, parameter in published:
+            name = parameter["name"]
+            wire = path.removeprefix(f"{rest.API_PREFIX}/")
+            seen.clear()
+            client.get(f"{path}?{name}=1&{name}=2")
+            capability = dispatch.resolve(wire).name
+            assert seen.get(capability, {}).get(name) == ["1", "2"], (
+                f"{wire} published {name} as an exploded array and kept "
+                f"{seen.get(capability, {}).get(name)!r}"
+            )
+    finally:
+        monkey.undo()
+
+
+def test_the_repeated_key_form_and_the_comma_form_give_the_same_answer(
+    lake: pathlib.Path,
+) -> None:
+    """The defect as a caller met it: a wrong number, in range, with a 200 on it.
+
+    ``funding-predict`` averages the rates it is handed, so the two spellings of the same
+    four numbers have to produce one prediction. Before, the repeated-key form — the one the
+    published schema describes — arrived as a single rate: ``predicted_funding_rate: 0.004``
+    over ``n_history: 1`` against the comma form's ``0.0025`` over ``n_history: 4``.
+    """
+    client = _client(lake)
+    rates = ["0.001", "0.002", "0.003", "0.004"]
+    exploded = client.get(
+        "/api/v1/funding-predict?" + "&".join(f"rates={rate}" for rate in rates)
+        + "&asset_class=crypto"
+    )
+    comma = client.get(
+        "/api/v1/funding-predict",
+        params={"rates": ",".join(rates), "asset_class": "crypto"},
+    )
+    assert exploded.status_code == comma.status_code == 200, exploded.text
+    assert exploded.json()["result"] == comma.json()["result"]
+    assert exploded.json()["result"]["n_history"] == len(rates)
+
+
+def test_a_single_value_is_still_a_single_value(lake: pathlib.Path) -> None:
+    """The half that keeps the two forks' callers working.
+
+    A key that appears once must stay a *string* through the collection step, because that is
+    what makes ``build_params`` split it on commas. Turning every query parameter into a list
+    would have fixed the exploded form and broken ``?symbols=BTC,ETH`` in the same commit.
+    """
+    seen: dict[str, Any] = {}
+    real = dispatch.build_params
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(
+            dispatch,
+            "build_params",
+            lambda cap, values: seen.setdefault(cap.name, real(cap, values)),
+        )
+        response = _client(lake).get(
+            "/api/v1/catalog-scan",
+            params={
+                "channel": "trade",
+                "symbols": f"{SYMBOL},deribit:ETH-PERPETUAL",
+                "start_ns": "0",
+                "end_ns": "9" * 18,
+            },
+        )
+    finally:
+        monkey.undo()
+    assert response.status_code == 200, response.text
+    assert seen["catalog-scan"].symbols == (SYMBOL, "deribit:ETH-PERPETUAL")

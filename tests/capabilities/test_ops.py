@@ -935,17 +935,27 @@ def test_a_slice_that_matches_nothing_says_so_rather_than_subscribing_to_an_empt
         asyncio.run(sub.begin())
 
 
-def test_the_equity_half_declares_the_merge_its_symbol_list_rests_on() -> None:
-    """NATIVE with a basis that is not ``native``, which is the honest pair.
+def test_the_equity_half_rests_on_what_it_writes_and_not_on_how_it_chose_the_symbols() -> None:
+    """Renamed and re-pinned: this asserted ``reference_merge`` and inverted the trust order.
 
-    What it writes is what a provider streamed, unaltered — the ceiling ``collect`` reaches
-    on both sides. What it *rests on* is a symbol set merged out of three registries and a
-    ranking computed from stored bars, and no venue published either.
+    The old argument was that this implementation *rests on* a symbol set merged out of three
+    registries and a ranking computed from stored bars, and that no venue published either.
+    Both halves are true and neither is about the returned answer. ``basis`` is what makes
+    ``prov`` a bound a caller can read — ``worst_provenance`` writes the rule down, "a
+    derivation can never be more trustworthy than its worst input" — and NATIVE over a basis
+    registered DERIVED broke it, uniquely among the ninety-one implementations, with nothing
+    asking. ``test_no_implementation_claims_a_provenance_stronger_than_its_basis`` now asks.
+
+    What this returns is a subscription that writes what a provider streamed, and every
+    record carries the provider's own tail; none of them says ``reference_merge``. How the
+    symbol list was chosen is a property of the *request*, argued at length in
+    :func:`~crocodile.capabilities.ops.collect_market_equities`, and it stays there.
     """
     impl = REGISTRY["collect-market"].impls[AssetClass.EQUITY]
     assert impl.fn is ops.collect_market_equities
     assert impl.prov is Provenance.NATIVE
-    assert impl.basis == "reference_merge"
+    assert impl.basis == "native"
+    assert impl.basis == REGISTRY["collect-market"].impls[AssetClass.CRYPTO].basis
 
 
 # ---------------------------------------------------------------------------

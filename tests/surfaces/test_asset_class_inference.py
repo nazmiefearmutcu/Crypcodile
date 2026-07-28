@@ -88,12 +88,19 @@ def test_the_market_is_inferred_from_a_sequence_of_symbols(name: str) -> None:
 
 
 def test_rest_serves_a_symbols_request_without_being_told_the_market(lake: pathlib.Path) -> None:
+    """Answering at all is the claim; the envelope's class is asserted where it is a fact.
+
+    ``catalog-scan`` reads the lake as a lake, so its envelope now reports ``any`` — see
+    ``Capability.cross_market``. Reading the resolution off the payload was never the
+    strongest way to observe it, and ``test_a_symbol_settles_the_market_for_a_sequence_field``
+    above asserts the resolution itself.
+    """
     response = _client(lake).get(
         "/api/v1/catalog-scan",
         params={"channel": "trade", "symbols": SYMBOL, "start_ns": START_NS, "end_ns": END_NS},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["provenance"]["asset_class"] == "crypto"
+    assert response.json()["provenance"]["asset_class"] == "any"
 
 
 def test_the_cli_serves_a_symbols_request_without_being_told_the_market(
@@ -109,8 +116,10 @@ def test_the_cli_serves_a_symbols_request_without_being_told_the_market(
 
 
 def test_mcp_serves_a_symbols_request_without_being_told_the_market(lake: pathlib.Path) -> None:
+    """Same as above: the call succeeds unnamed, and the envelope does not echo an input."""
     body = mcp.call_tool("resolve-symbols", {"symbols": [SYMBOL]}, settings=_settings(lake))
-    assert body["provenance"]["asset_class"] == "crypto"
+    assert body["rows"]
+    assert body["provenance"]["asset_class"] == "any"
 
 
 def test_a_single_symbol_still_settles_it(lake: pathlib.Path) -> None:
@@ -444,3 +453,68 @@ def test_mcp_serves_a_basis_request_without_being_told_the_market(lake: pathlib.
         settings=_settings(lake),
     )
     assert body["provenance"]["asset_class"] == "crypto"
+# ---------------------------------------------------------------------------
+# A cross-market answer says so instead of echoing what it was told
+# ---------------------------------------------------------------------------
+
+
+_CROSS_MARKET_REQUESTS: dict[str, dict[str, str]] = {
+    # The three the exit review drove, each one returning symbols from both markets while
+    # the envelope reported whichever class the caller had been forced to name.
+    "search": {"q": "BTC"},
+    "catalog-symbols": {},
+    "catalog-exchanges": {},
+}
+
+
+def test_a_cross_market_capability_is_one_implementation_and_says_so() -> None:
+    """The declaration is checkable, so it is checked rather than believed.
+
+    An answer that does not depend on the market cannot have two implementations, two
+    provenance ceilings or two bases — so a capability claiming ``cross_market`` and holding
+    any of those is claiming something its own declaration contradicts.
+    """
+    from crocodile.core.capability import REGISTRY
+
+    dispatch.wire_names()
+    declared = [cap for cap in REGISTRY.values() if cap.cross_market]
+    assert len(declared) > 5, "nothing claims to be cross-market; this gate proves nothing"
+    for cap in declared:
+        assert len({impl.fn for impl in cap.impls.values()}) == 1, cap.name
+        assert len({(impl.prov, impl.basis) for impl in cap.impls.values()}) == 1, cap.name
+        assert len(cap.impls) > 1, f"{cap.name} serves one market; it is not cross-market"
+
+
+@pytest.mark.parametrize("wire", sorted(_CROSS_MARKET_REQUESTS))
+def test_naming_either_market_gives_the_identical_answer(
+    lake: pathlib.Path, wire: str
+) -> None:
+    """Measured, not declared: the two classes are driven and the rows compared.
+
+    ``search?q=EQ&asset_class=crypto`` answered 200 with three ``stooq:`` equity symbols and
+    stamped ``provenance.asset_class: "crypto"``. The caller could not omit the class — a
+    hard 400 — any value was accepted, and the answer ignored it. Echoing an input back as a
+    property of the answer is the part a caller can be misled by: filtering results on that
+    field would partition a cross-market answer by an argument.
+    """
+    arguments = _CROSS_MARKET_REQUESTS[wire]
+    answers = [
+        mcp.call_tool(wire, {**arguments, "asset_class": value}, settings=_settings(lake))
+        for value in ("crypto", "equity")
+    ]
+    assert answers[0]["rows"] == answers[1]["rows"], wire
+    for answer in answers:
+        assert answer["provenance"]["asset_class"] == "any", wire
+
+
+def test_a_capability_that_does_serve_one_market_still_reports_which(
+    lake: pathlib.Path,
+) -> None:
+    """The other side of the line, so ``any`` stays a statement rather than a blanket."""
+    body = mcp.call_tool(
+        "slippage",
+        {"symbol": SYMBOL, "side": "buy", "size": 1.0, "asset_class": "crypto"},
+        settings=_settings(lake),
+    )
+    assert body["provenance"]["asset_class"] == "crypto"
+    assert dispatch.resolve("slippage").cross_market is False

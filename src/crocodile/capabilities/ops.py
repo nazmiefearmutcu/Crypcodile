@@ -1377,17 +1377,24 @@ COLLECT_MARKET = declare(
         returns=ReturnKind.STREAM,
         impls={
             AssetClass.CRYPTO: Impl(fn=collect_market, prov=Provenance.NATIVE, basis="native"),
-            # NATIVE with a basis that is not `native`, which reads oddly and is the honest
-            # pair. `prov` is the ceiling of what the capability *writes*, and this writes
-            # what an equity provider streamed, unaltered — the same ceiling `collect`
-            # reaches on both sides. `basis` names what the implementation's *inputs* rest
-            # on, and this one's inputs are not a venue's own market list: they are a symbol
-            # set resolved by merging three registries, plus a volume ranking computed from
-            # stored bars. Declaring `native` there would claim a venue published both, which
-            # is the one thing no equity source does. The split between the two fields is the
-            # split `indicators` already makes in the other direction.
+            # This read `basis="reference_merge"`, and the argument for it was that the
+            # implementation's *inputs* are a symbol set merged from three registries rather
+            # than a venue's own market list — true, and about the wrong inputs. `basis`
+            # names what the returned answer rests on, which is what makes `prov` a bound a
+            # caller can read: `worst_provenance` states the rule ("a derivation can never be
+            # more trustworthy than its worst input") and this pair inverted it, NATIVE over
+            # a basis registered DERIVED — the only inversion among the ninety-one, and one
+            # no gate was asking about until `test_no_implementation_claims_a_provenance
+            # _stronger_than_its_basis`.
+            #
+            # What this capability returns is a subscription that writes what an equity
+            # provider streamed, unaltered, and every record it writes carries the provider's
+            # own tail. None of them says `reference_merge`, because the merged universe
+            # decided *which symbols to subscribe to* — a property of the request, argued at
+            # length in `collect_market_equities` where it belongs — and not the provenance
+            # of any value. So the honest pair is the one the crypto half already declares.
             AssetClass.EQUITY: Impl(
-                fn=collect_market_equities, prov=Provenance.NATIVE, basis="reference_merge"
+                fn=collect_market_equities, prov=Provenance.NATIVE, basis="native"
             ),
         },
     )

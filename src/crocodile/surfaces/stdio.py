@@ -73,6 +73,7 @@ def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> 
     if method == "tools/call":
         params = request.get("params") or {}
         name = params.get("name", "")
+        failed = True
         try:
             result: Any = mcp.call_tool(name, params.get("arguments") or {}, data_dir=data_dir)
             # Inside the try, because serialising the result is part of answering the call.
@@ -83,6 +84,7 @@ def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> 
             # purpose: it is the one every MCP client reads with, so a type it refuses is a
             # type this projection must not put on the wire.
             text = json.dumps(result, indent=2)
+            failed = False
         except KeyError:
             text = json.dumps({"error": f"Tool {name} not found"}, indent=2)
         except _REPORTED as exc:
@@ -92,10 +94,37 @@ def handle_request(request: dict[str, Any], *, data_dir: Path | None = None) -> 
             # rather than what about the ask could not be answered — and a refusal reported
             # that way reads as a transport fault an agent will retry.
             text = json.dumps({"error": f"{name} failed: {exc}"}, indent=2)
+        except Exception as exc:
+            # Everything else: still a *tool* failure and not a protocol one. `_REPORTED` was
+            # doing two jobs and only one of them was its own — it chose the wording, and it
+            # also chose whether the agent heard anything at all. Anything it did not name
+            # escaped to the read loop and came back `-32603 Internal error`, which is the
+            # code for "this server broke", and which every client is entitled to retry.
+            #
+            # `gas-vol` handed a document whose columns are not the ones it needs raises
+            # `polars.ColumnNotFoundError`; that is the caller's own array, and DuckDB's exact
+            # twin — a bad column in caller SQL — is already classified as theirs in
+            # `dispatch.BAD_REQUEST`. Rather than growing a list of every library's spelling
+            # of that, the split moves: `_REPORTED` still says whose fault it is, in the text,
+            # and `isError` says an agent must not treat the answer as data. Neither decides
+            # whether the agent is told.
+            #
+            # The type name is kept because a failure an agent cannot name is a failure it
+            # cannot report to a human, and this is the only channel it has.
+            text = json.dumps(
+                {"error": f"{name} failed: {type(exc).__name__}: {exc}", "fault": "server"},
+                indent=2,
+            )
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {"content": [{"type": "text", "text": text}]},
+            "result": {
+                "content": [{"type": "text", "text": text}],
+                # MCP's own distinction: a tool that failed is a result carrying `isError`,
+                # while a JSON-RPC error means the request could not be dispatched at all.
+                # Without it the two are one string an agent has to parse to tell apart.
+                **({"isError": True} if failed else {}),
+            },
         }
 
     return {
@@ -144,14 +173,41 @@ async def serve_stdio(data_dir: Path | None = None) -> None:
                 break
             if not line:
                 break
+            # Parsed before anything can fail, so the request id is in hand for the error
+            # response. It sat inside the one ``try`` below, so *every* escaping exception
+            # produced a response whose keys were ``['jsonrpc', 'error']`` — no ``id``. A
+            # JSON-RPC client matches responses to requests by id and has nothing else to
+            # match on: the caller's future never resolves, and on a long-lived stdio session
+            # it never will. That is worse than the error it was reporting.
+            #
+            # A request that is not JSON has no id to carry, and ``None`` is what the spec
+            # says to send then. That case is the *only* one where omitting it is right, and
+            # separating the parse is what makes it the only one.
+            request_id: Any = None
             try:
                 request = json.loads(line.strip())
                 if not isinstance(request, dict) or "method" not in request:
                     continue
+                request_id = request.get("id")
+            except Exception as exc:
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {"code": -32700, "message": f"Parse error: {exc}"},
+                        }
+                    )
+                    + "\n"
+                )
+                sys.stdout.flush()
+                continue
+            try:
                 response = handle_request(request, data_dir=data_dir)
             except Exception as exc:
                 response = {
                     "jsonrpc": "2.0",
+                    "id": request_id,
                     "error": {
                         "code": -32603,
                         "message": f"Internal error: {exc}",

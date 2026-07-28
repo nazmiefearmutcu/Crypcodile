@@ -599,6 +599,10 @@ QUERY = declare(
         # NATIVE is the ceiling: `SELECT *` hands back stored rows unaltered. That a caller
         # can write an aggregate is the caller's computation, not this implementation's.
         impls=_both(query, Provenance.NATIVE),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -610,6 +614,10 @@ CATALOG = declare(
         params=NoParams,
         returns=ReturnKind.TABLE,
         impls=_both(catalog, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -624,6 +632,10 @@ CATALOG_SUMMARY = declare(
         # two directory listings, not an aggregate over records. Nothing in the answer was
         # computed from a stored row.
         impls=_both(catalog_summary, Provenance.NATIVE),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -635,6 +647,10 @@ CATALOG_STATS = declare(
         params=NoParams,
         returns=ReturnKind.SCALAR,
         impls=_both(catalog_stats, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -647,6 +663,10 @@ CATALOG_CHANNELS = declare(
         returns=ReturnKind.TABLE,
         aliases=("list_data_channels",),
         impls=_both(catalog_channels, Provenance.NATIVE),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -659,6 +679,10 @@ CATALOG_DATES = declare(
         returns=ReturnKind.TABLE,
         aliases=("list_dates",),
         impls=_both(catalog_dates, Provenance.NATIVE),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -671,6 +695,10 @@ CATALOG_SYMBOLS = declare(
         returns=ReturnKind.TABLE,
         aliases=("list_symbols",),
         impls=_both(catalog_symbols, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -683,6 +711,10 @@ CATALOG_INVENTORY = declare(
         returns=ReturnKind.TABLE,
         aliases=("inventory_snapshot",),
         impls=_both(catalog_inventory, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -695,6 +727,10 @@ CATALOG_EXCHANGES = declare(
         returns=ReturnKind.TABLE,
         aliases=("list_exchanges_on_disk",),
         impls=_both(catalog_exchanges, Provenance.NATIVE),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -706,6 +742,10 @@ CATALOG_SCAN = declare(
         params=ScanParams,
         returns=ReturnKind.TABLE,
         impls=_both(catalog_scan, Provenance.NATIVE),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -718,6 +758,10 @@ SEARCH = declare(
         returns=ReturnKind.TABLE,
         aliases=("search_symbols",),
         impls=_both(search, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -729,6 +773,10 @@ RESOLVE_SYMBOLS = declare(
         params=ResolveSymbolsParams,
         returns=ReturnKind.TABLE,
         impls=_both(resolve_symbols, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )
 
@@ -740,5 +788,9 @@ DATA_COVERAGE = declare(
         params=DataCoverageParams,
         returns=ReturnKind.TABLE,
         impls=_both(data_coverage, Provenance.DERIVED),
+        # Nothing in this module reads ``ctx.asset_class``: these read the lake as a
+        # lake. The envelope says ``any`` rather than echoing the value the caller
+        # had to supply and which selected nothing.
+        cross_market=True,
     )
 )

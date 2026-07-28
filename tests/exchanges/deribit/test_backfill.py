@@ -349,3 +349,31 @@ async def test_backfill_trades_yields_trade_exactly_at_start_ns() -> None:
     assert "P2-BOUNDARY" in trade_ids, (
         "Trade exactly at start_ns on page 2 was not yielded — off-by-one bug not fixed"
     )
+
+
+# ---------------------------------------------------------------------------
+# The live wiring, which no test could reach
+# ---------------------------------------------------------------------------
+
+
+def test_every_live_fetcher_accepts_the_rest_base_the_factory_binds() -> None:
+    """``backfill --channel trade`` raised ``TypeError`` before any I/O happened.
+
+    ``make_live_backfill`` binds ``rest_base`` into all of its fetchers with
+    ``functools.partial``, and ``_live_fetch_trades`` used the name in its body without
+    declaring it — so the partial rejected the keyword at call time and the channel was
+    unreachable in production. Both siblings declared it; only this one did not, and
+    ``# pragma: no cover`` on all three is why nothing noticed.
+
+    Checked by *binding* the signature rather than by calling it, because calling is a network
+    request. ``Signature.bind`` raises the identical ``TypeError`` the call raised, and it is
+    the only part of the call this test is about.
+    """
+    import inspect
+
+    from crocodile.crypto.exchanges.deribit.backfill import make_live_backfill
+
+    backfill = make_live_backfill(rest_base="https://example.invalid/api/v2")
+    inspect.signature(backfill._fetch_trades).bind("BTC-PERPETUAL", 1, 2, 3)
+    assert backfill._fetch_funding is not None
+    inspect.signature(backfill._fetch_funding).bind("BTC-PERPETUAL", 1, 2)

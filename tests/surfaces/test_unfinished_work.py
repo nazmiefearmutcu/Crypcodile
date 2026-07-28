@@ -20,7 +20,7 @@ import pytest
 from typer.testing import CliRunner
 
 from crocodile.core.config import Settings
-from crocodile.surfaces import cli, dispatch, mcp, rest
+from crocodile.surfaces import cli, dispatch, mcp, rest, stdio
 from tests.surfaces.conftest import END_NS, START_NS, SYMBOL
 
 
@@ -109,17 +109,8 @@ def test_a_network_surface_stops_materialising_at_its_own_row_ceiling(
     assert capped["provenance"]["row_limit"] == 5
 
 
-def test_an_unstarted_coroutine_is_awaited_by_the_network_surface_too(
-    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The other unstarted shape, on the surface that could not previously start one.
-
-    ``backfill`` returns its coroutine unstarted precisely because ``asyncio.run`` inside a
-    running event loop raises, and a FastAPI route is inside one — so an ``async def``
-    endpoint could only ever have answered this with ``RuntimeError``. The route does its
-    work in a worker thread, which owns no loop, and that is what makes one ``drive`` serve
-    all three surfaces instead of the CLI keeping its own.
-    """
+def _returning_a_coroutine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace ``catalog-summary`` with an implementation that hands back unstarted work."""
     from crocodile.core.capability import REGISTRY, Capability, Impl
 
     original = dispatch.resolve("catalog-summary")
@@ -142,6 +133,20 @@ def test_an_unstarted_coroutine_is_awaited_by_the_network_surface_too(
             },
         ),
     )
+
+
+def test_an_unstarted_coroutine_is_awaited_by_the_network_surface_too(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other unstarted shape, on the surface that could not previously start one.
+
+    ``backfill`` returns its coroutine unstarted precisely because ``asyncio.run`` inside a
+    running event loop raises, and a FastAPI route is inside one — so an ``async def``
+    endpoint could only ever have answered this with ``RuntimeError``. The route does its
+    work in a worker thread, which owns no loop, and that is what makes one ``drive`` serve
+    all three surfaces instead of the CLI keeping its own.
+    """
+    _returning_a_coroutine(monkeypatch)
     response = _client(lake).get("/api/v1/catalog-summary", params={"asset_class": "crypto"})
     assert response.status_code == 200, response.text
     assert response.json()["result"] == {"awaited": "yes"}
@@ -149,6 +154,49 @@ def test_an_unstarted_coroutine_is_awaited_by_the_network_surface_too(
     from_mcp = mcp.call_tool("catalog-summary", {"asset_class": "crypto"},
                              settings=_settings(lake))
     assert from_mcp["result"] == {"awaited": "yes"}
+
+
+async def test_mcp_drives_unstarted_work_from_inside_the_loop_it_actually_runs_in(
+    lake: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same claim from the one posture where it can fail, which is MCP's real one.
+
+    ``async def``, and that is the entire point of this test existing beside the one above.
+    ``drive`` called a bare ``asyncio.run``, which raises ``RuntimeError`` inside a running
+    event loop; REST is protected because its endpoint hands the work to
+    ``run_in_threadpool``, and MCP is not — ``operate.mcp`` opens a loop with ``asyncio.run``
+    and ``stdio.serve_stdio`` calls ``handle_request`` inline on it. Nothing stands between
+    them.
+
+    The gate that was meant to catch this asserted MCP from a **synchronous** body, which is
+    the one posture where no loop is running and the bug therefore cannot appear — and every
+    MCP-touching test body in the tree was ``def``, despite ``asyncio_mode = "auto"`` making
+    an ``async def`` one free. A capability returning a coroutine is latent rather than
+    impossible: the four that do today are all writes, so ``_refuse_readonly`` fires first,
+    and nothing in the registry forbids a read-only one.
+
+    Both entry points are driven: ``call_tool`` directly, and the JSON-RPC handler the
+    transport actually calls, because it is the second that runs on the loop in production.
+    """
+    import asyncio
+
+    assert asyncio.get_running_loop() is not None, "this test is worthless without a loop"
+    _returning_a_coroutine(monkeypatch)
+
+    body = mcp.call_tool("catalog-summary", {"asset_class": "crypto"}, settings=_settings(lake))
+    assert body["result"] == {"awaited": "yes"}
+
+    response = stdio.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "catalog-summary", "arguments": {"asset_class": "crypto"}},
+        },
+        data_dir=lake,
+    )
+    assert "error" not in response, response
+    assert '"awaited": "yes"' in response["result"]["content"][0]["text"]
 
 
 def test_a_result_no_surface_can_encode_is_refused_rather_than_handed_back() -> None:

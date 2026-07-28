@@ -47,6 +47,7 @@ from crocodile.core.capability import (
     AssetClass,
     Capability,
     CapabilityContext,
+    Fallback,
     Impl,
     ReturnKind,
     declare,
@@ -108,7 +109,7 @@ from crocodile.equity.analytics.volsurface import (
 from crocodile.equity.analytics.volsurface import (
     vol_skew as _equity_vol_skew,
 )
-from crocodile.equity.depth import select_depth_source
+from crocodile.equity.depth import alpaca_is_keyed, select_depth_source
 
 __all__ = [
     "BASIS",
@@ -660,7 +661,7 @@ def slippage_equities(ctx: CapabilityContext, params: SlippageParams) -> pl.Data
     :func:`~crocodile.core.capability.run_to_completion` — the caller may or may not own an
     event loop, and the same declaration has to answer on all three surfaces.
     """
-    source = select_depth_source()
+    source = select_depth_source(settings=ctx.settings)
     profile = run_to_completion(lambda: source.snapshot(params.symbol))
     return slippage_over_levels(
         params.symbol,
@@ -982,7 +983,9 @@ def liquidity_depth_equities(
     coroutine is driven by :func:`~crocodile.core.capability.run_to_completion` — the caller
     may or may not own an event loop and one declaration has to answer on all three surfaces.
     """
-    source = select_depth_source(bins=_LADDER_BINS, top_n=_LADDER_BINS)
+    source = select_depth_source(
+        bins=_LADDER_BINS, top_n=_LADDER_BINS, settings=ctx.settings
+    )
     profile = run_to_completion(lambda: source.snapshot(params.symbol))
     return liquidity_depth_from_profile(profile)
 
@@ -1234,6 +1237,12 @@ SLIPPAGE = declare(
             # The basis was additionally false rather than merely pessimistic. `fn=slippage`
             # was the same object for both classes and read `book_snapshot`, which no equity
             # provider writes, so `yahoo_1m_vap` named a path that could not execute.
+            #
+            # The floor the deleted argument was reaching for now has somewhere to live that
+            # does not fight the ceiling: `fallback` says what a *keyless* deployment gets,
+            # so the surfaces announce SYNTHETIC/`yahoo_1m_vap` when that is what will run
+            # and DERIVED/`alpaca_l1` when the keys are set. Before it existed the default
+            # deployment named a method that never ran and, on the CLI, said nothing at all.
             AssetClass.EQUITY: Impl(
                 fn=slippage_equities,
                 prov=Provenance.DERIVED,
@@ -1244,6 +1253,11 @@ SLIPPAGE = declare(
                 # that makes the crypto half's `book_snapshot` visible as the one the
                 # equity half cannot make.
                 reads=(),
+                fallback=Fallback(
+                    prov=Provenance.SYNTHETIC,
+                    basis="yahoo_1m_vap",
+                    reachable=alpaca_is_keyed,
+                ),
             ),
         },
     )
@@ -1654,6 +1668,16 @@ LIQUIDITY_DEPTH = declare(
                 prov=Provenance.DERIVED,
                 basis="alpaca_l1",
                 reads=(),
+                # The third of the three implementations over this one switch, declaring the
+                # same pair of branches. "The branch that actually ran is measured on the
+                # returned row's own `prov_*` columns" was true and was not enough: a caller
+                # reads the envelope before the rows, and the envelope named the branch that
+                # did not run.
+                fallback=Fallback(
+                    prov=Provenance.SYNTHETIC,
+                    basis="yahoo_1m_vap",
+                    reachable=alpaca_is_keyed,
+                ),
             ),
         },
     )

@@ -97,8 +97,13 @@ def test_a_sequence_parameter_capability_answers_the_same_on_all_three(
     assert from_cli.exit_code == 0, from_cli.output
     assert len(from_rest.json()["rows"]) == 3
     assert from_rest.json()["rows"] == from_mcp["rows"]
-    # Neither surface was told which market; the symbol settled it for both.
-    assert from_rest.json()["provenance"]["asset_class"] == "crypto"
+    # Neither surface was told which market and both answered, which is the claim; the
+    # symbol settled it for `resolve_asset_class` either way. The envelope reports `any`
+    # because `catalog-scan` reads the lake as a lake — one implementation for both classes,
+    # never consulting `ctx.asset_class` — so stamping the resolved value would report an
+    # input as a property of the answer.
+    assert from_rest.json()["provenance"]["asset_class"] == "any"
+    assert dispatch.resolve("catalog-scan").cross_market is True
     # And the result crosses both wires, which the `date` partition column stopped it doing.
     json.dumps(from_mcp)
 
@@ -152,6 +157,35 @@ def test_a_raw_sql_capability_answers_the_same_on_all_three(lake: pathlib.Path) 
     assert from_get.json()["rows"] == from_mcp["rows"] == [{"symbol": SYMBOL, "n": 40,
                                                             "first_ts": START_NS}]
     assert str(START_NS) in from_cli.stdout
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT count(*) AS n FROM trade -- how many",
+        "SELECT count(*) AS n FROM trade --",
+        "SELECT count(*) AS n FROM trade -- trailing ) AS x LIMIT 1",
+    ],
+    ids=["comment", "bare-marker", "comment-containing-sql"],
+)
+def test_a_trailing_line_comment_is_not_a_syntax_error_on_the_network_surfaces(
+    lake: pathlib.Path, sql: str
+) -> None:
+    """The surface's own LIMIT wrapper must not be swallowed by the caller's comment.
+
+    ``--`` runs to the end of the line, and the wrapper folded the statement onto one line —
+    so the closing parenthesis, the alias and the LIMIT all landed *inside* the comment.
+    Before: the CLI (no cap, no wrapper) answered, and REST and MCP answered
+    ``400 Parser Error: syntax error at end of input``, blaming the caller for SQL the
+    surface broke. A commented statement is what anyone pastes out of an editor.
+    """
+    from_rest = _client(lake).get("/api/v1/query", params={"sql": sql, "asset_class": "crypto"})
+    assert from_rest.status_code == 200, from_rest.text
+    from_mcp = mcp.call_tool("query", {"sql": sql, "asset_class": "crypto"},
+                             settings=_settings(lake))
+    from_cli = _cli(lake, "query", sql, "--asset-class", "crypto")
+    assert from_cli.exit_code == 0, from_cli.output
+    assert from_rest.json()["rows"] == from_mcp["rows"] == [{"n": 40}]
 
 
 def test_the_network_posture_holds_across_the_sweep(lake: pathlib.Path) -> None:

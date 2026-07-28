@@ -33,22 +33,52 @@ __all__ = ["call_tool", "tool_definitions", "tool_names"]
 def _definition(cap: Capability, wire: str) -> dict[str, Any]:
     """One MCP tool declaration.
 
-    ``inputSchema`` is ``msgspec.json.schema(cap.params)`` verbatim — the ``$ref``/``$defs``
-    form, which is valid JSON Schema and is what the params struct *is*. Inlining or
-    rewriting it here would be a second description of the parameters, which is precisely
-    what the three surfaces are being collapsed to avoid.
+    ``inputSchema`` is the params struct's own schema with the top-level ``$ref`` followed,
+    because ``$ref`` at the root of an ``inputSchema`` is a form MCP clients do not read: the
+    properties they offer a model come from ``properties``, and the previous version wrote
+    ``setdefault("properties", {})`` beside the ``$ref`` — inserting an **empty object** next
+    to the reference rather than resolving it. All 57 tools therefore published a tool with no
+    inputs at all. ``$defs`` is carried through unchanged so any nested reference inside the
+    followed schema still resolves; the reference is followed once, in
+    :func:`dispatch.params_schema`, which is the same function the REST projection uses for
+    its query parameters, so this is not a second description of the parameters.
 
     ``asset_class`` is added on top, because it is the one input a caller may supply that
     is not a capability parameter: it selects the implementation rather than describing the
-    request.
+    request. It was in neither the schema, the description nor the error text, and for the 32
+    wire names with two implementations and no symbol field it is the *only* thing that makes
+    the call answerable — so an agent reading the published contract could not call them, and
+    found out with a 400. It is listed as required for exactly those.
     """
-    schema: dict[str, Any] = dict(msgspec.json.schema(cap.params))
-    schema.setdefault("properties", {})
+    schema: dict[str, Any] = dispatch.params_schema(cap)
+    defs = msgspec.json.schema(cap.params).get("$defs")
+    if defs:
+        schema["$defs"] = defs
+    schema["type"] = "object"
+    properties = dict(schema.get("properties", {}))
+    accepted = dispatch.asset_class_option_values(cap)
+    mandatory = dispatch.requires_explicit_asset_class(cap)
+    properties["asset_class"] = {
+        "type": "string",
+        "enum": accepted,
+        "description": (
+            "Which market answers. "
+            + (
+                "Required: this tool has an implementation for each of these and no symbol "
+                "parameter to infer one from."
+                if mandatory
+                else "Inferred from the symbol's source when omitted."
+            )
+        ),
+    }
+    schema["properties"] = properties
+    if mandatory:
+        schema["required"] = [*schema.get("required", []), "asset_class"]
     return {
         "name": wire,
         "description": cap.summary if wire == cap.name else f"{cap.summary} (alias of {cap.name})",
         "inputSchema": schema,
-        "assetClasses": sorted(a.value for a in cap.impls),
+        "assetClasses": accepted,
     }
 
 
@@ -105,7 +135,7 @@ def call_tool(
             row_limit=dispatch.NETWORK_ROW_LIMIT,
         )
         result = dispatch.drive(dispatch.invoke(cap, ctx, params), row_limit=ctx.row_limit)
-        body = dispatch.payload(cap, result)
+        body = dispatch.payload(cap, result, row_limit=ctx.row_limit)
         body["provenance"] = dispatch.provenance_block(cap, ctx)
         warning = dispatch.warning_for(cap, ctx)
         if warning:

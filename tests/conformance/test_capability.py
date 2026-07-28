@@ -401,3 +401,97 @@ def test_a_justification_that_names_a_mechanism_is_accepted(
     """
     monkeypatch.setitem(capability.IRREDUCIBLE, "fixture-argued", why)
     test_every_irreducible_justification_names_a_market_property()
+# ---------------------------------------------------------------------------
+# An implementation cannot hand back more than its inputs
+# ---------------------------------------------------------------------------
+
+
+def _declared_impls() -> list[tuple[str, str, Impl]]:
+    """Every implementation in the registry, with the capability and asset class it serves."""
+    from crocodile.capabilities import load_all
+
+    load_all()
+    return [
+        (name, asset_class.value, impl)
+        for name, cap in sorted(REGISTRY.items())
+        for asset_class, impl in sorted(cap.impls.items(), key=lambda pair: pair[0].value)
+    ]
+
+
+def test_no_implementation_claims_a_provenance_stronger_than_its_basis() -> None:
+    """``worst_provenance``'s rule, applied to the declaration instead of to a row.
+
+    "A derivation can never be more trustworthy than its worst input" is already written
+    down, enforced over record frames, and was enforced nowhere over :class:`Impl` — so one
+    declaration in ninety-one inverted it and nothing said so: ``collect-market``/equity
+    claimed ``NATIVE`` over a basis registered ``DERIVED``.
+
+    This gate is worth more than that one fix. ``basis`` names what the answer rests on and
+    ``prov`` names what is handed back, and the whole value of the pair is that a caller can
+    read the second knowing it is bounded by the first. One exception makes the bound
+    advisory, and an advisory bound is the shape every finding in this phase had.
+
+    Note the direction: ``trust_rank`` is *higher is less trustworthy*, so a conforming
+    implementation has a rank at least as large as its basis's. ``indicators`` — ``DERIVED``
+    over ``native`` — is the ordinary case and the one this must keep allowing.
+    """
+    from crocodile.core.schema.provenance import trust_rank
+
+    impls = _declared_impls()
+    assert len(impls) > 50, "the registry is too small for this gate to mean anything"
+    inversions = [
+        (name, asset_class, impl.prov.value, impl.basis, level_for(impl.basis).value)
+        for name, asset_class, impl in impls
+        if trust_rank(impl.prov) < trust_rank(level_for(impl.basis))
+    ]
+    assert not inversions, (
+        "these hand back something more trustworthy than what they rest on: " f"{inversions}"
+    )
+
+
+def test_the_gate_above_rejects_an_inversion(_isolate_registry: None) -> None:
+    """Driven rather than assumed, because a gate that has never failed proves nothing."""
+    from crocodile.core.schema.provenance import trust_rank
+
+    inverted = Impl(fn=lambda ctx, params: None, prov=Provenance.NATIVE, basis="yahoo_1m_vap")
+    assert level_for(inverted.basis) is Provenance.SYNTHETIC
+    assert trust_rank(inverted.prov) < trust_rank(level_for(inverted.basis))
+
+
+# ---------------------------------------------------------------------------
+# The floor beside the ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_every_declared_fallback_is_weaker_than_the_ceiling_it_falls_from() -> None:
+    """A fallback that claimed *more* than the ceiling would be a second ceiling.
+
+    :class:`~crocodile.core.capability.Fallback` exists because ``prov`` is a maximum and a
+    deployment that cannot reach it was announcing it anyway. That only holds while the
+    fallback is genuinely below: ``DERIVED``/``alpaca_l1`` degrading to
+    ``SYNTHETIC``/``yahoo_1m_vap`` is the shape, and the reverse would let a keyless
+    deployment out-claim a keyed one.
+    """
+    from crocodile.core.schema.provenance import registered_bases, trust_rank
+
+    declared = [
+        (name, asset_class, impl)
+        for name, asset_class, impl in _declared_impls()
+        if impl.fallback is not None
+    ]
+    assert declared, "no fallback is declared; this gate would prove nothing"
+    for name, asset_class, impl in declared:
+        fallback = impl.fallback
+        assert fallback is not None  # narrowed for the type checker
+        where = f"{name}/{asset_class}"
+        assert fallback.basis in registered_bases(), (
+            f"{where} falls back to an unregistered basis {fallback.basis!r}; a basis with no "
+            f"confidence formula is a number chosen by feel"
+        )
+        assert trust_rank(fallback.prov) >= trust_rank(impl.prov), (
+            f"{where} falls back to something more trustworthy than its own ceiling"
+        )
+        assert trust_rank(fallback.prov) >= trust_rank(level_for(fallback.basis)), (
+            f"{where}'s fallback hands back more than it rests on"
+        )
+        assert callable(fallback.reachable), where
