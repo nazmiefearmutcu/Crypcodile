@@ -633,7 +633,23 @@ def test_every_declaration_states_a_summary_and_a_registered_basis(name: str) ->
         assert impl.basis in known
 
 
-@pytest.mark.parametrize("name", [n for n in _DECLARED if n not in {"indicators", "slippage"}])
+_SYMMETRIC = (
+    "indicators",
+    "slippage",
+    # M5's five. `basis`, `perp-basis`, `spot-future-basis` and `funding-apr` read equity
+    # legs through `crocodile.equity.analytics.carry`; `funding-predict` binds the one
+    # offline forecaster to both classes, on the `indicators` argument rather than the
+    # `fn=slippage` one — it reads no lake at all, so there is no channel for the two
+    # halves to differ over.
+    "basis",
+    "funding-apr",
+    "funding-predict",
+    "perp-basis",
+    "spot-future-basis",
+)
+
+
+@pytest.mark.parametrize("name", [n for n in _DECLARED if n not in _SYMMETRIC])
 def test_every_crypto_only_capability_is_scheduled_against_a_spec_method(name: str) -> None:
     """The other half of declaring an asymmetric capability, asserted per name.
 
@@ -646,6 +662,23 @@ def test_every_crypto_only_capability_is_scheduled_against_a_spec_method(name: s
     load_all()
     assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
     assert PENDING_SYMMETRY[name] in SPEC_METHODS
+
+
+@pytest.mark.parametrize("name", _SYMMETRIC)
+def test_every_symmetric_capability_left_the_ledger(name: str) -> None:
+    """The mirror of the test above, and the half that catches a *reverted* equity half.
+
+    The exclusion list above is what a name leaves by, so a name that leaves it and then
+    loses its equity implementation would be asserted about by neither test — which is
+    exactly the invisibility ``test_the_irreducible_list_is_not_hoarding_capabilities_
+    that_became_symmetric`` was written for one file over. Both directions are pinned
+    here: the implementations exist, and no schedule survives them.
+    """
+    from crocodile.core.capability import PENDING_SYMMETRY
+
+    load_all()
+    assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+    assert name not in PENDING_SYMMETRY
 
 
 def test_the_pure_capabilities_never_touch_the_catalog() -> None:
@@ -872,3 +905,193 @@ def test_the_two_asset_classes_of_slippage_are_not_the_same_function() -> None:
     load_all()
     impls = REGISTRY["slippage"].impls
     assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn
+
+
+# ---------------------------------------------------------------------------
+# M5: the four spread capabilities that gained an equity half, plus the forecaster
+# ---------------------------------------------------------------------------
+#
+# The equity carry arithmetic is tested against a real lake in
+# `tests/equity/test_equity_carry.py`. What is asserted here is the thing only this file
+# can assert: that the declarations are wired to those functions and reachable the way a
+# surface reaches them — through `REGISTRY`, by asset class, with the shared params
+# struct. A capability wired to the wrong function, or to the right one under the wrong
+# asset class, fails here rather than on whichever surface Phase 2 projects first.
+
+_M5_SPOT = "SPX"
+_M5_FUTURE = "ESH24"
+_M5_STOCK = "AAPL"
+_M5_EXPIRY = _T4 + 91 * _DAY_NS
+_M5_CURVE_CSV = "Date,1 Mo,3 Mo,6 Mo,1 Yr\n01/01/2024,5.53,5.46,5.24,4.84\n"
+
+
+def _m5_lake(tmp_path: Path) -> CapabilityContext:
+    """An equity lake with all four legs: two price series, a chain, a dividend, a curve."""
+    from crocodile.core.schema.enums import CorpActionType
+    from crocodile.core.schema.records import OHLCV, CorporateAction, OptionsChain
+    from crocodile.equity.providers.treasury import parse_par_yield_csv
+
+    def _px(symbol: str, ts: int, close: float) -> OHLCV:
+        return OHLCV(
+            source="stooq", symbol=symbol, symbol_raw=symbol, local_ts=ts,
+            asset_class=AssetClass.EQUITY, source_ts=ts, interval="1d",
+            open=close, high=close, low=close, close=close, volume=1.0,
+        )
+
+    def _opt(strike: float, opt: OptType, bid: float, ask: float) -> OptionsChain:
+        return OptionsChain(
+            source="yahoo", symbol=f"{_M5_STOCK}{strike:g}{opt.value}",
+            symbol_raw=f"{_M5_STOCK}{strike:g}{opt.value}", local_ts=_T3,
+            asset_class=AssetClass.EQUITY, source_ts=_T3, underlying=_M5_STOCK,
+            underlying_price=None, strike=strike, expiry=_M5_EXPIRY, opt_type=opt,
+            bid_px=bid, ask_px=ask,
+        )
+
+    records = [
+        _px(_M5_SPOT, _T1, 100.0),
+        _px(_M5_FUTURE, _T2, 101.0),
+        _px(_M5_STOCK, _T2, 100.0),
+        _opt(100.0, OptType.CALL, 5.4, 5.6),
+        _opt(100.0, OptType.PUT, 2.4, 2.6),
+        CorporateAction(
+            source="tiingo", symbol=_M5_STOCK, symbol_raw=_M5_STOCK, local_ts=_T4,
+            asset_class=AssetClass.EQUITY, source_ts=_T4, ex_date="2024-01-01",
+            type=CorpActionType.DIVIDEND_CASH, value=1.0,
+        ),
+        *parse_par_yield_csv(_M5_CURVE_CSV, local_ts=_T1),
+    ]
+
+    async def _write() -> None:
+        sink = ParquetSink(tmp_path)
+        for record in records:
+            await sink.put(record)
+        await sink.flush()
+        await sink.close()
+
+    asyncio.run(_write())
+    return _equity_ctx(tmp_path)
+
+
+def _call_equity(name: str, ctx: CapabilityContext, params: Any) -> Any:
+    return REGISTRY[name].impls[AssetClass.EQUITY].fn(ctx, params)
+
+
+def test_basis_for_equities_spreads_the_derivative_leg_over_the_cash_leg(
+    tmp_path: Path,
+) -> None:
+    """``perp_symbol`` names the derivative leg for equities; one capability, one schema."""
+    ctx = _m5_lake(tmp_path)
+    rows = _call_equity("basis", ctx, BasisParams(_M5_SPOT, _M5_FUTURE, _T1, _T4))
+    row = rows.row(0, named=True)
+    assert row["spot_price"] == pytest.approx(100.0)
+    assert row["perp_price"] == pytest.approx(101.0)
+    assert row["basis_pct"] == pytest.approx(0.01)
+
+
+def test_spot_future_basis_for_equities_reports_the_carry_the_crypto_half_cannot(
+    tmp_path: Path,
+) -> None:
+    """The column M5 exists for: the annualised basis net of what the money costs.
+
+    A perpetual quotes its financing directly as funding, so the crypto half never needed
+    the term and does not carry the column; an equity future quotes only a price.
+    """
+    ctx = _m5_lake(tmp_path)
+    params = SpotFutureBasisParams(_M5_FUTURE, _M5_SPOT, _T1, _T4, expiry_ns=_M5_EXPIRY)
+    rows = _call_equity("spot-future-basis", ctx, params)
+    row = rows.row(0, named=True)
+    assert row["risk_free_rate"] == pytest.approx(0.0546)
+    assert row["risk_free_date"] == "2024-01-01"
+    assert row["carry_pct"] == pytest.approx(row["annualized_pct"] - row["risk_free_rate"])
+    # The five columns the crypto half returns are all still here, in its order, so a
+    # caller does not have to know which market answered before it can read the answer.
+    assert rows.columns[:6] == [
+        "local_ts",
+        "future_price",
+        "spot_price",
+        "basis",
+        "basis_pct",
+        "annualized_pct",
+    ]
+
+
+def test_perp_basis_for_equities_reads_the_forward_off_put_call_parity(
+    tmp_path: Path,
+) -> None:
+    """One symbol, and the two columns the crypto half returns.
+
+    Nothing under ``equity/providers`` writes a ``DerivativeTicker``, so the one-symbol
+    schema is served by the option market's own statement of the same spread rather than
+    by a record no equity lake holds.
+    """
+    ctx = _m5_lake(tmp_path)
+    rows = _call_equity("perp-basis", ctx, PerpBasisParams(_M5_STOCK, _T1, _T4))
+    row = rows.row(0, named=True)
+    assert row["index_price"] == pytest.approx(100.0)
+    assert row["mark_price"] > row["index_price"]
+    assert row["basis"] == pytest.approx(row["mark_price"] - row["index_price"])
+    assert row["basis_pct"] == pytest.approx(row["basis"] / row["index_price"])
+
+
+def test_funding_apr_for_equities_reports_the_cost_of_carry_per_dividend(
+    tmp_path: Path,
+) -> None:
+    """Crypto's sign convention unchanged: positive means the position holder pays, so a
+    received dividend is negative funding and the two series share one axis."""
+    ctx = _m5_lake(tmp_path)
+    rows = _call_equity("funding-apr", ctx, FundingAprParams(_M5_STOCK, _T1, _T4))
+    row = rows.row(0, named=True)
+    assert row["funding_rate"] == pytest.approx(-0.01)
+    assert row["cumulative_funding"] == pytest.approx(-0.01)
+    assert row["risk_free_apr"] == pytest.approx(0.0553)
+    assert row["carry_apr"] == pytest.approx(row["risk_free_apr"] + row["apr"])
+
+
+def test_funding_predict_is_one_function_for_both_asset_classes(tmp_path: Path) -> None:
+    """The ``indicators`` pattern, not the ``fn=slippage`` one.
+
+    The distinction is whether the shared body can reach data the asset class has:
+    ``slippage`` read ``book_snapshot``, which no equity provider writes, while this reads
+    no lake at all — the history arrives in ``params`` and the model is offline. A second
+    adapter would be two spellings of one call.
+    """
+    load_all()
+    impls = REGISTRY["funding-predict"].impls
+    assert impls[AssetClass.CRYPTO].fn is impls[AssetClass.EQUITY].fn
+    ctx = _equity_ctx(tmp_path)
+    answer = _call_equity(
+        "funding-predict", ctx, FundingPredictParams((0.01, 0.02, 0.03), window_size=2)
+    )
+    assert answer["method"] in {"xgboost", "rolling_mean"}
+    assert isinstance(answer["predicted_funding_rate"], float)
+
+
+def test_every_m5_equity_impl_is_a_named_module_level_function() -> None:
+    """The calling-convention gate covers the shape; this covers the *identity*.
+
+    An equity half bound to the crypto function is the defect ``slippage`` shipped, and it
+    passes every gate that only looks at signatures. The one exception is
+    ``funding-predict``, which is asserted to be shared in the test above with the
+    argument for why.
+    """
+    load_all()
+    for name in ("basis", "perp-basis", "spot-future-basis", "funding-apr"):
+        impls = REGISTRY[name].impls
+        assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn
+        equity_fn = impls[AssetClass.EQUITY].fn
+        assert equity_fn.__name__.endswith("_equities")
+        assert equity_fn.__module__ == "crocodile.capabilities.analytics"
+
+
+def test_the_three_carry_impls_declare_the_basis_that_names_the_treasury_leg() -> None:
+    """``native`` would say a venue reported the carry. None did — the Treasury reported a
+    yield, and the combination is this engine's. ``basis`` keeps ``native`` because it has
+    no horizon and therefore no financing leg to claim."""
+    from crocodile.core.schema.provenance import Provenance
+
+    load_all()
+    for name in ("perp-basis", "spot-future-basis", "funding-apr"):
+        impl = REGISTRY[name].impls[AssetClass.EQUITY]
+        assert impl.basis == "treasury_carry"
+        assert impl.prov is Provenance.DERIVED
+    assert REGISTRY["basis"].impls[AssetClass.EQUITY].basis == "native"

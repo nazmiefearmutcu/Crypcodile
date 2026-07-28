@@ -293,37 +293,43 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 # ---------------------------------------------------------------------------
 
 _LEDGER_AS_SHIPPED: dict[str, str] = {
-    "basis": "M5",
+    # M5's five — `basis`, `perp-basis`, `spot-future-basis`, `funding-apr` and
+    # `funding-predict` — left in Phase 3 and are deleted here in the same commit that
+    # deleted them from `capabilities.analytics`, which is what the test below asks for.
+    # 21 entries became 16.
     "census": "M3",
     "chaos-score": "M6",
     "collect-market": "M3",
     "depth": "M6",
-    "funding-apr": "M5",
-    "funding-predict": "M5",
     "iv-surface": "M1",
     "label-transfers": "M4",
     "liquidity-depth": "M6",
     "markets": "M3",
     "ofi": "M7",
     "open-interest": "M2",
-    "perp-basis": "M5",
     "risk-reversal": "M1",
     "smart-money": "M4",
-    "spot-future-basis": "M5",
     "term-structure": "M1",
     "universe": "M3",
     "vol-skew": "M1",
     "whale-alerts": "M4",
 }
-"""The 21 entries Phase 2 closed with, pinned so the ledger's size is a watched number.
+"""What is left of the 21 entries Phase 2 closed with, pinned so the size stays watched.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was
 watching. Two things made that hard to see. The declaration in ``core/capability.py`` reads
-``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; the 21 live
+``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; the live
 entries are assembled at import time by three batch modules calling ``update()`` on it. And
 :func:`test_phase_3_exit_the_ledger_must_be_empty` skipped whenever the ledger was
 non-empty, so it was green at 21 and would have been green at 48.
+
+The count moving *down* is what Phase 3 is, and it is the direction this list is hardest to
+police: deleting an entry from ``capabilities.analytics`` alone leaves this pin naming a
+capability that is no longer scheduled, and deleting it from here alone leaves a schedule
+nothing records. Both deletions in one commit is the only state
+:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` accepts, which is
+why M5's five left both files together.
 
 Pinned here rather than beside the declaration for the reason the batches write it here:
 ``core/capability.py`` is shared and this is a test's assertion about a fact, not a fact.
