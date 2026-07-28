@@ -394,3 +394,38 @@ def test_phase_3_exit_the_ledger_must_be_empty() -> None:
         f"its capability the implementation it was missing, and leaves _LEDGER_AS_SHIPPED "
         f"in the same one."
     )
+
+
+# ---------------------------------------------------------------------------
+# The three assertions above, driven through states the live ledger cannot reach.
+# ---------------------------------------------------------------------------
+# `PENDING_SYMMETRY` and `_LEDGER_AS_SHIPPED` are both empty, so two of the three
+# comparisons in the census above read `{} - {}` and the third reads `{}.items()`.
+# Only the growth branch can fire from live state, which means the two branches
+# that report Phase 3 *delivering* — a name leaving, a name rescheduled — have never
+# run. That is the vacuous-green shape the mechanism section below the ledger's own
+# rules already answers for the gate-2 branch, applied to the census.
+
+
+def test_a_departed_entry_the_pin_still_holds_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What a half-done deletion looks like: the batch module dropped it, the pin did not."""
+    monkeypatch.setitem(_LEDGER_AS_SHIPPED, "fixture-departed", "M1")
+    with pytest.raises(AssertionError, match="fixture-departed"):
+        test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold()
+
+
+def test_a_rescheduled_entry_is_caught(
+    _isolate: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half-done edit: the name stayed, the method under it changed."""
+    monkeypatch.setitem(_LEDGER_AS_SHIPPED, "fixture-remapped", "M1")
+    PENDING_SYMMETRY["fixture-remapped"] = "M2"
+    with pytest.raises(AssertionError, match="rescheduled against a different method"):
+        test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold()
+
+
+def test_an_unpinned_new_entry_is_caught(_isolate: None) -> None:
+    """The branch that could already fire, pinned so a rewrite cannot lose it."""
+    PENDING_SYMMETRY["fixture-unpinned"] = "M1"
+    with pytest.raises(AssertionError, match="fixture-unpinned"):
+        test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold()

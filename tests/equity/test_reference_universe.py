@@ -184,15 +184,67 @@ def test_tiingo_wins_the_exchange_where_both_it_and_openfigi_name_one() -> None:
     assert listing.instrument.figi == "BBG000B9XRY4"
 
 
-def test_sec_still_wins_the_name_over_openfigis_security_description() -> None:
-    """SEC is last in priority and first for the one field only it reports well."""
+def test_sec_wins_the_name_over_openfigis_security_description() -> None:
+    """The registrant's legal name beats a security description, which is what the field holds.
+
+    This test used to assert the opposite of its own name. It was called
+    ``test_sec_still_wins_the_name_over_openfigis_security_description``, its docstring said
+    SEC was "first for the one field only it reports well", and its body asserted
+    ``name == "APPLE INC"`` — OpenFIGI's — under a comment conceding that OpenFIGI outranked
+    SEC. Green, and certifying the inverse of the claim three docstrings in the source make.
+
+    The code moved rather than the name, because the prose was right and the priority tuple
+    was wrong: ``Instrument.name`` is documented as the registrant-attested company name, and
+    with OpenFIGI ranked above SEC the same ticker carried SEC's legal name out of ``census``
+    and OpenFIGI's uppercase description out of ``universe``, decided by whether anyone had
+    enriched the row. See :data:`~crocodile.equity.reference.universe.REFERENCE_PRIORITY`.
+    """
     evidence = _evidence(
         sec=[_sec("AAPL", 320193, title="Apple Inc.")], tiingo=[_tiingo("AAPL")]
     ).with_figi({"AAPL": [_figi("AAPL", name="APPLE INC")]})
     (listing,) = evidence.merged()
-    # OpenFIGI outranks SEC, so its name is what fills the field once it speaks.
-    assert listing.instrument.name == "APPLE INC"
+    assert listing.instrument.name == "Apple Inc."
     assert listing.instrument.cik == "0000320193"
+
+
+def test_openfigis_description_still_names_a_ticker_the_sec_does_not_register() -> None:
+    """Demoting OpenFIGI kept its name as the fallback rather than discarding it.
+
+    A foreign issuer or an ETF share class has no SEC registrant row, and Tiingo publishes no
+    name at all, so the security description is the only name there is. Asserting it here is
+    what stops the priority change from being read as "OpenFIGI's name is not worth having".
+    """
+    evidence = _evidence(tiingo=[_tiingo("SPY")]).with_figi(
+        {"SPY": [_figi("SPY", name="SPDR S&P 500 ETF TRUST")]}
+    )
+    (listing,) = evidence.merged()
+    assert listing.instrument.name == "SPDR S&P 500 ETF TRUST"
+    assert listing.instrument.cik is None
+
+
+def test_the_priority_order_only_decides_the_three_fields_two_sources_both_publish() -> None:
+    """The order is an argument about ``name``, ``exchange`` and ``security_type`` only.
+
+    Everything else has exactly one publisher, so ``fill_nulls`` hands it over whatever the
+    ranking is — which is why moving SEC above OpenFIGI could change the resolution of
+    ``name`` and of nothing else. Pinned because that claim is the whole justification for
+    the change, and it would otherwise be a sentence in a docstring nobody re-checks.
+    """
+    contested = {
+        field
+        for field in ("name", "exchange", "security_type", "cik", "figi", "listing_date")
+        if sum(
+            1
+            for rows in (
+                reference.instruments_from_sec([_sec("AAPL", 320193, title="A")], as_of_ns=_AS_OF),
+                reference.instruments_from_tiingo([_tiingo("AAPL")], as_of_ns=_AS_OF),
+                reference.instruments_from_figi({"AAPL": [_figi("AAPL")]}, as_of_ns=_AS_OF),
+            )
+            if getattr(rows[0], field) is not None
+        )
+        > 1
+    }
+    assert contested == {"name", "exchange", "security_type"}
 
 
 def test_the_merged_row_carries_the_merges_own_tail_and_not_the_winners() -> None:
@@ -216,8 +268,8 @@ def test_confidence_rises_with_the_third_attestation() -> None:
     assert three.merged()[0].instrument.prov_confidence == pytest.approx(1.0)
     assert three.merged()[0].sources == (
         reference.SOURCE_TIINGO,
-        reference.SOURCE_OPENFIGI,
         reference.SOURCE_SEC,
+        reference.SOURCE_OPENFIGI,
     )
 
 
