@@ -787,15 +787,15 @@ FUNDING_PREDICT = declare(
             # method — XGBoost when the `ml` extra is installed, a rolling mean otherwise —
             # is named in the returned object's `method` field, where it varies per call.
             #
-            # `native` names where the *inputs* came from, and this is the batch's weakest
-            # basis: the rates arrive in `params` rather than out of the lake, so what is
-            # really being claimed is "funding rates as a venue settles them", which is what
-            # the parameter documents and not something this capability can check. A
-            # registered basis for caller-supplied inputs would say it properly; there is
-            # none, and inventing a confidence formula to get one is the thing the registry
-            # exists to forbid. Reported rather than papered over.
+            # `caller_supplied` names where the *inputs* came from, and this used to say
+            # `native` under a paragraph explaining that it was the batch's weakest basis:
+            # the rates arrive in `params` rather than out of the lake, so `native` claimed
+            # "funding rates as a venue settles them" — which is what the parameter
+            # documents and not something this capability can check. The registered basis
+            # that says it properly now exists and names this capability in its own
+            # docstring, so the caveat is spent and the declaration carries the claim.
             AssetClass.CRYPTO: Impl(
-                fn=funding_predict, prov=Provenance.SYNTHETIC, basis="native"
+                fn=funding_predict, prov=Provenance.SYNTHETIC, basis="caller_supplied"
             ),
         },
     )
@@ -916,11 +916,11 @@ SMART_MONEY = declare(
         returns=ReturnKind.TABLE,
         impls={
             # DERIVED: every output field is a sum or a max over the transfers supplied, and
-            # nothing here is modelled. `native` carries the same caveat as `funding-predict`
-            # — the rows arrive in `params`, so the claim is about what a transfer row is
-            # rather than about a channel this capability read.
+            # nothing here is modelled. `caller_supplied` for the reason `funding-predict`
+            # gives — the rows arrive in `params`, so no channel this capability read is
+            # behind them and nothing here can grade how they were sampled.
             AssetClass.CRYPTO: Impl(
-                fn=smart_money, prov=Provenance.DERIVED, basis="native"
+                fn=smart_money, prov=Provenance.DERIVED, basis="caller_supplied"
             ),
         },
     )
@@ -935,7 +935,7 @@ LABEL_TRANSFERS = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=label_transfers, prov=Provenance.DERIVED, basis="native"
+                fn=label_transfers, prov=Provenance.DERIVED, basis="caller_supplied"
             ),
         },
     )
@@ -953,9 +953,12 @@ CHAOS_SCORE = declare(
             # Its four terms are soft-thresholded and averaged, so the number is modelled
             # from a different data class than any of them — which is the definition, and
             # also why a chaos score is not comparable with anything but another chaos
-            # score. `native` carries the caller-supplied caveat `funding-predict` states.
+            # score. `caller_supplied` because all four terms are typed in by the caller:
+            # this is the capability whose shipped answer read `{"prov": "synthetic",
+            # "prov_basis": "native", "method": "A venue-reported value is certain by
+            # definition."}` over four numbers no venue ever saw.
             AssetClass.CRYPTO: Impl(
-                fn=chaos_score, prov=Provenance.SYNTHETIC, basis="native"
+                fn=chaos_score, prov=Provenance.SYNTHETIC, basis="caller_supplied"
             ),
         },
     )

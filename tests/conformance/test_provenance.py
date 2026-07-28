@@ -497,3 +497,81 @@ def test_a_scraped_last_price_is_not_a_venue_reported_print():
     assert level_for("scraped_last_price") is Provenance.SYNTHETIC
     assert confidence_for("scraped_last_price", {}) == 0.0
     assert "no per-print size" in describe("scraped_last_price")
+
+
+_CALLER_SUPPLIED_CAPABILITIES = frozenset(
+    {
+        "chaos-score",
+        "funding-predict",
+        "gas-vol",
+        "label-transfers",
+        "lending-stress",
+        "mev-sandwich",
+        "peg-deviation",
+        "smart-money",
+    }
+)
+"""The eight capabilities whose numbers arrive in ``params`` rather than out of the lake.
+
+Named in ``_caller_supplied``'s own docstring, one file over, as the reason it exists. The
+set is pinned here because a basis is only worth registering if something declares it, and
+this one was registered, argued at length, and then declared by nobody: all eight kept
+``basis="native"`` and ``crocodile.capabilities.ops`` kept the comment asking for the basis
+that by then existed. ``WHERE prov_basis = 'caller_supplied'`` — the query the registration
+says is the whole point — returned nothing.
+"""
+
+
+def test_the_capabilities_that_compute_over_caller_supplied_numbers_declare_it():
+    """A registered basis nothing declares is a decision that was made and not applied.
+
+    What shipped, live, from ``chaos-score``::
+
+        {"prov": "synthetic", "prov_basis": "native",
+         "method": "A venue-reported value is certain by definition. …"}
+
+    ``native`` means *a venue reported this*, and the four readings behind that score were
+    typed in by the caller. The sentence the basis carries contradicts the request that
+    produced it, in one line, on a surface that publishes both.
+    """
+    from crocodile.capabilities import load_all
+    from crocodile.core.capability import REGISTRY
+
+    load_all()
+
+    wrong = sorted(
+        f"{name}/{asset_class.value}={impl.basis}"
+        for name in _CALLER_SUPPLIED_CAPABILITIES
+        for asset_class, impl in REGISTRY[name].impls.items()
+        if impl.basis != "caller_supplied"
+    )
+    assert not wrong, (
+        f"{wrong} compute over numbers the caller handed in and claim a venue reported "
+        f"them. `caller_supplied` is registered for exactly this and says the true, narrower "
+        f"thing: a pure function is exact over what it was given, and the sampling story of "
+        f"the inputs belongs to whoever produced them."
+    )
+
+
+def test_no_capability_reading_the_lake_claims_its_inputs_were_handed_in():
+    """The other direction, so the basis stays a filter rather than a habit.
+
+    ``caller_supplied`` abstains from grading inputs this engine did not observe. Declaring
+    it where the lake *is* the input throws away a real ``native`` reading and makes the
+    query in the registration docstring stop separating anything.
+    """
+    from crocodile.capabilities import load_all
+    from crocodile.core.capability import REGISTRY
+
+    load_all()
+
+    unexpected = sorted(
+        name
+        for name, cap in REGISTRY.items()
+        if any(impl.basis == "caller_supplied" for impl in cap.impls.values())
+        and name not in _CALLER_SUPPLIED_CAPABILITIES
+    )
+    assert not unexpected, (
+        f"{unexpected} declare caller_supplied and are not on the list that argues for it; "
+        f"add them there with the argument, or declare what their inputs really rest on"
+    )

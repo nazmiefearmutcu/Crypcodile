@@ -257,17 +257,25 @@ def _rows_to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
 # Part 1 — the IRREDUCIBLE five, and the sixth that is not a capability
 # ---------------------------------------------------------------------------
 #
-# Every implementation below rests on inputs that are read rather than reconstructed, so
-# each declares ``basis="native"``. For the three that compute over *caller-supplied*
-# numbers — gas-vol, mev-sandwich, lending-stress, and peg-deviation's pure mode — that is
-# the closest registered basis and it is the wrong shade: ``native`` says a *venue*
-# reported the value, and a series pasted in from a CSV has no venue behind it that this
-# process can see. What these want is a `caller_supplied` basis registered at
-# ``Provenance.NATIVE`` with a constant 1.0 and the argument that a pure function is exact
-# over whatever it was handed. Registering one is a change to
-# ``core/schema/provenance.py``, which this batch does not own, so the gap is reported
-# rather than filled — and filled by feel is the one thing the provenance registry exists
-# to refuse.
+# `sequencer-latency` reads the lake, so it declares ``basis="native"``: the venue stamped
+# every timestamp it summarises. The other four compute over numbers that arrive in
+# ``params``, and they declare ``caller_supplied``.
+#
+# That basis is what this comment used to ask for. It said ``native`` was "the closest
+# registered basis and the wrong shade", described the formula that would be right, and
+# noted that registering one was a change to ``core/schema/provenance.py`` which this batch
+# did not own. Somebody registered it — with the argument, the constant 1.0, and this
+# batch's own capabilities named in its docstring — and nothing here changed, so the
+# request outlived its own answer and every one of these went on shipping
+# ``prov_basis="native"`` over a series the caller pasted in.
+#
+# `peg-deviation` is the one that needs a sentence, because it has two modes: a mid the
+# caller typed and a quote series out of the lake. One implementation declares one basis,
+# and the abstaining one is the safe half of the pair — ``caller_supplied`` says this
+# engine cannot grade inputs it did not observe, which understates the lake mode, while
+# ``native`` says a venue reported the number, which is simply false on the pure mode.
+# Understating a reading is a filter that returns a superset; overstating it is a claim
+# that is not true.
 
 
 class GasVolParams(msgspec.Struct, frozen=True):
@@ -522,7 +530,9 @@ GAS_VOL = declare(
         params=GasVolParams,
         returns=ReturnKind.SCALAR,
         impls={
-            AssetClass.CRYPTO: Impl(fn=gas_vol, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=gas_vol, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -535,7 +545,9 @@ MEV_SANDWICH = declare(
         params=MevSandwichParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=mev_sandwich, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=mev_sandwich, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -565,7 +577,9 @@ PEG_DEVIATION = declare(
         params=PegDeviationParams,
         returns=ReturnKind.TABLE,
         impls={
-            AssetClass.CRYPTO: Impl(fn=peg_deviation, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=peg_deviation, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -578,7 +592,9 @@ LENDING_STRESS = declare(
         params=LendingStressParams,
         returns=ReturnKind.SCALAR,
         impls={
-            AssetClass.CRYPTO: Impl(fn=lending_stress, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=lending_stress, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
