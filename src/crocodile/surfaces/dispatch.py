@@ -11,7 +11,6 @@ The one thing the surfaces are *allowed* to disagree about is trust, and
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import itertools
 from collections.abc import Iterator, Sequence
@@ -29,6 +28,7 @@ from crocodile.core.capability import (
     CapabilityContext,
     Impl,
     ReturnKind,
+    run_to_completion,
 )
 from crocodile.core.config import Settings
 from crocodile.core.errors import CapabilityUnavailable
@@ -550,12 +550,24 @@ def drive(result: Any, *, row_limit: int | None) -> Any:
     than :meth:`CapabilityContext.query`, so the ``LIMIT`` wrapper that caps raw SQL never
     sees it and draining the iterator is how one request materialises a lake. ``None`` — the
     CLI's posture, on the machine that owns the lake — drains it all.
+
+    Both awaits go through :func:`~crocodile.core.capability.run_to_completion` rather than a
+    bare ``asyncio.run``, and that is the same one-line bug this module documents twice
+    elsewhere: ``asyncio.run`` inside a running event loop raises ``RuntimeError``, and MCP
+    *is* one — ``operate.mcp`` opens a loop and ``stdio.serve_stdio`` calls ``handle_request``
+    inline on it, with no worker thread between. The REST projection is safe only because its
+    endpoint hands the work to ``run_in_threadpool``; nothing gave MCP the same protection,
+    and nothing forbids a read-only capability returning a coroutine. It was latent rather
+    than harmless: the four implementations that reach here — ``backfill`` twice, ``collect``,
+    ``collect-market`` — are all writes, so ``_refuse_readonly`` fires first on that surface.
+    A bug that only one refusal stands in front of is a bug with a schedule.
     """
     begin = getattr(result, "run", None)
     if callable(begin) and not isinstance(result, type):
-        return asyncio.run(begin())
+        return run_to_completion(begin)
     if inspect.iscoroutine(result):
-        return asyncio.run(result)
+        pending = result
+        return run_to_completion(lambda: pending)
     if isinstance(result, Iterator):
         # ``Iterator`` and not ``Iterable``: a str, a dict, a list and a polars frame are all
         # iterable and none of them is unconsumed work. What is being caught here is the
