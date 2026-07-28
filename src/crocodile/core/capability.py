@@ -299,6 +299,14 @@ the data while saying so, so an absent source is a reason to declare a
 :attr:`Provenance.SYNTHETIC` implementation, not to claim irreducibility. Adding a name
 here silences a build failure, which is exactly why the justification is mandatory and
 exactly why an empty one is itself a build failure.
+
+Being permanent is what makes a *stale* entry here worse than a stale one on
+:data:`PENDING_SYMMETRY`, and until an exit review looked, only the latter had a gate
+saying so. Two rules in ``tests/conformance/test_pending_symmetry.py`` now apply to both
+lists: an entry must name a registered capability, and a capability implemented for both
+asset classes has disproved its own entry and the entry has to go. Without the second, an
+equity half could land and then be deleted again with nothing raising, because the name was
+excused forever.
 """
 
 
@@ -357,8 +365,17 @@ The rules, each enforced by a gate in ``tests/conformance/test_pending_symmetry.
 4. it must be **empty** at Phase 3's exit, which is what makes it a schedule rather than a
    second exemption list.
 
-Empty today. Phase 2 fills it as it ports, and Phase 3 empties it again; the count only
-ever moving in those two directions is the property worth watching.
+**This dict is not empty at runtime, whatever the line above it says.** It ships with 21
+entries, none of them written here: :mod:`crocodile.capabilities.analytics`,
+:mod:`~crocodile.capabilities.market` and :mod:`~crocodile.capabilities.ops` each call
+``update()`` on it at import time, because four batches editing one dict in this shared
+module is four merge conflicts in one file. The declaration site therefore shows ``{}`` to
+anyone reading it, which is how "Empty today" survived here for a whole phase after it
+stopped being true — and it is why the count is pinned in
+``tests/conformance/test_pending_symmetry.py`` (``_LEDGER_AS_SHIPPED``) rather than
+asserted in prose. Phase 2 fills it as it ports and Phase 3 empties it again; the count
+only ever moving in those two directions is the property worth watching, and that test is
+what watches it.
 """
 
 
