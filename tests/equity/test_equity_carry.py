@@ -167,6 +167,26 @@ def _curve_records(local_ts: int = _NOW) -> list[MacroSeries]:
     return parse_par_yield_csv(_CURVE_CSV, local_ts=local_ts)
 
 
+def _published_ns(date_val: str) -> int:
+    """When that day's par curve actually went up: 3:30 pm New York, DST included.
+
+    Computed here from the same market timezone the module uses rather than written out as
+    a UTC constant, because the constant is what the code under test got wrong — a literal
+    would be an hour off for two thirds of the year and would agree with a fixed-offset
+    implementation for the wrong reason.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import time as _time
+
+    from crocodile.core.scheduler.calendar import MARKET_TZ
+
+    published = _datetime.combine(
+        _date.fromisoformat(date_val), _time(15, 30), tzinfo=MARKET_TZ
+    )
+    return int(published.timestamp()) * _SEC_NS
+
+
 def _lake(tmp_path: Path, records: list[Record]) -> Catalog:
     async def _write() -> None:
         sink = ParquetSink(tmp_path)
@@ -274,6 +294,43 @@ def test_a_price_earlier_than_every_published_quote_has_no_rate(tmp_path: Path) 
     catalog = _lake(tmp_path, _curve_records())
     curve = risk_free_curve(catalog, _NOW)
     assert curve.at(_NOW - 30 * _DAY_NS, 91.0) is None
+
+
+def test_a_quote_is_filed_under_the_hour_treasury_publishes_it_not_utc_midnight(
+    tmp_path: Path,
+) -> None:
+    """The record stores a date; midnight is not a claim about when the curve went up.
+
+    ``treasury/client.py`` says so in as many words, and this module read it as one anyway.
+    Treasury posts the par curve at 3:30 pm ET, so a price stamped at 09:30 ET on 2024-01-05
+    is *before* that day's curve existed — and subtracting it is lookahead, which the
+    provenance registry treats as categorical ("there is no confidence at which it is a
+    legal record") rather than as staleness to be scored in ``[0, 1]``.
+    """
+    catalog = _lake(tmp_path, _curve_records())
+    curve = risk_free_curve(catalog, _NOW)
+    assert curve.at(_published_ns("2024-01-05"), 91.0) is not None
+    morning = _published_ns("2024-01-05") - 6 * 3600 * _SEC_NS  # 09:30 ET, same session
+    quote = curve.at(morning, 91.0)
+    assert quote is not None
+    assert quote.date == "2024-01-04", "a morning price cannot see the afternoon's curve"
+
+
+def test_the_publication_hour_follows_the_market_timezone_across_the_dst_boundary(
+    tmp_path: Path,
+) -> None:
+    """3:30 pm ET is 20:30 UTC in winter and 19:30 UTC in summer.
+
+    A fixed offset would be an hour wrong for one half of the year in one direction or the
+    other, and the direction that is wrong admits the lookahead this is here to close.
+    """
+    winter = _lake(tmp_path / "w", parse_par_yield_csv("Date,3 Mo\n01/05/2024,5.46\n"))
+    summer = _lake(tmp_path / "s", parse_par_yield_csv("Date,3 Mo\n07/05/2024,5.46\n"))
+    winter_stamp = risk_free_curve(winter, _NOW + 400 * _DAY_NS).at(_NOW + 400 * _DAY_NS, 91.0)
+    summer_stamp = risk_free_curve(summer, _NOW + 400 * _DAY_NS).at(_NOW + 400 * _DAY_NS, 91.0)
+    assert winter_stamp is not None and summer_stamp is not None
+    assert (winter_stamp.quote_ts // _SEC_NS) % 86_400 == 20 * 3600 + 30 * 60
+    assert (summer_stamp.quote_ts // _SEC_NS) % 86_400 == 19 * 3600 + 30 * 60
 
 
 def test_the_lookup_is_by_publication_date_not_by_ingest_instant(tmp_path: Path) -> None:

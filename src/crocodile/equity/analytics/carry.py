@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import logging
 from bisect import bisect_right
+from datetime import date, datetime, time
 from typing import Final, NamedTuple
 
 import polars as pl
@@ -99,6 +100,7 @@ from crocodile.core.analytics.carry import (
     hours_between,
     spread,
 )
+from crocodile.core.scheduler.calendar import MARKET_TZ
 from crocodile.core.schema.enums import CorpActionType
 from crocodile.core.schema.provenance import confidence_for
 from crocodile.core.store.catalog import Catalog
@@ -167,7 +169,23 @@ class RiskFreeQuote(NamedTuple):
     """Nominal length of the curve point chosen, in days."""
 
     quote_ts: int
-    """Publication instant — the curve's own date at UTC midnight."""
+    """Publication instant — the curve's own date at 3:30 pm New York.
+
+    Not that date's UTC midnight, which is what the record stores and what this used to
+    carry. The provider's stamp is deliberate and correct as a *record*: the file states a
+    date and no time, and ``_parse_date`` says in as many words that midnight "is not a
+    claim that the curve was published at midnight". Reading it as one is this module's
+    error, and it inverts a category the registry treats as absolute. Treasury publishes the
+    par curve at 3:30 pm ET; a price stamped 09:30 ET on the same date is *before* that, so
+    subtracting that day's yield from it is lookahead, and ``_carry_confidence`` was scoring
+    the fourteen-and-a-half-hour gap as mild staleness — a number in ``[0, 1]`` for a record
+    ``_book_slice`` refuses outright, on the grounds that "there is no confidence at which
+    it is a legal record".
+
+    Correcting the instant is the whole fix: :meth:`RiskFreeCurve.at` already takes the most
+    recent quote published at or before the price, so a morning price now carries the
+    previous session's curve, which is the one that existed.
+    """
 
     date: str
     """That date, as the file spelled it after normalisation: ``YYYY-MM-DD``."""
@@ -246,6 +264,37 @@ _CURVE_SQL: Final = """
 """
 
 
+_PUBLICATION_TIME: Final = time(15, 30)
+"""When Treasury posts the daily par yield curve, in New York time.
+
+The figure ``treasury_carry``'s registration already states. It is not stored on the record
+— the file carries a date and nothing else — so it is applied here, by the only consumer
+that asks *when a yield became available* rather than *which day it is for*.
+"""
+
+
+def _published_ns(date_val: str, fallback_ns: int) -> int:
+    """The instant ``date_val``'s curve went up, or ``fallback_ns`` if the date is unusable.
+
+    ``MARKET_TZ`` rather than a fixed offset, because the offset is the thing that moves:
+    3:30 pm ET is 19:30 UTC for eight months of the year and 20:30 UTC for four, and a
+    constant would be wrong in one direction or the other for whichever half it did not
+    pick. The zone is imported from :mod:`crocodile.core.scheduler.calendar` rather than
+    declared again — one statement of what "the market's timezone" means.
+
+    The fallback is the record's own coalesced stamp, which is what this used to be
+    unconditionally. It is reached only when ``date_val`` is not an ISO date, and a curve
+    point that cannot say which day it is for is better placed at its ingest instant than
+    dropped, for the reason :func:`risk_free_curve` gives about ``coalesce``.
+    """
+    try:
+        day = date.fromisoformat(date_val)
+    except ValueError:
+        return fallback_ns
+    published = datetime.combine(day, _PUBLICATION_TIME, tzinfo=MARKET_TZ)
+    return int(published.timestamp()) * 1_000_000_000
+
+
 def risk_free_curve(catalog: Catalog, up_to_ns: int) -> RiskFreeCurve:
     """Load every Treasury curve point published at or before ``up_to_ns``.
 
@@ -258,6 +307,11 @@ def risk_free_curve(catalog: Catalog, up_to_ns: int) -> RiskFreeCurve:
     construction and a curve point whose publication date went missing is better placed at
     its ingest instant than dropped: the staleness it is then scored on is an overstatement
     of how fresh it is, which is the safe direction.
+
+    The coalesced stamp bounds the *query* — a row whose record is not in the lake yet
+    cannot be read — while the instant each quote is filed under is
+    :func:`_published_ns`, because "when the file was written" and "when the curve went up"
+    are two different facts and only the second says whether a price could have seen it.
     """
     catalog.refresh_views()
     try:
@@ -273,8 +327,13 @@ def risk_free_curve(catalog: Catalog, up_to_ns: int) -> RiskFreeCurve:
         symbol = str(row["symbol"])
         if tenor_days(symbol) is None:
             continue
+        date_val = str(row["date_val"])
         points.setdefault(symbol, []).append(
-            (int(row["quote_ts"]), str(row["date_val"]), float(row["value"]))
+            (
+                _published_ns(date_val, int(row["quote_ts"])),
+                date_val,
+                float(row["value"]),
+            )
         )
     for series in points.values():
         series.sort()
