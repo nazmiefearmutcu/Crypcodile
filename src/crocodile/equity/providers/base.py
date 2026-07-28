@@ -83,6 +83,22 @@ class Provider(ABC):
     channel is told why rather than left with an empty lake.
     """
 
+    wants_settings: ClassVar[bool] = False
+    """Whether :func:`~crocodile.equity.providers.factory.make_provider` should hand this
+    connector the resolved :class:`~crocodile.core.config.Settings`.
+
+    Opt-in rather than a parameter on every constructor, because most connectors need
+    nothing from configuration and a parameter they accept and ignore is dead weight that
+    reads as a promise. The two that do need it — ``sec_edgar``, whose User-Agent must name
+    a contactable party, and ``tiingo``, which is keyed — are the two whose credentials a
+    *surface* owns: :attr:`CapabilityContext.settings
+    <crocodile.core.capability.CapabilityContext.settings>` is the resolved environment for
+    the invocation, and a REST deployment configured from anywhere other than ``os.environ``
+    would otherwise have its configuration quietly ignored by the ingest layer. ``stooq``
+    and ``msn_money`` read ``os.environ`` directly in their own constructors, which is the
+    behaviour this flag exists to stop spreading.
+    """
+
     def __init__(
         self,
         symbols: list[str],
@@ -103,6 +119,14 @@ class Provider(ABC):
 
         A no-op for a connector that has not declared :attr:`supported_channels`.
 
+        A retired tag is resolved to its successor before the check
+        (:data:`~crocodile.core.schema.enums.CHANNEL_SUCCESSORS`), because ``bar`` and
+        ``ohlcv`` are one channel under two spellings and a declaration that listed both
+        would put two names for one thing into the set that decides the CLI's menu.
+        :func:`~crocodile.equity.providers.factory.channels_for_provider` widens in the same
+        direction for the same reason; before this, the menu offered ``bar`` for a connector
+        whose constructor would then refuse it.
+
         Raises:
             ValueError: if every requested channel is unservable. Constructed here
                 rather than at the first poll so the CLI reports it before opening a
@@ -111,7 +135,13 @@ class Provider(ABC):
         """
         if self.supported_channels is None:
             return
-        unservable = [ch for ch in self.channels if ch not in self.supported_channels]
+        from crocodile.core.schema.enums import CHANNEL_SUCCESSORS
+
+        unservable = [
+            ch
+            for ch in self.channels
+            if CHANNEL_SUCCESSORS.get(ch, ch) not in self.supported_channels
+        ]
         for channel in unservable:
             log.warning(
                 "%s cannot serve the %r channel and will emit nothing for it%s",
@@ -237,3 +267,97 @@ class Provider(ABC):
                 attempt += 1
             finally:
                 await transport.close()
+
+
+class PullProvider(Provider):
+    """A source that is *fetched* rather than subscribed to, wired into the same registry.
+
+    :class:`Provider` is a supervised websocket run loop: :meth:`run` connects a transport,
+    sends a subscribe frame, and drains frames through :meth:`normalize` into the sink,
+    reconnecting with backoff. Four equity sources have no wire of that shape at all — the
+    Treasury publishes one CSV per calendar year, SEC EDGAR serves an index and a document
+    per filing, Yahoo answers one option chain per expiry, Tiingo one price series per
+    request — and for each of them ``normalize`` is ``return ()``, ``_subscribe`` is
+    ``pass`` and ``list_instruments`` is the requested symbols echoed back.
+
+    Those three no-ops are the reason all four shipped as bare clients outside
+    ``factory._REGISTRY``, and the argument was recorded at the time: writing them out four
+    more times is four copies of an ABC being satisfied rather than used. It was the right
+    objection and the wrong conclusion. Being outside the registry is not a stylistic
+    preference — it is what made ``options_chain``, ``macro_series`` and ``insider`` channels
+    that eleven shipped equity capability implementations *read* and that no shipped ingest
+    path could *write*, so ``iv-surface``, ``open-interest``, ``perp-basis`` and
+    ``whale-alerts`` returned zero rows on every lake this product can build, and
+    ``spot-future-basis`` returned a row whose ``carry_pct`` was null under a
+    ``prov_confidence`` of 0.667. ``holding_13f`` was the same absence with nothing pointed
+    at it: ``smart-money``'s equity half differences information tables handed to it in
+    ``params``, so the channel could stay unwritten without any capability visibly failing,
+    which is the version of this defect no gate over *reads* can see.
+
+    So the three no-ops are written once, here, with the argument, and the four sources join
+    the registry that ``collect`` and ``backfill`` resolve against. What remains genuinely
+    per-source — which channels it serves, and how a fetch turns into records — is what each
+    subclass states.
+
+    The second half of the original objection was the load-bearing one:
+    :data:`~crocodile.equity.providers.factory.VALID_CHANNELS` was a hand-written list
+    offered as a menu for *every* provider, so adding ``macro_series`` to it would have
+    offered ``macro_series`` for ``alpaca`` — precisely the dead channel
+    ``tests/conformance/test_provider_channels.py`` exists to stop the picker walking a user
+    into. That is answered on the other side: the vocabulary is now derived from what the
+    registered providers declare, every registered provider declares, and the menu narrows
+    to the chosen one. See :data:`~crocodile.equity.providers.factory.VALID_CHANNELS`.
+
+    :meth:`run` stays unimplemented here. A pull source is not automatically pollable — a
+    curve that is republished once per business day, or a filing index that changes when
+    somebody files, is a thing to *backfill*, and a poll loop over it would spend a rate
+    limit re-reading yesterday. Subclasses that genuinely have a live snapshot to
+    re-read — Yahoo's option chain is one — override it; the rest inherit a refusal that
+    names the verb that does work, the way ``msn_money`` already did by hand.
+    """
+
+    ws_url = ""
+    """No websocket. Present because :class:`Provider` declares the attribute and
+    ``collect`` reads it to decide whether to attach a transport; an empty string is what
+    ``stooq``, ``msn_money`` and ``google_finance`` already carry for the same reason."""
+
+    rest_url = ""
+
+    def normalize(self, msg: object, local_ts: int) -> Iterable[Record]:
+        """Nothing arrives unsolicited, so there is nothing to normalise."""
+        return ()
+
+    async def _subscribe(self, transport: Transport) -> None:
+        """No subscription protocol exists for a source that answers one request at a time."""
+        return None
+
+    async def list_instruments(self) -> list[InstrumentIdentity]:
+        """Echo the requested symbols back as identities.
+
+        A pull source has no venue-wide instrument feed to enumerate — the caller names
+        what it wants and the source answers for that name — so the honest identity set is
+        the requested one. ``security_type`` is :attr:`SecurityType.UNKNOWN` rather than
+        guessed from the string: these symbols are option contract ids, Treasury tenors and
+        filer CIKs as often as they are tickers, and the enum has a member for "not
+        established" for exactly this.
+        """
+        from crocodile.core.schema.enums import SecurityType
+        from crocodile.equity.reference.identity import InstrumentIdentity
+
+        return [
+            InstrumentIdentity(
+                symbol=symbol,
+                source=self.name,
+                symbol_raw=symbol,
+                security_type=SecurityType.UNKNOWN,
+            )
+            for symbol in self.symbols
+        ]
+
+    async def run(self, max_reconnects: int = -1) -> None:
+        """Refuse a live subscription and name the verb that works instead."""
+        raise NotImplementedError(
+            f"{self.name} publishes on request and not as a stream; there is nothing to "
+            f"subscribe to. Use `backfill` with this source, which pages its history into "
+            f"the same lake."
+        )

@@ -291,12 +291,26 @@ def test_the_provider_factory_docstring_lists_every_registered_provider() -> Non
     )
 
 
-def test_the_treasury_client_counts_its_siblings_correctly() -> None:
-    """It called itself "the fourth" plain client and "a fifth entry" in the factory.
+def test_the_treasury_client_does_not_claim_to_be_outside_the_registry() -> None:
+    """This gate outlived its own subject, which is the thing it was written to catch.
 
-    Both ordinals were off by one: ``openfigi`` is a plain client too, and the factory
-    already holds five providers. The ordinals are the argument's arithmetic — "this is
-    the same shape as its siblings" is only checkable if the siblings are counted.
+    It pinned two ordinals — treasury calling itself "the fourth" plain client and "a fifth
+    entry" the factory would gain — because *that* prose had been off by one: ``openfigi``
+    is a plain client too, and the factory already held five providers. The ordinals were
+    the argument's arithmetic, and "this is the same shape as its siblings" is only
+    checkable if the siblings are counted.
+
+    Then the argument itself was measured and found wrong: a client outside
+    ``providers.factory._REGISTRY`` is a client no shipped command can reach, and eleven
+    equity capabilities read channels only those clients write. Treasury is a registered
+    provider now, so it makes no ordinal claim and there is no ordinal to check — the gate
+    failed with a ``KeyError`` rather than an assertion, which is what a gate looks like
+    when the sentence it guards has been deleted instead of edited.
+
+    So it now pins what is true after the move, in the same shape: the registry is what
+    decides who is reachable, ``openfigi`` is the one package deliberately outside it
+    because it enriches a universe rather than writing a channel, and treasury's docstring
+    must not still describe itself as a sibling of the excluded set.
     """
     from crocodile.equity.providers import factory
 
@@ -306,19 +320,18 @@ def test_the_treasury_client_counts_its_siblings_correctly() -> None:
         for child in providers_dir.iterdir()
         if child.is_dir() and (child / "__init__.py").exists()
     }
-    plain_clients = sorted(packages - set(factory._REGISTRY))
-    doc = _module_docstring(providers_dir / "treasury" / "client.py")
+    outside = sorted(packages - set(factory._REGISTRY))
+    assert outside == ["openfigi"], (
+        f"packages outside providers.factory._REGISTRY are {outside}. A source outside it "
+        f"cannot be reached by collect, collect-market or backfill, so anything new here is "
+        f"a capability whose inputs nothing can write — say why in this test or register it."
+    )
 
-    ordinal = {4: "fourth", 5: "fifth", 6: "sixth", 7: "seventh"}
-    assert f"This is the {ordinal[len(plain_clients)]}" in doc, (
-        f"there are {len(plain_clients)} keyless plain clients ({plain_clients}); the "
-        f"docstring's ordinal for treasury disagrees."
+    doc = _module_docstring(providers_dir / "treasury" / "client.py")
+    assert "This is the fourth" not in doc and "This is the fifth" not in doc, (
+        "treasury still counts itself among the plain clients; it is a registered provider"
     )
-    assert f"rather than a {ordinal[len(factory._REGISTRY) + 1]} entry" in doc, (
-        f"providers.factory._REGISTRY holds {len(factory._REGISTRY)} entries, so treasury "
-        f"would be the {ordinal[len(factory._REGISTRY) + 1]}; the docstring disagrees."
+    assert "TreasuryProvider" in doc or "_REGISTRY" in doc, (
+        "treasury's module docstring should say it is reachable through the provider "
+        "registry, since that is the fact its old argument got wrong"
     )
-    for sibling in plain_clients:
-        if sibling == "treasury":
-            continue
-        assert f"``{sibling}``" in doc, f"{sibling} is a plain client and goes unnamed here"

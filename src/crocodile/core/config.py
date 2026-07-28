@@ -85,6 +85,17 @@ class Settings(msgspec.Struct, frozen=True):
     stooq_zip_path: str | None = None
     """Path to a pre-downloaded Stooq bulk archive, bypassing the HTTP fetch."""
 
+    tiingo_api_key: str | None = None
+    """Tiingo API token. Absent means the provider refuses rather than degrades.
+
+    Unlike :attr:`openfigi_api_key`, there is no keyless tier here: every price endpoint
+    Tiingo publishes requires a token, and the free plan's limit is 500 unique symbols a
+    month rather than a rate. So an absent key is not a slower answer, it is no answer, and
+    :class:`~crocodile.equity.providers.tiingo.connector.TiingoProvider` raises
+    :class:`~crocodile.core.errors.ConfigError` naming ``CROCODILE_TIINGO_API_KEY`` and
+    pointing at ``stooq``, which serves the same channel keylessly.
+    """
+
     openfigi_api_key: str | None = None
     """OpenFIGI mapping key. Absent means the keyless tier, which is slower and not smaller.
 
@@ -209,6 +220,7 @@ _VARS: Final[Mapping[str, str]] = {
     "coingecko_api_key": "COINGECKO_API_KEY",
     "msn_money_api_key": "MSN_MONEY_API_KEY",
     "stooq_zip_path": "STOOQ_ZIP_PATH",
+    "tiingo_api_key": "TIINGO_API_KEY",
     "openfigi_api_key": "OPENFIGI_API_KEY",
     "sec_user_agent": "SEC_USER_AGENT",
     "base_rpc_url": "BASE_RPC_URL",

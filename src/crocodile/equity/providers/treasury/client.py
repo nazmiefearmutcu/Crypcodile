@@ -1,24 +1,36 @@
 """The daily Treasury par yield curve, read keylessly and emitted as ``MacroSeries``.
 
-**Why this is a client and not a** :class:`~crocodile.equity.providers.base.Provider`.
-That ABC is a supervised websocket run loop: ``run()`` connects a transport, subscribes,
-and drains frames through ``normalize()`` into a sink, reconnecting with backoff. The
-Treasury publishes one CSV per calendar year, updated once per business day at about
-3:30pm ET, over plain HTTP with no subscription and no stream. A connector shaped for that
-loop would implement ``normalize`` as ``return ()``, ``_subscribe`` as ``pass`` and
-``list_instruments`` over a fixed table — which is what ``stooq`` had to do, and it is
-three no-ops standing in for a contract this source does not have. The equity reference
-sources that were already in this position — ``openfigi``, ``sec_edgar``, ``tiingo`` and
-``yahoo`` — are all plain clients in exactly this shape, and between them they publish the
-``corp_action`` and ``options_chain`` rows the equity carry reads on its other legs, and
-the identifiers the universe merges on. This is the fifth, and it is deliberately the same
-shape as its four siblings rather than a sixth entry in the five-name
-``providers.factory._REGISTRY``: adding one there would also mean adding
-``macro_series`` to :data:`~crocodile.equity.providers.factory.VALID_CHANNELS`, and that
-list is the CLI's channel menu for *every* provider — including the ones that declare
-nothing and therefore get the whole vocabulary offered to them. Offering ``macro_series``
-for ``alpaca`` is precisely the dead channel ``tests/conformance/test_provider_channels.py``
-exists to stop the picker walking a user into.
+**This module used to argue that it should not be a**
+:class:`~crocodile.equity.providers.base.Provider`, **and the argument was measured and
+found wrong.** What it said: that ABC is a supervised websocket run loop, the Treasury
+publishes one CSV per calendar year over plain HTTP with no subscription and no stream, and
+a connector shaped for that loop would implement ``normalize`` as ``return ()``,
+``_subscribe`` as ``pass`` and ``list_instruments`` over a fixed table — three no-ops
+standing in for a contract this source does not have. It added that registering the source
+would mean adding ``macro_series`` to
+:data:`~crocodile.equity.providers.factory.VALID_CHANNELS`, which was the CLI's channel menu
+for *every* provider, so ``macro_series`` would be offered for ``alpaca`` — precisely the
+dead channel ``tests/conformance/test_provider_channels.py`` exists to stop the picker
+walking a user into.
+
+Both halves were true. What neither accounted for is what staying outside
+``providers.factory._REGISTRY`` *cost*: ``collect``, ``collect-market`` and ``backfill``
+resolve their sources through that registry, so a client outside it is a client no shipped
+command can reach. :class:`TreasuryYieldClient` had zero call sites anywhere in ``src/``,
+and the risk-free leg of ``spot-future-basis``, ``funding-apr`` and ``perp-basis`` reads the
+``macro_series`` channel — which meant those three reported ``risk_free_rate=None`` and
+``carry_pct=None`` on every lake this product could build, under a ``prov_confidence`` of
+0.667 that did not notice. A capability that cannot reach its data is not a smaller problem
+than three no-op methods.
+
+So both objections are answered rather than dismissed. The no-ops are written once, on
+:class:`~crocodile.equity.providers.base.PullProvider`, with the argument. The menu hazard
+was in the *flatness* of the vocabulary rather than in its length: ``VALID_CHANNELS`` is now
+derived from what each registered provider declares and narrowed back to the chosen one, and
+every registered provider is required to declare. :mod:`crocodile.equity.providers.treasury.
+connector` is the result. This module stays what it always was — a parser and an HTTP
+client, injectable and fixture-testable — and the connector is the twenty lines that let a
+command reach it.
 
 **Why the CSV and not the JSON API.** Both are keyless. ``fiscaldata.treasury.gov``
 returns JSON with stable field names and pagination; ``home.treasury.gov`` returns one CSV

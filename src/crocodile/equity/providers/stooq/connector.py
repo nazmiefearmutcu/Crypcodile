@@ -10,7 +10,7 @@ import sys
 import zipfile
 from collections.abc import AsyncIterator, Iterable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 import polars as pl
@@ -79,6 +79,20 @@ class StooqProvider(Provider):
     name = "stooq"
     ws_url = ""
     rest_url = "https://stooq.com"
+
+    supported_channels: ClassVar[frozenset[str]] = frozenset({"ohlcv", "index_value"})
+    """Daily bars, and an index level where the symbol names an index rather than a security.
+
+    Both come out of :meth:`backfill`; this connector has no live stream at all, which is
+    why :meth:`run` is inherited and never reached in practice. ``index_value`` was already
+    being written and was not on any menu, because
+    :data:`~crocodile.equity.providers.factory.VALID_CHANNELS` was a hand-written list of
+    four market-data names — the same list that made ``macro_series`` unofferable. Declaring
+    what is served is how a channel gets onto the derived vocabulary.
+
+    ``bar`` is absent and still accepted; see
+    :meth:`~crocodile.equity.providers.base.Provider._reject_unservable_channels`.
+    """
 
     def __init__(
         self,

@@ -559,11 +559,19 @@ def test_the_equity_half_accepts_the_crypto_only_dead_letter_path_and_ignores_it
 
     Equity providers have no dead-letter queue, so there is nothing for the field to mean on
     that side — and dropping it would delete the only way to place a crypto run's report.
+
+    ``ohlcv`` and not the fixture's default ``trade``: ``stooq`` now declares what it serves
+    and refuses a construction whose every channel is outside that set, so this used to build
+    a provider that would have polled and emitted nothing. The dead channel this test was
+    walking into is the one ``tests/conformance/test_provider_channels.py`` exists for.
     """
     sub = ops.collect_equities(
         ctx,
         _collect_params(
-            sources=("stooq",), symbols=("AAPL",), dlq_report_path="/tmp/dlq.json"
+            sources=("stooq",),
+            symbols=("AAPL",),
+            channels=("ohlcv",),
+            dlq_report_path="/tmp/dlq.json",
         ),
     )
     assert isinstance(sub, ops.Subscription)

@@ -97,6 +97,7 @@ from crocodile.core.capability import (
     ReturnKind,
     declare,
 )
+from crocodile.core.config import Settings
 from crocodile.core.connector import Connector
 from crocodile.core.replay.merge import replay as merge_replay
 from crocodile.core.resample.ohlcv import resample_ohlcv
@@ -579,7 +580,10 @@ SEQUENCER_LATENCY = declare(
             # The venue stamped every ``source_ts`` and the capture stamped every
             # ``local_ts``; the summary over their differences is what is computed.
             AssetClass.CRYPTO: Impl(
-                fn=sequencer_latency, prov=Provenance.DERIVED, basis="native"
+                fn=sequencer_latency,
+                prov=Provenance.DERIVED,
+                basis="native",
+                reads=("trade", "book_ticker"),
             ),
         },
     )
@@ -594,7 +598,14 @@ PEG_DEVIATION = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
-                fn=peg_deviation, prov=Provenance.DERIVED, basis="caller_supplied"
+                fn=peg_deviation,
+                prov=Provenance.DERIVED,
+                basis="caller_supplied",
+                # The two channels the lake branch falls back through when the caller
+                # supplies no price. `caller_supplied` names the other branch, and the
+                # two fields are not in conflict: a basis names where an answer's
+                # evidence rests, a read-set names what it may open.
+                reads=("book_ticker", "book_snapshot"),
             ),
         },
     )
@@ -748,6 +759,7 @@ def collect_equities(ctx: CapabilityContext, params: CollectParams) -> Subscript
             channels=list(params.channels),
             out=sink,
             registry=registry,
+            settings=ctx.settings,
         )
         if provider.transport is None:
             provider.transport = AiohttpWsTransport(provider.ws_url)
@@ -1006,6 +1018,7 @@ def collect_market_equities(ctx: CapabilityContext, params: CollectMarketParams)
                 channels=list(params.channels),
                 out=sink,
                 registry=registry,
+                settings=ctx.settings,
             )
             if provider.transport is None:
                 provider.transport = AiohttpWsTransport(provider.ws_url)
@@ -1094,6 +1107,7 @@ async def _drain_provider_backfill(
     source: str,
     params: BackfillParams,
     sink: Sink,
+    settings: Settings | None = None,
 ) -> int:
     """Page one equity provider's historical API into ``sink``, returning the record count.
 
@@ -1118,6 +1132,7 @@ async def _drain_provider_backfill(
         channels=[params.channel],
         out=sink,
         registry=InstrumentRegistry(),
+        settings=settings,
     )
     written = 0
     try:
@@ -1144,7 +1159,7 @@ def backfill_equities(ctx: CapabilityContext, params: BackfillParams) -> Corouti
     _refuse_readonly(ctx, "backfill")
     _check_backfill_range(params)
 
-    return _drain_provider_backfill(params.source, params, _lake_sink(ctx))
+    return _drain_provider_backfill(params.source, params, _lake_sink(ctx), ctx.settings)
 
 
 class ReplayParams(msgspec.Struct, frozen=True):
@@ -1450,8 +1465,12 @@ RESAMPLE = declare(
             # the venue, which is the same reading that makes ``indicators`` native. The
             # method applied on top is on the emitted rows, as ``ohlcv_from_trades``, where
             # it is measured per bar rather than promised once here.
-            AssetClass.CRYPTO: Impl(fn=resample, prov=Provenance.DERIVED, basis="native"),
-            AssetClass.EQUITY: Impl(fn=resample, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.CRYPTO: Impl(
+                fn=resample, prov=Provenance.DERIVED, basis="native", reads=("trade",)
+            ),
+            AssetClass.EQUITY: Impl(
+                fn=resample, prov=Provenance.DERIVED, basis="native", reads=("trade",)
+            ),
         },
     )
 )

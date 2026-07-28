@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, ClassVar
 
 from crocodile.core.ingest.transport import AiohttpWsTransport, Transport
 from crocodile.core.schema.enums import AssetClass, SecurityType, Side, Tape
@@ -26,6 +26,24 @@ class AlpacaProvider(Provider):
     name = "alpaca"
     ws_url = "wss://stream.data.alpaca.markets/v2/iex"
     rest_url = "https://data.alpaca.markets"
+
+    supported_channels: ClassVar[frozenset[str]] = frozenset({"trade", "quote", "ohlcv"})
+    """The three record types :meth:`normalize` builds, and nothing else.
+
+    Declared — rather than left at ``None`` — because ``None`` used to be safe and no longer
+    is. It meant "this connector has not been through the exercise", and
+    :func:`~crocodile.equity.providers.factory.channels_for_provider` answered it with the
+    whole vocabulary; that was harmless while the vocabulary was four market-data channels
+    every provider plausibly served. The vocabulary is now the union of what the registered
+    providers declare, and it includes ``options_chain``, ``macro_series``, ``insider`` and
+    ``holding_13f`` — so an undeclared connector would be offered a menu containing channels
+    it has never heard of. Every registered provider declares; the gate is in
+    ``tests/conformance/test_provider_channels.py``.
+
+    ``bar`` is not listed and is still accepted: it is the retired spelling of ``ohlcv`` and
+    :func:`~crocodile.equity.providers.factory.channels_for_provider` widens for it. Listing
+    both would put two names for one channel into the declaration that decides the menu.
+    """
 
     def __init__(
         self,
