@@ -212,11 +212,20 @@ def parse_13f_information_table(
         local_ts: UTC epoch nanoseconds at which the caller observed the document.
 
     Returns:
-        One record per ``infoTable`` element that states both a value and a share count, in
-        document order. A row missing either is skipped with a DEBUG line rather than
-        defaulted: both are required fields on
-        :class:`~crocodile.core.schema.records.Holding13F`, and a zero would be a position
-        of no value reported as a fact.
+        One record per ``infoTable`` element that states every field
+        :class:`~crocodile.core.schema.records.Holding13F` requires without a default —
+        ``cusip``, ``nameOfIssuer``, ``value``, ``sshPrnamt`` and ``sshPrnamtType`` — in
+        document order. A row missing any of them is skipped with a DEBUG line naming which,
+        rather than defaulted: a zero would be a position of no value reported as a fact.
+
+        ``sshPrnamtType`` belongs on that list and was the one exception to it, defaulted to
+        ``"SH"``. It is the unit of ``sshPrnamt``, and the two other values it takes are
+        ``PRN`` and ``CALL`` — principal amount and option contracts. A note reported as
+        ``10000000`` ``PRN`` is ten million dollars of face value; the same row defaulted to
+        ``SH`` is ten million *shares*, a quantity the filer never stated, of an instrument
+        that has no shares. Nothing downstream can tell the two apart afterwards, because a
+        defaulted ``SH`` is spelled exactly like a stated one, and a manager reporting only
+        notes would come back as one of the larger equity holders in the lake.
 
     Raises:
         Form13FParseError: the payload is not well-formed, or ``filing_date`` cannot be read.
@@ -249,13 +258,25 @@ def parse_13f_information_table(
         amount = child(entry, "shrsOrPrnAmt")
         value = _float_or_none(text_of(entry, "value"))
         shares = _float_or_none(text_of(amount, "sshPrnamt"))
-        if cusip is None or issuer is None or value is None or shares is None:
+        shares_type = text_of(amount, "sshPrnamtType")
+        missing = [
+            name
+            for name, stated in (
+                ("cusip", cusip is not None),
+                ("nameOfIssuer", issuer is not None),
+                ("value", value is not None),
+                ("sshPrnamt", shares is not None),
+                ("sshPrnamtType", shares_type is not None),
+            )
+            if not stated
+        ]
+        if missing:
             log.debug(
                 "sec_edgar: 13F row for %r under %s states no %s; skipping rather than "
-                "filing a zero",
+                "filing a default",
                 issuer,
                 accession_number,
-                "cusip" if cusip is None else "value or share count",
+                ", ".join(missing),
             )
             continue
         voting = child(entry, "votingAuthority")
@@ -285,7 +306,7 @@ def parse_13f_information_table(
                 cusip=cusip,
                 value=value * scale,
                 shares=shares,
-                shares_type=text_of(amount, "sshPrnamtType") or "SH",
+                shares_type=shares_type,
                 discretion=text_of(entry, "investmentDiscretion"),
                 voting_sole=_float_or_none(text_of(voting, "Sole")),
                 voting_shared=_float_or_none(text_of(voting, "Shared")),

@@ -178,3 +178,74 @@ def test_an_unreadable_filing_date_is_refused_rather_than_guessed() -> None:
     column is in, and how long the table was withheld."""
     with pytest.raises(Form13FParseError):
         _holdings(filing_date="not-a-date")
+
+
+def test_a_row_that_states_no_share_type_is_skipped_rather_than_called_shares() -> None:
+    """``sshPrnamtType`` is the unit of ``sshPrnamt``, and it was defaulted to ``"SH"``.
+
+    The other values it takes are ``PRN`` and ``CALL``. A note reported as ``10000000``
+    ``PRN`` is ten million dollars of face value; the same row with the type element absent
+    and the default applied is ten million *shares* of an instrument that has no shares —
+    a quantity the filer never stated, spelled identically to one they did, so nothing
+    downstream can tell it from a real share count.
+
+    The parser's own contract two paragraphs up says required fields are skipped rather
+    than defaulted. This was the one field that was not.
+    """
+    xml = """<?xml version="1.0"?>
+    <informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+      <infoTable>
+        <nameOfIssuer>NOTE ISSUER CO</nameOfIssuer>
+        <cusip>30161N101</cusip>
+        <value>10000000</value>
+        <shrsOrPrnAmt><sshPrnamt>10000000</sshPrnamt></shrsOrPrnAmt>
+        <investmentDiscretion>SOLE</investmentDiscretion>
+      </infoTable>
+      <infoTable>
+        <nameOfIssuer>ORDINARY EQUITY CO</nameOfIssuer>
+        <cusip>02079K305</cusip>
+        <value>250000</value>
+        <shrsOrPrnAmt><sshPrnamt>5000</sshPrnamt><sshPrnamtType>SH</sshPrnamtType></shrsOrPrnAmt>
+        <investmentDiscretion>SOLE</investmentDiscretion>
+      </infoTable>
+    </informationTable>
+    """
+    holdings = parse_13f_information_table(
+        xml,
+        cover=_cover(),
+        filing_date="2024-05-15",
+        accession_number=_ACCESSION,
+        local_ts=_LOCAL_TS,
+    )
+
+    # Before: two rows, the first of them `shares=10000000.0, shares_type="SH"`.
+    assert [h.issuer_name for h in holdings] == ["ORDINARY EQUITY CO"]
+    assert [(h.shares, h.shares_type) for h in holdings] == [(5000.0, "SH")]
+
+
+def test_a_stated_share_type_other_than_shares_survives_unchanged() -> None:
+    """The guard is about an absent element, not about refusing the units EDGAR defines.
+
+    A row that says ``PRN`` states its unit, and skipping it would lose a position the
+    filer reported in full. Only silence is refused.
+    """
+    xml = """<?xml version="1.0"?>
+    <informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+      <infoTable>
+        <nameOfIssuer>NOTE ISSUER CO</nameOfIssuer>
+        <cusip>30161N101</cusip>
+        <value>10000000</value>
+        <shrsOrPrnAmt>
+          <sshPrnamt>10000000</sshPrnamt><sshPrnamtType>PRN</sshPrnamtType>
+        </shrsOrPrnAmt>
+      </infoTable>
+    </informationTable>
+    """
+    holdings = parse_13f_information_table(
+        xml,
+        cover=_cover(),
+        filing_date="2024-05-15",
+        accession_number=_ACCESSION,
+        local_ts=_LOCAL_TS,
+    )
+    assert [(h.shares, h.shares_type) for h in holdings] == [(10000000.0, "PRN")]
