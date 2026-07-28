@@ -11,6 +11,7 @@ because dispatch is now :func:`crocodile.surfaces.mcp.call_tool`, covered by
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from crocodile.core.errors import ConnectorError, FatalConnectorError
 from crocodile.crypto.exchanges.base_onchain.price import get_base_market_data, get_onchain_price
 
 
@@ -105,16 +106,26 @@ async def test_get_onchain_price_aerodrome_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_onchain_price_unsupported_symbol() -> None:
-    """Verify get_onchain_price returns error for unsupported symbols."""
-    res = await get_onchain_price("UNKNOWN-SYMBOL")
-    assert "error" in res
-    assert "not supported" in res["error"]
+async def test_get_onchain_price_refuses_an_unsupported_symbol() -> None:
+    """Renamed and inverted: this used to assert the error *dict* that shipped.
+
+    Returning ``{"error": …}`` made a refusal indistinguishable from a reading to every
+    caller above it. ``onchain-price`` declares ``prov=NATIVE``, so the CLI exited 0 with the
+    dict printed as the answer and REST answered 200 with
+    ``{"result":{"error":…},"provenance":{"prov":"native"}}``. Fatal because no retry helps:
+    the pool is not in ``POOL_SPECS``.
+    """
+    with pytest.raises(FatalConnectorError, match="not supported"):
+        await get_onchain_price("UNKNOWN-SYMBOL")
 
 
 @pytest.mark.asyncio
-async def test_get_onchain_price_rpc_error_handling() -> None:
-    """Verify get_onchain_price handles RPC errors gracefully."""
+async def test_get_onchain_price_raises_when_the_node_refuses() -> None:
+    """"Gracefully" used to mean "as a successful result". It means "as an error" now.
+
+    A script checking ``$?`` saw success and ``warning_for`` stayed silent, because the
+    declared provenance was NATIVE and the failure was in the payload where nothing looks.
+    """
     with patch("crocodile.crypto.exchanges.base_onchain.price.AsyncWeb3") as mock_web3_class:
         mock_w3 = MagicMock()
         mock_w3.__aenter__ = AsyncMock(return_value=mock_w3)
@@ -125,9 +136,8 @@ async def test_get_onchain_price_rpc_error_handling() -> None:
         # Simulate block_number lookup raising exception
         mock_w3.eth.block_number = AwaitableValue(Exception("Node connection refused"))
 
-        res = await get_onchain_price("cbBTC-USDC")
-        assert "error" in res
-        assert "Failed fetching pool state" in res["error"]
+        with pytest.raises(ConnectorError, match="Failed fetching pool state"):
+            await get_onchain_price("cbBTC-USDC")
 
 
 @pytest.mark.asyncio

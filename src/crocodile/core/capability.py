@@ -25,7 +25,9 @@ over an empty registry is vacuously green, which is the same as not having one.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
@@ -54,6 +56,7 @@ __all__ = [
     "ReturnKind",
     "declare",
     "register",
+    "run_to_completion",
 ]
 
 
@@ -377,6 +380,49 @@ asserted in prose. Phase 2 fills it as it ports and Phase 3 empties it again; th
 only ever moving in those two directions is the property worth watching, and that test is
 what watches it.
 """
+
+
+def run_to_completion[T](make: Callable[[], Coroutine[Any, Any, T]]) -> T:
+    """Drive ``make()``'s coroutine to a value, from a caller that may or may not have a loop.
+
+    :data:`CapabilityFn` is synchronous and some implementations are not, so this is the one
+    bridge between the two — and it lives here, in the machinery, because writing it twice is
+    how the second copy came to be wrong. The first copy is
+    ``crocodile.capabilities.market``'s; the second was ``capabilities.onchain``'s ``_run``,
+    a bare ``asyncio.run`` under a comment asserting that "both network surfaces call
+    ``dispatch.invoke`` from a worker thread rather than from the event loop". Neither does.
+    ``onchain-price`` worked on the CLI, returned 500 on REST and raised ``RuntimeError:
+    asyncio.run() cannot be called from a running event loop`` on MCP — two surfaces out of
+    three, from one line, for a whole phase.
+
+    The two callers this has to serve are the reason it is not a bare ``asyncio.run``. A CLI
+    projection has no running loop, so ``asyncio.run`` is exactly right. A REST or MCP
+    projection *is* a running loop, and ``asyncio.run`` raises ``RuntimeError`` there —
+    which makes the same declaration work on one surface and fail on another, the asymmetry
+    this registry exists to end.
+
+    So a running loop is detected and the coroutine gets its own loop on a worker thread.
+    That blocks the calling loop for the duration, which is a real cost and is stated rather
+    than hidden: an async surface that does not want to pay it calls the adapter through
+    ``asyncio.to_thread``, which puts it on a thread with no loop and takes the first
+    branch. It cannot deadlock — every coroutine reaching this builds its own
+    ``aiohttp``/``ccxt``/``web3`` session inside the new loop and awaits nothing belonging to
+    the outer one.
+
+    ``make`` is a factory rather than a coroutine so the object is created on the thread that
+    will await it, and so a failure before submission cannot leave a "coroutine was never
+    awaited" warning behind instead of an error.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make())
+
+    def _in_its_own_loop() -> T:
+        return asyncio.run(make())
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_in_its_own_loop).result()
 
 
 def register(cap: Capability) -> Capability:
