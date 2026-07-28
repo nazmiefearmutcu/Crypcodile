@@ -35,10 +35,14 @@ interpolated into a query.
 
 Note on ``1w``: ``time_bucket`` anchors weekly buckets on Monday, which is also where
 Polars' ``group_by_dynamic`` anchors them, so this path and the Polars frame paths in
-``crocodile.equity.resample.ohlcv`` agree. The record paths in that module do not — they
-floor ``local_ts`` against the epoch, which fell on a Thursday. That divergence is
-between two functions this merge does not touch and it is still open; what has changed is
-that it is no longer three anchors against each other but one against two.
+``crocodile.equity.resample.ohlcv`` agree. The record paths in that module used not to —
+they floored ``local_ts`` against the epoch, which fell on a Thursday, so a weekly bar's
+boundary depended on which entry point produced it and nothing on the record said which.
+That is closed: :data:`crocodile.core.resample._interval.Interval.anchor_ns` carries the
+origin a width is counted from, the record paths floor against it, and
+``test_the_record_path_and_duckdb_put_a_trade_in_the_same_week`` pins the three answers
+together. It was invisible to every daily test because a second, a minute, an hour and a
+day all divide the epoch-midnight grid exactly and only a week does not.
 """
 
 from __future__ import annotations
@@ -114,13 +118,21 @@ def _side_volume_sql(qty: str, indent: str, *, has_side: bool) -> str:
 
     ``has_side`` is false when the ``trade`` view has no ``side`` column at all, which a
     lake written by a provider that never classified the aggressor genuinely does. Naming a
-    column DuckDB cannot resolve fails the whole query, so the split degrades to zeroes —
-    the same answer as a view whose every row says ``unknown``, which is what such a lake
-    means. The old equity SQL never referenced ``side``, so this case only became reachable
-    when the two implementations merged.
+    column DuckDB cannot resolve fails the whole query, so the split degrades to NULL. It
+    used to degrade to zeroes on the argument that a view with no ``side`` column says the
+    same thing as a view whose every row says ``unknown``. It does not: a row saying
+    ``unknown`` is a source that looked and could not tell, and an absent column is a
+    source that never had the question put to it. The two produce the same *number* — no
+    attributed volume — and only the second one is also the answer a bar gets when nobody
+    filled the field in at all, which is why it must be the same NULL that
+    ``OHLCV.buy_volume`` uses for exactly that. The old equity SQL never referenced
+    ``side``, so this case only became reachable when the two implementations merged.
     """
     if not has_side:
-        return f"{indent}0.0 AS buy_volume,\n{indent}0.0 AS sell_volume,\n"
+        return (
+            f"{indent}CAST(NULL AS DOUBLE) AS buy_volume,\n"
+            f"{indent}CAST(NULL AS DOUBLE) AS sell_volume,\n"
+        )
     return (
         f"{indent}sum(CASE WHEN side = 'buy'  THEN {qty} ELSE 0.0 END) AS buy_volume,\n"
         f"{indent}sum(CASE WHEN side = 'sell' THEN {qty} ELSE 0.0 END) AS sell_volume,\n"
@@ -185,7 +197,19 @@ def _build_fill_sql(
     ``start_ns``/``end_ns`` are plain ints, safe as numeric literals in the grid CTE;
     DuckDB does not accept ``?`` parameters inside ``generate_series`` bounds that also
     feed ``time_bucket``.
+
+    The ``coalesce`` on the side split is conditional on ``has_side`` for the reason
+    :func:`_side_volume_sql` gives. Where the view classifies aggressors, a bucket with no
+    prints really did see no buying and 0.0 is the measurement; where it has no ``side``
+    column, the aggregate is already NULL and coalescing it would put the fabricated zero
+    back one CTE later than it was removed.
     """
+    zero_or_null = (
+        "coalesce(a.buy_volume, 0.0)  AS buy_volume,\n        "
+        "coalesce(a.sell_volume, 0.0) AS sell_volume,"
+        if has_side
+        else "a.buy_volume,\n        a.sell_volume,"
+    )
     agg_rank = f"        max({rank_case})::INTEGER           AS {PROV_RANK},\n" if rank_case else ""
     filled_rank = f"        a.{PROV_RANK},\n" if rank_case else ""
     return (
@@ -229,8 +253,7 @@ def _build_fill_sql(
         "        a.low,\n"
         "        a.close,\n"
         "        coalesce(a.volume, 0.0)      AS volume,\n"
-        "        coalesce(a.buy_volume, 0.0)  AS buy_volume,\n"
-        "        coalesce(a.sell_volume, 0.0) AS sell_volume,\n"
+        f"        {zero_or_null}\n"
         "        a.vwap,\n"
         f"{filled_rank}"
         "        coalesce(a.num_trades, 0)    AS num_trades\n"
@@ -295,8 +318,9 @@ def resample_ohlcv(
             low             Float64
             close           Float64
             volume          Float64 (0.0 for empty fill bars)
-            buy_volume      Float64 volume whose aggressor was a buyer
-            sell_volume     Float64 volume whose aggressor was a seller
+            buy_volume      Float64 volume whose aggressor was a buyer, NULL if the view
+                                    has no ``side`` column at all
+            sell_volume     Float64 volume whose aggressor was a seller, same NULL
             vwap            Float64 sum(price*qty)/sum(qty), NULL at zero volume
             num_trades      Int64   (0 for empty fill bars)
             prov            Utf8    ohlcv_from_trades' level, floored by the worst print's

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import tempfile
 from pathlib import Path
 
@@ -998,6 +999,24 @@ _DAY_NS = 24 * 60 * _MINUTE_NS
 _ALIGNED_DAY = (1_700_000_000_000_000_000 // _DAY_NS) * _DAY_NS
 
 
+def _iso_monday_ns(ts_ns: int) -> int:
+    """Return the UTC midnight of the ISO week containing ``ts_ns``, in nanoseconds.
+
+    Computed from ``datetime`` rather than from the resampler's own arithmetic, so the
+    expectation below is the calendar's answer and not a restatement of the code under
+    test. ``(ts // week) * week`` — the thing the record paths used to do — is *not* an
+    ISO week start: it counts from the Unix epoch, and the epoch fell on a Thursday.
+    """
+    moment = datetime.datetime.fromtimestamp(ts_ns / 1e9, tz=datetime.UTC)
+    monday = (moment - datetime.timedelta(days=moment.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return int(monday.timestamp()) * 1_000_000_000
+
+
+_ALIGNED_MONDAY = _iso_monday_ns(_ALIGNED_DAY)
+
+
 def _bar_at(local_ts: int, interval: str, confidence: float) -> OHLCV:
     return OHLCV(
         source="alpaca",
@@ -1062,16 +1081,22 @@ _SAME_INPUTS: dict[str, tuple[list[OHLCV], str]] = {
         [_bar_at(_ALIGNED_DAY, "1m", 1.0), _bar_at(_ALIGNED_DAY, "1m", 1.0)],
         "1h",
     ),
+    "a week of sessions": (
+        [_bar_at(_ALIGNED_MONDAY + i * _DAY_NS, "1d", 1.0) for i in range(5)],
+        "1w",
+    ),
 }
 """Inputs both entry points must score the same, one case per axis they drifted on.
 
-No ``1w`` case, and the omission is not an oversight. The two paths anchor *weekly*
-buckets differently — the record path floors ``local_ts`` against the epoch, which fell
-on a Thursday, and ``group_by_dynamic`` anchors on Monday — so five daily bars land in
-one bucket on one side and two on the other. That is a disagreement about which rows
-share a bucket, not about how a bucket's coverage is scored, it predates this round, and
-folding it in here would hide a real difference behind a passing coverage test. Every
-other supported width (``s``/``m``/``h``/``d``) divides the epoch evenly and agrees.
+The ``1w`` case is the newest and it used to be excluded, because the two paths anchored
+weekly buckets differently: the record path floored ``local_ts`` against the epoch, which
+fell on a Thursday, while ``group_by_dynamic`` anchors on Monday, so five daily bars
+landed in one bucket on one side and two on the other. That was a disagreement about
+which rows share a bucket rather than about how a bucket's coverage is scored, and
+excluding it kept this table honest about what it was and was not measuring. The record
+paths now take their origin from ``Interval.anchor_ns`` and land where both engines land,
+so the case belongs here — and this is the entry that would go red if the anchor were
+ever reverted to zero.
 """
 
 
@@ -1166,11 +1191,14 @@ def test_five_daily_bars_fill_a_week_and_two_do_not() -> None:
     Against wall-clock widths two daily bars covered 172 800 s of a 117 000 s tradeable
     week and saturated at 1.0 — two of five sessions reported as a full week.
 
-    Record path only: the two paths do not agree on where a *weekly* bucket starts, which
-    is a separate pre-existing divergence — see :data:`_SAME_INPUTS`.
+    The five days are counted from the ISO Monday, not from ``(ts // week) * week``.
+    Those were the same number of nanoseconds apart and a different set of buckets: the
+    epoch-floored start is a Thursday, so the fifth bar landed in the following week and
+    a full week scored 0.64. The denominator this test is about is unchanged either way;
+    what changed is that the numerator is now five sessions of one week rather than four
+    of one and one of the next.
     """
-    week_ns = 7 * _DAY_NS
-    start = (1_700_000_000_000_000_000 // week_ns) * week_ns
+    start = _ALIGNED_MONDAY
     full = [_bar_at(start + i * _DAY_NS, "1d", 1.0) for i in range(5)]
     partial = [_bar_at(start + i * _DAY_NS, "1d", 1.0) for i in range(2)]
 
@@ -1322,3 +1350,278 @@ def test_a_filled_empty_bucket_carries_the_tail_too() -> None:
     by_count = dict(zip(res["num_trades"].to_list(), res["prov"].to_list(), strict=True))
     assert by_count[0] == Provenance.DERIVED.value, "an empty bucket rests on the basis"
     assert by_count[3] == Provenance.SYNTHETIC.value, "a scraped bucket is floored by its prints"
+
+
+# ---------------------------------------------------------------------------
+# Where a weekly bucket begins
+# ---------------------------------------------------------------------------
+# The three record paths above floored ``local_ts`` against the raw Unix epoch, and the
+# epoch fell on a *Thursday*. The two frame paths hand the same question to Polars and
+# the DuckDB path hands it to ``time_bucket``, and both of those anchor a week on its
+# Monday — measured, not assumed: ``time_bucket(INTERVAL '1 week', make_timestamp(0))``
+# and ``from_epoch(0).dt.truncate('1w')`` each answer 1969-12-29, which is the Monday
+# whose week contains the epoch.
+#
+# So a weekly bar's boundary depended on which entry point produced it, and nothing said
+# so on the record: a bar stamped Thursday 00:00 UTC is a perfectly plausible weekly bar
+# to anyone who does not already know the convention. It is invisible to every daily
+# test because a day divides the epoch grid exactly and every other supported width does
+# too, which is why this survived a merge that compared the paths on ``1d``.
+
+
+_WEEK_PROBE_NS = 1_700_000_000_000_000_000
+"""2023-11-14T22:13:20Z, a Tuesday — the base timestamp the rest of this file uses."""
+
+
+def _week_trade(ts: int) -> Trade:
+    return Trade(
+        source="alpaca",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        source_ts=None,
+        local_ts=ts,
+        asset_class=AssetClass.EQUITY,
+        id=str(ts),
+        price=100.0,
+        amount=1.0,
+        side=Side.BUY,
+    )
+
+
+def _week_quote(ts: int) -> Quote:
+    return Quote(
+        source="alpaca",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        source_ts=None,
+        local_ts=ts,
+        asset_class=AssetClass.EQUITY,
+        bid_px=99.0,
+        bid_sz=1.0,
+        ask_px=101.0,
+        ask_sz=1.0,
+    )
+
+
+def test_a_weekly_bar_from_trades_begins_on_the_iso_monday() -> None:
+    """The epoch's Thursday is not a week boundary anyone reports against."""
+    bars = list(resample_trades_to_bars([_week_trade(_WEEK_PROBE_NS)], "1w"))
+
+    assert len(bars) == 1
+    assert bars[0].local_ts == _iso_monday_ns(_WEEK_PROBE_NS)
+
+
+def test_a_weekly_bar_from_quotes_begins_on_the_iso_monday() -> None:
+    bars = list(resample_quotes_to_bars([_week_quote(_WEEK_PROBE_NS)], "1w"))
+
+    assert len(bars) == 1
+    assert bars[0].local_ts == _iso_monday_ns(_WEEK_PROBE_NS)
+
+
+def test_a_weekly_bar_from_bars_begins_on_the_iso_monday() -> None:
+    bars = list(resample_bars_to_bars([_bar_at(_WEEK_PROBE_NS, "1d", 1.0)], "1w"))
+
+    assert len(bars) == 1
+    assert bars[0].local_ts == _iso_monday_ns(_WEEK_PROBE_NS)
+
+
+def test_a_millisecond_stream_anchors_its_week_where_a_nanosecond_one_does() -> None:
+    """The anchor is a duration and has to be converted into the stream's unit too.
+
+    ``_detect_scale_and_adjust_interval`` converts the *width*; a grid is a width and an
+    origin, and converting only the width would leave a millisecond stream flooring
+    against nanosecond-scaled Monday — an offset of three million days.
+    """
+    ms = _WEEK_PROBE_NS // 1_000_000
+    bars = list(resample_trades_to_bars([_week_trade(ms)], "1w"))
+
+    assert len(bars) == 1
+    assert bars[0].local_ts == _iso_monday_ns(_WEEK_PROBE_NS) // 1_000_000
+
+
+def test_the_record_and_frame_paths_put_a_trade_in_the_same_week() -> None:
+    """The disagreement was about *which rows share a bucket*, not about a label.
+
+    Two prints four days apart straddle a Monday. Anchored on Thursday they are one
+    weekly bar; anchored on Monday they are two. A consumer reading the lake could get
+    either answer depending on which entry point wrote the bars.
+    """
+    early = _iso_monday_ns(_WEEK_PROBE_NS) - 2 * _DAY_NS  # the previous Saturday
+    late = early + 4 * _DAY_NS  # the following Wednesday
+
+    from_records = list(resample_trades_to_bars([_week_trade(early), _week_trade(late)], "1w"))
+    frame = pl.DataFrame(
+        {
+            "local_ts": [early, late],
+            "price": [100.0, 100.0],
+            "amount": [1.0, 1.0],
+            "symbol": ["AAPL", "AAPL"],
+        }
+    )
+    from_frame = resample_trades_df(frame, "1w")
+
+    assert [b.local_ts for b in from_records] == from_frame["bar"].to_list()
+    assert len(from_records) == 2, "a Saturday and the next Wednesday are not one week"
+
+
+def test_the_record_path_and_duckdb_put_a_trade_in_the_same_week() -> None:
+    """``time_bucket`` is the third opinion, and it was one of the two that agreed."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "source=alpaca/channel=trade/date=2023-11-14/part-0.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            [
+                {
+                    "source": "alpaca",
+                    "asset_class": "equity",
+                    "channel": "trade",
+                    "symbol": "AAPL",
+                    "symbol_raw": "AAPL",
+                    "source_ts": None,
+                    "local_ts": _WEEK_PROBE_NS,
+                    "id": "1",
+                    "price": 100.0,
+                    "amount": 1.0,
+                }
+            ]
+        ).write_parquet(path)
+
+        with Catalog(tmp_dir) as catalog:
+            res = resample_ohlcv(
+                catalog, "AAPL", _WEEK_PROBE_NS - _DAY_NS, _WEEK_PROBE_NS + _DAY_NS, "1w"
+            )
+
+    from_records = list(resample_trades_to_bars([_week_trade(_WEEK_PROBE_NS)], "1w"))
+
+    assert res["bar"].to_list() == [b.local_ts for b in from_records]
+    assert res.row(0, named=True)["bar"] == _iso_monday_ns(_WEEK_PROBE_NS)
+
+
+# ---------------------------------------------------------------------------
+# The aggressor split: filled where it can be, a hole where it cannot
+# ---------------------------------------------------------------------------
+# `OHLCV.buy_volume` and `sell_volume` declared `float = 0.0` and almost nothing set
+# them. Two writers in the whole tree did — `binance/backfill.py` off
+# `takerBuyBaseAssetVolume`, and `corpactions/calculator.py`, which rescales what it is
+# handed — against six equity providers, two other crypto ones, and all three record
+# resamplers below that shipped the default. So a zero meant "no buying happened" on a
+# Binance bar and "nobody filled this in" everywhere else, and the bytes are identical.
+#
+# The trade path is the one that could always have answered: a `Trade` states `side`.
+# The tests below are the ones that would have gone red on the all-zeros state, and each
+# names the reason its particular path can or cannot fill the field.
+
+
+def _sided_trade(ts: int, amount: float, side: Side) -> Trade:
+    return Trade(
+        source="alpaca",
+        symbol="AAPL",
+        symbol_raw="AAPL",
+        source_ts=None,
+        local_ts=ts,
+        asset_class=AssetClass.EQUITY,
+        id=str(ts),
+        price=100.0,
+        amount=amount,
+        side=side,
+    )
+
+
+def _split_bar(local_ts: int, buy: float | None, sell: float | None) -> OHLCV:
+    return OHLCV(
+        source="binance",
+        symbol="binance:BTCUSDT",
+        symbol_raw="BTCUSDT",
+        source_ts=None,
+        local_ts=local_ts,
+        interval="1m",
+        open=100.0,
+        high=100.0,
+        low=100.0,
+        close=100.0,
+        volume=10.0,
+        buy_volume=buy,
+        sell_volume=sell,
+        num_trades=1,
+        asset_class=AssetClass.CRYPTO,
+    )
+
+
+def test_a_bar_built_from_trades_reports_the_side_its_trades_stated() -> None:
+    """The path that had the answer all along and threw it away.
+
+    Every print here is a buy, and the bar used to say `buy_volume=0.0` — which reads as
+    the exact opposite of what happened, not as an absence.
+    """
+    trades = [_sided_trade(i * 100_000_000, 1.0, Side.BUY) for i in range(3)]
+
+    bar = next(iter(resample_trades_to_bars(trades, "1s")))
+
+    assert bar.buy_volume == 3.0
+    assert bar.sell_volume == 0.0, "a measured zero, on a bucket whose every print was a buy"
+    assert bar.volume == 3.0
+
+
+def test_an_unclassified_print_is_credited_to_neither_side() -> None:
+    """The same rule the SQL path applies, asserted against the record path.
+
+    `Side.UNKNOWN` is the normal case on a consolidated equity tape. Crediting it to
+    `sell_volume` — which is what "everything that is not a buy" amounts to — reported
+    whole sessions as seller-initiated. So the identity is an inequality and the gap is
+    recoverable by subtraction.
+    """
+    trades = [
+        _sided_trade(0, 1.0, Side.BUY),
+        _sided_trade(100_000_000, 2.0, Side.SELL),
+        _sided_trade(200_000_000, 0.5, Side.UNKNOWN),
+    ]
+
+    bar = next(iter(resample_trades_to_bars(trades, "1s")))
+
+    assert bar.buy_volume == 1.0
+    assert bar.sell_volume == 2.0
+    assert bar.volume == 3.5
+    assert bar.buy_volume + bar.sell_volume <= bar.volume
+    assert bar.volume - bar.buy_volume - bar.sell_volume == pytest.approx(0.5)
+
+
+def test_a_bar_built_from_quotes_states_no_split_at_all() -> None:
+    """Nothing here was transacted, so there is no aggressor to attribute."""
+    quotes = [_week_quote(i * 100_000_000) for i in range(2)]
+
+    bar = next(iter(resample_quotes_to_bars(quotes, "1s")))
+
+    assert bar.buy_volume is None
+    assert bar.sell_volume is None
+    assert bar.volume == 0.0, "the structural zero ohlcv_from_quotes argues for, unchanged"
+
+
+def test_re_bucketing_carries_a_split_its_inputs_stated() -> None:
+    """A Binance backfill day re-read at a wider width used to lose its split entirely."""
+    bars = [_split_bar(i * _MINUTE_NS, buy=6.0, sell=4.0) for i in range(3)]
+
+    out = next(iter(resample_bars_to_bars(bars, "1h")))
+
+    assert out.buy_volume == 18.0
+    assert out.sell_volume == 12.0
+
+
+def test_one_silent_input_disqualifies_the_whole_buckets_split() -> None:
+    """A partial sum understates by the silent bars' volume, and understates invisibly.
+
+    18 buys out of 40 total would still satisfy `buy + sell <= volume`, which is the only
+    invariant a consumer can check — so the wrong answer is indistinguishable from a
+    genuinely lopsided fortnight. Stricter than the `num_trades` rule beside it on purpose:
+    a missing count is bounded by the count, a missing split by the bar's whole volume.
+    """
+    bars = [
+        _split_bar(0, buy=6.0, sell=4.0),
+        _split_bar(_MINUTE_NS, buy=None, sell=None),
+        _split_bar(2 * _MINUTE_NS, buy=6.0, sell=4.0),
+    ]
+
+    out = next(iter(resample_bars_to_bars(bars, "1h")))
+
+    assert out.buy_volume is None
+    assert out.sell_volume is None
+    assert out.volume == 30.0, "volume is still the sum; only the attribution is withheld"

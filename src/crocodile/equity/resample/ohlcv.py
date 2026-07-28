@@ -45,9 +45,10 @@ from crocodile.core.resample._frame_prov import PROV_RANK as _PROV_RANK
 from crocodile.core.resample._frame_prov import emitted_prov as _emitted_prov
 from crocodile.core.resample._frame_prov import order_columns as _order_columns
 from crocodile.core.resample._frame_prov import rank_inputs as _rank_inputs
+from crocodile.core.resample._interval import bucket_start as _bucket_start
 from crocodile.core.resample._interval import parse_interval as _parse_interval
 from crocodile.core.resample.ohlcv import resample_ohlcv
-from crocodile.core.schema.enums import AssetClass
+from crocodile.core.schema.enums import AssetClass, Side
 from crocodile.core.schema.provenance import (
     Provenance,
     ProvenanceFields,
@@ -90,6 +91,20 @@ def _detect_scale_and_adjust_interval(ts: int, interval_ns: int) -> int:
         return max(1, interval_ns // 1000)
     else:  # milliseconds
         return max(1, interval_ns // 1_000_000)
+
+
+def _adjusted_anchor(ts: int, anchor_ns: int) -> int:
+    """Return an interval's bucket origin in the unit ``ts`` is stamped in.
+
+    The companion of :func:`_detect_scale_and_adjust_interval`, which converts a *width*
+    into the stream's unit; a grid is a width and an origin, and converting only the
+    width is what left the three record paths below flooring against the raw epoch.
+
+    Every anchor this codebase uses is a whole number of days, and a day is a whole
+    number of milliseconds, microseconds and nanoseconds alike, so the division is exact
+    in every unit :func:`_ts_unit_ns` can report.
+    """
+    return anchor_ns // _ts_unit_ns(ts)
 
 
 def _ts_unit_ns(ts: int) -> int:
@@ -276,10 +291,24 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
     """Resample an iterable of Trade records into OHLCV records.
 
     Assumes Trade records are ordered by local_ts.
+
+    This is the only one of the three record paths that *measures* the aggressor split
+    rather than inheriting it, because it is the only one whose inputs state a side. A
+    trade carries ``side``, so ``buy_volume`` and ``sell_volume`` here are facts about the
+    prints in the bucket; :func:`resample_bars_to_bars` can only pass on what its inputs
+    already stated, and :func:`resample_quotes_to_bars` has no aggressor to attribute at
+    all. All three used to emit the record's defaulted ``0.0``, which said "no buying
+    happened" about buckets whose every print was a buy.
+
+    ``Side.UNKNOWN`` is credited to neither side, matching the SQL path's rule exactly —
+    see :func:`crocodile.core.resample.ohlcv._side_volume_sql` for the equity tape that
+    made the alternative untenable. So the identity is
+    ``buy_volume + sell_volume <= volume`` and the gap is recoverable by subtraction.
     """
     parsed = _parse_interval(interval)
     interval_ns, interval_label = parsed.ns, parsed.polars
     adjusted_interval: int | None = None
+    adjusted_anchor = 0
 
     # A bar is not something a venue published. Stated once here and spread onto every
     # record below: a resampled record with no `prov=` inherits the header default, which
@@ -310,6 +339,8 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
     low_px = 0.0
     close_px = 0.0
     volume = 0.0
+    buy_volume = 0.0
+    sell_volume = 0.0
     vwap_sum = 0.0
     trade_count = 0
 
@@ -334,8 +365,9 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(trade.local_ts, interval_ns)
+            adjusted_anchor = _adjusted_anchor(trade.local_ts, parsed.anchor_ns)
 
-        bucket = (trade.local_ts // adjusted_interval) * adjusted_interval
+        bucket = _bucket_start(trade.local_ts, adjusted_interval, adjusted_anchor)
 
         if current_bucket is None:
             current_bucket = bucket
@@ -344,6 +376,8 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             low_px = trade.price
             close_px = trade.price
             volume = trade.amount
+            buy_volume = trade.amount if trade.side is Side.BUY else 0.0
+            sell_volume = trade.amount if trade.side is Side.SELL else 0.0
             vwap_sum = trade.price * trade.amount
             trade_count = 1
             input_levels = [trade.prov]
@@ -352,6 +386,10 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             low_px = min(low_px, trade.price)
             close_px = trade.price
             volume += trade.amount
+            if trade.side is Side.BUY:
+                buy_volume += trade.amount
+            elif trade.side is Side.SELL:
+                sell_volume += trade.amount
             vwap_sum += trade.price * trade.amount
             trade_count += 1
             input_levels.append(trade.prov)
@@ -370,6 +408,8 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
                 low=low_px,
                 close=close_px,
                 volume=volume,
+                buy_volume=buy_volume,
+                sell_volume=sell_volume,
                 vwap=vwap,
                 num_trades=trade_count,
                 asset_class=AssetClass.EQUITY,
@@ -384,6 +424,8 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             low_px = trade.price
             close_px = trade.price
             volume = trade.amount
+            buy_volume = trade.amount if trade.side is Side.BUY else 0.0
+            sell_volume = trade.amount if trade.side is Side.SELL else 0.0
             vwap_sum = trade.price * trade.amount
             trade_count = 1
             input_levels = [trade.prov]
@@ -403,6 +445,8 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
             low=low_px,
             close=close_px,
             volume=volume,
+            buy_volume=buy_volume,
+            sell_volume=sell_volume,
             vwap=vwap,
             num_trades=trade_count,
             asset_class=AssetClass.EQUITY,
@@ -419,10 +463,18 @@ def resample_quotes_to_bars(
     """Resample Quote records into OHLCV records based on bid, ask, or mid-price.
 
     Assumes Quote records are ordered by local_ts.
+
+    ``buy_volume`` and ``sell_volume`` are left ``None``, which is a stronger statement
+    than the ``0.0`` they used to inherit. A quote has no aggressor: nothing here was
+    transacted, and the bar's ``volume`` is itself a structural zero — see the
+    ``ohlcv_from_quotes`` registration. A zero split on a zero-volume bar is arithmetically
+    unobjectionable and still wrong to write, because it is the same value a *traded* bar
+    gets when nobody filled the field in, and a consumer cannot tell the two apart.
     """
     parsed = _parse_interval(interval)
     interval_ns, interval_label = parsed.ns, parsed.polars
     adjusted_interval: int | None = None
+    adjusted_anchor = 0
 
     # SYNTHETIC, not DERIVED: these prices are quotes, nothing here was transacted, and
     # the `volume` below is a structural zero rather than a measured one.
@@ -469,8 +521,9 @@ def resample_quotes_to_bars(
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(quote.local_ts, interval_ns)
+            adjusted_anchor = _adjusted_anchor(quote.local_ts, parsed.anchor_ns)
 
-        bucket = (quote.local_ts // adjusted_interval) * adjusted_interval
+        bucket = _bucket_start(quote.local_ts, adjusted_interval, adjusted_anchor)
 
         if price_type == "mid":
             price = (quote.bid_px + quote.ask_px) / 2.0
@@ -556,6 +609,27 @@ def resample_quotes_to_bars(
         )
 
 
+def _open_side_split(bar: OHLCV) -> tuple[float, float, bool]:
+    """Start a bucket's aggressor split from its first input bar.
+
+    Returns ``(buy, sell, stated)``; ``stated`` is false when the bar declares no split,
+    and one such input disqualifies the whole bucket. Summing what is stated and ignoring
+    what is not would understate the split by exactly the volume of the silent inputs, and
+    understate it *invisibly* — the emitted numbers would still satisfy
+    ``buy + sell <= volume``, which is the only invariant a consumer can check.
+
+    All-or-nothing is stricter than the ``num_trades`` rule immediately below it, which
+    counts a silent bar as one print. That asymmetry is deliberate: a missing count is
+    bounded by the count itself, while a missing split is bounded by the bar's whole
+    volume, so the two failures are not the same size. Re-bucketing one Binance backfill
+    day — the only crypto source that fills these in — beside a day from any other
+    provider used to yield a bar reporting the Binance day's buys as the fortnight's.
+    """
+    if bar.buy_volume is None or bar.sell_volume is None:
+        return 0.0, 0.0, False
+    return bar.buy_volume, bar.sell_volume, True
+
+
 def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLCV]:
     """Resample lower-resolution OHLCV records into higher-resolution OHLCV records.
 
@@ -570,6 +644,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
     parsed = _parse_interval(interval)
     interval_ns, interval_label = parsed.ns, parsed.polars
     adjusted_interval: int | None = None
+    adjusted_anchor = 0
     unit_ns = 1
     span_cache: dict[str, int] = {}
     tradeable_ns = _tradeable_ns(interval_ns)
@@ -598,6 +673,9 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
     low_px = 0.0
     close_px = 0.0
     volume = 0.0
+    buy_volume = 0.0
+    sell_volume = 0.0
+    has_side_split = False
     vwap_vol_sum = 0.0
     trade_count_sum = 0
     has_trade_count = False
@@ -623,9 +701,10 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(bar.local_ts, interval_ns)
+            adjusted_anchor = _adjusted_anchor(bar.local_ts, parsed.anchor_ns)
             unit_ns = _ts_unit_ns(bar.local_ts)
 
-        bucket = (bar.local_ts // adjusted_interval) * adjusted_interval
+        bucket = _bucket_start(bar.local_ts, adjusted_interval, adjusted_anchor)
         span = max(1, _tradeable_span_ns(bar.interval, span_cache) // unit_ns)
         segment = (bar.local_ts, bar.local_ts + span, bar.prov_confidence)
 
@@ -636,6 +715,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             low_px = bar.low
             close_px = bar.close
             volume = bar.volume
+            buy_volume, sell_volume, has_side_split = _open_side_split(bar)
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
             segments = [segment]
@@ -651,6 +731,11 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             low_px = min(low_px, bar.low)
             close_px = bar.close
             volume += bar.volume
+            if bar.buy_volume is None or bar.sell_volume is None:
+                has_side_split = False
+            else:
+                buy_volume += bar.buy_volume
+                sell_volume += bar.sell_volume
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum += vwap_val * bar.volume
             segments.append(segment)
@@ -679,6 +764,8 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
                 low=low_px,
                 close=close_px,
                 volume=volume,
+                buy_volume=buy_volume if has_side_split else None,
+                sell_volume=sell_volume if has_side_split else None,
                 vwap=vwap,
                 num_trades=trade_count_sum if has_trade_count else None,
                 asset_class=AssetClass.EQUITY,
@@ -693,6 +780,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             low_px = bar.low
             close_px = bar.close
             volume = bar.volume
+            buy_volume, sell_volume, has_side_split = _open_side_split(bar)
             vwap_val = bar.vwap if bar.vwap is not None else bar.close
             vwap_vol_sum = vwap_val * bar.volume
             segments = [segment]
@@ -721,6 +809,8 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
             low=low_px,
             close=close_px,
             volume=volume,
+            buy_volume=buy_volume if has_side_split else None,
+            sell_volume=sell_volume if has_side_split else None,
             vwap=vwap,
             num_trades=trade_count_sum if has_trade_count else None,
             asset_class=AssetClass.EQUITY,

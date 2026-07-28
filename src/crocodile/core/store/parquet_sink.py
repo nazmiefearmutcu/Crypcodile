@@ -213,6 +213,7 @@ _CRYPTO_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
         "index_price": pl.Float64,
         "funding_rate": pl.Float64,
         "predicted_funding_rate": pl.Float64,
+        "realized_funding_rate": pl.Float64,
         "funding_timestamp": pl.Int64,
         "open_interest": pl.Float64,
     },
@@ -242,6 +243,7 @@ _CRYPTO_CHANNEL_EXTRA: dict[str, dict[str, Any]] = {
         "funding_rate": pl.Float64,
         "funding_timestamp": pl.Int64,
         "predicted_funding_rate": pl.Float64,
+        "realized_funding_rate": pl.Float64,
         "interval_hours": pl.Int64,
     },
     "open_interest": {

@@ -18,7 +18,34 @@ def test_perp_ticker_emits_derivative_and_funding():
     dt = next(r for r in out if isinstance(r, DerivativeTicker))
     fn = next(r for r in out if isinstance(r, Funding))
     assert dt.mark_price == 2000.4 and dt.open_interest == 12345.0
-    assert fn.funding_rate == 0.0001 and fn.predicted_funding_rate == 0.0003
+    assert fn.funding_rate == 0.0001
+
+
+def test_funding_8h_is_not_offered_as_a_forecast():
+    """``funding_8h`` describes eight hours that have already happened.
+
+    It used to land in ``predicted_funding_rate`` on both records this payload produces.
+    Nothing raised and nothing looked wrong downstream: it is a per-8h rate like the one
+    it displaced, so ``apr_from_rate(rate, 8)`` returned a plausible APR either way. The
+    only symptom was that a desk asking what the next settlement would cost was told what
+    the last one did — for a venue whose funding is quoted precisely so that question can
+    be answered.
+
+    Deribit's ticker publishes no forecast, so the forward field stays ``None`` rather
+    than being filled with the nearest available number.
+    """
+    msg = json.loads((P / "ticker_perp.json").read_text())
+    out = list(normalize_message(msg, local_ts=7))
+    dt = next(r for r in out if isinstance(r, DerivativeTicker))
+    fn = next(r for r in out if isinstance(r, Funding))
+
+    assert fn.realized_funding_rate == 0.0003, "the 8h figure keeps a home, a truthful one"
+    assert fn.predicted_funding_rate is None
+    assert dt.realized_funding_rate == 0.0003
+    assert dt.predicted_funding_rate is None, (
+        "the ticker and the funding record are built from one dict; fixing one and not "
+        "the other is how they drift"
+    )
 
 
 def test_option_ticker_emits_options_chain():

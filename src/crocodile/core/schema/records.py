@@ -145,6 +145,15 @@ class DerivativeTicker(
     index_price: float | None = None
     funding_rate: float | None = None
     predicted_funding_rate: float | None = None
+    realized_funding_rate: float | None = None
+    """The same three-way split :class:`Funding` carries, kept mirrored on purpose.
+
+    Every venue that emits a ``DerivativeTicker`` emits a ``Funding`` beside it off the
+    same payload, and the Deribit connector wrote ``funding_8h`` into *both* forward
+    fields from one line each. Two records fed by one dict diverging in shape is how one
+    of them gets fixed and the other does not.
+    """
+
     funding_timestamp: int | None = None
     open_interest: float | None = None
 
@@ -194,9 +203,43 @@ class OptionsChain(
 
 
 class Funding(_Header, frozen=True, kw_only=True, tag=Channel.FUNDING.value, tag_field="channel"):
+    """One funding observation for a perpetual, for whichever venue published it.
+
+    The three rate fields differ by *when they are about*, and that is the whole of the
+    distinction: ``funding_rate`` is the rate in force for the interval this record
+    describes, ``predicted_funding_rate`` is an estimate of the next one, and
+    ``realized_funding_rate`` is what has already accrued. All three are per-interval
+    figures over ``interval_hours``, so ``crocodile.crypto.analytics.funding.apr_from_rate``
+    annualizes any of them by the same factor.
+    """
+
     funding_rate: float
     funding_timestamp: int | None = None
     predicted_funding_rate: float | None = None
+    """A forward-looking estimate of the *next* interval's rate, or ``None``.
+
+    ``None`` means the venue publishes no estimate, which is common: Deribit's ticker
+    does not, and its funding-history endpoint cannot by construction. Deribit's
+    connector used to fill this with ``funding_8h``, a figure describing the eight hours
+    that had already happened — the one substitution this field cannot survive, since a
+    consumer reads it precisely to know what it is about to pay.
+    """
+
+    realized_funding_rate: float | None = None
+    """Funding that has already accrued, over the window ending at ``funding_timestamp``.
+
+    Distinct from ``funding_rate`` because a venue can publish both and they can differ:
+    Deribit's ticker carries ``current_funding`` (the rate in force) beside ``funding_8h``
+    (what the last eight hours actually cost), and a carry desk wants both.
+
+    A separate field rather than a note in ``prov``, because the provenance tail is a
+    claim about the *record*: ``prov``/``prov_basis``/``prov_confidence`` describe how the
+    whole observation was arrived at, and there is nowhere in them to say "this one field
+    is about a different span than the field beside it". Marking the record SYNTHETIC to
+    excuse one misfiled number would also have downgraded ``funding_rate``, which is a
+    plain venue reading. Shape is the only honest place for a distinction about shape.
+    """
+
     interval_hours: int | None = None
 
 
@@ -232,8 +275,27 @@ class OHLCV(_Header, frozen=True, kw_only=True, tag=Channel.OHLCV.value, tag_fie
     low: float
     close: float
     volume: float
-    buy_volume: float = 0.0
-    sell_volume: float = 0.0
+    buy_volume: float | None = None
+    sell_volume: float | None = None
+    """Volume whose aggressor was a buyer / a seller, or ``None`` if nobody split it.
+
+    Optional for the reason ``vwap`` below is, and the zero they replaced was the worse
+    half of that argument: ``0.0`` is a *measurement* — no buying happened in this bar —
+    and it was standing in for "no path filled this in", which was almost every path.
+    Exactly two writers ever set them: ``binance/backfill.py``, off
+    ``takerBuyBaseAssetVolume``, and ``corpactions/calculator.py``, which rescales what it
+    is handed. Every other bar in the lake — six equity providers, two crypto ones, and
+    all three record resamplers — carried a defaulted zero, so a consumer reading
+    ``buy_volume == 0.0`` could not tell a quiet bar from an unfilled field, and
+    ``sum(buy_volume) / sum(volume)`` over a mixed lake answered with the Binance
+    fraction of it.
+
+    ``buy_volume + sell_volume <= volume`` where both are stated: an unclassified print is
+    credited to neither side, and the remainder is the volume no source attributed. See
+    :func:`crocodile.core.resample.ohlcv._side_volume_sql` for why that is an inequality
+    rather than an identity.
+    """
+
     num_trades: int | None = None
     vwap: float | None = None
     """Volume-weighted average price over the bar, or ``None`` if the source omits it.

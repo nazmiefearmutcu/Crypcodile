@@ -344,8 +344,15 @@ def test_a_view_with_no_side_column_reports_no_aggressor_rather_than_failing(
     assert len(df) == 1
     row = df.row(0, named=True)
     assert row["volume"] == 10.0
-    assert row["buy_volume"] == 0.0, "no side column means no aggressor was ever stated"
-    assert row["sell_volume"] == 0.0
+    # Migrated: this used to pin 0.0 on the argument that an absent `side` column says the
+    # same thing as a column of `unknown`. It does not. A row saying `unknown` is a source
+    # that looked and could not tell; an absent column is a source nobody asked. Both
+    # attribute no volume, and only the second is *also* what a bar looks like when no
+    # writer filled the field in — which is the state `OHLCV.buy_volume` now spells NULL.
+    # Handing a consumer 0.0 here made "10 shares traded and none of it was buying" and
+    # "10 shares traded and nobody said" the same answer.
+    assert row["buy_volume"] is None, "no side column means the question was never put"
+    assert row["sell_volume"] is None
 
 
 def test_resample_nan_trades_ignored(tmp_path: Path) -> None:

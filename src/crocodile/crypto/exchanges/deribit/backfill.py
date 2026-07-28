@@ -8,8 +8,21 @@ Appendix §3.1:
 - Funding: ``public/get_funding_rate_history``
   (``start_timestamp``, ``end_timestamp``, hourly aggregation).
   Returns ``interest_1h`` and ``interest_8h`` per entry (no field named ``funding_rate``).
-  Canonical mapping: ``interest_8h`` -> ``funding_rate``;
-  ``interest_1h`` -> ``predicted_funding_rate``.
+  Canonical mapping: ``interest_8h`` -> ``funding_rate``.
+
+  ``interest_1h`` used to be written to ``predicted_funding_rate`` and no longer is. A
+  history endpoint answers about windows that have closed; every number in the response
+  is backward-looking, so *nothing* in it belongs in a field whose contract is an
+  estimate of the next settlement. The same substitution was live on the ticker path in
+  ``normalize.py`` with ``funding_8h``, and the two together meant a consumer asking
+  Deribit "what am I about to pay" got an answer about what it had already paid, from
+  both entry points, with a number plausible enough to annualize.
+
+  ``interest_1h`` is dropped rather than rehomed. Every rate field on ``Funding`` is
+  scoped to ``interval_hours``, which is 8 here, so an hourly figure has no honest slot;
+  giving it one would add a wire column every surface has to carry for a number no
+  consumer has asked for, and a one-hour rate sitting beside ``interval_hours=8`` is the
+  same category error this change removes.
 """
 
 from __future__ import annotations
@@ -85,7 +98,11 @@ def parse_funding_page(
 
     Canonical mapping (appendix §3.1):
     - ``interest_8h`` → ``funding_rate``
-    - ``interest_1h`` → ``predicted_funding_rate``
+
+    ``predicted_funding_rate`` is left unset: a history page states no estimate of
+    anything, and ``interest_1h`` — which used to be written there — is a realized
+    one-hour figure. See this module's docstring for why it is dropped rather than moved
+    to ``realized_funding_rate``.
     """
     out: list[Funding] = []
     entries: list[dict[str, Any]] = raw.get("result") or []
@@ -99,7 +116,6 @@ def parse_funding_page(
                 local_ts=local_ts,
                 asset_class=AssetClass.CRYPTO,
                 funding_rate=float(entry["interest_8h"]),
-                predicted_funding_rate=float(entry["interest_1h"]),
                 interval_hours=8,
                 funding_timestamp=ms_to_ns(entry["timestamp"]),
             )

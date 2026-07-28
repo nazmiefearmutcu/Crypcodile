@@ -639,7 +639,9 @@ def _record_body(struct: Any, d: dict[str, Any]) -> dict[str, Any]:
 
     A column that is absent, or present and null on a field that has a default,
     is left out so the struct's own default stands — that is how ``buy_volume``
-    reads back as ``0.0`` and ``num_trades`` as ``None`` from the same null.
+    and ``num_trades`` both read back as ``None`` from the same null. ``buy_volume``
+    used to read back as ``0.0`` from it, which turned a lake's silence about the
+    aggressor split into a measurement that nobody bought.
 
     A null on a field with no default is passed through only when the field's
     annotation admits it. ``OptionsChain.underlying_price`` is ``float | None``
