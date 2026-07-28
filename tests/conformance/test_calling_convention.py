@@ -220,4 +220,8 @@ def test_the_declared_capabilities_call_through_to_their_analytics_functions() -
     """
     capabilities.load_all()
     assert REGISTRY["indicators"].impls[AssetClass.CRYPTO].fn is analytics.indicators
-    assert REGISTRY["slippage"].impls[AssetClass.EQUITY].fn is analytics.slippage
+    # One adapter per (capability, asset class), not one per capability. This asserted
+    # `analytics.slippage` for the *equity* impl, which was the shape of the defect: one
+    # function bound twice, reading `book_snapshot`, which no equity provider writes.
+    assert REGISTRY["slippage"].impls[AssetClass.CRYPTO].fn is analytics.slippage
+    assert REGISTRY["slippage"].impls[AssetClass.EQUITY].fn is analytics.slippage_equities

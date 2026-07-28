@@ -41,7 +41,7 @@ import msgspec
 import polars as pl
 
 from crocodile.core.analytics.indicators import apply_indicators
-from crocodile.core.analytics.slippage import estimate_slippage
+from crocodile.core.analytics.slippage import estimate_slippage, slippage_over_levels
 from crocodile.core.capability import (
     PENDING_SYMMETRY,
     AssetClass,
@@ -50,6 +50,7 @@ from crocodile.core.capability import (
     Impl,
     ReturnKind,
     declare,
+    run_to_completion,
 )
 from crocodile.core.resample.ohlcv import resample_ohlcv
 from crocodile.core.schema.provenance import Provenance
@@ -81,6 +82,7 @@ from crocodile.crypto.analytics.volsurface import (
     vol_skew as _vol_skew,
 )
 from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.equity.depth import select_depth_source
 
 __all__ = [
     "BASIS",
@@ -162,10 +164,16 @@ class SlippageParams(msgspec.Struct, frozen=True):
 
     ``size_unit`` is the crypto half of a collision: the crypto implementation took
     ``size: float | str`` plus a unit and could walk the book denominated in either asset,
-    the equity one took a bare ``float``. One struct has to cover both, so the unit is
-    either equity-ignored or crypto-lost, and it is equity-ignored — an optional parameter
+    the equity one took a bare ``float``. One struct has to cover both, so the unit was
+    either equity-ignored or crypto-lost, and it was equity-ignored — an optional parameter
     costs a caller that omits it nothing, while dropping it deletes a measured, tested book
     walk. Left unset, the walk is by quantity, which is what sizing in shares means.
+
+    It is no longer equity-*ignored*, because the walk is now one function over whichever
+    ladder the asset class brings — see
+    :func:`~crocodile.core.analytics.slippage.slippage_over_levels`. Sizing an equity order
+    in dollars was the use the original note said the parameter was being kept for; keeping
+    it turned out to cost nothing and it now works.
     """
 
     symbol: str
@@ -473,13 +481,47 @@ def indicators(ctx: CapabilityContext, params: IndicatorParams) -> pl.DataFrame:
 
 
 def slippage(ctx: CapabilityContext, params: SlippageParams) -> pl.DataFrame:
-    """Walk the stored book for the requested size. A pure argument shuffle."""
+    """Walk the stored crypto book for the requested size. A pure argument shuffle."""
     return estimate_slippage(
         ctx.catalog,
         params.symbol,
         params.side,
         params.size,
         params.size_unit,
+    )
+
+
+def slippage_equities(ctx: CapabilityContext, params: SlippageParams) -> pl.DataFrame:
+    """Walk the equity depth ladder for the requested size.
+
+    A separate adapter, because ``fn=slippage`` was bound for both asset classes and that
+    was the whole defect. :func:`estimate_slippage` reads ``book_snapshot``, and no equity
+    provider in this tree emits one — so every equity call raised ``ValueError: No book
+    snapshots found`` while the declaration published ``prov_basis: "yahoo_1m_vap"``, a
+    basis naming a ladder the code path never opened. A declared basis for an unreachable
+    branch is worse than a missing one: it reads as measured.
+
+    The ladder that basis names is the one ``depth`` already serves —
+    :func:`~crocodile.equity.depth.select_depth_source`, Alpaca L1 when keyed and the
+    synthetic Yahoo VAP profile when not — so the two capabilities now read one book and
+    the walk over it is :func:`~crocodile.core.analytics.slippage.slippage_over_levels`,
+    shared with crypto. Which of the two branches ran is on the profile's own tail, where
+    it was measured; the declaration states the ceiling, and it states the same ceiling
+    ``depth`` does, because there is only one book to have a ceiling over.
+
+    Like ``depth``, this reaches the network rather than the lake, so it is driven through
+    :func:`~crocodile.core.capability.run_to_completion` — the caller may or may not own an
+    event loop, and the same declaration has to answer on all three surfaces.
+    """
+    source = select_depth_source()
+    profile = run_to_completion(lambda: source.snapshot(params.symbol))
+    return slippage_over_levels(
+        params.symbol,
+        params.side,
+        params.size,
+        list(profile.bids),
+        list(profile.asks),
+        size_unit=params.size_unit,
     )
 
 
@@ -698,13 +740,23 @@ SLIPPAGE = declare(
         aliases=("simulate-price-impact",),
         impls={
             AssetClass.CRYPTO: Impl(fn=slippage, prov=Provenance.DERIVED, basis="native"),
-            # An equity book is modelled from volume bars unless an Alpaca key upgrades it
-            # to L1, so an estimate walked over it is SYNTHETIC on its best day. Declaring
-            # the keyed ceiling here would let a keyless deployment report a level it never
-            # reaches; which of the two a given snapshot actually was is on the snapshot's
-            # own tail, where it can be measured rather than promised.
+            # `DERIVED`/`alpaca_l1`, which is what `market.py` declares for `depth` over
+            # exactly this book. The two used to disagree: this entry said SYNTHETIC /
+            # `yahoo_1m_vap` and argued it as the deliberate *floor* — "declaring the keyed
+            # ceiling would let a keyless deployment report a level it never reaches" —
+            # while `depth` said DERIVED / `alpaca_l1` and argued the ceiling. One book, one
+            # `select_depth_source`, two batches, opposite ends of one range.
+            #
+            # `Impl.prov` is documented as a ceiling, so the floor argument was answering a
+            # question the field does not ask, and its own worry is already handled where it
+            # belongs: which branch ran is on the returned profile's tail, measured by
+            # `provenance_fields`, not promised here.
+            #
+            # The basis was additionally false rather than merely pessimistic. `fn=slippage`
+            # was the same object for both classes and read `book_snapshot`, which no equity
+            # provider writes, so `yahoo_1m_vap` named a path that could not execute.
             AssetClass.EQUITY: Impl(
-                fn=slippage, prov=Provenance.SYNTHETIC, basis="yahoo_1m_vap"
+                fn=slippage_equities, prov=Provenance.DERIVED, basis="alpaca_l1"
             ),
         },
     )

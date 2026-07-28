@@ -949,7 +949,7 @@ def test_every_capability_that_writes_outside_the_process_refuses_a_read_only_su
             getattr(ops, adapter)(readonly_ctx, params)
         except PermissionError:
             continue
-        except Exception:  # noqa: BLE001 - any other failure is not the refusal
+        except Exception:  # any other failure is not the refusal being asked about
             pass
         unguarded.append(adapter)
     assert not unguarded, (

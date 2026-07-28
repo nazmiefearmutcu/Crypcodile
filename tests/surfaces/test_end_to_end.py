@@ -82,11 +82,16 @@ def test_the_cli_answers_to_a_retired_spelling(lake: pathlib.Path) -> None:
 
 
 def test_the_cli_warns_when_the_implementation_is_not_native(lake: pathlib.Path) -> None:
-    """Equity slippage rests on a modelled book, and the surface says so before the number.
+    """Equity slippage rests on a book the venue did not publish, and the surface says so.
 
     The banner generalises the one the equity REST depth route shipped by hand for a single
-    endpoint. Here it comes from the basis registration, so every modelled answer carries
+    endpoint. Here it comes from the basis registration, so every non-native answer carries
     one.
+
+    ``DERIVED``/``alpaca_l1`` rather than ``SYNTHETIC``/``yahoo_1m_vap``: the equity half
+    used to be the crypto function, reading the crypto ``book_snapshot`` this lake writes
+    while declaring a VAP basis it never touched. It walks the ladder ``depth`` serves now,
+    and declares the same ceiling ``depth`` does, because it is the same book.
     """
     runner = CliRunner()
     result = runner.invoke(
@@ -95,8 +100,8 @@ def test_the_cli_warns_when_the_implementation_is_not_native(lake: pathlib.Path)
          "--asset-class", "equity", "--data-dir", str(lake)],
     )
     assert result.exit_code == 0, result.output
-    assert "SYNTHETIC" in result.output
-    assert "yahoo_1m_vap" in result.output
+    assert "DERIVED" in result.output
+    assert "alpaca_l1" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +163,9 @@ def test_rest_serves_the_alias_and_the_synthetic_warning(lake: pathlib.Path) -> 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["result"]["expected_price"] > 0
-    assert "SYNTHETIC" in body["warning"]
+    # DERIVED since the equity half stopped claiming a VAP ladder it never opened; see
+    # test_the_cli_warns_when_the_implementation_is_not_native.
+    assert "DERIVED" in body["warning"]
 
 
 def test_rest_describes_its_query_parameters_in_openapi(lake: pathlib.Path) -> None:
@@ -219,8 +226,8 @@ def test_mcp_warns_on_a_modelled_answer(lake: pathlib.Path) -> None:
         {"symbol": SYMBOL, "side": "buy", "size": 1.0, "asset_class": "equity"},
         settings=_settings(lake),
     )
-    assert "SYNTHETIC" in body["warning"]
-    assert body["provenance"]["prov_basis"] == "yahoo_1m_vap"
+    assert "DERIVED" in body["warning"]
+    assert body["provenance"]["prov_basis"] == "alpaca_l1"
 
 
 def test_mcp_refuses_a_tool_it_does_not_have() -> None:

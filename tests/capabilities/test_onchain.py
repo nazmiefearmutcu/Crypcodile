@@ -21,19 +21,19 @@ from __future__ import annotations
 import asyncio
 import inspect
 import pathlib
+from typing import cast
 
 import msgspec
 import pytest
-from typing import cast
 
 import crocodile.crypto.exchanges.base_onchain.price
 from crocodile.capabilities import onchain
 from crocodile.core.capability import (
     IRREDUCIBLE,
-    CapabilityContext,
     PENDING_SYMMETRY,
     REGISTRY,
     AssetClass,
+    CapabilityContext,
     ReturnKind,
 )
 from crocodile.core.schema.provenance import Provenance, registered_bases
@@ -212,7 +212,6 @@ def test_no_pool_reader_reports_a_failure_as_a_result() -> None:
     ``prov=NATIVE`` over whatever comes back.
     """
     import ast
-    import pathlib
 
     source = pathlib.Path(
         crocodile.crypto.exchanges.base_onchain.price.__file__

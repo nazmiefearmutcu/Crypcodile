@@ -36,7 +36,12 @@ import polars as pl
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.rows import _coerce_levels_from_row
 
-__all__ = ["estimate_slippage", "parse_base_quote", "parse_size_input"]
+__all__ = [
+    "estimate_slippage",
+    "parse_base_quote",
+    "parse_size_input",
+    "slippage_over_levels",
+]
 
 _SIZE_WITH_UNIT = re.compile(r"^([0-9.]+)\s*([a-zA-Z]+)?$")
 
@@ -167,7 +172,7 @@ def estimate_slippage(
     size: float | str,
     size_unit: str | None = None,
 ) -> pl.DataFrame:
-    """Calculate the expected execution price and slippage for a given size.
+    """Calculate the expected execution price and slippage against the stored book.
 
     Args:
         catalog: A :class:`~crocodile.core.store.catalog.Catalog` instance.
@@ -177,8 +182,54 @@ def estimate_slippage(
             overrides *size_unit*.
         size_unit: What *size* is denominated in. When it names the symbol's quote asset
             the book is walked by notional rather than by quantity; otherwise the walk is
-            by quantity, which is what an equity caller sizing in shares wants and gets by
-            leaving this unset.
+            by quantity, which is what a caller sizing in shares wants and gets by leaving
+            this unset.
+
+    Returns:
+        The one-row frame :func:`slippage_over_levels` describes.
+
+    Raises:
+        ValueError: on a non-positive size, an unrecognised side, a symbol with no stored
+            book snapshot, an empty side of the book, or a size deeper than the book.
+        RuntimeError: if the snapshot query fails for a reason other than the view not
+            existing.
+    """
+    bids, asks = _load_book(catalog, symbol)
+    return slippage_over_levels(symbol, side, size, bids, asks, size_unit=size_unit)
+
+
+def slippage_over_levels(
+    symbol: str,
+    side: str,
+    size: float | str,
+    bids: list[tuple[float, float]],
+    asks: list[tuple[float, float]],
+    *,
+    size_unit: str | None = None,
+) -> pl.DataFrame:
+    """Walk a ladder to the requested size, wherever the ladder came from.
+
+    Separated from :func:`estimate_slippage` because the arithmetic is not the part that
+    differs between the two asset classes — the *ladder* is. Crypto venues stream a book and
+    the lake stores it; no equity provider in this tree emits a ``BookSnapshot`` at all, so
+    the equity half of the ``slippage`` capability was calling the lake reader above and
+    raising ``ValueError: No book snapshots found`` on every call, while its declaration
+    published ``prov_basis: "yahoo_1m_vap"`` — a basis naming a synthetic VAP ladder that
+    the code path never touched.
+
+    The ladder that basis names is real: ``crocodile.equity.depth.select_depth_source``
+    builds it, and ``depth`` already serves it. So the walk takes levels rather than a
+    catalog, and each asset class brings its own book to it.
+
+    Args:
+        symbol: Canonical symbol string, echoed into the result.
+        side: ``"buy"``/``"b"`` or ``"sell"``/``"s"``, case-insensitive. A buy walks the
+            asks and a sell walks the bids.
+        size: The execution size. A string may carry its own unit (``"305 USDT"``), which
+            overrides *size_unit*.
+        bids: Resting bid levels as ``(price, amount)``, in any order.
+        asks: Resting ask levels as ``(price, amount)``, in any order.
+        size_unit: See :func:`estimate_slippage`.
 
     Returns:
         A one-row Polars DataFrame: ``symbol``, ``side``, ``size``, ``size_unit``,
@@ -191,10 +242,8 @@ def estimate_slippage(
         question nobody asked.
 
     Raises:
-        ValueError: on a non-positive size, an unrecognised side, a symbol with no stored
-            book snapshot, an empty side of the book, or a size deeper than the book.
-        RuntimeError: if the snapshot query fails for a reason other than the view not
-            existing.
+        ValueError: on a non-positive size, an unrecognised side, an empty side of the
+            book, or a size deeper than the book.
     """
     if isinstance(size, str):
         size_val, parsed_unit = parse_size_input(size)
@@ -221,7 +270,6 @@ def estimate_slippage(
         _base, quote = parse_base_quote(symbol)
         is_quote = final_unit == quote.upper()
 
-    bids, asks = _load_book(catalog, symbol)
     raw_levels = bids if side_lower == "sell" else asks
 
     # Drop deleted/empty levels and enforce the walk order, rather than trusting however
