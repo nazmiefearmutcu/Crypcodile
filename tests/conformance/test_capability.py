@@ -307,6 +307,11 @@ def test_indicator_names_are_what_apply_indicators_accepts() -> None:
         apply_indicators(_bars(), name)
 
 
+# ---------------------------------------------------------------------------
+# An implementation cannot hand back more than its inputs
+# ---------------------------------------------------------------------------
+
+
 def _declared_impls() -> list[tuple[str, str, Impl]]:
     """Every implementation in the registry, with the capability and asset class it serves."""
     from crocodile.capabilities import load_all
@@ -317,6 +322,46 @@ def _declared_impls() -> list[tuple[str, str, Impl]]:
         for name, cap in sorted(REGISTRY.items())
         for asset_class, impl in sorted(cap.impls.items(), key=lambda pair: pair[0].value)
     ]
+
+
+def test_no_implementation_claims_a_provenance_stronger_than_its_basis() -> None:
+    """``worst_provenance``'s rule, applied to the declaration instead of to a row.
+
+    "A derivation can never be more trustworthy than its worst input" is already written
+    down, enforced over record frames, and was enforced nowhere over :class:`Impl` — so one
+    declaration in ninety-one inverted it and nothing said so: ``collect-market``/equity
+    claimed ``NATIVE`` over a basis registered ``DERIVED``.
+
+    This gate is worth more than that one fix. ``basis`` names what the answer rests on and
+    ``prov`` names what is handed back, and the whole value of the pair is that a caller can
+    read the second knowing it is bounded by the first. One exception makes the bound
+    advisory, and an advisory bound is the shape every finding in this phase had.
+
+    Note the direction: ``trust_rank`` is *higher is less trustworthy*, so a conforming
+    implementation has a rank at least as large as its basis's. ``indicators`` — ``DERIVED``
+    over ``native`` — is the ordinary case and the one this must keep allowing.
+    """
+    from crocodile.core.schema.provenance import trust_rank
+
+    impls = _declared_impls()
+    assert len(impls) > 50, "the registry is too small for this gate to mean anything"
+    inversions = [
+        (name, asset_class, impl.prov.value, impl.basis, level_for(impl.basis).value)
+        for name, asset_class, impl in impls
+        if trust_rank(impl.prov) < trust_rank(level_for(impl.basis))
+    ]
+    assert not inversions, (
+        "these hand back something more trustworthy than what they rest on: " f"{inversions}"
+    )
+
+
+def test_the_gate_above_rejects_an_inversion(_isolate_registry: None) -> None:
+    """Driven rather than assumed, because a gate that has never failed proves nothing."""
+    from crocodile.core.schema.provenance import trust_rank
+
+    inverted = Impl(fn=lambda ctx, params: None, prov=Provenance.NATIVE, basis="yahoo_1m_vap")
+    assert level_for(inverted.basis) is Provenance.SYNTHETIC
+    assert trust_rank(inverted.prov) < trust_rank(level_for(inverted.basis))
 
 
 # ---------------------------------------------------------------------------
