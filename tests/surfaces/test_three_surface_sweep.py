@@ -97,8 +97,13 @@ def test_a_sequence_parameter_capability_answers_the_same_on_all_three(
     assert from_cli.exit_code == 0, from_cli.output
     assert len(from_rest.json()["rows"]) == 3
     assert from_rest.json()["rows"] == from_mcp["rows"]
-    # Neither surface was told which market; the symbol settled it for both.
-    assert from_rest.json()["provenance"]["asset_class"] == "crypto"
+    # Neither surface was told which market and both answered, which is the claim; the
+    # symbol settled it for `resolve_asset_class` either way. The envelope reports `any`
+    # because `catalog-scan` reads the lake as a lake — one implementation for both classes,
+    # never consulting `ctx.asset_class` — so stamping the resolved value would report an
+    # input as a property of the answer.
+    assert from_rest.json()["provenance"]["asset_class"] == "any"
+    assert dispatch.resolve("catalog-scan").cross_market is True
     # And the result crosses both wires, which the `date` partition column stopped it doing.
     json.dumps(from_mcp)
 

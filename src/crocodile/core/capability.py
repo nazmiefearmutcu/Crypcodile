@@ -305,6 +305,30 @@ class Capability(msgspec.Struct, frozen=True):
     :data:`IRREDUCIBLE`.
     """
 
+    cross_market: bool = False
+    """Whether the answer is the same whichever implementation serves it.
+
+    Thirteen capabilities read the lake *as a lake* rather than as a market: ``search``,
+    ``query``, ``catalog-symbols``, ``catalog-exchanges`` and the rest of
+    :mod:`crocodile.capabilities.catalog`, whose module never mentions ``ctx.asset_class``
+    because there is nothing for it to mean. ``search?q=EQ&asset_class=crypto`` answered 200
+    with three ``stooq:`` equity symbols and stamped ``provenance.asset_class: "crypto"`` —
+    a value that selected nothing, echoed back as though it had.
+
+    The envelope reads this and says ``"any"`` instead. That is the whole of what the flag
+    does today: it does not change which implementation runs, because for these it cannot
+    matter, and it deliberately does not try to make the parameter optional — that lives in
+    ``surfaces.dispatch.resolve_asset_class``, which refuses when it cannot tell, and
+    relaxing it there is a separate decision about a function three surfaces share.
+
+    Declared rather than sniffed, and then *checked*: a conforming capability has one
+    implementation function and one ``(prov, basis)`` across its asset classes, which is
+    mechanically true of an answer that does not depend on the market, and the surfaces drive
+    both classes and compare the rows. Sniffing the same condition would silently catch
+    capabilities that share a function *and* read ``ctx.asset_class`` inside it —
+    ``apply_indicators`` is one, and :class:`CapabilityContext` documents why it does.
+    """
+
     aliases: tuple[str, ...] = ()
     """Retired spellings that must keep resolving to :attr:`name`.
 

@@ -704,7 +704,14 @@ def provenance_block(cap: Capability, ctx: CapabilityContext) -> dict[str, Any]:
     prov, basis = effective_provenance(impl, ctx.settings)
     block: dict[str, Any] = {
         "capability": cap.name,
-        "asset_class": ctx.asset_class.value,
+        # ``any`` for a capability whose answer does not depend on which implementation ran.
+        # ``search?q=EQ&asset_class=crypto`` returned three ``stooq:`` equity symbols and
+        # stamped ``"crypto"`` — a value the caller was *forced* to supply, that selected
+        # nothing, echoed back as though it had. Same for ``catalog-symbols`` and
+        # ``catalog-exchanges``, and for the ten other capabilities in that batch. Echoing an
+        # input is not reporting a fact, and a caller filtering answers by this field would
+        # have partitioned a cross-market answer by the argument they happened to send.
+        "asset_class": "any" if cap.cross_market else ctx.asset_class.value,
         "prov": prov.value,
         "prov_basis": basis,
         "method": describe(basis),
