@@ -514,12 +514,15 @@ def _carry_confidence(
 
 
 _CHAIN_SQL: Final = """
-    SELECT local_ts, expiry, strike, opt_type, bid_px, ask_px, mark_price, last_price
+    SELECT local_ts, expiry, strike, opt_type, underlying_price,
+           bid_px, ask_px, mark_price, last_price
     FROM options_chain
     WHERE UPPER(underlying) = UPPER(?)
       AND local_ts BETWEEN ? AND ?
     ORDER BY local_ts, expiry, strike
 """
+"""``underlying_price`` is selected because it is the cash leg — see
+:func:`equity_forward_basis` for why the separate price series is not."""
 
 
 def _option_mid(row: dict[str, object]) -> float | None:
@@ -559,9 +562,10 @@ def equity_forward_basis(
 
     Args:
         catalog: The lake.
-        symbol: The underlying, as ``options_chain.underlying`` spells it, and as the cash
-            price series is symboled. One symbol, which is the shared ``PerpBasisParams``
-            schema and the constraint the whole construction is built to honour.
+        symbol: The underlying, as ``options_chain.underlying`` spells it. One symbol,
+            which is the shared ``PerpBasisParams`` schema and the constraint the whole
+            construction is built to honour — and, since both legs now come off the chain,
+            one channel too.
         start_ns: Inclusive lower bound on ``local_ts``.
         end_ns: Inclusive upper bound on ``local_ts``.
 
@@ -571,7 +575,53 @@ def equity_forward_basis(
         ``strike``, ``risk_free_rate`` and ``prov_confidence``, which say which contract
         pair the forward came off and what it was discounted at.
 
-        ``pl.DataFrame()`` when there is no chain, no cash price, or no curve.
+        ``pl.DataFrame()`` when there is no chain, no curve, or no chain snapshot that
+        carries its own underlying price.
+
+    **The index leg is the chain row's own ``underlying_price``, and nothing else.** The
+    claim this function's own summary makes — a mark and an index *at the same instant* —
+    is only true if both come off one observation, which is exactly how the crypto twin
+    gets it: :func:`~crocodile.crypto.analytics.basis.perp_basis` reads ``mark_price`` and
+    ``index_price`` off a single ``derivative_ticker`` row and drops the row when either is
+    missing. It does not reach for a spot series when the record has no index, and neither
+    does this.
+
+    It used to. The cash leg was :func:`price_leg`'s nearest *prior* print, taken with an
+    unbounded search, and on one identical chain snapshot whose rows all carried a spot of
+    105.00 the answer moved with nothing but the age of the stored cash series: a
+    same-instant print gave a 0.57 % basis, a one-day-old daily bar gave 5.6 %, and a
+    year-old one gave 151 %. Every one of those rows was built from an option chain that
+    was carrying 105.00 in a column this function did not select. A basis is a *difference*
+    between two prices; two prices from different instants subtracted are not a basis, they
+    are two unrelated observations and a subtraction sign.
+
+    The provider half already settled this argument in the other direction:
+    ``yahoo/client.py`` stopped writing ``underlying_price=None`` and started writing the
+    quote out of *the same ``optionChain`` payload that produced the strikes*, because a
+    second quote call "would stamp a price from a different instant onto a chain snapshot".
+    A stored series read at query time is that same defect one layer down, so honouring the
+    argument means not re-introducing it here.
+
+    **Why there is no fallback to the price series, bounded or otherwise.** A bound needs a
+    number saying how stale a cash print may be before it stops describing the instant, and
+    that number is not published by anything. This registry has twice declined to invent
+    exactly that denominator — ``_aggregate_of_an_undeclared_stream`` refuses to say how
+    often a stream ought to tick, and ``book_resample`` refuses staleness as a confidence
+    term for the same reason — and the horizon, the only interval already on the row, is
+    the wrong one: it is how long the *financing* is applied for, and a 91-day horizon
+    would happily admit a 30-day-old cash print, which is the 32 % basis in the table
+    above. So the skew is removed rather than graded, and ``prov_confidence`` gains no term
+    for it because the observable it would score is now structurally zero at every emitted
+    row — the same shape ``book_resample`` describes when it lost its formula by making
+    ``lookahead_ns`` unreachable rather than by scoring it.
+
+    The cost is a chain whose provider writes no spot: it yields no rows where it used to
+    yield wrong ones. That is the empty-result contract this module already applies to a
+    missing curve, and the one equity chain provider in the tree writes the column.
+
+    The gain is the second failure mode closing too. A lake holding an ``options_chain``
+    and a curve and nothing else returned *zero* rows, because ``price_leg`` had nothing to
+    find — while every row in it carried a usable spot.
 
     **Why a missing curve means no rows rather than an undiscounted forward.** Setting
     ``r = 0`` gives ``F = K + (C - P)``, which is a perfectly computable number and a
@@ -597,27 +647,17 @@ def equity_forward_basis(
     if len(chain) == 0:
         return pl.DataFrame()
 
-    cash = price_leg(catalog, symbol, start_ns, end_ns)
-    if len(cash) == 0:
-        return pl.DataFrame()
     curve = risk_free_curve(catalog, end_ns)
     if not curve:
         return pl.DataFrame()
 
-    cash_ts = cash["local_ts"].to_list()
-    cash_px = cash["price"].to_list()
-
     rows: list[dict[str, object]] = []
     for (at_raw,), snapshot in chain.group_by(["local_ts"], maintain_order=True):
         at_ns = int(at_raw)  # type: ignore[call-overload]
-        index = bisect_right(cash_ts, at_ns) - 1
-        if index < 0:
-            continue
-        spot = float(cash_px[index])
-        pair = _nearest_parity_pair(snapshot, at_ns=at_ns, spot=spot)
+        pair = _nearest_parity_pair(snapshot, at_ns=at_ns)
         if pair is None:
             continue
-        expiry_ns, strike, call_px, put_px = pair
+        expiry_ns, spot, strike, call_px, put_px = pair
         horizon_days = days_between(at_ns, expiry_ns)
         quote = curve.at(at_ns, horizon_days)
         if quote is None:
@@ -660,17 +700,49 @@ def equity_forward_basis(
     ).sort("local_ts")
 
 
+def _chain_spot(at_expiry: pl.DataFrame) -> float | None:
+    """The cash price these chain rows were quoted against, or ``None``.
+
+    Scoped to one expiry rather than to the whole snapshot because a provider fetches a
+    chain one expiry at a time — ``yahoo/client.py`` runs one request per expiration and
+    stamps them all with one ``local_ts`` — so the spot that came back with *these* strikes
+    is the one on *these* rows. This is the same scoping
+    :func:`~crocodile.core.analytics.volsurface._underlying_price_at` needs its
+    expiry-bounded statement for.
+
+    Rows of one expiry in one snapshot come from one payload, so the column is constant
+    across them and the first usable value is the value; the loop exists to skip nulls, not
+    to choose between disagreeing numbers. Non-positive is treated as absent for the reason
+    :func:`price_leg` gives — every consumer divides by it.
+    """
+    if "underlying_price" not in at_expiry.columns:
+        return None
+    for value in at_expiry["underlying_price"].to_list():
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0.0:
+            return float(value)
+    return None
+
+
 def _nearest_parity_pair(
-    snapshot: pl.DataFrame, *, at_ns: int, spot: float
-) -> tuple[int, float, float, float] | None:
-    """Return ``(expiry, strike, call, put)`` for the nearest expiry's most-ATM pair."""
+    snapshot: pl.DataFrame, *, at_ns: int
+) -> tuple[int, float, float, float, float] | None:
+    """Return ``(expiry, spot, strike, call, put)`` for the nearest expiry's most-ATM pair.
+
+    The spot is read before the strike is chosen because it is what "most ATM" is measured
+    against, and it comes off the same rows the strikes did — see
+    :func:`equity_forward_basis` for why it is not looked up anywhere else.
+    """
     live = snapshot.filter(pl.col("expiry") > at_ns)
     if len(live) == 0:
         return None
     expiry_ns = int(live["expiry"].min())  # type: ignore[arg-type]
+    at_expiry = live.filter(pl.col("expiry") == expiry_ns)
+    spot = _chain_spot(at_expiry)
+    if spot is None:
+        return None
     calls: dict[float, float] = {}
     puts: dict[float, float] = {}
-    for row in live.filter(pl.col("expiry") == expiry_ns).iter_rows(named=True):
+    for row in at_expiry.iter_rows(named=True):
         price = _option_mid(row)
         if price is None:
             continue
@@ -681,7 +753,7 @@ def _nearest_parity_pair(
     if len(shared) < _MIN_PARITY_STRIKES:
         return None
     strike = min(shared, key=lambda k: abs(k - spot))
-    return expiry_ns, strike, calls[strike], puts[strike]
+    return expiry_ns, spot, strike, calls[strike], puts[strike]
 
 
 _DIVIDEND_SQL: Final = """

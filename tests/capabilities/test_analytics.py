@@ -1189,7 +1189,12 @@ def _m5_lake(tmp_path: Path) -> CapabilityContext:
             source="yahoo", symbol=f"{_M5_STOCK}{strike:g}{opt.value}",
             symbol_raw=f"{_M5_STOCK}{strike:g}{opt.value}", local_ts=_T3,
             asset_class=AssetClass.EQUITY, source_ts=_T3, underlying=_M5_STOCK,
-            underlying_price=None, strike=strike, expiry=_M5_EXPIRY, opt_type=opt,
+            # The spot out of the same payload the strikes came from, which is what the
+            # provider writes and what `perp-basis` reads as its index leg. It was `None`
+            # here, so the assertion below that `index_price == 100.0` was passing off the
+            # stored `_px(_M5_STOCK, _T2, 100.0)` bar — a different instant that happened
+            # to agree — and could not have noticed the chain's own column at all.
+            underlying_price=100.0, strike=strike, expiry=_M5_EXPIRY, opt_type=opt,
             bid_px=bid, ask_px=ask,
         )
 

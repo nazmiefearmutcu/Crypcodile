@@ -114,7 +114,24 @@ def _index(symbol: str, ts: int, value: float) -> IndexValue:
     )
 
 
-def _option(ts: int, strike: float, opt: OptType, bid: float, ask: float) -> OptionsChain:
+def _option(
+    ts: int,
+    strike: float,
+    opt: OptType,
+    bid: float,
+    ask: float,
+    spot: float | None = 100.0,
+    expiry: int | None = None,
+) -> OptionsChain:
+    """One contract, carrying the spot out of the payload that produced it.
+
+    ``spot`` defaults to a real number rather than to ``None``, which is what it was
+    pinned at until this fixture was found to be structurally unable to see the field the
+    provider writes: every chain built here answered as if Yahoo had left the column empty,
+    so the one column the forward's index leg comes from was never exercised. ``None``
+    remains reachable by passing it, because a chain with no spot is a real state and now
+    has a real consequence.
+    """
     return OptionsChain(
         source="yahoo",
         symbol=f"{_STOCK}{strike:g}{opt.value}",
@@ -123,9 +140,9 @@ def _option(ts: int, strike: float, opt: OptType, bid: float, ask: float) -> Opt
         asset_class=AssetClass.EQUITY,
         source_ts=ts,
         underlying=_STOCK,
-        underlying_price=None,
+        underlying_price=spot,
         strike=strike,
-        expiry=_EXPIRY,
+        expiry=_EXPIRY if expiry is None else expiry,
         opt_type=opt,
         bid_px=bid,
         ask_px=ask,
@@ -546,18 +563,109 @@ def test_a_strike_quoted_on_only_one_side_cannot_close_parity(tmp_path: Path) ->
     assert equity_forward_basis(catalog, _STOCK, *_WINDOW).is_empty()
 
 
-def test_a_symbol_with_no_chain_or_no_cash_price_is_empty(tmp_path: Path) -> None:
-    no_chain = _lake(tmp_path / "a", [_trade(_STOCK, _T1, 100.0, "p1"), *_curve_records()])
+def test_a_symbol_with_no_chain_is_empty(tmp_path: Path) -> None:
+    """A cash price on its own is not half a forward — parity needs both option legs.
+
+    This used to assert a second thing: that a chain with no separate cash *series* was
+    also empty. It is not, and it should never have been — the chain carries the cash leg.
+    That case is now
+    ``test_a_lake_holding_only_a_chain_and_a_curve_still_answers``, which asserts the
+    opposite outcome for the same lake, and the case this one still covers is unchanged.
+    """
+    no_chain = _lake(tmp_path, [_trade(_STOCK, _T1, 100.0, "p1"), *_curve_records()])
     assert equity_forward_basis(no_chain, _STOCK, *_WINDOW).is_empty()
-    no_cash = _lake(
-        tmp_path / "b",
+
+
+def test_the_index_leg_is_the_chains_own_spot_and_not_a_stored_print(tmp_path: Path) -> None:
+    """One snapshot, one spot: the mark and the index come off the same observation.
+
+    The chain below carries 105.00 on every row while the stored cash series holds a
+    day-old bar at 100.00. Taking the stored print made the answer a function of how old
+    the cash series happened to be — the same snapshot read 0.0057 against a same-instant
+    print and 0.5600 against this one, ten times the basis, with no column moving to say
+    so. The crypto twin cannot express that: ``perp_basis`` reads mark and index off one
+    ``derivative_ticker`` row.
+    """
+    catalog = _lake(
+        tmp_path,
         [
-            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6),
-            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6),
+            _bar(_STOCK, _NOW - _DAY_NS, 100.0),
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=105.0),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=105.0),
             *_curve_records(),
         ],
     )
-    assert equity_forward_basis(no_cash, _STOCK, *_WINDOW).is_empty()
+    row = equity_forward_basis(catalog, _STOCK, *_WINDOW).row(0, named=True)
+    assert row["index_price"] == pytest.approx(105.0)
+    horizon = (_EXPIRY - _T2) / _DAY_NS
+    forward = 100.0 + 3.0 * (1.0 + _THREE_MONTH_ON_JAN_5 * horizon / DAYS_PER_YEAR)
+    assert row["basis_pct"] == pytest.approx((forward - 105.0) / 105.0)
+
+
+def test_a_lake_holding_only_a_chain_and_a_curve_still_answers(tmp_path: Path) -> None:
+    """Every row carried a usable spot while the function returned nothing.
+
+    ``price_leg`` was a precondition, so an ``options_chain`` partition with no ``trade``,
+    ``ohlcv`` or ``index_value`` beside it produced zero rows — an empty answer reported
+    for a lake that held both legs of the measurement.
+    """
+    catalog = _lake(
+        tmp_path,
+        [
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=100.0),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=100.0),
+            *_curve_records(),
+        ],
+    )
+    frame = equity_forward_basis(catalog, _STOCK, *_WINDOW)
+    assert len(frame) == 1
+    assert frame["index_price"][0] == pytest.approx(100.0)
+
+
+def test_a_chain_with_no_spot_of_its_own_is_no_forward(tmp_path: Path) -> None:
+    """The cost of the decision above, stated: no contemporaneous cash leg, no row.
+
+    A cash print from some other instant is available here and is deliberately not used —
+    a bound on how stale it may be would need a number nothing publishes, which is the
+    denominator ``_aggregate_of_an_undeclared_stream`` and ``book_resample`` both decline
+    to invent.
+    """
+    catalog = _lake(
+        tmp_path,
+        [
+            _trade(_STOCK, _T1, 100.0, "p1"),
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=None),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=None),
+            *_curve_records(),
+        ],
+    )
+    assert equity_forward_basis(catalog, _STOCK, *_WINDOW).is_empty()
+
+
+def test_the_spot_is_scoped_to_the_expiry_the_forward_is_read_off(tmp_path: Path) -> None:
+    """One ``local_ts`` can hold several expiries, each fetched in its own request.
+
+    ``yahoo/client.py`` issues one call per expiration and stamps them with one local
+    instant, so the spot that came back with *these* strikes is the one on *these* rows.
+    The nearest expiry is chosen first and its own spot is what the strike is measured
+    against — the far expiry's 200.00 below must not select the 200-strike.
+    """
+    near = _EXPIRY
+    far = _EXPIRY + 30 * _DAY_NS
+    catalog = _lake(
+        tmp_path,
+        [
+            _option(_T2, 100.0, OptType.CALL, 5.4, 5.6, spot=100.0, expiry=near),
+            _option(_T2, 100.0, OptType.PUT, 2.4, 2.6, spot=100.0, expiry=near),
+            _option(_T2, 200.0, OptType.CALL, 9.4, 9.6, spot=200.0, expiry=far),
+            _option(_T2, 200.0, OptType.PUT, 1.4, 1.6, spot=200.0, expiry=far),
+            *_curve_records(),
+        ],
+    )
+    row = equity_forward_basis(catalog, _STOCK, *_WINDOW).row(0, named=True)
+    assert row["expiry"] == near
+    assert row["strike"] == pytest.approx(100.0)
+    assert row["index_price"] == pytest.approx(100.0)
 
 
 def test_an_expiry_already_past_the_snapshot_is_not_a_forward(tmp_path: Path) -> None:
