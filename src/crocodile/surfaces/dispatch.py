@@ -48,6 +48,7 @@ __all__ = [
     "REFUSED",
     "UNAVAILABLE",
     "asset_class_option_values",
+    "banner_for",
     "build_context",
     "build_params",
     "drive",
@@ -632,6 +633,32 @@ def warning_for(cap: Capability, ctx: CapabilityContext) -> str | None:
         f"{impl.prov.value.upper()} — {cap.name} for {ctx.asset_class.value} is not a "
         f"venue-reported observation. Its inputs rest on {impl.basis!r}: {_headline(impl.basis)}"
     )
+
+
+def banner_for(cap: Capability, ctx: CapabilityContext) -> str | None:
+    """The subset of :func:`warning_for` that belongs on a terminal's error stream.
+
+    Only when the answer was *modelled* — when the quantity was produced from a different
+    data class than the one it reports, which is what :attr:`Provenance.SYNTHETIC` means. An
+    equity depth ladder is invented from 1m bars and an operator has to be told before they
+    read the numbers.
+
+    ``DERIVED`` is deliberately not announced here, and the difference is what a banner is
+    for. A derived answer is computed from native inputs, which is what an indicator *is*:
+    the caller asked for ``--indicator rsi`` by name, so being told that an RSI was computed
+    is not news. Printing it on every successful call made two things worse at once — a
+    script asserting empty stderr broke on a command that worked, and an operator who sees
+    the banner on every call stops reading the one that matters, which is the SYNTHETIC one
+    arriving on the same channel.
+
+    Nothing is lost on the surfaces that can carry it: :func:`warning_for` still announces
+    every non-``NATIVE`` implementation in the payload, where it is a field a machine reader
+    can consult rather than a line a human learns to skip.
+    """
+    impl = implementation(cap, ctx)
+    if impl.prov in (Provenance.NATIVE, Provenance.DERIVED):
+        return None
+    return warning_for(cap, ctx)
 
 
 def _headline(basis: str) -> str:

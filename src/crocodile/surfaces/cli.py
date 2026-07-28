@@ -28,7 +28,7 @@ from crocodile.core.errors import CrocodileError
 from crocodile.core.store.catalog import Catalog
 from crocodile.surfaces import dispatch
 
-__all__ = ["RESERVED_OPTIONS", "build_app", "command_names"]
+__all__ = ["POSITIONAL", "RESERVED_OPTIONS", "build_app", "command_names", "positional_field"]
 
 RESERVED_OPTIONS: frozenset[str] = frozenset({"asset_class", "data_dir"})
 """Option names this surface adds itself, which a params field may therefore not use.
@@ -84,6 +84,35 @@ def _option_decl(name: str, kind: type) -> str:
     return f"{flag}/--no-{name.replace('_', '-')}" if kind is bool else flag
 
 
+POSITIONAL = "_positional"
+"""The synthesised name of the optional positional argument. Not a params field name.
+
+Leading underscore because it must never collide with one: a struct field called
+``_positional`` would silently take over the argument that fills a different field.
+"""
+
+
+def positional_field(cap: Capability) -> str | None:
+    """The one parameter this capability may also take positionally, if there is one.
+
+    A capability with **exactly one** required parameter, spellable as text, gets it as an
+    optional positional argument as well as an option. That is how the legacy CLI took every
+    one of them — ``crypcodile query "SELECT 1"``, ``crypcodile search BTC`` — and losing it
+    was not a decision anyone made, it fell out of synthesising keyword-only options from a
+    struct.
+
+    One required parameter, or none. Two would make the order something a caller has to
+    memorise, and ``crocodile indicators deribit:BTC-PERPETUAL 1700000000000000000
+    1700003600000000000`` is a line nobody can read back. A structured parameter is excluded
+    for the opposite reason: it is a document rather than a word, and a shell hands those
+    over on a pipe, which is what :func:`_from_stdin` is for.
+    """
+    required = [field for field in msgspec.structs.fields(cap.params) if field.required]
+    if len(required) != 1 or required[0].name in dispatch.structured_fields(cap):
+        return None
+    return required[0].name
+
+
 def _parameters(cap: Capability) -> list[inspect.Parameter]:
     """Build the Typer signature for one capability: its params, then this surface's own.
 
@@ -93,7 +122,31 @@ def _parameters(cap: Capability) -> list[inspect.Parameter]:
     """
     descriptions = dispatch.params_schema(cap).get("properties", {})
     parameters: list[inspect.Parameter] = []
+    positional = positional_field(cap)
+    if positional is not None:
+        # First in the signature, because ``inspect.Signature`` refuses a positional
+        # parameter after a keyword-only one. It defaults to ``None`` so that every existing
+        # invocation — which passes the option — keeps working unchanged.
+        parameters.append(
+            inspect.Parameter(
+                POSITIONAL,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=None,
+                annotation=Annotated[
+                    str | None,
+                    typer.Argument(
+                        metavar=positional.upper(),
+                        help=f"{positional}, positionally. Also readable from stdin.",
+                    ),
+                ],
+            )
+        )
     for field in msgspec.structs.fields(cap.params):
+        if field.name == POSITIONAL:
+            raise ValueError(
+                f"{cap.name}: params field {field.name!r} collides with the positional "
+                f"argument this surface synthesises"
+            )
         if field.name in RESERVED_OPTIONS:
             raise ValueError(
                 f"{cap.name}: params field {field.name!r} collides with the "
@@ -105,7 +158,14 @@ def _parameters(cap: Capability) -> list[inspect.Parameter]:
         option = typer.Option(_option_decl(field.name, kind), help=help_text)
         default: Any = inspect.Parameter.empty
         annotation: Any = Annotated[kind, option]
-        if not field.required:
+        if field.name == positional:
+            # Required, but not required *as an option*: Click would reject the command line
+            # before the runner ever sees the positional or the pipe that supplies it. The
+            # requirement is still enforced — `build_params` refuses a struct with a missing
+            # field, naming it, after all three ways of supplying it have been tried.
+            default = None
+            annotation = Annotated[kind | None, option]
+        elif not field.required:
             default = field.default if field.default is not msgspec.NODEFAULT else None
             # A field with a real default keeps its declared type so ``--help`` shows the
             # value; one that defaults to None (or to a factory) becomes optional.
@@ -154,6 +214,7 @@ def _runner(cap: Capability) -> Any:
     def run(**kwargs: Any) -> None:
         asset_class: AssetClass | None = kwargs.pop("asset_class", None)
         data_dir: Path | None = kwargs.pop("data_dir", None)
+        _fill_positional(cap, kwargs)
         settings = Settings.from_env()
         try:
             params = dispatch.build_params(cap, kwargs)
@@ -173,9 +234,9 @@ def _runner(cap: Capability) -> Any:
                 readonly=False,
                 row_limit=None,
             )
-            warning = dispatch.warning_for(cap, ctx)
-            if warning:
-                typer.echo(warning, err=True)
+            banner = dispatch.banner_for(cap, ctx)
+            if banner:
+                typer.echo(banner, err=True)
             try:
                 pending = dispatch.invoke(cap, ctx, params)
                 # See the module docstring: local operator, own lake, so nothing is capped.
@@ -194,6 +255,43 @@ def _runner(cap: Capability) -> Any:
     runner.__signature__ = inspect.Signature(_parameters(cap), return_annotation=None)
     runner.__annotations__ = {}
     return runner
+
+
+def _fill_positional(cap: Capability, kwargs: dict[str, Any]) -> None:
+    """Resolve the one parameter this surface accepts three ways into the one it passes on.
+
+    Precedence is option, then positional, then stdin, and it is that way round because it
+    goes from most explicit to least: a caller who typed ``--sql`` said which value they
+    meant, and a pipe is what is left when nothing was said at all.
+    """
+    positional = kwargs.pop(POSITIONAL, None)
+    field = positional_field(cap)
+    if field is None:
+        return
+    if kwargs.get(field) is None:
+        kwargs[field] = positional
+    if kwargs.get(field) is None:
+        kwargs[field] = _from_stdin()
+
+
+def _from_stdin() -> str | None:
+    """A piped value, or ``None`` if there is no pipe and nothing on it.
+
+    Guarded on ``isatty`` so an interactive ``crocodile query`` reports the missing argument
+    instead of sitting silently waiting for a terminal that has nothing to send. A pipe is
+    how a shell hands over a value too long to type, and ``echo "SELECT …" | crypcodile
+    query`` is what the legacy CLI accepted; whitespace-only input is treated as nothing,
+    because ``< /dev/null`` is not an argument.
+    """
+    import sys
+
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return None
+        piped = sys.stdin.read().strip()
+    except (AttributeError, ValueError, OSError):
+        return None
+    return piped or None
 
 
 def _render(cap: Capability, result: Any, pending: Any = None) -> str:

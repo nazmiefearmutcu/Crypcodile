@@ -249,7 +249,14 @@ def test_capabilities_shape_and_contents(
     }
 
     assert result["mcp_tools_hint"] == sorted(mcp.tool_names())
-    assert {f"GET {path}" for path in rest.route_paths()} <= listed
+    # Method and path: four capabilities take parameters a query string cannot carry and
+    # answer only on POST, so a discovery list that says GET for everything sends an agent
+    # to a 405.
+    assert {
+        f"{method} {path}"
+        for path, methods in rest.route_methods().items()
+        for method in methods
+    } <= listed
 
     # Core free meta / catalog / analytics routes agents should discover. Every entry is a
     # capability's wire name now, so the hierarchical spellings the hand-written routes

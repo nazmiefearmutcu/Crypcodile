@@ -19,8 +19,9 @@ from tests.surfaces.conftest import SYMBOL
 
 
 def _client(lake: pathlib.Path):  # starlette's TestClient, imported lazily
-    from crocodile.core.config import Settings
     from starlette.testclient import TestClient
+
+    from crocodile.core.config import Settings
 
     return TestClient(
         rest.build_app(settings=Settings(data_dir=lake)), raise_server_exceptions=False
