@@ -414,9 +414,16 @@ def test_mcp_calls_a_tool_and_returns_the_same_envelope(
 
 
 def test_mcp_publishes_the_params_struct_as_its_input_schema() -> None:
+    """Re-pinned: the schema is inlined now, because a root ``$ref`` published no inputs.
+
+    This asserted the ``$ref``/``$defs`` form and read the properties out of ``$defs``, which
+    is where they were — and not where an MCP client looks. Clients build a tool's arguments
+    from ``inputSchema.properties``, and the projection wrote ``setdefault("properties", {})``
+    beside the reference, so every one of the 57 tools published an *empty* property set. The
+    assertion moves to the object a client actually reads.
+    """
     tool = next(t for t in mcp.tool_definitions() if t["name"] == "indicators")
-    assert tool["inputSchema"]["$ref"].endswith("IndicatorParams")
-    properties = tool["inputSchema"]["$defs"]["IndicatorParams"]["properties"]
+    properties = tool["inputSchema"]["properties"]
     # `fill_empty` joined the struct when the equity CLI's flag came back — it had been
     # dropped and its default silently flipped False to True. Listed here because the
     # projection publishes whatever the struct holds, which is the property being asserted.
@@ -428,8 +435,12 @@ def test_mcp_publishes_the_params_struct_as_its_input_schema() -> None:
         "indicator",
         "period",
         "fill_empty",
+        # The one input that is not a capability parameter: it selects the implementation.
+        "asset_class",
     }
     assert tool["assetClasses"] == ["crypto", "equity"]
+    # `indicators` takes a symbol, so the class is inferable and the option is not required.
+    assert "asset_class" not in tool["inputSchema"].get("required", [])
 
 
 def test_mcp_warns_on_a_modelled_answer(
@@ -571,3 +582,102 @@ def test_each_surface_declares_its_own_posture(lake: pathlib.Path) -> None:
     assert cli_posture == (False, None)
     assert rest_posture == (True, dispatch.NETWORK_ROW_LIMIT)
     assert rest_posture == mcp_posture
+
+
+# ---------------------------------------------------------------------------
+# The published contract, read the way a generated client reads it
+# ---------------------------------------------------------------------------
+
+
+def test_no_mcp_tool_publishes_an_empty_input_schema() -> None:
+    """A tool whose ``properties`` is ``{}`` cannot be called correctly from its contract.
+
+    Before: all 57. ``setdefault("properties", {})`` inserted an empty object beside the
+    root ``$ref`` instead of resolving it, and a client builds arguments from
+    ``properties`` — so every parameter of every capability was invisible on this surface.
+    """
+    import msgspec
+
+    from crocodile.core.capability import REGISTRY
+
+    tools = mcp.tool_definitions()
+    assert len(tools) > 50, "the registry is too small for this to prove anything"
+    for tool in tools:
+        schema = tool["inputSchema"]
+        cap = dispatch.resolve(tool["name"])
+        declared = {field.name for field in msgspec.structs.fields(cap.params)}
+        published = set(schema["properties"])
+        assert schema.get("type") == "object", tool["name"]
+        assert "$ref" not in schema, f"{tool['name']} publishes a reference, not a schema"
+        assert declared <= published, (
+            f"{tool['name']} declares {sorted(declared - published)} and publishes neither"
+        )
+        assert published == declared | {"asset_class"}, tool["name"]
+    assert REGISTRY, "no capabilities loaded"
+
+
+def test_every_tool_that_cannot_infer_its_market_says_asset_class_is_required() -> None:
+    """32 of the 57 wire names have two implementations and no symbol to resolve from.
+
+    For those, ``asset_class`` is the only thing that makes the call answerable — and it
+    appeared in no schema, no description and no error text. A client following the contract
+    could not call them; it found out with a 400.
+    """
+    mandatory = [
+        tool
+        for tool in mcp.tool_definitions()
+        if dispatch.requires_explicit_asset_class(dispatch.resolve(tool["name"]))
+    ]
+    assert len(mandatory) > 20, "this gate is measuring the wrong population"
+    for tool in mandatory:
+        schema = tool["inputSchema"]
+        assert "asset_class" in schema["required"], tool["name"]
+        assert schema["properties"]["asset_class"]["enum"] == tool["assetClasses"]
+
+    inferable = [
+        tool
+        for tool in mcp.tool_definitions()
+        if not dispatch.requires_explicit_asset_class(dispatch.resolve(tool["name"]))
+    ]
+    assert inferable, "every tool requires it; the distinction is not being drawn"
+    for tool in inferable:
+        assert "asset_class" not in tool["inputSchema"].get("required", []), tool["name"]
+
+
+def test_rest_publishes_asset_class_as_required_exactly_where_it_is(
+    lake: pathlib.Path,
+) -> None:
+    """The same claim on the other network surface, off the generated document.
+
+    ``required: false`` on a route where ``resolve_asset_class`` refuses outright describes a
+    request that can only answer 400. The enum is narrowed for the same reason: a route
+    offering a class it has no implementation for describes a 501.
+    """
+    document = _client(lake).get("/openapi.json").json()
+    checked = 0
+    for path, item in document["paths"].items():
+        operation = item.get("get") or item.get("post")
+        parameter = next(
+            p for p in operation["parameters"] if p["name"] == "asset_class"
+        )
+        cap = dispatch.resolve(path.removeprefix(f"{rest.API_PREFIX}/"))
+        assert parameter["required"] is dispatch.requires_explicit_asset_class(cap), path
+        assert parameter["schema"]["enum"] == dispatch.asset_class_option_values(cap), path
+        checked += 1
+    assert checked > 50, checked
+
+
+def test_the_two_network_surfaces_publish_the_same_parameters(lake: pathlib.Path) -> None:
+    """Half of what "full API symmetry" means, measured off both published documents.
+
+    Both are derived from one params struct, so this can only fail if a projector starts
+    describing the schema in its own words — which is what each of these fixes was.
+    """
+    document = _client(lake).get("/openapi.json").json()
+    for tool in mcp.tool_definitions():
+        cap = dispatch.resolve(tool["name"])
+        operation = document["paths"][f"{rest.API_PREFIX}/{tool['name']}"]
+        published = {p["name"] for p in (operation.get("get") or operation["post"])["parameters"]}
+        # REST omits the fields a URL cannot carry; they live in the request body instead.
+        expected = set(tool["inputSchema"]["properties"]) - dispatch.structured_fields(cap)
+        assert published == expected, tool["name"]

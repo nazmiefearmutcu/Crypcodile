@@ -58,6 +58,7 @@ __all__ = [
     "params_schema",
     "payload",
     "provenance_block",
+    "requires_explicit_asset_class",
     "resolve",
     "resolve_asset_class",
     "stream_summary",
@@ -319,9 +320,40 @@ def resolve_asset_class(
     )
 
 
-def asset_class_option_values() -> list[str]:
-    """The accepted spellings of an explicit asset class, for help text and schemas."""
-    return [a.value for a in AssetClass]
+def asset_class_option_values(cap: Capability | None = None) -> list[str]:
+    """The accepted spellings of an explicit asset class, for help text and schemas.
+
+    Narrowed to what ``cap`` actually implements when one is given. A route or tool that
+    publishes ``equity`` for a capability with no equity half is describing a request that
+    can only ever answer 501, and the published schema is the only thing a generated client
+    has to go on.
+    """
+    classes = AssetClass if cap is None else cap.impls
+    return sorted(a.value for a in classes)
+
+
+def requires_explicit_asset_class(cap: Capability) -> bool:
+    """Whether a caller *must* name the asset class for this capability to be answerable.
+
+    :func:`resolve_asset_class` resolves in three steps and only the first two can succeed
+    without the caller saying anything: an explicit choice, or a canonical ``source:RAW``
+    symbol the source registries can place. A capability with two implementations and no
+    symbol field has neither, so omitting the class is a hard refusal — and 32 of the 57 wire
+    names are in exactly that position.
+
+    Published rather than discovered. The MCP ``inputSchema`` did not mention ``asset_class``
+    at all, and the REST document listed it ``required: false`` on all of them, so the one
+    input that makes those calls answerable appeared nowhere a client could read it: a
+    generated client's only route to the truth was a 400 at runtime.
+
+    Read off :data:`_SYMBOL_FIELDS` rather than restated, so a capability that gains a symbol
+    parameter stops being listed as requiring the option on the same day.
+    """
+    if len(cap.impls) < 2:
+        return False
+    return not any(
+        field.name in _SYMBOL_FIELDS for field in msgspec.structs.fields(cap.params)
+    )
 
 
 # ---------------------------------------------------------------------------

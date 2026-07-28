@@ -116,8 +116,17 @@ def _openapi_parameters(cap: Capability) -> list[dict[str, Any]]:
         {
             "name": "asset_class",
             "in": "query",
-            "required": False,
-            "schema": {"type": "string", "enum": dispatch.asset_class_option_values()},
+            # Mandatory on the 26 routes whose capability has two implementations and no
+            # symbol to infer from: `resolve_asset_class` refuses outright there, so
+            # `required: false` was describing a request that can only answer 400. The enum
+            # is narrowed to what this capability implements for the same reason — a route
+            # publishing a class it has no implementation for describes a 501.
+            "required": dispatch.requires_explicit_asset_class(cap),
+            "schema": {"type": "string", "enum": dispatch.asset_class_option_values(cap)},
+            "description": (
+                "Which market answers. Inferred from the symbol's source when omitted, "
+                "where the capability takes one."
+            ),
         }
     )
     return parameters
