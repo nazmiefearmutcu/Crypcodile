@@ -45,6 +45,7 @@ from crocodile.core.resample._frame_prov import PROV_RANK as _PROV_RANK
 from crocodile.core.resample._frame_prov import emitted_prov as _emitted_prov
 from crocodile.core.resample._frame_prov import order_columns as _order_columns
 from crocodile.core.resample._frame_prov import rank_inputs as _rank_inputs
+from crocodile.core.resample._interval import bucket_start as _bucket_start
 from crocodile.core.resample._interval import parse_interval as _parse_interval
 from crocodile.core.resample.ohlcv import resample_ohlcv
 from crocodile.core.schema.enums import AssetClass
@@ -90,6 +91,20 @@ def _detect_scale_and_adjust_interval(ts: int, interval_ns: int) -> int:
         return max(1, interval_ns // 1000)
     else:  # milliseconds
         return max(1, interval_ns // 1_000_000)
+
+
+def _adjusted_anchor(ts: int, anchor_ns: int) -> int:
+    """Return an interval's bucket origin in the unit ``ts`` is stamped in.
+
+    The companion of :func:`_detect_scale_and_adjust_interval`, which converts a *width*
+    into the stream's unit; a grid is a width and an origin, and converting only the
+    width is what left the three record paths below flooring against the raw epoch.
+
+    Every anchor this codebase uses is a whole number of days, and a day is a whole
+    number of milliseconds, microseconds and nanoseconds alike, so the division is exact
+    in every unit :func:`_ts_unit_ns` can report.
+    """
+    return anchor_ns // _ts_unit_ns(ts)
 
 
 def _ts_unit_ns(ts: int) -> int:
@@ -280,6 +295,7 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
     parsed = _parse_interval(interval)
     interval_ns, interval_label = parsed.ns, parsed.polars
     adjusted_interval: int | None = None
+    adjusted_anchor = 0
 
     # A bar is not something a venue published. Stated once here and spread onto every
     # record below: a resampled record with no `prov=` inherits the header default, which
@@ -334,8 +350,9 @@ def resample_trades_to_bars(trades: Iterable[Trade], interval: str) -> Iterator[
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(trade.local_ts, interval_ns)
+            adjusted_anchor = _adjusted_anchor(trade.local_ts, parsed.anchor_ns)
 
-        bucket = (trade.local_ts // adjusted_interval) * adjusted_interval
+        bucket = _bucket_start(trade.local_ts, adjusted_interval, adjusted_anchor)
 
         if current_bucket is None:
             current_bucket = bucket
@@ -423,6 +440,7 @@ def resample_quotes_to_bars(
     parsed = _parse_interval(interval)
     interval_ns, interval_label = parsed.ns, parsed.polars
     adjusted_interval: int | None = None
+    adjusted_anchor = 0
 
     # SYNTHETIC, not DERIVED: these prices are quotes, nothing here was transacted, and
     # the `volume` below is a structural zero rather than a measured one.
@@ -469,8 +487,9 @@ def resample_quotes_to_bars(
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(quote.local_ts, interval_ns)
+            adjusted_anchor = _adjusted_anchor(quote.local_ts, parsed.anchor_ns)
 
-        bucket = (quote.local_ts // adjusted_interval) * adjusted_interval
+        bucket = _bucket_start(quote.local_ts, adjusted_interval, adjusted_anchor)
 
         if price_type == "mid":
             price = (quote.bid_px + quote.ask_px) / 2.0
@@ -570,6 +589,7 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
     parsed = _parse_interval(interval)
     interval_ns, interval_label = parsed.ns, parsed.polars
     adjusted_interval: int | None = None
+    adjusted_anchor = 0
     unit_ns = 1
     span_cache: dict[str, int] = {}
     tradeable_ns = _tradeable_ns(interval_ns)
@@ -623,9 +643,10 @@ def resample_bars_to_bars(bars: Iterable[OHLCV], interval: str) -> Iterator[OHLC
 
         if adjusted_interval is None:
             adjusted_interval = _detect_scale_and_adjust_interval(bar.local_ts, interval_ns)
+            adjusted_anchor = _adjusted_anchor(bar.local_ts, parsed.anchor_ns)
             unit_ns = _ts_unit_ns(bar.local_ts)
 
-        bucket = (bar.local_ts // adjusted_interval) * adjusted_interval
+        bucket = _bucket_start(bar.local_ts, adjusted_interval, adjusted_anchor)
         span = max(1, _tradeable_span_ns(bar.interval, span_cache) // unit_ns)
         segment = (bar.local_ts, bar.local_ts + span, bar.prov_confidence)
 

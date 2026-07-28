@@ -35,10 +35,14 @@ interpolated into a query.
 
 Note on ``1w``: ``time_bucket`` anchors weekly buckets on Monday, which is also where
 Polars' ``group_by_dynamic`` anchors them, so this path and the Polars frame paths in
-``crocodile.equity.resample.ohlcv`` agree. The record paths in that module do not — they
-floor ``local_ts`` against the epoch, which fell on a Thursday. That divergence is
-between two functions this merge does not touch and it is still open; what has changed is
-that it is no longer three anchors against each other but one against two.
+``crocodile.equity.resample.ohlcv`` agree. The record paths in that module used not to —
+they floored ``local_ts`` against the epoch, which fell on a Thursday, so a weekly bar's
+boundary depended on which entry point produced it and nothing on the record said which.
+That is closed: :data:`crocodile.core.resample._interval.Interval.anchor_ns` carries the
+origin a width is counted from, the record paths floor against it, and
+``test_the_record_path_and_duckdb_put_a_trade_in_the_same_week`` pins the three answers
+together. It was invisible to every daily test because a second, a minute, an hour and a
+day all divide the epoch-midnight grid exactly and only a week does not.
 """
 
 from __future__ import annotations
