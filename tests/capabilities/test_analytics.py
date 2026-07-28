@@ -44,6 +44,7 @@ from crocodile.capabilities.analytics import (
 from crocodile.core.capability import REGISTRY, AssetClass, CapabilityContext
 from crocodile.core.config import Settings
 from crocodile.core.schema.enums import OptType, Side
+from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import (
     BookSnapshot,
     DepthProfile,
@@ -55,6 +56,7 @@ from crocodile.core.schema.records import (
 )
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
+from crocodile.equity.analytics.options import bsm_price
 
 _BASE_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
 _SEC_NS = 1_000_000_000
@@ -633,7 +635,32 @@ def test_every_declaration_states_a_summary_and_a_registered_basis(name: str) ->
         assert impl.basis in known
 
 
-@pytest.mark.parametrize("name", [n for n in _DECLARED if n not in {"indicators", "slippage"}])
+_SYMMETRIC = frozenset(
+    {
+        # OHLCV and a stored book are things both markets report, so these two were
+        # symmetric before Phase 3 began.
+        "indicators",
+        "slippage",
+        # The options family, symmetric since M1: one surface in
+        # `core.analytics.volsurface`, read through a Black-76 model on the crypto side
+        # and a Black-Scholes-Merton one on the equity side.
+        "iv-surface",
+        "term-structure",
+        "vol-skew",
+        "risk-reversal",
+    }
+)
+"""Names this batch owns that no longer need a schedule, and why each stopped needing one.
+
+A bare exclusion list would let a capability leave the gate below by being deleted from
+the ledger without gaining an equity half, which is the failure
+:func:`test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric` catches in the
+other direction. So membership here is asserted rather than assumed: the test below runs
+over *every* declared name and checks the two facts against each other.
+"""
+
+
+@pytest.mark.parametrize("name", _DECLARED)
 def test_every_crypto_only_capability_is_scheduled_against_a_spec_method(name: str) -> None:
     """The other half of declaring an asymmetric capability, asserted per name.
 
@@ -644,6 +671,10 @@ def test_every_crypto_only_capability_is_scheduled_against_a_spec_method(name: s
     from crocodile.core.capability import PENDING_SYMMETRY, SPEC_METHODS
 
     load_all()
+    if name in _SYMMETRIC:
+        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+        assert name not in PENDING_SYMMETRY
+        return
     assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
     assert PENDING_SYMMETRY[name] in SPEC_METHODS
 
@@ -872,3 +903,240 @@ def test_the_two_asset_classes_of_slippage_are_not_the_same_function() -> None:
     load_all()
     impls = REGISTRY["slippage"].impls
     assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn
+
+
+# ---------------------------------------------------------------------------
+# The options family's equity halves — M1, closed
+# ---------------------------------------------------------------------------
+# Their lake is separate from the crypto one above rather than merged into `_records()`,
+# because `iv-surface` selects on `underlying` and not on asset class: one lake holding
+# both markets' chains would let a crypto row satisfy an equity assertion under a shared
+# ticker, which is precisely the "answers plausibly and empty" failure the registry exists
+# to make impossible.
+
+_EQUITY_UNDERLYING = "AAPL"
+_EQUITY_SPOT = 100.0
+_EQUITY_CALL_IV = 0.50
+_EQUITY_PUT_IV = 0.70
+
+_SOLVED_STRIKE = 120.0
+_SOLVED_MID = bsm_price(
+    _EQUITY_SPOT, _SOLVED_STRIKE, 1.0, 0.0, _EQUITY_CALL_IV, 0.0, OptType.CALL
+)
+"""The mid of the one contract Yahoo priced but did not grade, in vols the chain agrees with.
+
+It is the Black-Scholes price at exactly ``_EQUITY_CALL_IV``, so solving it back returns
+the vol every other call on this expiry carries. That is what keeps the skew flat while
+still forcing the fallback branch to run: a mid quoted at some other vol would make the
+risk reversal depend on which strike the 25-delta search happened to land on, and the test
+below would then be measuring the search rather than the capability.
+"""
+
+
+def _equity_option(
+    strike: float,
+    expiry: int,
+    opt_type: OptType,
+    mark_iv: float | None,
+    *,
+    bid_px: float | None = None,
+    ask_px: float | None = None,
+    open_interest: float | None = None,
+) -> OptionsChain:
+    """A Yahoo-shaped contract: an IV or a two-sided quote, and never a ``mark_price``."""
+    symbol = f"yahoo:{_EQUITY_UNDERLYING}-{expiry}-{int(strike)}-{opt_type.value}"
+    return OptionsChain(
+        source="yahoo",
+        symbol=symbol,
+        symbol_raw=symbol.split(":", 1)[-1],
+        source_ts=_BASE_NS,
+        local_ts=_BASE_NS,
+        asset_class=AssetClass.EQUITY,
+        underlying=_EQUITY_UNDERLYING,
+        underlying_price=_EQUITY_SPOT,
+        strike=strike,
+        expiry=expiry,
+        opt_type=opt_type,
+        mark_iv=mark_iv,
+        bid_px=bid_px,
+        ask_px=ask_px,
+        open_interest=open_interest,
+    )
+
+
+def _equity_chain() -> list[Any]:
+    """Three strikes at E1 both ways, one at E2, and one contract Yahoo priced but did not
+    grade — the row that makes the solve-from-mid branch reachable."""
+    rows: list[Any] = [
+        _equity_option(strike, _E1, opt_type, iv, open_interest=oi)
+        for strike, oi in ((90.0, 11.0), (100.0, 22.0), (110.0, 33.0))
+        for opt_type, iv in ((OptType.CALL, _EQUITY_CALL_IV), (OptType.PUT, _EQUITY_PUT_IV))
+    ]
+    rows.append(_equity_option(100.0, _E2, OptType.CALL, 0.45, open_interest=5.0))
+    rows.append(
+        _equity_option(
+            _SOLVED_STRIKE,
+            _E1,
+            OptType.CALL,
+            None,
+            bid_px=_SOLVED_MID - 0.01,
+            ask_px=_SOLVED_MID + 0.01,
+            open_interest=1.0,
+        )
+    )
+    return rows
+
+
+@pytest.fixture
+def equity_ctx(tmp_path: Path) -> CapabilityContext:
+    load_all()
+    asyncio.run(_write(tmp_path, _equity_chain()))
+    return CapabilityContext(
+        catalog=Catalog(tmp_path),
+        settings=Settings(data_dir=tmp_path),
+        asset_class=AssetClass.EQUITY,
+    )
+
+
+def _call_equity(name: str, ctx: CapabilityContext, params: Any) -> Any:
+    return REGISTRY[name].impls[AssetClass.EQUITY].fn(ctx, params)
+
+
+def test_iv_surface_serves_equities_and_says_which_price_each_row_came_from(
+    equity_ctx: CapabilityContext,
+) -> None:
+    """M1's two halves in one assertion: the chain reads, and the fallback is reachable.
+
+    Six of the seven rows carry Yahoo's own ``impliedVolatility`` and report
+    ``source="mark_iv"``; the seventh has none and is solved by inverting Black-Scholes-
+    Merton on the mid of its bid and ask, reporting ``source="computed"``. A surface where
+    every row said ``mark_iv`` would pass a row-count test while the solver had never run.
+    """
+    rows = _call_equity("iv-surface", equity_ctx, IvSurfaceParams(_EQUITY_UNDERLYING, _BASE_NS))
+    assert len(rows) == 8
+    assert set(rows["source"].to_list()) == {"mark_iv", "computed"}
+
+    solved = rows.filter(pl.col("source") == "computed")
+    assert solved.height == 1
+    assert solved["strike"][0] == pytest.approx(_SOLVED_STRIKE)
+    assert solved["iv"][0] == pytest.approx(_EQUITY_CALL_IV, abs=1e-3)
+
+    otm_call = rows.filter((pl.col("strike") == 110.0) & (pl.col("opt_type") == "C"))
+    assert otm_call["moneyness"][0] == pytest.approx(1.1)
+    assert otm_call["iv"][0] == pytest.approx(_EQUITY_CALL_IV)
+
+
+def test_the_two_asset_classes_of_the_options_family_are_not_the_same_function() -> None:
+    """The tell ``slippage`` did not have until it broke, asserted before this one can.
+
+    One function cannot invert a ``mark_price`` no equity feed publishes *and* a mid no
+    crypto venue publishes. Binding one object for both would have produced an equity
+    surface of ``source="unavailable"`` under a declaration claiming otherwise — a hole
+    that reads exactly like an empty lake.
+    """
+    load_all()
+    for name in ("iv-surface", "term-structure", "vol-skew", "risk-reversal"):
+        impls = REGISTRY[name].impls
+        assert set(impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+        assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn
+
+
+def test_term_structure_serves_equities_with_one_atm_row_per_expiry(
+    equity_ctx: CapabilityContext,
+) -> None:
+    rows = _call_equity(
+        "term-structure", equity_ctx, TermStructureParams(_EQUITY_UNDERLYING, _BASE_NS)
+    )
+    assert rows["expiry"].to_list() == [_E1, _E2]
+    assert rows["atm_strike"].to_list() == [100.0, 100.0]
+    assert rows["days_to_expiry"][0] == pytest.approx(365.0)
+
+
+def test_vol_skew_serves_equities_with_a_delta_priced_off_the_spot(
+    equity_ctx: CapabilityContext,
+) -> None:
+    """Every row gets a delta, which is what ``risk-reversal`` then searches.
+
+    The ``None`` this refuses is not cosmetic: a missing delta silently drops a strike from
+    the 25-delta search, and a fabricated zero would win it against every negative target.
+    """
+    rows = _call_equity("vol-skew", equity_ctx, VolSkewParams(_EQUITY_UNDERLYING, _E1, _BASE_NS))
+    assert len(rows) == 7
+    assert rows["strike"].to_list() == sorted(rows["strike"].to_list())
+    assert all(delta is not None for delta in rows["delta"].to_list())
+
+
+def test_risk_reversal_serves_equities_and_prices_calls_against_puts(
+    equity_ctx: CapabilityContext,
+) -> None:
+    """Calls are quoted 20 vols under puts throughout, so the risk reversal is -0.20.
+
+    Flat on both sides on purpose, for the reason the crypto twin gives: which strikes the
+    25-delta search lands on is the surface's business, and a flat pair makes the answer
+    the same whichever it picks — which leaves this measuring the capability.
+    """
+    result = _call_equity(
+        "risk-reversal", equity_ctx, RiskReversalParams(_EQUITY_UNDERLYING, _E1, _BASE_NS)
+    )
+    assert result["risk_reversal"] == pytest.approx(_EQUITY_CALL_IV - _EQUITY_PUT_IV)
+    assert result["butterfly"] is not None
+
+
+def test_risk_reversal_reports_two_holes_for_an_equity_expiry_with_no_chain(
+    equity_ctx: CapabilityContext,
+) -> None:
+    params = RiskReversalParams(_EQUITY_UNDERLYING, _E1 + _DAY_NS, _BASE_NS)
+    assert _call_equity("risk-reversal", equity_ctx, params) == {
+        "risk_reversal": None,
+        "butterfly": None,
+    }
+
+
+def test_the_options_family_declares_the_same_ceiling_for_both_markets() -> None:
+    """DERIVED on ``native``, by the same argument rather than by copying the crypto row.
+
+    On its best day every ``iv`` is a vol the feed published — Deribit's ``mark_iv``, or
+    Yahoo's ``impliedVolatility`` carried in the same field — and the cross-section is this
+    engine's arrangement of those points, which is DERIVED and not NATIVE. The fallback
+    inverts a *published* price on both sides, a venue mark there and a quoted mid here, so
+    neither reaches SYNTHETIC. ``native`` names the inputs, which is what a basis is for.
+    """
+    load_all()
+    for name in ("iv-surface", "term-structure", "vol-skew", "risk-reversal"):
+        for asset_class, impl in REGISTRY[name].impls.items():
+            assert impl.prov is Provenance.DERIVED, (name, asset_class)
+            assert impl.basis == "native", (name, asset_class)
+
+
+def test_the_equity_options_adapters_are_named_module_level_functions() -> None:
+    """A stack trace and the calling-convention gate both need a file and a line number."""
+    from crocodile.capabilities import analytics
+
+    load_all()
+    for name in ("iv-surface", "term-structure", "vol-skew", "risk-reversal"):
+        fn = REGISTRY[name].impls[AssetClass.EQUITY].fn
+        assert fn is getattr(analytics, fn.__name__)
+        assert fn.__module__ == analytics.__name__
+
+
+def test_the_options_family_reads_the_lake_through_the_context_and_not_the_network(
+    equity_ctx: CapabilityContext,
+) -> None:
+    """No provider call, no ``run_to_completion``: the chain is already in the lake.
+
+    Worth pinning because the equity halves of ``depth`` and ``slippage`` in this same
+    registry *do* reach a provider, and a reader could reasonably assume an equity
+    implementation always does.
+    """
+    surface = _call_equity(
+        "iv-surface", equity_ctx, IvSurfaceParams(_EQUITY_UNDERLYING, _BASE_NS)
+    )
+    assert isinstance(surface, pl.DataFrame)
+    empty = CapabilityContext(
+        catalog=Catalog(Path(equity_ctx.settings.data_dir) / "nothing-here"),
+        settings=equity_ctx.settings,
+        asset_class=AssetClass.EQUITY,
+    )
+    assert _call_equity(
+        "iv-surface", empty, IvSurfaceParams(_EQUITY_UNDERLYING, _BASE_NS)
+    ).is_empty()

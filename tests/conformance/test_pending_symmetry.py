@@ -300,28 +300,34 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "depth": "M6",
     "funding-apr": "M5",
     "funding-predict": "M5",
-    "iv-surface": "M1",
     "label-transfers": "M4",
     "liquidity-depth": "M6",
     "markets": "M3",
     "ofi": "M7",
     "open-interest": "M2",
     "perp-basis": "M5",
-    "risk-reversal": "M1",
     "smart-money": "M4",
     "spot-future-basis": "M5",
-    "term-structure": "M1",
     "universe": "M3",
-    "vol-skew": "M1",
     "whale-alerts": "M4",
 }
-"""The 21 entries Phase 2 closed with, pinned so the ledger's size is a watched number.
+"""The entries the ledger currently holds, pinned so its size is a watched number.
+
+Phase 2 closed with 21. It is 17: M1 has been repaid, and its four names — ``iv-surface``,
+``term-structure``, ``vol-skew`` and ``risk-reversal`` — left in the commit that gave them
+equity halves. Deleting them here and from the ``PENDING_SYMMETRY.update`` block in
+``capabilities/analytics.py`` is one change and not two: leave the batch entry and
+:func:`test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric` fails because
+the capability is symmetric; leave this one and
+:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails because the
+name departed unrecorded. That the two fail in opposite directions is what makes them one
+gate rather than two lists to keep in step by hand.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was
 watching. Two things made that hard to see. The declaration in ``core/capability.py`` reads
-``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; the 21 live
-entries are assembled at import time by three batch modules calling ``update()`` on it. And
+``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; every live
+entry is assembled at import time by three batch modules calling ``update()`` on it. And
 :func:`test_phase_3_exit_the_ledger_must_be_empty` skipped whenever the ledger was
 non-empty, so it was green at 21 and would have been green at 48.
 

@@ -82,6 +82,15 @@ from crocodile.crypto.analytics.volsurface import (
     vol_skew as _vol_skew,
 )
 from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.equity.analytics.volsurface import (
+    iv_surface as _equity_iv_surface,
+)
+from crocodile.equity.analytics.volsurface import (
+    term_structure as _equity_term_structure,
+)
+from crocodile.equity.analytics.volsurface import (
+    vol_skew as _equity_vol_skew,
+)
 from crocodile.equity.depth import select_depth_source
 
 __all__ = [
@@ -577,14 +586,51 @@ def iv_surface(ctx: CapabilityContext, params: IvSurfaceParams) -> pl.DataFrame:
     return _iv_surface(ctx.catalog, params.underlying, params.at_ns, params.rate)
 
 
+def iv_surface_equities(ctx: CapabilityContext, params: IvSurfaceParams) -> pl.DataFrame:
+    """The same cross-section over a US equity chain, solved against the spot with BSM.
+
+    A separate adapter rather than a second asset class bound to :func:`iv_surface`, and
+    the reason is the one ``slippage_equities`` learned the hard way: the two halves do not
+    read the same numbers off the row. The crypto solver inverts ``mark_price``, which no
+    equity feed publishes, so binding one function for both would have produced a surface
+    of ``source="unavailable"`` for every equity contract Yahoo did not hand a vol for —
+    a hole that reads exactly like an empty lake, under a declaration claiming otherwise.
+
+    Everything after that choice is shared: this and its crypto twin call one
+    :mod:`crocodile.core.analytics.volsurface`, differing only in the
+    :class:`~crocodile.core.analytics.volsurface.OptionsModel` they pass it, so the two
+    frames cannot disagree about columns, dtypes, the snapshot rule or which strike is ATM.
+
+    Reads the lake, like its twin, and so needs neither a network call nor
+    ``run_to_completion``.
+    """
+    return _equity_iv_surface(ctx.catalog, params.underlying, params.at_ns, params.rate)
+
+
 def term_structure(ctx: CapabilityContext, params: TermStructureParams) -> pl.DataFrame:
     """ATM implied vol per expiry — the surface read down its ATM column."""
     return _term_structure(ctx.catalog, params.underlying, params.at_ns, params.rate)
 
 
+def term_structure_equities(ctx: CapabilityContext, params: TermStructureParams) -> pl.DataFrame:
+    """The equity ATM column of the same surface. See :func:`iv_surface_equities`."""
+    return _equity_term_structure(ctx.catalog, params.underlying, params.at_ns, params.rate)
+
+
 def vol_skew(ctx: CapabilityContext, params: VolSkewParams) -> pl.DataFrame:
     """Per-strike implied vol and delta for a single expiry."""
     return _vol_skew(
+        ctx.catalog,
+        params.underlying,
+        params.expiry_ns,
+        params.at_ns,
+        params.rate,
+    )
+
+
+def vol_skew_equities(ctx: CapabilityContext, params: VolSkewParams) -> pl.DataFrame:
+    """One equity expiry's strikes, with the Black-Scholes-Merton delta beside each vol."""
+    return _equity_vol_skew(
         ctx.catalog,
         params.underlying,
         params.expiry_ns,
@@ -611,6 +657,30 @@ def risk_reversal(ctx: CapabilityContext, params: RiskReversalParams) -> dict[st
     surface's answer to "what did I ask for", and a surface already knows.
     """
     skew = _vol_skew(
+        ctx.catalog,
+        params.underlying,
+        params.expiry_ns,
+        params.at_ns,
+        params.rate,
+    )
+    if skew.is_empty():
+        return {"risk_reversal": None, "butterfly": None}
+    rr, bf = risk_reversal_butterfly(skew, target_delta=params.target_delta)
+    return {"risk_reversal": rr, "butterfly": bf}
+
+
+def risk_reversal_equities(
+    ctx: CapabilityContext, params: RiskReversalParams
+) -> dict[str, float | None]:
+    """The same two numbers off the equity skew, and the same short-circuit.
+
+    ``risk_reversal_butterfly`` is not duplicated for the equity half and could not
+    usefully be: by the time it runs the market has been reduced to strikes, vols and
+    deltas, and subtracting a put's vol from a call's is the same sentence in both. Only
+    the skew underneath it is asset-class-specific, which is the one call that differs
+    between this and :func:`risk_reversal`.
+    """
+    skew = _equity_vol_skew(
         ctx.catalog,
         params.underlying,
         params.expiry_ns,
@@ -895,6 +965,24 @@ IV_SURFACE = declare(
             # price rather than modelling a price from some other data class. Which of the
             # three each row actually took is on the row, in its `source` column.
             AssetClass.CRYPTO: Impl(fn=iv_surface, prov=Provenance.DERIVED, basis="native"),
+            # The equity half lands on the same two words, by the same argument rather than
+            # by symmetry. On its best day every `iv` is Yahoo's own `impliedVolatility`,
+            # carried on the row as `mark_iv` — the feed supplied the points and this
+            # arranged them into a cross-section, which is DERIVED and not NATIVE. The
+            # fallback inverts Black-Scholes-Merton on the *mid of a published bid and
+            # ask*, so it is a venue quote being solved rather than a price modelled out of
+            # some other data class, which is what keeps it the near side of SYNTHETIC.
+            # `native` names the inputs and it is right for both branches: an IV Yahoo
+            # published and a two-sided quote Yahoo published are both things a venue said.
+            # Which branch a row took is on the row, in the same `source` column with the
+            # same three words. What is *not* claimed here is the model: the solve is
+            # European over an American contract at a zero dividend yield, and
+            # `equity/analytics/volsurface.py` states both and what they cost, because
+            # neither is a sampling deficiency and `prov_confidence` would be the wrong
+            # place to report them.
+            AssetClass.EQUITY: Impl(
+                fn=iv_surface_equities, prov=Provenance.DERIVED, basis="native"
+            ),
         },
     )
 )
@@ -910,6 +998,9 @@ TERM_STRUCTURE = declare(
             AssetClass.CRYPTO: Impl(
                 fn=term_structure, prov=Provenance.DERIVED, basis="native"
             ),
+            AssetClass.EQUITY: Impl(
+                fn=term_structure_equities, prov=Provenance.DERIVED, basis="native"
+            ),
         },
     )
 )
@@ -923,6 +1014,9 @@ VOL_SKEW = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(fn=vol_skew, prov=Provenance.DERIVED, basis="native"),
+            AssetClass.EQUITY: Impl(
+                fn=vol_skew_equities, prov=Provenance.DERIVED, basis="native"
+            ),
         },
     )
 )
@@ -937,6 +1031,9 @@ RISK_REVERSAL = declare(
         impls={
             AssetClass.CRYPTO: Impl(
                 fn=risk_reversal, prov=Provenance.DERIVED, basis="native"
+            ),
+            AssetClass.EQUITY: Impl(
+                fn=risk_reversal_equities, prov=Provenance.DERIVED, basis="native"
             ),
         },
     )
@@ -1060,13 +1157,14 @@ PENDING_SYMMETRY.update(
         "spot-future-basis": "M5",
         "funding-apr": "M5",
         "funding-predict": "M5",
-        # M1 — the options family, all four of it. `term-structure`, `vol-skew` and
-        # `risk-reversal` are `iv-surface` read three ways and call it directly, so they
-        # land the moment the equity chain does.
-        "iv-surface": "M1",
-        "term-structure": "M1",
-        "vol-skew": "M1",
-        "risk-reversal": "M1",
+        # M1 was here — the options family, all four of it — and is repaid. The prediction
+        # the entry made held: `term-structure`, `vol-skew` and `risk-reversal` are
+        # `iv-surface` read three ways, and once the Yahoo chain carried a spot and the
+        # surface moved to `core.analytics.volsurface` they landed together, three adapters
+        # of two lines each. The one thing the entry did not foresee is that the equity
+        # chain needed the *underlying price* before any of it worked — Yahoo's option
+        # payload carries it in the quote block beside the strikes, and without it every
+        # moneyness is NaN and no mid can be inverted.
         # M7 — order-flow imbalance from L1 quote changes, which is this measurement's
         # equity form: the crypto implementation differences consecutive top-of-book
         # snapshots, and an equity quote stream is the same two prices and two sizes.
