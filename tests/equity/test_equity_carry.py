@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from crocodile.core.analytics.carry import DAYS_PER_YEAR
+from crocodile.core.analytics.carry import DAYS_PER_YEAR, apr_from_rate
 from crocodile.core.schema.enums import AssetClass, CorpActionType, OptType, Side
 from crocodile.core.schema.records import (
     OHLCV,
@@ -149,12 +149,17 @@ def _option(
     )
 
 
-def _dividend(ts: int, value: float) -> CorporateAction:
+def _dividend(ts: int, value: float, ingest_ts: int | None = None) -> CorporateAction:
+    """One declared dividend. ``ingest_ts`` is when this copy of it was written.
+
+    Two parameters because the collapse turns on the difference: ``ts`` becomes the event
+    instant two providers agree on, and ``ingest_ts`` is the ``local_ts`` they cannot share.
+    """
     return CorporateAction(
         source="tiingo",
         symbol=_STOCK,
         symbol_raw=_STOCK,
-        local_ts=ts,
+        local_ts=ts if ingest_ts is None else ingest_ts,
         asset_class=AssetClass.EQUITY,
         source_ts=ts,
         ex_date="2024-01-08",
@@ -828,6 +833,57 @@ def test_cumulative_funding_is_a_running_sum(dividend_lake: Catalog) -> None:
         pytest.approx(-0.005),
         pytest.approx(-0.015),
     ]
+
+
+def test_one_dividend_reported_twice_is_one_event(tmp_path: Path) -> None:
+    """``corp_action`` carries three providers' copies, and a repeated backfill adds more.
+
+    Without the collapse the second copy is an event zero hours after the first, so
+    ``interval_hours`` floors to 1 and the whole dividend is annualised over one hour
+    instead of over the real period, while ``cumulative_funding`` scales with the copy
+    count. The crypto twin collapses on the funding timestamp for exactly this reason, and
+    ``price_leg`` twenty lines up collapses two prints at one instant the same way.
+    """
+    price_and_curve = [_bar(_STOCK, _NOW - 12 * 3600 * _SEC_NS, 200.0), *_curve_records()]
+    once = _lake(tmp_path / "once", [*price_and_curve, _dividend(_NOW, 1.0)])
+    thrice = _lake(
+        tmp_path / "thrice",
+        [
+            *price_and_curve,
+            _dividend(_NOW, 1.0),
+            _dividend(_NOW, 1.0, ingest_ts=_NOW + 60 * _SEC_NS),
+            _dividend(_NOW, 1.0, ingest_ts=_NOW + 120 * _SEC_NS),
+        ],
+    )
+    expected = equity_funding_apr(once, _STOCK, *_WINDOW)
+    frame = equity_funding_apr(thrice, _STOCK, *_WINDOW)
+    assert len(expected) == 1
+    assert frame.to_dicts() == expected.to_dicts(), (
+        "how many times a dividend was written down is not a fact about the dividend"
+    )
+    # What the copies used to produce, stated as the ratio rather than as a magnitude that
+    # depends on the fixture's price: the second copy lands zero hours after the first,
+    # `interval_hours` floors to 1, and the same dividend is annualised over one hour
+    # instead of over the real period — here 24x, and unbounded as the copies bunch up.
+    assert frame["apr"][0] == pytest.approx(apr_from_rate(-1.0 / 200.0, 24))
+    assert apr_from_rate(-1.0 / 200.0, 1) == pytest.approx(24 * frame["apr"][0])
+
+
+def test_the_last_report_of_a_dividend_wins(tmp_path: Path) -> None:
+    """Providers that disagree are a correction, not an average nobody declared — the rule
+    :func:`price_leg` already applies to two prints at one instant."""
+    corrected = _lake(
+        tmp_path,
+        [
+            _bar(_STOCK, _NOW - 12 * 3600 * _SEC_NS, 200.0),
+            _dividend(_NOW, 1.0),
+            _dividend(_NOW, 2.0, ingest_ts=_NOW + 60 * _SEC_NS),
+            *_curve_records(),
+        ],
+    )
+    frame = equity_funding_apr(corrected, _STOCK, *_WINDOW)
+    assert len(frame) == 1
+    assert frame["dividend"][0] == pytest.approx(2.0)
 
 
 def test_carry_apr_is_financing_paid_minus_dividends_received(

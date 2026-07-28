@@ -852,8 +852,41 @@ _DIVIDEND_SQL: Final = """
       AND type = ?
       AND value IS NOT NULL
       AND local_ts BETWEEN ? AND ?
-    ORDER BY event_ts
+    ORDER BY event_ts, local_ts
 """
+"""Ordered by ingest within each event so :func:`_one_row_per_event` can keep the last."""
+
+
+def _one_row_per_event(events: pl.DataFrame) -> pl.DataFrame:
+    """Collapse repeated reports of one dividend to a single event.
+
+    The same collapse :func:`price_leg` applies twenty lines up
+    (``.unique(subset=["local_ts"], keep="last")``) and the same one the crypto twin
+    applies to funding settlements, whose docstring states why: rows sharing an event
+    timestamp are "collapsed to a single event **before** APR and the cumulative sum are
+    computed, so cumulative funding cannot explode".
+
+    It was missing here, and this module's own header says the channel invites it: dividends
+    arrive in ``corp_action`` "from three different providers", and a repeated ``backfill``
+    over the channel duplicates them on its own. The consequence was not a rounding error.
+    Two copies of one $1.00 dividend produce a second event zero hours after the first, so
+    ``interval_hours`` floors to 1 and ``apr_from_rate`` annualises a whole dividend over
+    one hour instead of over the real period — a 24-fold overstatement against a daily
+    interval, and unbounded as the interval being replaced gets longer.
+    ``cumulative_funding`` meanwhile scales with the copy count, which is the number a
+    consumer sums a position's carry out of.
+
+    ``keep="last"`` and not "first" or a mean: the latest ingest is the correction. That is
+    the rule :func:`price_leg` already uses for two prints at one instant, and a mean would
+    invent a dividend no provider declared.
+
+    Collapsing on ``event_ts`` rather than on ``local_ts`` is the point of the whole
+    exercise — ``local_ts`` is when *this process* wrote the row, so two copies of one
+    dividend differ in it by construction and grouping on it would collapse nothing.
+    """
+    return events.unique(subset=["event_ts"], keep="last", maintain_order=False).sort(
+        "event_ts"
+    )
 
 
 def equity_funding_apr(
@@ -906,7 +939,9 @@ def equity_funding_apr(
     ``interval_hours`` is Int64 to match the crypto frame's dtype, and a period shorter
     than an hour is floored to one — two dividends in the same hour is a data defect, and
     a zero there would raise out of :func:`~crocodile.core.analytics.carry.periods_per_year`
-    rather than report it.
+    rather than report it. The commonest such defect — the same dividend reported twice —
+    is removed before that floor is reached rather than floored into a multiplied APR; see
+    :func:`_one_row_per_event`.
     """
     catalog.refresh_views()
     try:
@@ -920,6 +955,7 @@ def equity_funding_apr(
         return pl.DataFrame()
     if len(events) == 0:
         return pl.DataFrame()
+    events = _one_row_per_event(events)
 
     prices = price_leg(catalog, symbol, start_ns, end_ns)
     if len(prices) == 0:
