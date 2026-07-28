@@ -34,6 +34,7 @@ from __future__ import annotations
 import duckdb
 import polars as pl
 
+from crocodile.core.analytics.carry import annualise_over_days, days_between
 from crocodile.core.store.catalog import Catalog
 
 __all__ = [
@@ -266,15 +267,19 @@ def spot_future_basis(
         return pl.DataFrame()
 
     # Optionally append annualized_pct.
+    #
+    # The two lines this used to spell inline — `(expiry_ns - local_ts) / 86_400e9` and
+    # `basis_pct * 365 / days` — are `days_between` and `annualise_over_days` in
+    # `crocodile.core.analytics.carry`, and they are called rather than repeated because
+    # the equity half of this same capability annualises the same spread the same way. The
+    # arithmetic is identical, including the None for a non-positive horizon; `86_400e9`
+    # became the integer `NS_PER_DAY` on the way, which is the same number without the
+    # float literal.
     if expiry_ns is not None:
-        ann_values: list[float | None] = []
-        for row in df.iter_rows(named=True):
-            days_to_expiry = (expiry_ns - row["local_ts"]) / 86_400e9
-            if days_to_expiry > 0.0:
-                ann_values.append(row["basis_pct"] * 365.0 / days_to_expiry)
-            else:
-                # Expired or same-timestamp: annualisation is undefined; emit None.
-                ann_values.append(None)
+        ann_values: list[float | None] = [
+            annualise_over_days(row["basis_pct"], days_between(row["local_ts"], expiry_ns))
+            for row in df.iter_rows(named=True)
+        ]
         df = df.with_columns(
             pl.Series("annualized_pct", ann_values, dtype=pl.Float64)
         )
