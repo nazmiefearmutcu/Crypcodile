@@ -134,6 +134,27 @@ class IndicatorParams(msgspec.Struct, frozen=True):
     interval: str = "1d"
     indicator: str | None = None
     period: int = 14
+    fill_empty: bool = False
+    """Insert a zero-volume bar for every bucket in the range that saw no trades.
+
+    ``False``, which is what the equity CLI's ``--fill-empty`` defaulted to
+    (``equity/legacy/cli.py:1641-1647@4a0f84c``, whose help warned it "can explode wide
+    date ranges"). The port dropped the flag and hardcoded ``True`` in the adapter, on the
+    argument that a 14-period SMA otherwise spans different amounts of wall-clock time on a
+    thin symbol than on a busy one. That argument is real and it is not this field's to
+    settle: a caller who wants an even time grid asks for one, and a caller who does not
+    gets the arithmetic the legacy command gave them.
+
+    What the silent flip changed, measured on a 40-bar equity series with a 60-minute
+    session gap: 40 rows became 121, the last bar's RSI moved 49.573 → 55.732, and the
+    largest per-bar RSI difference was 36.56. A period is a count of *bars*, so inserting
+    bars redefines every window in the result.
+
+    And with no field to ask for ``False``, there was no way back on any of the three
+    surfaces — including for the second-order case, where a symbol the lake has never seen
+    stopped answering "no data found" and started answering with fabricated bars carrying
+    ``num_trades=0``, ``volume=0.0`` and the header's default ``prov_confidence=1.0``.
+    """
 
 
 class SlippageParams(msgspec.Struct, frozen=True):
@@ -423,11 +444,16 @@ def indicators(ctx: CapabilityContext, params: IndicatorParams) -> pl.DataFrame:
     """Resample the symbol's trades into bars, then append the requested indicators.
 
     The query is the crypto CLI's ``indicators`` command end to end, via
-    ``CrypcodileClient.get_indicators``: resample with ``fill_empty=True``, sort by
-    ``bar``, then compute. It is copied rather than invented because the two differ in ways
-    that change the numbers — without ``fill_empty`` a quiet hour is simply absent from the
-    series, so a 14-period SMA silently spans a different amount of wall-clock time on a
-    thin symbol than on a busy one.
+    ``CrypcodileClient.get_indicators``: resample, sort by ``bar``, then compute.
+
+    ``fill_empty`` was hardcoded ``True`` here, on the argument that a quiet hour is
+    otherwise absent from the series and a 14-period SMA therefore spans a different amount
+    of wall-clock time on a thin symbol than on a busy one. The argument stands; the
+    hardcoding does not, because it was also the equity command's flag and its default was
+    ``False``. Silently flipping a default is not the same decision as offering one: it
+    changed the arithmetic for every caller (max ΔRSI 36.56 over a session gap) and left
+    nobody able to ask for the other answer, on any of the three surfaces. It now comes
+    from :attr:`IndicatorParams.fill_empty`, which carries the measurement.
 
     An empty frame is passed through to :func:`apply_indicators` rather than returned
     early, so an unknown ``indicator`` name is still rejected on a lake with no data. The
@@ -439,7 +465,7 @@ def indicators(ctx: CapabilityContext, params: IndicatorParams) -> pl.DataFrame:
         params.start_ns,
         params.end_ns,
         params.interval,
-        fill_empty=True,
+        fill_empty=params.fill_empty,
     )
     if not bars.is_empty():
         bars = bars.sort("bar")

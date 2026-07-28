@@ -27,6 +27,7 @@ from crocodile.capabilities.analytics import (
     ChaosScoreParams,
     FundingAprParams,
     FundingPredictParams,
+    IndicatorParams,
     IvSurfaceParams,
     LabelTransfersParams,
     LiquidityDepthParams,
@@ -701,3 +702,69 @@ def test_the_declared_return_kinds_match_what_the_adapters_return(
     assert REGISTRY["basis"].returns is ReturnKind.TABLE
     score = _call("chaos-score", empty_ctx, ChaosScoreParams(0.0, 0.0, 0.0, 0.0))
     assert isinstance(score, float) and not math.isnan(score)
+
+
+# ---------------------------------------------------------------------------
+# indicators: the default that flipped
+# ---------------------------------------------------------------------------
+
+
+def test_indicators_can_be_asked_not_to_fill_the_gaps_and_does_not_by_default() -> None:
+    """The legacy default was ``False`` and this port hardcoded ``True`` with no way back.
+
+    ``equity/legacy/cli.py:1641-1647@4a0f84c`` declared ``--fill-empty`` defaulting to
+    ``False``, with help warning it "can explode wide date ranges". The adapter passes
+    ``fill_empty=True`` unconditionally and ``IndicatorParams`` has no field to ask for the
+    other one, so every caller on all three surfaces gets a series the legacy command would
+    only have produced on request.
+
+    It changes the numbers, which is the part that matters: measured on a 40-bar equity
+    series with a 60-minute session gap, 40 rows became 121 and the last bar's RSI moved
+    49.573 → 55.732, max ΔRSI 36.56. A period is a count of bars, so inserting bars
+    redefines the window every indicator is measured over.
+    """
+    assert IndicatorParams(symbol="x", start_ns=0, end_ns=1).fill_empty is False
+    assert "fill_empty" in IndicatorParams.__struct_fields__
+
+
+def test_indicators_over_a_symbol_with_no_trades_returns_nothing_to_indicate(
+    ctx: CapabilityContext,
+) -> None:
+    """The second-order effect, which is a fabrication rather than a difference of opinion.
+
+    With ``fill_empty=True``, a symbol the lake has never seen stops answering "no data" and
+    starts answering with bars: ``num_trades: 0``, ``volume: 0.0``, and — because the tail is
+    the header's default — ``prov_confidence: 1.0``. Eleven invented rows, exit 0, at the
+    confidence a venue print carries. Gate 3b bans exactly this shape inside a record
+    constructor; it arrived here through a resampler argument instead.
+    """
+    bars = _call(
+        "indicators",
+        ctx,
+        IndicatorParams(
+            symbol="deribit:NOTHING-EVER-TRADED",
+            start_ns=_BASE_NS,
+            end_ns=_BASE_NS + 10 * 60 * _SEC_NS,
+            interval="1m",
+        ),
+    )
+    assert bars.is_empty(), (
+        f"a symbol with no stored trades produced {bars.height} bars; a bar the market never "
+        f"printed is a fabrication whatever the resampler calls it"
+    )
+
+
+def test_the_indicators_fill_empty_parameter_is_served_rather_than_redirected() -> None:
+    """``_PARAM_BECAME_A_CAPABILITY`` said the flag moved to ``resample``, and it had.
+
+    That entry was true and was not the whole story: the flag moved, and the *default* moved
+    with it in the opposite direction, so a caller who did nothing got the behaviour the
+    legacy command reserved for a caller who asked. A redirect ledger has no vocabulary for
+    a default, which is why the parameter is back on the capability that no longer only
+    redirects it.
+    """
+    from tests.conformance.test_phase2_surface_parity import _PARAM_BECAME_A_CAPABILITY
+
+    assert ("indicators", "fill_empty") not in _PARAM_BECAME_A_CAPABILITY
+    load_all()
+    assert "fill_empty" in REGISTRY["indicators"].params.__struct_fields__

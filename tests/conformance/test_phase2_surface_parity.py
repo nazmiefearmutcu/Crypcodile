@@ -506,14 +506,15 @@ _PARAM_BECAME_A_CAPABILITY: dict[tuple[str, str], tuple[str, str]] = {
         "The other half of the same mode: a dated future has an expiry and the other two "
         "measurements have nothing to put in it. It is `spot-future-basis`'s `expiry_ns`.",
     ),
-    ("indicators", "fill_empty"): (
-        "resample",
-        "The equity `indicators` command resampled the bars and *then* applied the "
-        "indicator, and `--fill-empty` governed the first step — its body passes the flag "
-        "to `client.resample(...)` and nothing else reads it. Resampling is its own "
-        "capability, and the flag went with the step it belongs to rather than staying on "
-        "a command that no longer performs it.",
-    ),
+    # `("indicators", "fill_empty")` was here, redirected to `resample`, on the argument
+    # that the equity command resampled and *then* applied the indicator so the flag went
+    # with the step it belonged to. Every word of that was true and it was not the whole
+    # decision: the flag moved and its default moved the other way, from the legacy `False`
+    # to a hardcoded `True` in the adapter, so a caller who did nothing got a series the
+    # legacy command produced only on request — 40 rows became 121 and the last bar's RSI
+    # moved 49.573 to 55.732 over one session gap. This ledger has no vocabulary for a
+    # default, which is exactly why the redirect read as complete. `indicators` accepts the
+    # parameter again, so there is nothing left to redirect.
 }
 """(capability, parameter as frozen) → (the capability that now accepts it, why).
 

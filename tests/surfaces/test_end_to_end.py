@@ -198,7 +198,18 @@ def test_mcp_publishes_the_params_struct_as_its_input_schema() -> None:
     tool = next(t for t in mcp.tool_definitions() if t["name"] == "indicators")
     assert tool["inputSchema"]["$ref"].endswith("IndicatorParams")
     properties = tool["inputSchema"]["$defs"]["IndicatorParams"]["properties"]
-    assert set(properties) == {"symbol", "start_ns", "end_ns", "interval", "indicator", "period"}
+    # `fill_empty` joined the struct when the equity CLI's flag came back — it had been
+    # dropped and its default silently flipped False to True. Listed here because the
+    # projection publishes whatever the struct holds, which is the property being asserted.
+    assert set(properties) == {
+        "symbol",
+        "start_ns",
+        "end_ns",
+        "interval",
+        "indicator",
+        "period",
+        "fill_empty",
+    }
     assert tool["assetClasses"] == ["crypto", "equity"]
 
 
