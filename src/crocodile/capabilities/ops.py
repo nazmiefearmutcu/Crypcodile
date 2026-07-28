@@ -86,7 +86,6 @@ import msgspec
 import polars as pl
 
 from crocodile.core.capability import (
-    PENDING_SYMMETRY,
     AssetClass,
     Capability,
     CapabilityContext,
@@ -899,6 +898,116 @@ def collect_market(ctx: CapabilityContext, params: CollectMarketParams) -> Subsc
     )
 
 
+def collect_market_equities(ctx: CapabilityContext, params: CollectMarketParams) -> Subscription:
+    """Subscribe one or more equity providers to a slice of the whole listed universe.
+
+    **What the slice is, and why it is not one exchange's.** The crypto half resolves each
+    source's own market list, because there a source *is* a venue and its universe is the
+    thing it lists. An equity provider is not a venue: Alpaca and Finnhub serve the
+    consolidated tape, so the market slice one of them can collect is the resolved universe
+    rather than any single exchange's book. That is why ``sources`` here names providers while
+    the universe comes from somewhere else entirely — from
+    :mod:`crocodile.equity.reference.universe`, which is SPEC_METHOD M3's
+    SEC EDGAR x OpenFIGI x Tiingo merge, and which is exactly the thing whose absence the
+    comment below this capability's declaration used to describe.
+
+    **The volume ranking, and its source, named.** ``top=N`` orders by mean traded volume per
+    stored bar, read out of this lake's own ``channel=ohlcv/`` partitions — see
+    :data:`~crocodile.equity.reference.universe.VOLUME_RANK_SQL`, which argues the statistic
+    and the filter. There is no free whole-market equity volume board to rank against, so the
+    honest source is the one this deployment already has, and a lake with no bars gets a
+    refusal naming ``collect`` and ``backfill`` rather than an arbitrary N tickers wearing the
+    word "top".
+
+    **The ``all`` slice is volume-ordered too, which the crypto half's is not.** ``max_symbols``
+    caps how much of a market is watched, and its own docstring is about a cap that silently
+    answered a different question. Over a crypto venue's own market list the order at least
+    comes from the venue; over a merged reference universe the natural order is alphabetical
+    by ticker, so a cap of 500 would subscribe to five hundred tickers beginning with A and
+    call it a market slice. Ordering by the same evidence first makes the cap take the part of
+    the market anyone meant, and where the lake has no evidence at all it falls back to ticker
+    order — which is the alphabetical slice, arrived at because there was nothing better and
+    not by default.
+
+    **No OpenFIGI.** This capability needs a symbol list and nothing else; a FIGI would buy an
+    identifier no connector subscribes with. ``universe`` enriches because it returns rows a
+    caller reads, and this returns a subscription.
+
+    Everything judgeable without the network is judged before a :class:`Subscription` exists —
+    including the SEC contact string, which is configuration and so must not first fail on an
+    await inside somebody's event loop.
+    """
+    _refuse_readonly(ctx, "collect-market")
+
+    from crocodile.equity.reference import universe as reference
+
+    if not params.sources or not params.channels:
+        raise ValueError("collect-market needs a non-empty sources and channels")
+    if params.top is None and not params.all_symbols:
+        raise ValueError("collect-market needs either top=N or all_symbols=True")
+    if params.top is not None and params.all_symbols:
+        raise ValueError("collect-market takes either top=N or all_symbols=True, not both")
+
+    kinds = reference.parse_kinds(params.kinds)
+    # An empty ``quote`` means "any currency", which is how the crypto half spells it and what
+    # `UniverseParams.quote` argues for: an unasked-for filter that silently empties a market
+    # is worse than no filter.
+    currency = params.quote or None
+    user_agent = reference.require_sec_user_agent(ctx.settings)
+
+    async def begin() -> None:
+        from crocodile.core.ingest.transport import AiohttpWsTransport
+        from crocodile.core.util.time import now_ns
+        from crocodile.equity.providers.factory import make_provider
+        from crocodile.equity.reference.registry import InstrumentRegistry
+
+        evidence = await reference.fetch_bulk_evidence(
+            as_of_ns=now_ns(), sec_user_agent=user_agent
+        )
+        listings = reference.filter_listings(
+            evidence.merged(), kinds=kinds, currency=currency
+        )
+        volumes = reference.volume_by_symbol(ctx.query, channels=ctx.catalog.list_channels())
+        if params.top is not None and not volumes:
+            raise ValueError(
+                "collect-market --top ranks equities by traded volume, which reads this "
+                "lake's own stored ohlcv bars, and it holds none; collect or backfill the "
+                "ohlcv channel first, or ask for --all-symbols instead"
+            )
+        ranked = reference.rank_listings(listings, volumes)
+        cap = params.top if params.top is not None else params.max_symbols
+        symbols = [listing.symbol for listing in ranked[:cap]]
+        if not symbols:
+            raise ValueError(
+                f"no symbols matched the requested market slice "
+                f"(kinds={list(params.kinds)}, quote={params.quote!r})"
+            )
+
+        sink = _lake_sink(ctx)
+        registry = InstrumentRegistry()
+        providers = []
+        for source in params.sources:
+            provider = make_provider(
+                provider=source,
+                symbols=symbols,
+                channels=list(params.channels),
+                out=sink,
+                registry=registry,
+            )
+            if provider.transport is None:
+                provider.transport = AiohttpWsTransport(provider.ws_url)
+            providers.append(provider)
+
+        await collect_equity(providers, sink, max_reconnects=params.max_reconnects)
+
+    return Subscription(
+        sources=params.sources,
+        channels=params.channels,
+        duration_seconds=params.duration_seconds,
+        begin=begin,
+    )
+
+
 class BackfillParams(msgspec.Struct, frozen=True):
     """Parameters for ``backfill``: a bounded historical fetch, written straight to the lake.
 
@@ -1240,24 +1349,34 @@ COLLECT_MARKET = declare(
         returns=ReturnKind.STREAM,
         impls={
             AssetClass.CRYPTO: Impl(fn=collect_market, prov=Provenance.NATIVE, basis="native"),
+            # NATIVE with a basis that is not `native`, which reads oddly and is the honest
+            # pair. `prov` is the ceiling of what the capability *writes*, and this writes
+            # what an equity provider streamed, unaltered — the same ceiling `collect`
+            # reaches on both sides. `basis` names what the implementation's *inputs* rest
+            # on, and this one's inputs are not a venue's own market list: they are a symbol
+            # set resolved by merging three registries, plus a volume ranking computed from
+            # stored bars. Declaring `native` there would claim a venue published both, which
+            # is the one thing no equity source does. The split between the two fields is the
+            # split `indicators` already makes in the other direction.
+            AssetClass.EQUITY: Impl(
+                fn=collect_market_equities, prov=Provenance.NATIVE, basis="reference_merge"
+            ),
         },
     )
 )
 
-# ``collect-market`` is ``collect`` with the symbol list resolved from a live venue
-# universe, and that resolution is the entire equity gap: no equity source in the tree
-# enumerates a universe. ``Provider.list_instruments`` describes the symbols it was handed
-# rather than discovering any, and nothing ranks equities by traded volume, so neither the
-# ``top`` slice nor the ``all`` slice has anything to resolve against. That is exactly
-# SPEC_METHOD M3 — "Equity universe from SEC EDGAR x OpenFIGI x Tiingo, merged by
-# CoverageResolver" — which makes this a schedule and not a market property, so it goes to
-# PENDING_SYMMETRY and never to IRREDUCIBLE.
-#
-# Written here rather than in the dict's own module because ``core/capability.py`` is
-# shared by four batches porting in parallel and an edit per batch is four conflicts in one
-# file — the same reason the declarations left that module. ``setdefault`` so a coordinator
-# who does write the entry there wins over this one instead of colliding with it.
-PENDING_SYMMETRY.setdefault("collect-market", "M3")
+# ``collect-market`` was scheduled here against M3, and the entry has gone because the method
+# landed. What it said was that ``collect-market`` is ``collect`` with the symbol list
+# resolved from a live venue universe, and that no equity source in the tree enumerated one:
+# ``Provider.list_instruments`` describes the symbols it was handed rather than discovering
+# any, and nothing ranked equities by traded volume, so neither the ``top`` slice nor the
+# ``all`` slice had anything to resolve against. Both halves of that are now answered —
+# ``crocodile.equity.reference.universe`` is the enumeration and
+# ``VOLUME_RANK_SQL`` is the ranking, over this lake's own stored bars — and
+# :func:`collect_market_equities` is where they meet. The matching line left
+# ``_LEDGER_AS_SHIPPED`` in ``tests/conformance/test_pending_symmetry.py`` in the same commit,
+# which is what a gate there requires and what keeps a departure from the ledger visible in a
+# diff rather than only in a count.
 
 
 BACKFILL = declare(

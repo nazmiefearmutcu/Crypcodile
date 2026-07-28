@@ -140,9 +140,13 @@ def test_an_explicit_asset_class_is_never_overridden_by_a_symbol() -> None:
     assert dispatch.resolve_asset_class(
         dispatch.resolve("replay"), explicit=AssetClass.EQUITY, symbols=(SYMBOL,)
     ) is AssetClass.EQUITY
+    # `collect-market` stood here until M3 gave it an equity half, at which point it stopped
+    # being a capability that can be unavailable for a market. `open-interest` replaces it as
+    # the fixture on the same grounds it was picked for: a live crypto-only declaration with
+    # a real implementation, scheduled against M2 rather than claimed irreducible.
     with pytest.raises(CapabilityUnavailable):
         dispatch.resolve_asset_class(
-            dispatch.resolve("collect-market"), explicit=AssetClass.EQUITY, symbols=(SYMBOL,)
+            dispatch.resolve("open-interest"), explicit=AssetClass.EQUITY, symbols=(SYMBOL,)
         )
 
 

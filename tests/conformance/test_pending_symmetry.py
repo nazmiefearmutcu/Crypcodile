@@ -295,7 +295,6 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 _LEDGER_AS_SHIPPED: dict[str, str] = {
     "basis": "M5",
     "chaos-score": "M6",
-    "collect-market": "M3",
     "depth": "M6",
     "funding-apr": "M5",
     "funding-predict": "M5",
@@ -322,15 +321,13 @@ entries are assembled at import time by three batch modules calling ``update()``
 :func:`test_phase_3_exit_the_ledger_must_be_empty` skipped whenever the ledger was
 non-empty, so it was green at 21 and would have been green at 48.
 
-Phase 2 closed with 21. Eighteen are left: M3 took ``markets``, ``universe`` and ``census``,
-which waited on one piece of reference data and left when it arrived
-(``crocodile.equity.reference.universe``, the SEC EDGAR x OpenFIGI x Tiingo merge the method
-names). ``collect-market`` is scheduled against the same method and resolves against the same
-universe, and it is still here because its equity half is a separate change. That is the
-direction this pin exists to make visible, and it is only visible because deleting a name here
-and deleting it from its batch module is one commit:
-:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails in both
-directions if either half is done alone.
+Phase 2 closed with 21. Seventeen are left: M3 took four of them — ``markets``, ``universe``,
+``census`` and ``collect-market``, all four of which waited on one piece of reference data
+and left when it arrived (``crocodile.equity.reference.universe``, the SEC EDGAR x OpenFIGI x
+Tiingo merge the method names). That is the direction this pin exists to make visible, and it
+is only visible because deleting the four here and deleting them from the two batch modules
+is one commit: :func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails
+in both directions if either half is done alone.
 
 Pinned here rather than beside the declaration for the reason the batches write it here:
 ``core/capability.py`` is shared and this is a test's assertion about a fact, not a fact.
