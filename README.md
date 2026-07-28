@@ -1,25 +1,35 @@
-<p align="center"><img src="assets/logo.svg" width="84" alt="Crypcodile"></p>
+<p align="center"><img src="assets/logo.svg" width="84" alt="Crocodile"></p>
 
-<h1 align="center">Crypcodile</h1>
+<h1 align="center">Crocodile</h1>
 
-<p align="center"><b>A deterministic engine for the whole crypto market.</b><br>
-Pull order books, trades, funding and on-chain DEX events from 100+ venues into one
-Parquet lake — then replay any slice of it byte-for-byte.</p>
+<p align="center"><b>A deterministic engine for crypto <i>and</i> US equities.</b><br>
+Pull order books, trades, funding, option chains, filings and on-chain DEX events from
+100+ venues and nine equity sources into one Parquet lake — then replay any slice of it
+byte-for-byte.</p>
 
-<p align="center"><sub>Python 3.12+ · Apache-2.0 · public market data needs no API keys</sub></p>
+<p align="center"><sub>Python 3.12+ · Apache-2.0 · every keyless path works with no API keys</sub></p>
 
 ---
 
-Every market-data tool can fetch a price. Two things make this one different.
+Every market-data tool can fetch a price. Three things make this one different.
 
-**One schema for everything.** A hand-written Deribit connector, a ccxt Kraken
-venue, and a Uniswap V3 pool on Base all emit the *same* record types. So a
-question like "show me every BTC trade across all my sources" is one SQL
-statement, not three codebases.
+**One schema for everything.** A hand-written Deribit connector, a ccxt Kraken venue, a
+Uniswap V3 pool on Base and an SEC EDGAR Form 4 all emit the *same* record types. So a
+question like "show me every trade across all my sources" is one SQL statement, not four
+codebases.
 
-**The lake is deterministic.** What lands on disk is normalized, validated, and
-replayable — `replay` a window today or next year and you get identical bytes.
-No hidden clocks, no re-fetching, no drift.
+**One capability, both markets.** Crocodile is the merge of two engines — Crypcodile for
+crypto and Stockodile for equities — and both histories are in this repository's `git
+log`. What came out is a single registry of **49 capabilities**, 42 of which answer for
+both asset classes under one name and one parameter schema; the seven that do not each
+carry a written argument for why no equity analogue can exist. The CLI, the REST API and
+the MCP server are *projections* of that registry, so none of them can drift from it.
+
+**The lake is deterministic, and it says where every number came from.** What lands on
+disk is normalized, validated, and replayable — `replay` a window today or next year and
+you get identical bytes. Every record also carries how it came to exist: a provenance
+level, the method it rests on, and a confidence computed by a registered formula rather
+than chosen by hand. A modelled answer says so before you read a row.
 
 On top of that sits an options and microstructure analytics library, **FlowMap**
 (a GPU order-flow visualizer), and an **MCP server** so LLM agents read real
@@ -92,10 +102,10 @@ inside it.
 
 ## Reaching the whole market
 
-Crypcodile speaks to **109 venues**: ten native connectors, hand-written for
-fidelity, plus the entire [ccxt](https://github.com/ccxt/ccxt) family behind one
-universal connector. When a name exists in both, the native connector wins, so
-the total is a union rather than a sum — six names overlap.
+On the crypto side Crocodile speaks to **109 venues**: ten native connectors,
+hand-written for fidelity, plus the entire [ccxt](https://github.com/ccxt/ccxt)
+family behind one universal connector. When a name exists in both, the native
+connector wins, so the total is a union rather than a sum — six names overlap.
 
 The ccxt half is not a fixed number: the dependency is `ccxt>=4.5`, and 105 is
 what the version resolved here ships. `crocodile markets --asset-class crypto`
@@ -107,7 +117,26 @@ prints the count your install actually has, and `crocodile census` reports it as
 | **Native** | Binance · Bybit · Coinbase · Deribit · OKX · Base on-chain (Uniswap V3, Aerodrome) · GMX/Synthetix · Derive · Superchain · CoinGecko |
 | **Universal** | every ccxt exchange id — Kraken, KuCoin, MEXC, Gate, HTX, Bitget, … |
 
-You don't have to name symbols. Name a *slice of the market* and Crypcodile
+On the equity side there are **nine sources**, and what each one may be asked for is
+derived from the source itself rather than from a shared menu — so a channel is offered
+for the providers that serve it and nowhere else:
+
+| Source | Writes | Key |
+|---|---|---|
+| `alpaca` | `trade` `quote` `ohlcv` | yes |
+| `yahoo` | `options_chain` `ohlcv` `corp_action` `insider` | no |
+| `sec_edgar` | `insider` `holding_13f` `filing` `fundamental` | no (contact string) |
+| `treasury` | `macro_series` | no |
+| `tiingo` | `ohlcv` `corp_action` | yes (free tier) |
+| `stooq` | `ohlcv` `index_value` | no |
+| `msn_money` | `ohlcv` `corp_action` | no |
+| `google_finance` | `trade` `index_value` `fundamental` | no |
+| `finnhub` | `trade` | yes |
+
+`openfigi` is deliberately not a source: it enriches an instrument universe and writes no
+channel of its own.
+
+You don't have to name symbols. Name a *slice of the market* and Crocodile
 resolves the concrete list from the live universe:
 
 ```bash
