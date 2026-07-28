@@ -28,32 +28,53 @@ def _client(lake: pathlib.Path):  # starlette's TestClient, imported lazily
     )
 
 
-def test_a_misspelled_filter_is_refused_rather_than_ignored(lake: pathlib.Path) -> None:
-    """The measured case, and the one that reads as an answer.
+_MISSPELLED = "exchagne"
+"""A near miss for a real filter, and a name no capability declares under any spelling.
 
-    ``catalog-inventory`` takes ``channel`` and ``exchange``. ``source`` is the lake's own
-    partition key and the obvious guess, and guessing it returned everything.
-    """
+The measured case was `?source=nope` on `catalog-inventory`, which takes `exchange`:
+`source` is the lake's own partition key, so it is the obvious guess, and guessing it
+returned the whole inventory. A transposition is used here instead so this test keeps
+measuring the *rule* rather than which of the two spellings the registry settles on.
+"""
+
+
+def _filter_field(name: str) -> str:
+    """A field this capability really declares, read off the registry rather than typed."""
+    import msgspec
+
+    fields = [
+        field.name
+        for field in msgspec.structs.fields(dispatch.resolve(name).params)
+        if field.name != "channel"
+    ]
+    assert fields, name
+    return fields[0]
+
+
+def test_a_misspelled_filter_is_refused_rather_than_ignored(lake: pathlib.Path) -> None:
+    """A filter that is silently ignored narrows nothing and does not say it did not."""
     response = _client(lake).get(
-        "/api/v1/catalog-inventory", params={"source": "nope", "asset_class": "crypto"}
+        "/api/v1/catalog-inventory", params={_MISSPELLED: "nope", "asset_class": "crypto"}
     )
     assert response.status_code == 400, response.text
     detail = response.json()["detail"]
-    assert "source" in detail
-    assert "exchange" in detail, "the refusal has to name what the caller could have meant"
+    assert _MISSPELLED in detail
+    assert _filter_field("catalog-inventory") in detail, (
+        "the refusal has to name what the caller could have meant"
+    )
 
 
 def test_the_refusal_reaches_the_other_two_surfaces(lake: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match="source"):
-        mcp.call_tool("catalog-inventory", {"source": "nope", "asset_class": "crypto"})
+    with pytest.raises(ValueError, match=_MISSPELLED):
+        mcp.call_tool("catalog-inventory", {_MISSPELLED: "nope", "asset_class": "crypto"})
 
     reported = stdio.handle_request(
         {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
          "params": {"name": "catalog-inventory",
-                    "arguments": {"source": "nope", "asset_class": "crypto"}}},
+                    "arguments": {_MISSPELLED: "nope", "asset_class": "crypto"}}},
         data_dir=lake,
     )
-    assert "source" in reported["result"]["content"][0]["text"]
+    assert _MISSPELLED in reported["result"]["content"][0]["text"]
 
 
 def test_a_body_parameter_that_is_not_a_parameter_is_refused_too(lake: pathlib.Path) -> None:
@@ -69,16 +90,17 @@ def test_the_surfaces_own_parameters_are_not_mistaken_for_unknown_ones(
     lake: pathlib.Path,
 ) -> None:
     """``asset_class`` selects the implementation; it is not a capability parameter."""
+    field = _filter_field("catalog-inventory")
     response = _client(lake).get(
-        "/api/v1/catalog-inventory", params={"exchange": "deribit", "asset_class": "crypto"}
+        "/api/v1/catalog-inventory", params={field: "deribit", "asset_class": "crypto"}
     )
     assert response.status_code == 200, response.text
     assert response.json()["rows"], "deribit is in the fixture lake"
 
     result = CliRunner().invoke(
         cli.build_app(),
-        ["catalog-inventory", "--exchange", "deribit", "--asset-class", "crypto",
-         "--data-dir", str(lake)],
+        ["catalog-inventory", f"--{field.replace('_', '-')}", "deribit",
+         "--asset-class", "crypto", "--data-dir", str(lake)],
     )
     assert result.exit_code == 0, result.output
 

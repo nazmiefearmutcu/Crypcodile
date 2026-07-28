@@ -123,15 +123,26 @@ def test_a_computed_answer_does_not_print_a_banner(lake: pathlib.Path) -> None:
 
 
 def test_a_modelled_answer_still_announces_itself(lake: pathlib.Path) -> None:
-    """Equity slippage rests on a modelled book. This is the line that must survive."""
+    """A chaos score is an index no market publishes. This is the line that must survive.
+
+    ``chaos-score`` is chosen because it is ``SYNTHETIC`` by declaration and computes over
+    four numbers the caller supplies, so the assertion is about the banner rather than about
+    whichever data source a modelled implementation happens to read this month.
+    """
+    from crocodile.core.schema.provenance import Provenance
+
+    cap = dispatch.resolve("chaos-score")
+    assert {impl.prov for impl in cap.impls.values()} == {Provenance.SYNTHETIC}
+
     result = CliRunner().invoke(
         cli.build_app(),
-        ["slippage", "--symbol", SYMBOL, "--side", "buy", "--size", "1.0",
-         "--asset-class", "equity", "--data-dir", str(lake)],
+        ["chaos-score", "--volatility", "0.4", "--stablecoin-deviation", "0.01",
+         "--orderbook-imbalance", "0.2", "--sequencer-delay", "1.5",
+         "--data-dir", str(lake)],
     )
     assert result.exit_code == 0, result.output
     assert "SYNTHETIC" in result.stderr
-    assert "yahoo_1m_vap" in result.stderr
+    assert "chaos-score" in result.stderr
 
 
 def test_the_network_surfaces_still_carry_every_warning(lake: pathlib.Path) -> None:
@@ -162,7 +173,9 @@ def test_stdout_stays_machine_readable_while_a_banner_is_printed(lake: pathlib.P
     """The reason the banner is on stderr at all: ``| jq`` must keep working."""
     result = CliRunner().invoke(
         cli.build_app(),
-        ["slippage", "--symbol", SYMBOL, "--side", "buy", "--size", "1.0",
-         "--asset-class", "equity", "--data-dir", str(lake)],
+        ["chaos-score", "--volatility", "0.4", "--stablecoin-deviation", "0.01",
+         "--orderbook-imbalance", "0.2", "--sequencer-delay", "1.5",
+         "--data-dir", str(lake)],
     )
-    assert json.loads(result.stdout)["expected_price"] > 0
+    assert result.stderr, "this capability is modelled and must say so"
+    assert 0.0 <= json.loads(result.stdout) <= 100.0

@@ -42,7 +42,14 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
     from fastapi import FastAPI, Request
 
-__all__ = ["API_PREFIX", "build_app", "methods_for", "route_paths"]
+__all__ = [
+    "API_PREFIX",
+    "build_app",
+    "methods_for",
+    "publish_one_operation_id_per_method",
+    "route_methods",
+    "route_paths",
+]
 
 API_PREFIX = "/api/v1"
 """The prefix both forks already served on. Kept so existing callers do not move."""
@@ -328,7 +335,54 @@ def build_app(*, settings: Settings | None = None, data_dir: Path | None = None)
                 "responses": _openapi_responses(cap),
             },
         )
+    publish_one_operation_id_per_method(app)
     return app
+
+
+_METHOD_SUFFIXES = ("_get", "_post", "_put", "_patch", "_delete", "_head", "_options")
+
+
+def publish_one_operation_id_per_method(app: FastAPI) -> None:
+    """Give each method of a two-method route its own ``operationId``.
+
+    OpenAPI requires ``operationId`` to be unique across every operation in a document, and
+    FastAPI derives one per *route* — so a route serving GET and POST writes the same id
+    under both, and warns once per route that it has done so. A generated client would come
+    out with two methods of one name, or one silently overwriting the other.
+
+    Two routes per capability would avoid it and cannot be had: Gate 4 counts the paths this
+    app serves and a second registration of the same path reads as the same capability
+    projected twice. So the document is corrected after it is generated, which is the only
+    point at which the method is known.
+
+    Applied by :func:`build_app` and by the server that mounts these routes beside its own,
+    because the schema is generated per app and each one would otherwise write its own
+    invalid copy.
+    """
+    import warnings
+
+    original = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema:
+            return app.openapi_schema
+        with warnings.catch_warnings():
+            # Suppressed because the next four lines are the fix for exactly what it warns
+            # about, and only for that message: anything else FastAPI has to say is kept.
+            warnings.filterwarnings("ignore", message="Duplicate Operation ID")
+            schema = original()
+        for item in schema.get("paths", {}).values():
+            for method, operation in item.items():
+                identifier = operation.get("operationId") if isinstance(operation, dict) else None
+                if not isinstance(identifier, str):
+                    continue
+                for suffix in _METHOD_SUFFIXES:
+                    identifier = identifier.removesuffix(suffix)
+                operation["operationId"] = f"{identifier}_{method}"
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
 
 
 def route_paths() -> set[str]:

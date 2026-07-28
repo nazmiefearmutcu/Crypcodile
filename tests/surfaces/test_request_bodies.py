@@ -160,6 +160,40 @@ def test_the_openapi_document_says_a_body_is_accepted(lake: pathlib.Path) -> Non
     assert {p["name"] for p in posted.get("parameters", [])} == {"asset_class"}
 
 
+def test_each_method_gets_its_own_operation_id(lake: pathlib.Path) -> None:
+    """OpenAPI requires ``operationId`` to be unique across every operation in a document.
+
+    FastAPI derives one per *route* and a route here serves two methods, so it wrote the
+    same id under ``get`` and ``post`` for all fifty-odd paths — and warned about each one.
+    A generated client would have produced two methods of the same name, or silently kept
+    whichever it read last.
+    """
+    document = _client(lake).get("/openapi.json").json()
+    ids = [
+        operation["operationId"]
+        for item in document["paths"].values()
+        for operation in item.values()
+        if isinstance(operation, dict) and "operationId" in operation
+    ]
+    assert len(ids) == len(set(ids)), sorted({i for i in ids if ids.count(i) > 1})
+
+    query = document["paths"]["/api/v1/query"]
+    assert query["get"]["operationId"] != query["post"]["operationId"]
+    assert query["get"]["operationId"].endswith("_get")
+    assert query["post"]["operationId"].endswith("_post")
+
+
+def test_generating_the_document_warns_about_nothing(lake: pathlib.Path) -> None:
+    """The warning is FastAPI telling us the document it just wrote is invalid."""
+    import warnings
+
+    app = rest.build_app(settings=_settings(lake))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        app.openapi()
+    assert [str(warning.message) for warning in caught] == []
+
+
 def test_the_openapi_document_describes_the_response_envelope(lake: pathlib.Path) -> None:
     """Where a caller is told the shape changed.
 

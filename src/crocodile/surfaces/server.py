@@ -442,6 +442,10 @@ def build_server(*, settings: Settings | None = None, data_dir: Path | None = No
         if str(getattr(route, "path", "")).startswith(f"{rest.API_PREFIX}/"):
             app.routes.append(route)
 
+    # The capability routes serve two methods each and FastAPI writes one operationId per
+    # route, so this app needs the same correction the projection's own app applies.
+    rest.publish_one_operation_id_per_method(app)
+
     for path, name, handler in _OPERATIONAL:
         app.add_api_route(path, handler, methods=["GET"], name=name)
     app.add_api_route(
