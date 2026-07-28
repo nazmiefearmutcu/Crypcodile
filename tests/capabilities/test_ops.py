@@ -174,7 +174,15 @@ def test_every_irreducible_name_is_a_declared_capability() -> None:
     It named six and one of them was not: ``gas-tracker``. An exemption list whose entries
     are not all the same kind of thing means two things at once, and the one that is not a
     capability is the one nothing can check.
+
+    ``load_all()`` because two of the seven — ``onchain-price`` and ``base-market-data`` —
+    are declared in the ``onchain`` batch, which importing ``ops`` does not pull in. Without
+    it this file passed inside the full suite and failed on its own, which is the wrong way
+    round for a test whose whole subject is what the registry holds.
     """
+    from crocodile.capabilities import load_all
+
+    load_all()
     assert {name for name in IRREDUCIBLE if name in REGISTRY} == set(IRREDUCIBLE)
 
 
@@ -872,6 +880,82 @@ def test_export_encodes_the_nested_columns_every_record_now_carries(
         ),
     )
     assert "prov_inputs" in pl.read_csv(dest).columns
+
+
+def test_export_refuses_a_read_only_surface(
+    lake: Path, readonly_ctx: CapabilityContext, tmp_path: Path
+) -> None:
+    """The one writer this batch left unguarded, and the only one whose path is a parameter.
+
+    Measured on the shipped build: ``GET /api/v1/export?channel=trade&symbols=…&dest=…&
+    fmt=csv`` returned ``200 {"result":"/…/pwned.csv"}`` with a 5 960-byte file on disk.
+    ``dest`` is caller-chosen and unvalidated, so substituting ``~/.zshrc`` overwrites it —
+    an unauthenticated network caller writing an arbitrary path as the server's user.
+
+    ``ExportParams``' own docstring named this hazard and left it to the surfaces, which is
+    the split that produced it: ``_refuse_readonly`` guarded ``collect``,
+    ``collect-market`` and ``backfill`` — the three that write the *lake* — and nobody
+    re-derived that a file write is the same trust question. It is the same question, and
+    it is answered in the same place, so a fourth surface cannot forget it either.
+    """
+    dest = tmp_path / "pwned.csv"
+    prints = [_trade(_BASE_NS, 100.0, 1.0, "a")]
+    asyncio.run(_write(lake, prints))
+
+    with pytest.raises(PermissionError, match="read-only"):
+        ops.export(
+            readonly_ctx,
+            ops.ExportParams(
+                channel="trade",
+                symbols=("deribit:BTC-PERPETUAL",),
+                start_ns=0,
+                end_ns=_BASE_NS + _1S,
+                dest=str(dest),
+                fmt="csv",
+            ),
+        )
+
+    assert not dest.exists(), "the refusal has to happen before anything is written"
+
+
+def test_every_capability_that_writes_outside_the_process_refuses_a_read_only_surface(
+    readonly_ctx: CapabilityContext, tmp_path: Path
+) -> None:
+    """The census that would have caught ``export``, rather than four separate tests.
+
+    Each of the tests above names one adapter, which is how the fourth one came to have no
+    test at all. This asks the question the other way round — of every adapter this batch
+    declares, which ones write something a read-only surface must not be able to start? —
+    so a fifth writer arrives already covered or already failing.
+    """
+    writers = {
+        "collect": _collect_params(),
+        "collect_equities": _collect_params(sources=("stooq",)),
+        "collect_market": _market_params(),
+        "backfill": _backfill_params(),
+        "backfill_equities": _backfill_params(),
+        "export": ops.ExportParams(
+            channel="trade",
+            symbols=("deribit:BTC-PERPETUAL",),
+            start_ns=0,
+            end_ns=_BASE_NS,
+            dest=str(tmp_path / "out.csv"),
+            fmt="csv",
+        ),
+    }
+    unguarded = []
+    for adapter, params in writers.items():
+        try:
+            getattr(ops, adapter)(readonly_ctx, params)
+        except PermissionError:
+            continue
+        except Exception:  # noqa: BLE001 - any other failure is not the refusal
+            pass
+        unguarded.append(adapter)
+    assert not unguarded, (
+        f"{unguarded} write outside this process and did not refuse a read-only surface; "
+        f"call _refuse_readonly before anything is constructed"
+    )
 
 
 def test_export_refuses_an_unsupported_format(ctx: CapabilityContext, tmp_path: Path) -> None:

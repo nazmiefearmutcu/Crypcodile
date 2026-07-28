@@ -147,8 +147,10 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def _refuse_readonly(ctx: CapabilityContext, capability: str) -> None:
-    """Refuse a lake-mutating capability on a surface that declared itself read-only.
+def _refuse_readonly(
+    ctx: CapabilityContext, capability: str, writes: str = "the operator's lake"
+) -> None:
+    """Refuse a capability that writes outside this process on a read-only surface.
 
     ``PermissionError`` rather than ``ValueError`` — which is what
     :func:`~crocodile.core.store.catalog.assert_readonly_sql` raises — because the two are
@@ -156,12 +158,21 @@ def _refuse_readonly(ctx: CapabilityContext, capability: str) -> None:
     wrong*, and a caller that retries with better parameters is doing the right thing with
     it. This one says the parameters were fine and the surface is not trusted to run the
     capability at all, which a REST projection maps to 403 and a caller must not retry.
+
+    ``writes`` names what gets written, and it exists because the lake is not the only
+    thing that does. This guard was written for ``collect``, ``collect-market`` and
+    ``backfill``, and its wording — "writes to the lake" — is why nobody re-derived it for
+    ``export``, which writes a file at a path the *caller* chooses. An exit review measured
+    the consequence: ``GET /api/v1/export?…&dest=/…/pwned.csv&fmt=csv`` answered ``200``
+    with the file on disk. The question is not which store is being written but whether
+    this surface is trusted to make the process write anything at all, so the answer is one
+    function and the difference is one noun.
     """
     if ctx.readonly:
         raise PermissionError(
-            f"capability {capability!r} writes to the lake and this surface is read-only; "
+            f"capability {capability!r} writes {writes} and this surface is read-only; "
             f"a surface that does not trust its callers with mutating SQL cannot trust "
-            f"them to start a write into the operator's lake"
+            f"them to start a write outside this process"
         )
 
 
@@ -1030,10 +1041,18 @@ class ExportParams(msgspec.Struct, frozen=True):
     context the way ``collect``'s ``data_dir`` did. On a local CLI that is exactly right.
     On a network surface it is a caller choosing where the server writes, which is a
     surface policy decision of the same family as
-    :attr:`CapabilityContext.readonly <crocodile.core.capability.CapabilityContext.readonly>`
-    — a REST or MCP projection has to confine it to a directory it owns rather than pass it
-    through. Stated here because a hazard that is obvious on one surface and invisible on
-    another is the kind that ships.
+    :attr:`CapabilityContext.readonly <crocodile.core.capability.CapabilityContext.readonly>`.
+
+    That paragraph used to end by leaving the confinement to "a REST or MCP projection",
+    and closed on the observation that a hazard obvious on one surface and invisible on
+    another is the kind that ships. It shipped: neither projection confined anything, and
+    ``GET /api/v1/export?…&dest=/…/pwned.csv&fmt=csv`` wrote 5 960 bytes to a caller-chosen
+    absolute path and answered ``200`` with it. Naming a hazard is not delegating it. The
+    decision is now taken here, by :func:`_refuse_readonly`, on the same rule as the three
+    lake writers: a surface that is not trusted with mutating SQL is not trusted to make
+    this process write a file either. Confining ``dest`` to a server-owned directory
+    remains a reasonable thing for a projection to add *on top*; it is no longer the only
+    thing standing between an unauthenticated caller and the filesystem.
     """
 
     channel: str
@@ -1067,6 +1086,7 @@ def export(ctx: CapabilityContext, params: ExportParams) -> str:
     scanning — and it is not lost: ``Catalog.scan`` raises ``ValueError("limit must be >=
     0")`` on the same input, one call deeper.
     """
+    _refuse_readonly(ctx, "export", "a file at a path the caller chooses")
     export_rows(
         ctx.catalog,
         params.channel,
