@@ -85,6 +85,17 @@ class Settings(msgspec.Struct, frozen=True):
     stooq_zip_path: str | None = None
     """Path to a pre-downloaded Stooq bulk archive, bypassing the HTTP fetch."""
 
+    openfigi_api_key: str | None = None
+    """OpenFIGI mapping key. Absent means the keyless tier, which is slower and not smaller.
+
+    The two tiers differ in throughput and in nothing else: keyless is twenty-five requests
+    a minute in batches of ten, keyed is twenty-five per six seconds in batches of a hundred,
+    and both return the same fields for the same ticker. So this is never the difference
+    between an answer and no answer — it is the difference between how much of a universe
+    the equity reference merge can enrich before it stops, and the rows it did not reach say
+    so through ``reference_merge``'s confidence rather than by going missing.
+    """
+
     sec_user_agent: str | None = None
     """Contact string sent to SEC EDGAR, which requires one and blocks requests without it.
 
@@ -198,6 +209,7 @@ _VARS: Final[Mapping[str, str]] = {
     "coingecko_api_key": "COINGECKO_API_KEY",
     "msn_money_api_key": "MSN_MONEY_API_KEY",
     "stooq_zip_path": "STOOQ_ZIP_PATH",
+    "openfigi_api_key": "OPENFIGI_API_KEY",
     "sec_user_agent": "SEC_USER_AGENT",
     "base_rpc_url": "BASE_RPC_URL",
     "base_rpc_urls": "BASE_RPC_URLS",

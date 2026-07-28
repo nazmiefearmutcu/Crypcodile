@@ -604,6 +604,22 @@ DERIVES_RECORDS: dict[str, str] = {
         "is a structural zero. Left silent they would all have inherited the header "
         "default and claimed NATIVE."
     ),
+    "equity/reference/universe.py": (
+        "Builds an Instrument out of three other Instruments: SEC EDGAR's registrant row, "
+        "Tiingo's listing row and OpenFIGI's identifier row, resolved by CoverageResolver "
+        "under fill_nulls. The merged row is the one that matters here — no registry "
+        "published it, because the CIK is SEC's, the venue is Tiingo's and the FIGI is "
+        "OpenFIGI's — so left silent it would have inherited the highest-priority source's "
+        "own `native` tail and claimed a registrar reported it whole. It carries "
+        "`reference_merge` instead, whose confidence counts how many of the three agreed. "
+        "The three per-source builders are on this list too and legitimately claim NATIVE: "
+        "a pre-merge row is one registry's own statement, read rather than reconstructed. "
+        "Being here is what makes that a claim somebody wrote rather than a default nobody "
+        "noticed, which is the entire distinction this list exists to force. Note the "
+        "discovery rule below only walks `resample` packages, so this entry is voluntary — "
+        "and it is exactly the kind of module that rule was blind to when `google_finance` "
+        "put a synthesiser in `providers/`."
+    ),
 }
 """Modules that build records out of other records, and why each one counts as derived.
 

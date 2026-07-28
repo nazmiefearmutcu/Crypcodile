@@ -12,3 +12,9 @@ __all__ = [
     "SecurityMaster",
     "TickerMapping",
 ]
+
+# `universe` is deliberately not re-exported here. It reaches three provider packages, and
+# `equity.providers.factory` imports `equity.reference.registry` at module scope — so a
+# re-export would make importing this package and importing that one two halves of an import
+# cycle, resolved or not depending on which of them a caller happened to reach first. Import
+# `crocodile.equity.reference.universe` by its own name.
