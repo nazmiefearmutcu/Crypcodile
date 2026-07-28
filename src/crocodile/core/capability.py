@@ -280,6 +280,15 @@ IRREDUCIBLE: Final[dict[str, str]] = {
     "sequencer-latency": "Measures an L2 sequencer; equities have no sequencer.",
     "peg-deviation": "Stablecoin peg mechanics; no equity instrument behaves this way.",
     "lending-stress": "On-chain lending-pool utilisation and liquidation thresholds.",
+    # The two below arrived at Phase 2's exit rather than from the port. The surface-parity
+    # gate found three wire names — `get_onchain_price` and `get_base_market_data` on both
+    # forks' MCP servers, and equity's `GET /api/v1/market-data` — that the 47 ported
+    # capabilities did not serve, so they were declared rather than exempted; see
+    # `crocodile.capabilities.onchain`.
+    "onchain-price": "An AMM pool's price is a function of two pooled reserves; no equity "
+    "instrument is priced that way, and there is no chain to read one off.",
+    "base-market-data": "The same pool, with its swap volume. Same argument: the volume is "
+    "the pool's own swap log, which has no equity analogue either.",
 }
 """The only way a capability escapes the symmetry gate, and the bar for getting on it.
 

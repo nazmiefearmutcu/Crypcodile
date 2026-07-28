@@ -1,4 +1,10 @@
-"""Tests for Crypcodile analytics commands (Slippage Estimator, OFI Indexer, Whale Alerts Tracker) (Task R4).
+"""Tests for Crypcodile analytics functions (Slippage Estimator, OFI Indexer, Whale Alerts
+Tracker) (Task R4).
+
+The three tests that drove ``slippage`` / ``ofi`` / ``whale-alerts`` through the hand-written
+crypto Typer app left with it: reaching a capability from the CLI is now
+``tests/surfaces/test_end_to_end.py``, and the interactive prompt fallback and the ``shell``
+command are affordances the projected CLI does not have.
 """
 
 from __future__ import annotations
@@ -8,7 +14,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from typer.testing import CliRunner
 
 from crocodile.core.schema.enums import AssetClass, Side
 from crocodile.core.schema.records import BookSnapshot, Liquidation, Trade
@@ -18,7 +23,6 @@ from crocodile.crypto.analytics.ofi import calculate_ofi, parse_interval_to_ns
 from crocodile.core.analytics.slippage import estimate_slippage
 from crocodile.crypto.analytics.whale import track_whale_alerts
 from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.crypto.legacy.cli import app
 
 _BASE_NS = 1_704_067_200_000_000_000  # 2024-01-01 00:00:00 UTC
 _SYMBOL = "deribit:BTC-PERPETUAL"
@@ -338,7 +342,7 @@ def test_track_whale_alerts_empty_lake(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI & Client Wrapper Verification
+# Client Wrapper Verification
 # ---------------------------------------------------------------------------
 
 
@@ -358,94 +362,3 @@ def test_client_methods(slippage_lake: Path, ofi_lake: Path, whale_lake: Path) -
     client = CrypcodileClient(whale_lake)
     df = client.track_whale_alerts(_SYMBOL, _BASE_NS, _BASE_NS + 20_000_000_000, 1000.0)
     assert len(df) == 2
-
-
-def test_cli_commands_non_interactive(slippage_lake: Path, ofi_lake: Path, whale_lake: Path) -> None:
-    import os
-    from collections import namedtuple
-    from unittest.mock import patch
-
-    os.environ["POLARS_FMT_MAX_COLS"] = "20"
-    os.environ["POLARS_TABLE_WIDTH"] = "1000"
-
-    runner = CliRunner()
-
-    TerminalSize = namedtuple("TerminalSize", ["columns", "lines"])
-    with patch("shutil.get_terminal_size", return_value=TerminalSize(1000, 100)):
-        # CLI slippage command
-        result = runner.invoke(
-            app,
-            [
-                "slippage",
-                "--symbol", _SYMBOL,
-                "--side", "buy",
-                "--size", "3.0",
-                "--data-dir", str(slippage_lake),
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        assert "buy" in result.output
-        assert "101.66" in result.output
-
-        # CLI ofi command
-        result = runner.invoke(
-            app,
-            [
-                "ofi",
-                "--symbol", _SYMBOL,
-                "--start", str(_BASE_NS),
-                "--end", str(_BASE_NS + 40_000_000_000),
-                "--interval", "15s",
-                "--data-dir", str(ofi_lake),
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        assert "ofi" in result.output
-
-        # CLI whale-alerts command
-        result = runner.invoke(
-            app,
-            [
-                "whale-alerts",
-                "--symbol", _SYMBOL,
-                "--start", str(_BASE_NS),
-                "--end", str(_BASE_NS + 20_000_000_000),
-                "--min-usd", "1000",
-                "--data-dir", str(whale_lake),
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        assert "Liquidation" in result.output
-        assert "Trade" in result.output
-
-
-def test_cli_commands_interactive_fallback(slippage_lake: Path) -> None:
-    from unittest.mock import patch
-    runner = CliRunner()
-    
-    # Simulate interactive input for slippage
-    # inputs:
-    # 1. Symbol (defaults to deribit:BTC-PERPETUAL)
-    # 2. Side (defaults to buy)
-    # 3. Size (e.g. 3.0)
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True):
-        result = runner.invoke(
-            app,
-            ["slippage", "--data-dir", str(slippage_lake)],
-            input="deribit:BTC-PERPETUAL\nbuy\n3.0\n",
-        )
-    # Note: under tests/pipes where tty is mock, click/typer falls back to prompt
-    # and the prompt returns what we sent.
-    assert result.exit_code == 0, result.output
-    assert "buy" in result.output
-
-
-def test_shell_integration_registration() -> None:
-    runner = CliRunner()
-    
-    # Run the interactive shell and verify commands exist in the help menu
-    result = runner.invoke(app, ["shell"], input="help\nexit\n")
-    assert result.exit_code == 0, result.output
-    assert "slippage" in result.output
-    assert "ofi" in result.output
-    assert "whale-alerts" in result.output

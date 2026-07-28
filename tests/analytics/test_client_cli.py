@@ -1,12 +1,17 @@
-"""Tests for Task 6.5 — CrypcodileClient analytics methods + CLI subcommands.
+"""Tests for Task 6.5 — CrypcodileClient analytics methods.
 
 Acceptance criteria (from the plan, verbatim):
   - populate a tmp lake; CrypcodileClient(tmp).funding_apr(...) equals
     analytics.funding.funding_apr(catalog, ...).
-  - Invoke the CLI via Typer's CliRunner: `funding-apr --symbol ... --data-dir tmp`
-    exits 0 and prints a table containing the APR.
-  - `iv-surface` exits 0 on a populated options lake.
   - ruff + mypy clean.
+
+The other half of the plan — "invoke the CLI via Typer's CliRunner" for ``funding-apr``,
+``basis``, ``iv-surface``, ``term-structure``, ``vol-skew`` and ``risk-reversal`` — went with
+the hand-written crypto Typer app. ``tests/surfaces/test_end_to_end.py`` owns reaching a
+capability from the CLI, ``tests/conformance/test_surfaces.py`` owns it being there at all,
+and ``tests/capabilities/test_analytics.py`` owns the numbers. The ``basis`` argument-mode
+multiplexer those tests pinned no longer exists: ``basis``, ``perp-basis`` and
+``spot-future-basis`` are three separately declared capabilities.
 """
 
 from __future__ import annotations
@@ -16,7 +21,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from typer.testing import CliRunner
 
 from crocodile.core.schema.enums import AssetClass, OptType
 from crocodile.core.schema.records import Funding, OptionsChain
@@ -25,7 +29,6 @@ from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.funding import funding_apr as analytics_funding_apr
 from crocodile.crypto.analytics.volsurface import iv_surface as analytics_iv_surface
 from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.crypto.legacy.cli import app
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -273,101 +276,6 @@ def test_client_term_structure_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI: funding-apr
-# ---------------------------------------------------------------------------
-
-_RUNNER = CliRunner()
-
-
-def test_cli_funding_apr_exits_0(funding_lake: Path) -> None:
-    """CLI funding-apr must exit 0 on a populated lake."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "funding-apr",
-            "--symbol", _SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + 3 * _8H_NS),
-            "--data-dir", str(funding_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-def test_cli_funding_apr_contains_apr(funding_lake: Path) -> None:
-    """CLI funding-apr output must contain 'apr' (column header)."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "funding-apr",
-            "--symbol", _SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + 3 * _8H_NS),
-            "--data-dir", str(funding_lake),
-        ],
-    )
-    assert "apr" in result.output.lower(), (
-        f"'apr' not found in CLI output:\n{result.output}"
-    )
-
-
-def test_cli_funding_apr_empty_lake_exits_0(tmp_path: Path) -> None:
-    """CLI funding-apr on an empty lake must exit 0 (graceful empty result)."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "funding-apr",
-            "--symbol", _SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + _8H_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-# ---------------------------------------------------------------------------
-# CLI: basis --perp
-# ---------------------------------------------------------------------------
-
-
-def test_cli_basis_perp_exits_0(tmp_path: Path) -> None:
-    """CLI basis --perp on empty lake must exit 0 (graceful empty)."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "basis",
-            "--perp", _PERP_SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + _8H_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-# ---------------------------------------------------------------------------
-# CLI: basis --future/--spot
-# ---------------------------------------------------------------------------
-
-
-def test_cli_basis_future_exits_0(tmp_path: Path) -> None:
-    """CLI basis --future/--spot on empty lake must exit 0."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "basis",
-            "--future", _FUTURE_SYMBOL,
-            "--spot", _SPOT_SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + _8H_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-# ---------------------------------------------------------------------------
 # CrypcodileClient — spot_perp_basis
 # ---------------------------------------------------------------------------
 
@@ -378,287 +286,6 @@ def test_client_spot_perp_basis_returns_dataframe(tmp_path: Path) -> None:
     df = client.spot_perp_basis(_SPOT_SYMBOL, _PERP_SYMBOL, _BASE_NS, _BASE_NS + _8H_NS)
     assert isinstance(df, pl.DataFrame)
     assert len(df) == 0
-
-
-# ---------------------------------------------------------------------------
-# CLI: basis --spot/--perp (true spot-perp basis)
-# ---------------------------------------------------------------------------
-
-
-def test_cli_basis_spot_perp_exits_0(tmp_path: Path) -> None:
-    """CLI basis --spot/--perp on empty lake must exit 0 (graceful empty)."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "basis",
-            "--spot", _SPOT_SYMBOL,
-            "--perp", _PERP_SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + _8H_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert "No basis data found." in result.output
-
-
-def test_cli_basis_spot_perp_calls_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """CLI --spot + --perp must invoke spot_perp_basis, not mark/index perp_basis."""
-    calls: list[tuple[str, str]] = []
-
-    def _fake_spot_perp(self, spot_symbol, perp_symbol, start_ns, end_ns):  # noqa: ANN001
-        calls.append((spot_symbol, perp_symbol))
-        return pl.DataFrame(
-            {
-                "local_ts": [int(_BASE_NS)],
-                "spot_price": [100.0],
-                "perp_price": [101.0],
-                "basis": [1.0],
-                "basis_pct": [0.01],
-            }
-        )
-
-    def _fake_perp(self, perp_symbol, start_ns, end_ns):  # noqa: ANN001
-        raise AssertionError("perp_basis must not be used for --spot/--perp mode")
-
-    monkeypatch.setattr(CrypcodileClient, "spot_perp_basis", _fake_spot_perp)
-    monkeypatch.setattr(CrypcodileClient, "perp_basis", _fake_perp)
-
-    result = _RUNNER.invoke(
-        app,
-        [
-            "basis",
-            "--spot", _SPOT_SYMBOL,
-            "--perp", _PERP_SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + _8H_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert calls == [(_SPOT_SYMBOL, _PERP_SYMBOL)]
-    assert "basis" in result.output.lower()
-
-
-def test_cli_basis_perp_alone_still_mark_index(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CLI --perp alone must still use mark/index perp_basis."""
-    called: list[str] = []
-
-    def _fake_perp(self, perp_symbol, start_ns, end_ns):  # noqa: ANN001
-        called.append(perp_symbol)
-        return pl.DataFrame()
-
-    def _fake_spot_perp(self, spot_symbol, perp_symbol, start_ns, end_ns):  # noqa: ANN001
-        raise AssertionError("spot_perp_basis must not be used for --perp alone")
-
-    monkeypatch.setattr(CrypcodileClient, "perp_basis", _fake_perp)
-    monkeypatch.setattr(CrypcodileClient, "spot_perp_basis", _fake_spot_perp)
-
-    result = _RUNNER.invoke(
-        app,
-        [
-            "basis",
-            "--perp", _PERP_SYMBOL,
-            "--start", str(_BASE_NS),
-            "--end", str(_BASE_NS + _8H_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert called == [_PERP_SYMBOL]
-
-
-# ---------------------------------------------------------------------------
-# CLI: iv-surface
-# ---------------------------------------------------------------------------
-
-
-def test_cli_iv_surface_exits_0(options_lake: Path) -> None:
-    """CLI iv-surface must exit 0 on a populated options lake."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "iv-surface",
-            "--underlying", _UNDERLYING,
-            "--at", str(_BASE_NS),
-            "--data-dir", str(options_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-def test_cli_iv_surface_empty_exits_0(tmp_path: Path) -> None:
-    """CLI iv-surface on an empty lake must exit 0 gracefully."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "iv-surface",
-            "--underlying", _UNDERLYING,
-            "--at", str(_BASE_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-# ---------------------------------------------------------------------------
-# CLI: term-structure
-# ---------------------------------------------------------------------------
-
-
-def test_cli_term_structure_exits_0(options_lake: Path) -> None:
-    """CLI term-structure must exit 0 on a populated options lake."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "term-structure",
-            "--underlying", _UNDERLYING,
-            "--at", str(_BASE_NS),
-            "--data-dir", str(options_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-def test_cli_term_structure_empty_exits_0(tmp_path: Path) -> None:
-    """CLI term-structure on empty lake must exit 0 gracefully."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "term-structure",
-            "--underlying", _UNDERLYING,
-            "--at", str(_BASE_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-# ---------------------------------------------------------------------------
-# CLI: vol-skew
-# ---------------------------------------------------------------------------
-
-
-def test_cli_vol_skew_exits_0(options_lake: Path) -> None:
-    """CLI vol-skew must exit 0 on a populated options lake."""
-    e1_ns = _BASE_NS + _ONE_YEAR_NS
-    result = _RUNNER.invoke(
-        app,
-        [
-            "vol-skew",
-            "--underlying", _UNDERLYING,
-            "--expiry-ns", str(e1_ns),
-            "--at", str(_BASE_NS),
-            "--data-dir", str(options_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-def test_cli_vol_skew_expiry_alias(options_lake: Path) -> None:
-    """CLI vol-skew accepts --expiry as an alias for --expiry-ns."""
-    e1_ns = _BASE_NS + _ONE_YEAR_NS
-    result = _RUNNER.invoke(
-        app,
-        [
-            "vol-skew",
-            "--underlying", _UNDERLYING,
-            "--expiry", str(e1_ns),
-            "--at", str(_BASE_NS),
-            "--data-dir", str(options_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-
-
-def test_cli_vol_skew_empty_exits_0(tmp_path: Path) -> None:
-    """CLI vol-skew on an empty lake must exit 0 gracefully."""
-    e1_ns = _BASE_NS + _ONE_YEAR_NS
-    result = _RUNNER.invoke(
-        app,
-        [
-            "vol-skew",
-            "--underlying", _UNDERLYING,
-            "--expiry-ns", str(e1_ns),
-            "--at", str(_BASE_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert "No options data found" in result.output
-
-
-def test_cli_vol_skew_missing_args_exits_1() -> None:
-    """CLI vol-skew without required args in non-interactive mode must exit 1."""
-    result = _RUNNER.invoke(app, ["vol-skew", "--underlying", _UNDERLYING])
-    assert result.exit_code == 1, f"exit_code={result.exit_code}\n{result.output}"
-
-
-# ---------------------------------------------------------------------------
-# CLI: risk-reversal
-# ---------------------------------------------------------------------------
-
-
-def test_cli_risk_reversal_exits_0(options_lake: Path) -> None:
-    """CLI risk-reversal must exit 0 on a populated options lake."""
-    e1_ns = _BASE_NS + _ONE_YEAR_NS
-    result = _RUNNER.invoke(
-        app,
-        [
-            "risk-reversal",
-            "--underlying", _UNDERLYING,
-            "--expiry-ns", str(e1_ns),
-            "--at", str(_BASE_NS),
-            "--data-dir", str(options_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert "risk_reversal:" in result.output
-    assert "butterfly:" in result.output
-
-
-def test_cli_risk_reversal_target_delta(options_lake: Path) -> None:
-    """CLI risk-reversal accepts --target-delta."""
-    e1_ns = _BASE_NS + _ONE_YEAR_NS
-    result = _RUNNER.invoke(
-        app,
-        [
-            "risk-reversal",
-            "--underlying", _UNDERLYING,
-            "--expiry", str(e1_ns),
-            "--at", str(_BASE_NS),
-            "--target-delta", "0.10",
-            "--data-dir", str(options_lake),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert "risk_reversal:" in result.output
-    assert "butterfly:" in result.output
-
-
-def test_cli_risk_reversal_empty_exits_0(tmp_path: Path) -> None:
-    """CLI risk-reversal on empty lake must exit 0 gracefully."""
-    e1_ns = _BASE_NS + _ONE_YEAR_NS
-    result = _RUNNER.invoke(
-        app,
-        [
-            "risk-reversal",
-            "--underlying", _UNDERLYING,
-            "--expiry-ns", str(e1_ns),
-            "--at", str(_BASE_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, f"exit_code={result.exit_code}\n{result.output}"
-    assert "No options data found" in result.output
-
-
-def test_cli_risk_reversal_missing_args_exits_1() -> None:
-    """CLI risk-reversal without required args in non-interactive mode must exit 1."""
-    result = _RUNNER.invoke(app, ["risk-reversal", "--underlying", _UNDERLYING])
-    assert result.exit_code == 1, f"exit_code={result.exit_code}\n{result.output}"
 
 
 # ---------------------------------------------------------------------------

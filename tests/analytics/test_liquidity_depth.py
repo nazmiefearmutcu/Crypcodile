@@ -1,7 +1,13 @@
+"""Analytics + client tests for block liquidity depth.
+
+The four tests that drove ``liquidity-depth`` through the hand-written crypto Typer app
+left with it; ``tests/surfaces/test_end_to_end.py`` and
+``tests/conformance/test_surfaces.py`` own reaching a capability from the CLI now.
+"""
+
 import pathlib
 
 import pytest
-from typer.testing import CliRunner
 
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.records import BookSnapshot
@@ -9,11 +15,9 @@ from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.liquidity_depth import calculate_block_liquidity_depth
 from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.crypto.legacy.cli import app
 
 _BASE_TS = 1_700_000_000_000_000_000
 _SYMBOL = "base_onchain:DEGEN-WETH"
-_RUNNER = CliRunner()
 
 
 async def _write_depth_lake(data_dir: pathlib.Path) -> None:
@@ -110,52 +114,3 @@ def test_client_calculate_block_liquidity_depth(depth_lake: pathlib.Path) -> Non
     assert df["block"][0] == 100
     assert df["bid_depth_1pct"][0] == 15.0
     assert "ask_depth_5pct" in df.columns
-
-
-def test_cli_liquidity_depth_exits_0(depth_lake: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "liquidity-depth",
-            "--symbol",
-            _SYMBOL,
-            "--data-dir",
-            str(depth_lake),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    # Polars may truncate wide column names in the table display
-    assert "bid_depth" in result.output
-    assert "100" in result.output
-    assert "15.0" in result.output or "15" in result.output
-
-
-def test_cli_liquidity_depth_empty_exits_0(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "liquidity-depth",
-            "--symbol",
-            "base_onchain:MISSING",
-            "--data-dir",
-            str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "No book snapshots found" in result.output
-
-
-def test_cli_liquidity_depth_requires_symbol(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        ["liquidity-depth", "--data-dir", str(tmp_path)],
-    )
-    assert result.exit_code == 1
-    assert "symbol is required" in result.output.lower()
-
-
-def test_cli_liquidity_depth_help() -> None:
-    result = _RUNNER.invoke(app, ["liquidity-depth", "--help"])
-    assert result.exit_code == 0
-    assert "--symbol" in result.output
-    assert "--data-dir" in result.output

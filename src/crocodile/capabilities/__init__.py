@@ -16,10 +16,15 @@ The families, and what belongs in each:
 ``analytics``
     Anything computed from stored records: ``basis``, ``funding-apr``, ``iv-surface``,
     ``vol-skew``, ``term-structure``, ``slippage``, ``ofi``, ``indicators``.
+``onchain``
+    The two Base-mainnet pool readers, which are the one family that answers from a
+    contract call rather than from the lake. A fifth module rather than a corner of
+    ``market`` because it arrived after the four batches were closed, from the parity
+    gate rather than from the port — see its docstring.
 ``ops``
-    Things that move data rather than read it, plus the six
+    Things that move data rather than read it, plus the
     :data:`~crocodile.core.capability.IRREDUCIBLE` names: ``collect``, ``backfill``,
-    ``replay``, ``export``, ``migrate-lake``.
+    ``replay``, ``export``.
 
 Membership is a judgement about the family, not a hard partition, and nothing enforces it
 beyond review — what *is* enforced is that every module is on :data:`BATCHES` and that
@@ -33,7 +38,7 @@ from typing import Final
 
 __all__ = ["BATCHES", "load_all"]
 
-BATCHES: Final[tuple[str, ...]] = ("analytics", "catalog", "market", "ops")
+BATCHES: Final[tuple[str, ...]] = ("analytics", "catalog", "market", "onchain", "ops")
 """Every batch module, in load order.
 
 A module missing from here is a module :func:`load_all` never imports, which is a block of

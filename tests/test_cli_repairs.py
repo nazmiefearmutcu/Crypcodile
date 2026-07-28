@@ -1,91 +1,31 @@
+"""Two bug-fix regressions whose subject is the lake, not the command that reached it.
+
+The rest of this file was regression cover for the crypto Typer app and went with it. Three
+groups, three reasons:
+
+* ``query`` from a pipe, the ``export``/``replay``/``collect``/``funding-apr``
+  non-interactive guards and the ``basis`` mode combinations were behaviour of hand-written
+  commands. ``query``, ``export``, ``replay``, ``collect``, ``funding-apr`` and the three
+  basis capabilities are projected now, and required parameters replace the guards —
+  ``tests/conformance/test_surfaces.py`` and ``tests/surfaces/test_end_to_end.py`` own what
+  a surface does with a missing or bad one.
+* ``make_sparkline``, ``select_collect_params_interactively`` and
+  ``prompt_time_range_helper`` were that module's own helpers and have no successor at all.
+* What survives is below: neither test invokes a CLI. One pins the export schema of an empty
+  frame, the other pins that a 21-digit timestamp bound reaches a real error rather than a
+  silently wrong scan.
+"""
+
 import pathlib
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-from typer.testing import CliRunner
+
 import polars as pl
-from crocodile.crypto.legacy.cli import app, make_sparkline, select_collect_params_interactively
-from crocodile.crypto.client.export import export as client_export
+import pytest
+
 from crocodile.core.store.catalog import Catalog
+from crocodile.crypto.client.export import export as client_export
 
-_BASE_TS = 1_700_000_000_000_000_000
 
-def test_piped_query_command(tmp_path):
-    runner = CliRunner()
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
-        result = runner.invoke(app, ["query", "--data-dir", str(tmp_path)], input="SELECT 42 AS val")
-        assert result.exit_code == 0
-        assert "42" in result.output
-
-def test_piped_query_command_empty(tmp_path):
-    runner = CliRunner()
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
-        result = runner.invoke(app, ["query", "--data-dir", str(tmp_path)], input="   ")
-        assert result.exit_code == 1
-        assert "Error: SQL query is required and stdin is empty." in result.stderr or "Error: SQL query is required and stdin is empty." in result.output
-
-def test_non_interactive_validation_failures(tmp_path):
-    runner = CliRunner()
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
-        result = runner.invoke(app, ["export", "--data-dir", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "Error:" in result.stderr or "Error:" in result.output
-
-        result = runner.invoke(app, ["replay", "--data-dir", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "Error:" in result.stderr or "Error:" in result.output
-
-        result = runner.invoke(app, ["collect", "--data-dir", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "Error:" in result.stderr or "Error:" in result.output
-
-        result = runner.invoke(app, ["funding-apr", "--data-dir", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "Error:" in result.stderr or "Error:" in result.output
-
-def test_basis_mutually_exclusive_and_non_interactive(tmp_path):
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        ["basis", "--perp", "BTC-PERPETUAL", "--future", "BTC-FUTURE", "--data-dir", str(tmp_path)]
-    )
-    assert result.exit_code == 1
-    assert "mutually exclusive" in result.output or "mutually exclusive" in result.stderr
-
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False):
-        result = runner.invoke(app, ["basis", "--data-dir", str(tmp_path)])
-        assert result.exit_code == 1
-        assert "Error:" in result.output or "Error:" in result.stderr
-
-def test_basis_implicit_mode_interactive(tmp_path):
-    runner = CliRunner()
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=True), \
-         patch("crocodile.crypto.legacy.cli.select_symbols_interactively", return_value=(None, ["binance-spot:BTCUSDT"])), \
-         patch("crocodile.crypto.legacy.cli.prompt_symbol", return_value="binance-spot:BTCUSDT"), \
-         patch("crocodile.crypto.legacy.cli.prompt_time_range_helper", return_value=(0, 9999999999999999999)), \
-         patch("crocodile.crypto.client.client.CrypcodileClient.spot_future_basis", return_value=pl.DataFrame()):
-        result = runner.invoke(
-            app,
-            ["basis", "--future", "deribit:BTC-FUTURE", "--data-dir", str(tmp_path)]
-        )
-        assert result.exit_code == 0
-        assert "No basis data found." in result.output
-
-def test_sparkline_nan_inf_validation():
-    assert make_sparkline([100.0, float("nan"), 200.0]) != ""
-    assert make_sparkline([100.0, float("inf")]) == ""
-    assert make_sparkline([float("nan"), float("inf"), None]) == ""
-    assert make_sparkline([100.0, 100.0]) == "██"
-
-def test_selection_wizard_digit_checks():
-    with patch("typer.prompt") as mock_prompt:
-        # list_exchanges() is sorted: 1=base_onchain, 2=binance, ...
-        mock_prompt.side_effect = ["2", "1, trade", "trade,book_ticker", "1"]
-        exchange, symbols, channels = select_collect_params_interactively(None, None, None)
-        assert exchange == "binance"
-        assert channels == ["trade", "book_ticker"]
-        assert symbols == ["BTCUSDT"]
-
-def test_empty_dataframe_export_schema(tmp_path):
+def test_empty_dataframe_export_schema(tmp_path: pathlib.Path) -> None:
     catalog = Catalog(tmp_path)
     dest = tmp_path / "empty_export.parquet"
     client_export(catalog, "trade", [], 0, 9999999999999999999, "parquet", dest)
@@ -98,13 +38,14 @@ def test_empty_dataframe_export_schema(tmp_path):
     assert "date" in df.columns
 
 
-def test_adversarial_timestamp_overflow(tmp_path):
+def test_adversarial_timestamp_overflow(tmp_path: pathlib.Path) -> None:
     # Testing extremely large timestamp overflow, against a file shaped the way
     # the product writes one today. This built a crypto-family row under an
     # `exchange=` partition — the retired union's file schema, which no live
     # writer produces — by taking `_channel_schema`'s default family, so the
     # bound it guards was being checked on a shape the CLI will not meet.
     from crocodile.core.store.parquet_sink import FAMILY_CANONICAL, _channel_schema
+
     schema = _channel_schema("trade", FAMILY_CANONICAL)
     df = pl.DataFrame([{
         "symbol": "deribit:BTC-PERPETUAL",
@@ -131,90 +72,7 @@ def test_adversarial_timestamp_overflow(tmp_path):
 
     from crocodile.crypto.client.client import CrypcodileClient
     client = CrypcodileClient(data_dir=tmp_path)
-    
+
     # 21-digit timestamp or larger should cause datetime/OverflowError when scanned
     with pytest.raises((OverflowError, OSError, ValueError)):
         client.scan("trade", ["deribit:BTC-PERPETUAL"], 0, 999999999999999999999)
-
-
-def test_adversarial_selection_wizard_loops():
-    # Test that select_collect_params_interactively rejects invalid/out-of-bound indexes and eventually accepts a valid one
-    with patch("typer.prompt") as mock_prompt:
-        # exchange: 99 (invalid), 2 (valid -> binance; list_exchanges is sorted)
-        # channels: 99 (invalid), 1 (valid -> trade)
-        # symbols: 99 (invalid), 1 (valid -> BTCUSDT)
-        mock_prompt.side_effect = ["99", "2", "99", "1", "99", "1"]
-        exchange, symbols, channels = select_collect_params_interactively(None, None, None)
-        assert exchange == "binance"
-        assert channels == ["trade"]
-        assert symbols == ["BTCUSDT"]
-
-
-def test_adversarial_selection_wizard_non_digit():
-    # Test that select_collect_params_interactively rejects non-digit / random strings and loops
-    with patch("typer.prompt") as mock_prompt:
-        # exchange: "invalid", "2" (binance)
-        # channels: "invalid", "1"
-        # symbols: "invalid", "1"
-        mock_prompt.side_effect = ["invalid", "2", "invalid", "1", "invalid", "1"]
-        exchange, symbols, channels = select_collect_params_interactively(None, None, None)
-        assert exchange == "binance"
-        assert channels == ["trade"]
-        assert symbols == ["BTCUSDT"]
-
-
-def test_collect_is_interactive_nameerror_fix(tmp_path):
-    runner = CliRunner()
-    with patch("crocodile.crypto.legacy.cli.is_interactive_stdin", return_value=False), \
-         patch("crocodile.crypto.legacy.cli.collect_live", new_callable=AsyncMock) as mock_collect_live, \
-         patch("crocodile.crypto.legacy.cli.AiohttpWsTransport") as mock_transport, \
-         patch("crocodile.crypto.legacy.cli.make_connector") as mock_connector:
-        
-        mock_conn = MagicMock()
-        mock_conn.transport = MagicMock()
-        mock_connector.return_value = mock_conn
-        
-        result = runner.invoke(
-            app,
-            ["collect", "--exchange", "binance", "--symbols", "BTCUSDT", "--channels", "trade", "--data-dir", str(tmp_path)]
-        )
-        assert "NameError" not in result.output
-        assert result.exit_code == 0
-
-
-def test_prompt_time_range_helper_overflow_fallback(tmp_path):
-    from crocodile.crypto.legacy.cli import prompt_time_range_helper
-    
-    with patch("crocodile.core.store.catalog.Catalog") as mock_catalog_class, \
-         patch("typer.prompt") as mock_prompt, \
-         patch("typer.echo") as mock_echo:
-        
-        mock_cat = MagicMock()
-        mock_catalog_class.return_value = mock_cat
-        mock_cat._registered_channels = ["trade"]
-        mock_cat.query.return_value = pl.DataFrame({
-            "min_t": [999999999999999999999], # 21 digits, causes overflow
-            "max_t": [999999999999999999999]
-        })
-        
-        # Mock user entering a 21-digit start timestamp and an empty end timestamp
-        mock_prompt.side_effect = ["999999999999999999999", ""]
-        
-        start, end = prompt_time_range_helper(
-            data_dir=tmp_path,
-            channel="trade",
-            symbols=["BTCUSDT"],
-            default_start=123,
-            default_end=456
-        )
-        
-        # With len(val) > 19, parse_time treats the start_input as invalid date format,
-        # prints the warning, and returns the fallback.
-        # Fallback here is min_ts if min_ts is not None else default_start.
-        # Since min_ts is 999999999999999999999, it returns 999999999999999999999.
-        assert start == 999999999999999999999
-        
-        warning_calls = [call for call in mock_echo.call_args_list if "Invalid date format" in call[0][0]]
-        assert len(warning_calls) > 0
-        assert "999999999999999999999" in warning_calls[0][0][0]
-

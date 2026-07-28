@@ -1,4 +1,10 @@
-"""Tests for sequencer latency analytics, client wrapper, and CLI."""
+"""Tests for sequencer latency analytics and its client wrapper.
+
+The four CLI tests left with the hand-written crypto Typer app; reaching
+``sequencer-latency`` from a surface is now ``tests/conformance/test_surfaces.py`` and
+``tests/surfaces/test_end_to_end.py``, and the blank-exchange default is
+``tests/capabilities/test_ops.py``.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,6 @@ import asyncio
 import pathlib
 
 import pytest
-from typer.testing import CliRunner
 
 from crocodile.core.schema.enums import AssetClass
 from crocodile.core.schema.records import BookTicker
@@ -14,11 +19,9 @@ from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.crypto.analytics.sequencer_latency import calculate_sequencer_latency
 from crocodile.crypto.client.client import CrypcodileClient
-from crocodile.crypto.legacy.cli import app
 
 _BASE_TS = 1_700_000_000_000_000_000
 _EXCHANGE = "base_onchain"
-_RUNNER = CliRunner()
 
 
 async def _write_latency_lake(data_dir: pathlib.Path) -> None:
@@ -133,51 +136,3 @@ def test_client_calculate_sequencer_latency(latency_lake: pathlib.Path) -> None:
     assert df["metric"][0] == "production_interval"
     assert df["avg_seconds"][0] == pytest.approx(2.0)
     assert "ingestion_delay" in df["metric"].to_list()
-
-
-def test_cli_sequencer_latency_exits_0(latency_lake: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "sequencer-latency",
-            "--exchange",
-            _EXCHANGE,
-            "--data-dir",
-            str(latency_lake),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "production_interval" in result.output
-    assert "ingestion_delay" in result.output
-    assert "2.0" in result.output or "2" in result.output
-
-
-def test_cli_sequencer_latency_default_exchange(latency_lake: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        ["sequencer-latency", "--data-dir", str(latency_lake)],
-    )
-    assert result.exit_code == 0, result.output
-    assert "production_interval" in result.output
-
-
-def test_cli_sequencer_latency_empty_exits_0(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "sequencer-latency",
-            "--exchange",
-            "missing_exchange",
-            "--data-dir",
-            str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "No sequencer latency data found" in result.output
-
-
-def test_cli_sequencer_latency_help() -> None:
-    result = _RUNNER.invoke(app, ["sequencer-latency", "--help"])
-    assert result.exit_code == 0
-    assert "--exchange" in result.output
-    assert "--data-dir" in result.output
