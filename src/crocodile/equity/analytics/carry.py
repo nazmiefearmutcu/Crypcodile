@@ -490,6 +490,23 @@ def equity_spot_future_carry(
     than dropped: the basis they report is a real spread that was really quoted, and the
     fact that it cannot be annualised is stated in the column rather than by the row's
     absence.
+
+    **Why a lake with no curve still gets rows here, and none from**
+    :func:`equity_forward_basis`. The two look like one decision made twice and are not.
+    Here the yield enters exactly one output column, so its absence has somewhere to be
+    reported: ``risk_free_rate`` is ``None``, ``carry_pct`` is ``None``, every other column
+    is a spread that was genuinely quoted, and ``prov_confidence`` is 0.0 — which is what
+    ``treasury_carry`` returns for a yield as stale as the horizon is long, and what an
+    absent leg is encoded as. Nothing on the row claims a financing rate. There, the yield
+    enters ``mark_price`` itself: parity is ``F = K + (C - P)(1 + rT)``, so a missing ``r``
+    does not blank a column, it silently changes the *forward* to the one a zero-rate market
+    would price — a number no column could carry a ``None`` for.
+
+    The rule both follow is therefore one rule: an absent leg is reported, and it is dropped
+    only when there is nowhere on the row to report it. That is
+    :func:`~crocodile.core.analytics.carry.carry_over_risk_free`'s own argument for
+    propagating ``None`` rather than defaulting to zero, applied to whichever column the
+    rate would otherwise have reached.
     """
     future = price_leg(catalog, future_symbol, start_ns, end_ns)
     cash = price_leg(catalog, spot_symbol, start_ns, end_ns)
@@ -694,6 +711,14 @@ def equity_forward_basis(
     needs the financing leg; emitting rows without one would make that schedule's own
     justification false. The absence is reported by the empty result, which is the
     empty-result contract every function in this family already shares.
+
+    That is a different answer from the one :func:`equity_spot_future_carry` and
+    :func:`equity_funding_apr` give to what looks like the same question, and the difference
+    is which column the missing rate would have reached. There it reaches ``carry_pct``
+    alone, which can be ``None``; here it reaches ``mark_price``, and a forward priced at
+    ``r = 0`` is a forward — there is no null to put in it and no column beside it that
+    would say so. One rule, two consequences: an absent leg is reported, and it is dropped
+    only when the row has nowhere to report it.
 
     The nearest expiry strictly after the snapshot is used, and within it the strike
     closest to the cash price. Parity holds at every strike, so the choice is about noise
