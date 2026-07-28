@@ -607,6 +607,59 @@ def _amm_tick_curve(inputs: Mapping[str, Any]) -> float:
     return min(n / _AMM_LADDER_LEVELS, 1.0)
 
 
+_REFERENCE_SOURCES: Final[int] = 3
+"""Sources the equity reference merge consults: SEC EDGAR, OpenFIGI and Tiingo.
+
+The denominator of one basis and a property of that method — scoped exactly like
+``_YAHOO_1M_VAP_SESSION_BARS`` above, and for the same reason: a crypto venue universe
+comes off one venue's own market list and has no such triple to agree with.
+"""
+
+
+@register_basis("reference_merge", level=Provenance.DERIVED, inputs=["instrument"])
+def _reference_merge(inputs: Mapping[str, Any]) -> float:
+    """A listed security's identity assembled from three registries: how many of them named it.
+
+    ``n_sources / 3``, where ``n_sources`` counts the reference sources that returned a row
+    for this ticker out of the three ``SPEC_METHODS`` M3 names — SEC EDGAR's
+    ``company_tickers.json``, Tiingo's supported-tickers file, and OpenFIGI's mapping
+    endpoint. A ticker all three name is an identity three independent registrars agree
+    exists; one only Tiingo lists is a listing nobody else has confirmed, and the number
+    says which of the two you are holding.
+
+    **Why the denominator is a fixed three rather than "sources this run consulted".** The
+    second reading is the tempting one and it is the ``yahoo_1m_vap`` mistake one axis over:
+    it would score a run that only managed SEC EDGAR at 1.0 for every ticker SEC lists,
+    which reports a single-registrar row as fully attested. The method *declares* three
+    sources, so a session contains three attestations whether or not any given run fetched
+    them — the same argument that divides by 390 because a regular US session contains 390
+    one-minute bars whether or not any were fetched. This matters in practice rather than in
+    principle: OpenFIGI's keyless tier is twenty-five requests a minute in batches of ten, so
+    enrichment is bounded by the slice a caller asked for rather than run across a
+    ninety-thousand-row universe, and the rows outside that slice really are attested twice
+    and score 0.67. Degrading and saying so is the product promise; degrading and reporting
+    1.0 is the thing this registry exists to refuse.
+
+    :attr:`Provenance.DERIVED` and not :attr:`Provenance.NATIVE`. Every field on a merged
+    row was published by one of the three — the CIK by SEC, the listing venue by Tiingo, the
+    FIGI by OpenFIGI — so nothing here is modelled, which is the line
+    :attr:`Provenance.SYNTHETIC` is the other side of. But no single source published the
+    *row*: the identity that joins a registrant to a listing to a global identifier is this
+    engine's, assembled by ``CoverageResolver`` under a stated priority, and NATIVE would
+    claim a registrar reported it that way.
+
+    Saturating at three says the identity is as well attested as this method can make it, not
+    that it has become a venue's own instrument record. That claim is ``prov``'s, and it
+    stays ``DERIVED`` at every value.
+    """
+    n = _require_int(inputs, "n_sources")
+    if not 0 <= n <= _REFERENCE_SOURCES:
+        raise ConfidenceInputError(
+            f"input 'n_sources' must be between 0 and {_REFERENCE_SOURCES}, got {n}"
+        )
+    return n / _REFERENCE_SOURCES
+
+
 @register_basis("farcaster_cast_search", level=Provenance.SYNTHETIC, inputs=[])
 def _farcaster_cast_search(_: Mapping[str, Any]) -> float:
     """Social metrics modelled from a page of casts: 0.0, by definition.
