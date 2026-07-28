@@ -8,19 +8,15 @@ JSON nor the bordered polars frame the legacy CLI printed — and, for a ``STREA
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import pathlib
-from collections.abc import Iterator
-from typing import Any
 
-import pytest
 from typer.testing import CliRunner
 
-from crocodile.core import capability as capability_module
-from crocodile.core.capability import REGISTRY, AssetClass, Capability, Impl, ReturnKind
+from crocodile.core.capability import AssetClass, ReturnKind
 from crocodile.core.schema.provenance import Provenance
 from crocodile.surfaces import cli, dispatch
+from tests.surfaces.conftest import FakeSubscription
 
 
 def test_a_scalar_is_printed_as_json_rather_than_as_a_python_repr(lake: pathlib.Path) -> None:
@@ -59,55 +55,8 @@ def test_a_frame_is_still_printed_as_a_frame(lake: pathlib.Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass(frozen=True)
-class _FakeSubscription:
-    """Shaped like :class:`~crocodile.capabilities.ops.Subscription`, connecting to nothing.
-
-    A real ``collect`` opens a websocket to a live venue, which is not a thing a test may
-    do; what is under test is what the projection does with the object, and that is decided
-    entirely by the three fields a surface is allowed to read off it.
-    """
-
-    sources: tuple[str, ...]
-    channels: tuple[str, ...]
-    duration_seconds: float | None
-
-    async def run(self) -> None:
-        return None
-
-
-@pytest.fixture
-def _collecting_nothing() -> Iterator[None]:
-    """Replace ``collect``'s crypto implementation with one that opens no sockets."""
-    original = REGISTRY["collect"]
-
-    def _fake(ctx: Any, params: Any) -> _FakeSubscription:
-        return _FakeSubscription(
-            sources=tuple(params.sources),
-            channels=tuple(params.channels),
-            duration_seconds=params.duration_seconds,
-        )
-
-    REGISTRY["collect"] = Capability(
-        name=original.name,
-        summary=original.summary,
-        params=original.params,
-        returns=original.returns,
-        aliases=original.aliases,
-        impls={
-            asset_class: Impl(fn=_fake, prov=impl.prov, basis=impl.basis)
-            for asset_class, impl in original.impls.items()
-        },
-    )
-    capability_module._DECLARED_NAMES.add(original.name)
-    try:
-        yield
-    finally:
-        REGISTRY["collect"] = original
-
-
 def test_a_finished_collection_run_says_what_it_collected(
-    lake: pathlib.Path, _collecting_nothing: None
+    lake: pathlib.Path, collecting_nothing: None
 ) -> None:
     """A ``STREAM`` run returns ``None``, so rendering the return value printed ``None``.
 
@@ -129,7 +78,7 @@ def test_a_finished_collection_run_says_what_it_collected(
 
 def test_an_unstarted_subscription_describes_itself_before_it_runs() -> None:
     """Read off the object rather than guessed, and ``None`` for anything that is not one."""
-    pending = _FakeSubscription(sources=("deribit",), channels=("trade",), duration_seconds=None)
+    pending = FakeSubscription(sources=("deribit",), channels=("trade",), duration_seconds=None)
     assert dispatch.stream_summary(pending) == {
         "sources": ["deribit"],
         "channels": ["trade"],
