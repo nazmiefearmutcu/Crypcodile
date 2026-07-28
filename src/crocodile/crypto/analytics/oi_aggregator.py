@@ -1,6 +1,19 @@
+"""Open interest across crypto venues, aligned onto one clock.
+
+Reads the ``open_interest`` channel — which is a value a perpetual's venue publishes about
+itself — filters it to the requested symbol patterns, and hands the samples to
+:func:`crocodile.core.analytics.open_interest.align_open_interest`, which owns the
+forward-fill and the wide frame. The equity half of ``open-interest`` counts a different
+kind of series out of a different channel and produces the same table through the same
+function; that shared shape is what makes the capability symmetric rather than two
+capabilities under one name.
+"""
+
 from __future__ import annotations
 
 import polars as pl
+
+from crocodile.core.analytics.open_interest import SeriesKey, align_open_interest
 from crocodile.core.store.catalog import Catalog
 
 
@@ -23,7 +36,7 @@ def aggregate_open_interest(
     try:
         catalog.refresh_views()
         raw_df = catalog.query(
-            "SELECT * FROM \"open_interest\" "
+            'SELECT * FROM "open_interest" '
             f"WHERE local_ts >= {start_ns} AND local_ts <= {end_ns}"
         )
     except Exception:
@@ -47,15 +60,11 @@ def aggregate_open_interest(
 
     # Drop empty / whitespace-only tokens so they do not become contains("")
     # (which matches every symbol under the default regex engine).
-    symbols_list = [
-        s for s in symbols_list if isinstance(s, str) and s.strip()
-    ]
+    symbols_list = [s for s in symbols_list if isinstance(s, str) and s.strip()]
 
     if symbols_list:
         filters = [
-            pl.col("symbol")
-            .str.to_lowercase()
-            .str.contains(s.lower(), literal=True)
+            pl.col("symbol").str.to_lowercase().str.contains(s.lower(), literal=True)
             for s in symbols_list
         ]
         filter_expr = filters[0]
@@ -66,9 +75,7 @@ def aggregate_open_interest(
     if len(raw_df) == 0:
         return pl.DataFrame()
 
-    # Align across unique local_ts with forward-fill per (exchange, symbol)
     timestamps = sorted(raw_df["local_ts"].unique().to_list())
-    exchanges = sorted(raw_df["source"].unique().to_list())
     series_keys = sorted(
         {
             (row["source"], row["symbol"])
@@ -79,34 +86,11 @@ def aggregate_open_interest(
     # Map: ts -> (exchange, symbol) -> open_interest
     # Skip null OI samples so they do not overwrite last-known values with 0.0
     # and zero out forward-fill for that series.
-    data_map: dict[int, dict[tuple[str, str], float]] = {}
+    samples: dict[int, dict[SeriesKey, float]] = {}
     for row in raw_df.iter_rows(named=True):
         oi_val = row["open_interest"]
         if oi_val is None:
             continue
-        ts = row["local_ts"]
-        key = (row["source"], row["symbol"])
-        oi = float(oi_val)
-        if ts not in data_map:
-            data_map[ts] = {}
-        data_map[ts][key] = oi
+        samples.setdefault(row["local_ts"], {})[(row["source"], row["symbol"])] = float(oi_val)
 
-    last_seen: dict[tuple[str, str], float] = {key: 0.0 for key in series_keys}
-    records = []
-
-    for ts in timestamps:
-        current_data = data_map.get(ts, {})
-        for key in series_keys:
-            if key in current_data:
-                last_seen[key] = current_data[key]
-
-        # Sum symbols per exchange, then total across exchanges
-        record: dict[str, float | int] = {"local_ts": ts}
-        for exchange in exchanges:
-            record[exchange] = sum(
-                last_seen[key] for key in series_keys if key[0] == exchange
-            )
-        record["total_oi"] = sum(last_seen.values())
-        records.append(record)
-
-    return pl.DataFrame(records)
+    return align_open_interest(timestamps, series_keys, samples)
