@@ -15,7 +15,8 @@ import asyncio
 import inspect
 import itertools
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Any, Final, get_args, get_origin
+from types import NoneType, UnionType
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, get_args, get_origin
 
 import duckdb
 import msgspec
@@ -57,6 +58,7 @@ __all__ = [
     "resolve",
     "resolve_asset_class",
     "stream_summary",
+    "structured_fields",
     "symbol_hints",
     "warning_for",
     "wire_names",
@@ -332,23 +334,30 @@ def build_params(cap: Capability, values: dict[str, Any]) -> Any:
     "not supplied" as ``None`` gets the struct's own default instead of overwriting it with
     a null.
 
-    A string arriving for a *sequence* field is split on commas, because a command line and
-    a query string have no lists either. Without this, fifteen of the registry's capabilities
-    were unreachable from two of their three surfaces: ``--symbols BTCUSDT`` and
+    A string arriving for a *sequence of scalars* is split on commas, because a command line
+    and a query string have no lists either. Without this, fifteen of the registry's
+    capabilities were unreachable from two of their three surfaces: ``--symbols BTCUSDT`` and
     ``?symbols=BTC`` both failed with ``Expected 'array', got 'str'``, which is a capability
     that is declared, projected, listed by Gate 4 and impossible to call. Comma separation is
     not invented here — it is what both forks' REST servers and both CLIs took, and what
     ``_PARAM_RENAMES`` in the surface-parity gate already documents for ``open-interest``.
 
+    A string arriving for a *structured* field is JSON. Splitting ``[{"a": 1}, {"b": 2}]`` on
+    commas produces ``['[{"a"', '1}', '{"b"', '2}]']``, which is the same unreachability one
+    step further along: ``gas-vol``, ``mev-sandwich``, ``smart-money`` and ``label-transfers``
+    take arrays of objects, and a transport that can only hand over text — a command line —
+    has no other way to spell one. What those four take is a JSON document either way; this
+    only says so where the transport lost the type.
+
     Raises:
-        ValueError: a value does not fit the declared schema, or a required one is missing.
-            msgspec's own message names the field and the type, and is not reworded.
+        ValueError: a value does not fit the declared schema, a required one is missing, or a
+            structured field was handed text that is not JSON. msgspec's own message names
+            the field and the type, and is not reworded.
     """
     sequences = _sequence_fields(cap.params)
+    structured = structured_fields(cap)
     supplied = {
-        key: [part.strip() for part in value.split(",") if part.strip()]
-        if key in sequences and isinstance(value, str)
-        else value
+        key: _from_text(cap, key, value, sequence=key in sequences, structured=key in structured)
         for key, value in values.items()
         if value is not None
     }
@@ -356,6 +365,24 @@ def build_params(cap: Capability, values: dict[str, Any]) -> Any:
         return msgspec.convert(supplied, type=cap.params, strict=False)
     except msgspec.ValidationError as exc:
         raise ValueError(f"{cap.name}: {exc}") from exc
+
+
+def _from_text(
+    cap: Capability, key: str, value: Any, *, sequence: bool, structured: bool
+) -> Any:
+    """Recover a value a text-only transport had to flatten. Anything else passes through."""
+    if not isinstance(value, str):
+        return value
+    if structured:
+        try:
+            return msgspec.json.decode(value)
+        except msgspec.DecodeError as exc:
+            raise ValueError(
+                f"{cap.name}: {key} takes a JSON document and {value!r} is not one: {exc}"
+            ) from exc
+    if sequence:
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return value
 
 
 def _sequence_fields(params: type[msgspec.Struct]) -> frozenset[str]:
@@ -372,6 +399,55 @@ def _sequence_fields(params: type[msgspec.Struct]) -> frozenset[str]:
             if isinstance(origin, type) and issubclass(origin, (list, tuple, set, frozenset)):
                 found.add(field.name)
     return frozenset(found)
+
+
+def structured_fields(cap: Capability) -> frozenset[str]:
+    """Field names whose declared type has no faithful spelling in a URL.
+
+    A scalar is spellable, and so is a sequence of scalars: ``?symbols=BTC,ETH`` is a
+    convention both forks already served. An array of *objects* is not — ``?trades=`` would
+    have to carry an escaped JSON document through a length limit, an access log and a
+    browser history — and neither is a mapping.
+
+    This is the whole of what tells a projection that a capability wants a body. It is read
+    off the parameter declaration because that is the only place the answer exists: a list of
+    capability names in a projector would be the fourth copy of the registry this package
+    exists to remove, and it would be wrong the first time a parameter changed type.
+    """
+    return frozenset(
+        field.name
+        for field in msgspec.structs.fields(cap.params)
+        if not _url_expressible(field.type)
+    )
+
+
+def _url_expressible(annotation: Any) -> bool:
+    """Whether a value of this type can be written in a query string or on a command line."""
+    origin = get_origin(annotation)
+    if origin is not None and origin in (list, tuple, set, frozenset):
+        return all(_scalar(arg) for arg in get_args(annotation) if arg is not Ellipsis)
+    if _is_union(annotation):
+        return all(_url_expressible(arg) for arg in get_args(annotation) if arg is not NoneType)
+    return _scalar(annotation)
+
+
+def _scalar(annotation: Any) -> bool:
+    """Whether this is a single value: a string, a number, a flag, or a literal among them.
+
+    ``Literal`` counts because a ``Literal["error", "first"]`` is spelled as one of its
+    strings, and a ``StrEnum`` counts because it *is* a ``str`` — which is what makes the
+    check ``issubclass`` rather than an identity test against a tuple of types.
+    """
+    if get_origin(annotation) is Literal:
+        return True
+    if _is_union(annotation):
+        return all(_scalar(arg) for arg in get_args(annotation) if arg is not NoneType)
+    return isinstance(annotation, type) and issubclass(annotation, (str, int, float, bool))
+
+
+def _is_union(annotation: Any) -> bool:
+    """``X | None`` and ``Union[X, None]`` are the same thing and are spelled two ways."""
+    return get_origin(annotation) in (Union, UnionType)
 
 
 # ---------------------------------------------------------------------------
