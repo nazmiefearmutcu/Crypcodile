@@ -163,7 +163,19 @@ class RiskFreeQuote(NamedTuple):
     """
 
     rate: float
-    """The par yield as a decimal fraction (0.0412 is 4.12 %)."""
+    """The par yield as a decimal fraction (0.0412 is 4.12 %), **simply** compounded.
+
+    Bond-equivalent, which is how the Treasury quotes it and how
+    :mod:`crocodile.core.analytics.carry` consumes it — see that module's header for why the
+    carry arithmetic keeps the convention rather than converting: both legs of a carry stay
+    on one clock.
+
+    It is emitted on the wire as ``risk_free_rate``, and it is the only rate this engine
+    publishes. The options family's ``--rate`` is *continuous* (``exp(-r*t)``), so the two
+    are not interchangeable and the conversion is ``r_cont = ln(1 + r_simple)``. That is
+    stated on the option capabilities' ``rate`` field, where an operator wiring one into the
+    other is looking; it is repeated here because this is the end they would copy from.
+    """
 
     tenor_days: float
     """Nominal length of the curve point chosen, in days."""

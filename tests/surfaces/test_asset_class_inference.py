@@ -281,6 +281,8 @@ def _sample(annotation: Any) -> Any:
     Enough to get past ``build_params``; ``resolve_asset_class`` runs before any
     implementation does, so nothing here has to be semantically valid.
     """
+    if hasattr(annotation, "__metadata__"):  # Annotated[T, msgspec.Meta(...)]
+        return _sample(get_args(annotation)[0])
     origin = get_origin(annotation)
     if origin is Literal:
         return get_args(annotation)[0]
