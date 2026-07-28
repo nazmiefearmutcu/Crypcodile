@@ -741,9 +741,17 @@ def _book_snapshot_slice(inputs: Mapping[str, Any]) -> float:
     fixed constant would be a number invented to stand for how often a book ought to tick,
     which is the move ``_aggregate_of_an_undeclared_stream`` refuses one indirection out. The
     mitigation is that the number is read *relative to a claim the caller made*: widening the
-    window weakens the claim as fast as it raises the score, and both the requested instant
-    and the snapshot's own stamp are on the emitted record, so the age is recoverable by
-    anyone who wants to re-grade it against a window of their own.
+    window weakens the claim as fast as it raises the score, and the age is recoverable from
+    the emitted record by anyone who wants to re-grade it against a window of their own.
+
+    That last clause was false for as long as it stood here, and it is the whole of what
+    makes this denominator tolerable, so it is worth saying exactly what carries it.
+    ``DepthProfile.local_ts`` is the *requested* instant — the slice re-stamps it — and
+    ``source_ts`` is the venue's own clock, a different number wherever both exist and
+    ``None`` for every Coinbase book. Neither is the stamp ``age_ns`` was measured from.
+    ``DepthProfile.snapshot_ts`` is, and ``age_ns = local_ts - snapshot_ts`` reads off the
+    row. Until that field existed a caller passing ``--max-age-ns 86400e9`` against an
+    hour-old book got ``prov_confidence=0.958`` and no way to find the hour.
 
     **Why the terms multiply.** They are independent ways the same answer fails to be the
     book at the instant asked for — a ladder can be short, stale, or both — and a slice that
