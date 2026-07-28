@@ -517,8 +517,9 @@ def _chain_row_with_spot(
     ts: int,
     strike: float,
     expiry: int,
-    mark_iv: float,
+    mark_iv: float | None,
     underlying_price: float | None,
+    mark_price: float | None = None,
 ) -> OptionsChain:
     """A chain row whose stored spot may be absent — `underlying_price` is nullable.
 
@@ -538,7 +539,7 @@ def _chain_row_with_spot(
         strike=strike,
         expiry=expiry,
         opt_type=OptType.CALL,
-        mark_price=None,
+        mark_price=mark_price,
         mark_iv=mark_iv,
     )
 
@@ -632,3 +633,112 @@ def test_atm_iv_skips_a_hole_in_the_moneyness_column() -> None:
 
     # Before: 2.5 — the hole's own vol, reported as the vol at the money.
     assert _atm_iv(skew_df, all_rows) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# The per-expiry fit runs at a forward the expiry stated, or it does not run
+# ---------------------------------------------------------------------------
+
+
+def test_a_row_that_states_no_spot_gets_no_fitted_iv(tmp_path: Path) -> None:
+    """The phantom row: `iv=null, source="unavailable"` — and a `fitted_iv` beside it.
+
+    The fit re-solved every row against `underlying_prices[0]`, a spot borrowed from an
+    arbitrary sibling, so a contract carrying a `mark_price` and no underlying price of
+    its own was priced against a forward it never stated. Its solved vol entered the SABR
+    calibration and a fitted vol came back out at its strike, published next to the `null`
+    the very same row's honest solve had just produced.
+
+    Nothing on the row said which of the two numbers to believe. The surface's `iv` column
+    says the contract could not be priced; `fitted_iv` said 0.41881694431634475 anyway.
+    """
+    records: list[object] = [
+        _chain_row_with_spot(_BASE_NS, 90.0, _E1_NS, 0.5, 100.0),
+        _chain_row_with_spot(_BASE_NS, 100.0, _E1_NS, 0.4, 100.0),
+        _chain_row_with_spot(_BASE_NS, 110.0, _E1_NS, 0.55, 100.0),
+        # No mark_iv and no spot: unpriceable on its own terms, and it says so.
+        _chain_row_with_spot(_BASE_NS, 105.0, _E1_NS, None, None, mark_price=8.0),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+
+    df = iv_surface(Catalog(tmp_path), _UNDERLYING, _AT_NS)
+
+    phantom = df.filter(pl.col("strike") == 105.0).row(0, named=True)
+    assert phantom["iv"] is None
+    assert phantom["source"] == "unavailable"
+    # Before: a float — a fitted vol for a contract the surface had just refused to price.
+    assert phantom["fitted_iv"] is None
+
+    # The three rows that did state the forward are still fitted; the refusal is scoped
+    # to the row that did not, not to the expiry.
+    for strike in (90.0, 100.0, 110.0):
+        row = df.filter(pl.col("strike") == strike).row(0, named=True)
+        assert row["fitted_iv"] is not None
+        assert math.isfinite(row["fitted_iv"])
+
+
+def test_an_expiry_stating_two_forwards_is_not_fitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`underlying_prices[0]` is not a choice between candidates, it is an iteration order.
+
+    When the rows of one expiry state different underlying prices there is no forward the
+    expiry agrees on, and the old code seeded SABR with whichever one the frame happened
+    to hand back first. The whole smile moves with it: read through `_snapshot` in one
+    order the strike-90 `fitted_iv` came back 0.462445, in the reverse order 0.508161 —
+    a 9.9% move in a published number, off one lake at one instant, with nothing in the
+    frame recording which forward produced which. Neither strike 90 nor its spot changed
+    between the two reads; only which sibling was asked went first.
+
+    Both orders now produce the same answer, which is no answer: `fitted_iv` is null
+    across the expiry, the same refusal already made when no row states a forward at all.
+    """
+    records: list[object] = [
+        _chain_row_with_spot(_BASE_NS, 90.0, _E1_NS, 0.5, 100.0),
+        _chain_row_with_spot(_BASE_NS, 100.0, _E1_NS, 0.4, 100.0),
+        # A sibling quoting a forward of its own, two and a half times the others.
+        _chain_row_with_spot(_BASE_NS, 110.0, _E1_NS, 0.55, 250.0),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+
+    from crocodile.core.analytics import volsurface as _core
+
+    real_snapshot = _core._snapshot
+
+    def ordered(descending: bool) -> object:
+        def wrapper(raw: pl.DataFrame, at_ns: int) -> pl.DataFrame:
+            snap = real_snapshot(raw, at_ns)
+            return snap if len(snap) == 0 else snap.sort("strike", descending=descending)
+
+        return wrapper
+
+    fitted_by_order = []
+    for descending in (False, True):
+        monkeypatch.setattr(_core, "_snapshot", ordered(descending))
+        df = iv_surface(Catalog(tmp_path), _UNDERLYING, _AT_NS)
+        fitted_by_order.append(df.sort("strike")["fitted_iv"].to_list())
+
+    assert fitted_by_order[0] == fitted_by_order[1], "the fit still depends on frame order"
+    assert fitted_by_order[0] == [None, None, None]
+
+
+def test_the_fit_is_calibrated_on_the_ivs_the_surface_publishes(tmp_path: Path) -> None:
+    """One solve per row, and the fit reads the same column the caller does.
+
+    The old fit called `model.solve_iv` a second time with `underlying_price=forward`
+    rather than the row's own spot, so a chain could publish one `iv` and calibrate on
+    another. With a single stated forward the two agree by construction — which is the
+    point: the divergence is now unspellable rather than merely absent. A spline fit
+    passes through its knots exactly, so it reads the calibration inputs back out.
+    """
+    records: list[object] = [
+        _chain_row_with_spot(_BASE_NS, 90.0, _E1_NS, 0.5, 100.0),
+        _chain_row_with_spot(_BASE_NS, 100.0, _E1_NS, 0.4, 100.0),
+        _chain_row_with_spot(_BASE_NS, 110.0, _E1_NS, 0.55, 100.0),
+    ]
+    asyncio.run(_write_records(tmp_path, records))
+
+    df = iv_surface(Catalog(tmp_path), _UNDERLYING, _AT_NS, fit_method="spline").sort("strike")
+
+    assert df["iv"].to_list() == pytest.approx([0.5, 0.4, 0.55])
+    assert df["fitted_iv"].to_list() == pytest.approx([0.5, 0.4, 0.55])

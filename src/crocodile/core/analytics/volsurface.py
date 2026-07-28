@@ -490,6 +490,91 @@ def _underlying_price_at(
 # ---------------------------------------------------------------------------
 
 
+class _SolvedRow(NamedTuple):
+    """One chain row after ``model.solve_iv``, before it is either fitted or emitted.
+
+    Exists so the vol on a row is solved exactly once. The fit used to re-solve every row
+    against a forward borrowed from one arbitrary sibling, which meant the numbers it
+    calibrated on were not the numbers in the ``iv`` column and no reader could see the
+    difference. Carrying the solved row through both steps makes that divergence
+    unspellable rather than merely fixed.
+    """
+
+    expiry_ns: int
+    strike: float
+    opt_type: str
+    spot: float | None
+    """The row's own ``underlying_price``, or ``None`` when it stated none or stated one
+    that is not a usable price. The only forward this row is entitled to be fitted at."""
+    iv: float | None
+    source: str
+    moneyness: float
+
+
+def _fit_by_expiry(
+    solved: list[_SolvedRow],
+    *,
+    at_ns: int,
+    fit_method: str,
+) -> dict[tuple[int, float, str], float | None]:
+    """Fit one smile per expiry, and only where the expiry states one forward to fit at.
+
+    An expiry qualifies when the distinct underlying prices its rows state number exactly
+    one. Zero is the case this function already declined — nothing to seed a calibration
+    with. More than one is the case it used to answer by taking ``underlying_prices[0]``,
+    which is not a choice between candidates but the frame's iteration order deciding a
+    number: measured, a neighbouring strike's ``fitted_iv`` moved 46% depending on which
+    sibling's spot won.
+
+    Two alternatives were available and are worse. Fitting each stated spot separately
+    turns a chain assembled from quotes observed milliseconds apart into a set of
+    one-point smiles, each of which fits its single point exactly and says nothing. Adding
+    a column naming the forward each row was fitted at makes the borrowed number legible
+    but still publishes it, and this module's argument is that a fitted number which
+    cannot be told from an honest one is the failure — not that it should be labelled.
+
+    So the cost is stated rather than smoothed over: a chain whose rows carry per-contract
+    forwards observed at different instants states several prices and is not fitted, and
+    ``fitted_iv`` is null across it. Admitting near-agreement would mean a tolerance, and a
+    tolerance here is a constant invented to stand for how far apart two forwards may be
+    before they are two forwards. The place to make a chain state one forward is the
+    collector that stamps it, not this function.
+
+    Rows are fitted in strike order so a tie in ``calibrate_sabr``'s search for the strike
+    nearest the forward does not resolve on frame order.
+    """
+    by_expiry: dict[int, list[_SolvedRow]] = {}
+    for entry in solved:
+        by_expiry.setdefault(entry.expiry_ns, []).append(entry)
+
+    fitted_iv_map: dict[tuple[int, float, str], float | None] = {}
+    for expiry_ns, group in by_expiry.items():
+        forwards = {entry.spot for entry in group if entry.spot is not None}
+        if len(forwards) != 1:
+            continue
+        forward = forwards.pop()
+
+        # Every row that stated a spot stated this one, by the test above. The rows that
+        # stated none are absent from the calibration and from its output.
+        fit_rows = sorted(
+            (entry for entry in group if entry.spot is not None),
+            key=lambda entry: (entry.strike, entry.opt_type),
+        )
+        strikes = [entry.strike for entry in fit_rows]
+        fitted_vols = fit_volatility_skew(
+            strikes,
+            [entry.iv for entry in fit_rows],
+            forward,
+            (expiry_ns - at_ns) / _NS_PER_YEAR,
+            strikes,
+            method=fit_method,
+        )
+        for entry, fitted in zip(fit_rows, fitted_vols, strict=False):
+            fitted_iv_map[(entry.expiry_ns, entry.strike, entry.opt_type)] = fitted
+
+    return fitted_iv_map
+
+
 def iv_surface(
     catalog: Catalog,
     underlying: str,
@@ -509,10 +594,24 @@ def iv_surface(
     and ``NaN`` where the chain carries no underlying price — a hole, not a strike that
     happens to sit at zero.
 
-    The per-expiry fit is skipped, rather than run against an invented forward, when no row
-    of that expiry carries an underlying price. A SABR calibration seeded on a made-up
-    forward returns numbers, and they would land in ``fitted_iv`` beside the honest ones
-    with nothing to tell them apart.
+    The per-expiry fit is skipped, rather than run against an invented forward, when the
+    rows of that expiry do not state exactly one underlying price — whether because none
+    of them states one, or because they state several and no row's price is more the
+    expiry's forward than another's. A SABR calibration seeded on a made-up forward returns
+    numbers, and they would land in ``fitted_iv`` beside the honest ones with nothing to
+    tell them apart.
+
+    A row that states no underlying price of its own is not fitted even when the rest of
+    its expiry agrees on one. It is the row that declined to say where the forward was, and
+    the smile is parameterised in strike-over-forward: evaluating it there would be
+    assuming on the row's behalf. That is the case that used to publish ``iv=null,
+    source="unavailable", fitted_iv=1.260023`` — a fitted vol for a contract the surface
+    had just said it could not price.
+
+    Every ``iv`` fed to the fit is the ``iv`` published on the same row. Solving the fit's
+    inputs a second time against a different spot is what let a phantom forward reach the
+    calibration at all, and it made ``fitted_iv`` a curve through vols that appear nowhere
+    in the frame.
     """
     raw = _scan_chain(catalog, underlying)
     if len(raw) == 0:
@@ -522,45 +621,38 @@ def iv_surface(
     if len(snap) == 0:
         return pl.DataFrame()
 
-    fitted_iv_map: dict[tuple[int, float, str], float | None] = {}
-    for expiry in set(snap["expiry"].to_list()):
-        exp_df = snap.filter(pl.col("expiry") == expiry)
-        if len(exp_df) == 0:
-            continue
+    solved: list[_SolvedRow] = []
+    for row in snap.iter_rows(named=True):
+        strike = float(row["strike"])
+        expiry_ns = int(row["expiry"])
+        opt_type_str = str(row["opt_type"])
+        spot = _as_float(row.get("underlying_price"))
+        if spot is not None and not (math.isfinite(spot) and spot > 0.0):
+            # Present but unusable as a price. Treated as absent rather than as a forward
+            # of zero, which is the same reading `moneyness` takes two lines down.
+            spot = None
 
-        underlying_prices = [
-            p
-            for p in exp_df["underlying_price"].to_list()
-            if p is not None and math.isfinite(p) and p > 0.0
-        ]
-        if not underlying_prices:
-            continue
-        forward = float(underlying_prices[0])
-        t_years = (expiry - at_ns) / _NS_PER_YEAR
-
-        strikes: list[float] = []
-        ivs: list[float | None] = []
-        keys: list[tuple[float, str]] = []
-        for row in exp_df.iter_rows(named=True):
-            strike = float(row["strike"])
-            opt_type_str = str(row["opt_type"])
-            iv, _ = model.solve_iv(
-                quote=_quote(row),
-                underlying_price=forward,
-                strike=strike,
-                t_years=t_years,
-                opt_type=_opt_type(opt_type_str),
-                rate=rate,
-            )
-            strikes.append(strike)
-            ivs.append(iv)
-            keys.append((strike, opt_type_str))
-
-        fitted_vols = fit_volatility_skew(
-            strikes, ivs, forward, t_years, strikes, method=fit_method
+        iv, source = model.solve_iv(
+            quote=_quote(row),
+            underlying_price=spot,
+            strike=strike,
+            t_years=(expiry_ns - at_ns) / _NS_PER_YEAR,
+            opt_type=_opt_type(opt_type_str),
+            rate=rate,
         )
-        for (strike, opt_type_str), fitted in zip(keys, fitted_vols, strict=False):
-            fitted_iv_map[(int(expiry), strike, opt_type_str)] = fitted
+        solved.append(
+            _SolvedRow(
+                expiry_ns=expiry_ns,
+                strike=strike,
+                opt_type=opt_type_str,
+                spot=spot,
+                iv=iv,
+                source=source,
+                moneyness=strike / spot if spot is not None else float("nan"),
+            )
+        )
+
+    fitted_iv_map = _fit_by_expiry(solved, at_ns=at_ns, fit_method=fit_method)
 
     out_expiry: list[int] = []
     out_strike: list[float] = []
@@ -570,33 +662,16 @@ def iv_surface(
     out_fitted_iv: list[float | None] = []
     out_source: list[str] = []
 
-    for row in snap.iter_rows(named=True):
-        strike = float(row["strike"])
-        expiry_ns = int(row["expiry"])
-        opt_type_str = str(row["opt_type"])
-        underlying_price = _as_float(row.get("underlying_price"))
-
-        iv, source = model.solve_iv(
-            quote=_quote(row),
-            underlying_price=underlying_price,
-            strike=strike,
-            t_years=(expiry_ns - at_ns) / _NS_PER_YEAR,
-            opt_type=_opt_type(opt_type_str),
-            rate=rate,
+    for entry in solved:
+        out_expiry.append(entry.expiry_ns)
+        out_strike.append(entry.strike)
+        out_moneyness.append(entry.moneyness)
+        out_opt_type.append(entry.opt_type)
+        out_iv.append(entry.iv)
+        out_fitted_iv.append(
+            fitted_iv_map.get((entry.expiry_ns, entry.strike, entry.opt_type))
         )
-        moneyness = (
-            strike / underlying_price
-            if underlying_price is not None and underlying_price > 0.0
-            else float("nan")
-        )
-
-        out_expiry.append(expiry_ns)
-        out_strike.append(strike)
-        out_moneyness.append(moneyness)
-        out_opt_type.append(opt_type_str)
-        out_iv.append(iv)
-        out_fitted_iv.append(fitted_iv_map.get((expiry_ns, strike, opt_type_str)))
-        out_source.append(source)
+        out_source.append(entry.source)
 
     return pl.DataFrame(
         {
