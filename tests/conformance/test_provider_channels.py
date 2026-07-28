@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import pytest
 
-from crocodile.equity.legacy.cli import VALID_CHANNELS, channels_for_provider
 from crocodile.equity.providers.base import Provider
-from crocodile.equity.providers.factory import _REGISTRY, supported_channels
+from crocodile.equity.providers.factory import (
+    _REGISTRY,
+    VALID_CHANNELS,
+    channels_for_provider,
+    supported_channels,
+)
 
 
 def _declaring_providers() -> list[str]:

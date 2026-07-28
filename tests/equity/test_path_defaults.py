@@ -1,9 +1,19 @@
 """Safe defaults for machine-local paths and secrets (no hardcoded home dirs).
 
-The package is now ``crocodile``, but the on-disk state roots are deliberately
-not renamed with it: ``STOCKODILE_HOME`` and ``~/.stockodile`` still name where
-an existing equity deployment keeps its state, and renaming them would orphan
-those files silently. These tests pin the names so the rename cannot leak in.
+One test left, and its departure is a deliberate behaviour change rather than a gap.
+``test_default_payments_file_uses_stockodile_home`` pinned
+``equity/legacy/api_server._default_payments_file`` answering ``$STOCKODILE_HOME`` and then
+``~/.stockodile/payments_db.json``. There is one ledger now, resolved by
+:func:`crocodile.surfaces.payments.payments_path`, and it answers ``PAYMENTS_FILE`` first,
+then a per-run temporary file under pytest, then ``~/.crypcodile/payments_db.json`` — the
+crypto fork's root, kept because renaming it would orphan a live deployment's ledger. There
+is no ``STOCKODILE_HOME`` branch to pin, so the assertion has no successor; what replaces it
+is ``tests/equity/test_api_payment_security.py``, which drives the real ledger through the
+route that administers it.
+
+What survives here is the narrower claim the file was really for: no production module
+resolves a path out of somebody's home checkout, and the one env override that *is* still
+read by an equity-inherited module keeps working.
 """
 
 from __future__ import annotations
@@ -11,29 +21,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
-
-def test_default_payments_file_uses_stockodile_home(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The equity state root is still ``STOCKODILE_HOME`` / ``~/.stockodile``.
-
-    This assertion used to live on the equity fork's own copy of the Base
-    on-chain connector, which the merge deduplicated away (see
-    ``test_get_ipc_file_prefers_env``). The home-derived default it was really
-    guarding survives on the equity module that owns it.
-    """
-    from crocodile.equity.legacy import api_server
-
-    monkeypatch.delenv("STOCKODILE_HOME", raising=False)
-
-    path = api_server._default_payments_file()
-    assert path.endswith(os.path.join(".stockodile", "payments_db.json"))
-    # Must not embed a machine-specific project checkout path (home expand is fine).
-    assert not path.startswith("/Users/nazmi/Stockodile/")
-    assert not path.startswith("/Users/nazmi/Desktop/Stockodile/")
-
-    monkeypatch.setenv("STOCKODILE_HOME", "/tmp/stockodile-home")
-    path = api_server._default_payments_file()
-    assert path == os.path.join("/tmp/stockodile-home", "payments_db.json")
 
 
 def test_get_ipc_file_prefers_env(monkeypatch: pytest.MonkeyPatch) -> None:
