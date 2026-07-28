@@ -1,11 +1,15 @@
+"""Unit tests for whale-transfer filtering, labelling, and the on-chain tracker.
+
+The two tests that drove ``label-transfers`` through the hand-written crypto Typer app
+left with it: the capability takes transfer rows and a watchlist object rather than the
+two file paths that CLI read, and ``tests/capabilities/test_analytics.py`` covers it.
+"""
+
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from typer.testing import CliRunner
 from web3 import AsyncWeb3
 
 from crocodile.crypto.analytics.whale_transfers import (
@@ -14,9 +18,6 @@ from crocodile.crypto.analytics.whale_transfers import (
     label_known_addresses,
     label_transfer_addresses,
 )
-from crocodile.crypto.legacy.cli import app
-
-_RUNNER = CliRunner()
 
 
 def test_filter_transfers_by_usd() -> None:
@@ -83,43 +84,6 @@ def test_label_known_addresses() -> None:
     assert rows[0] == {"address": "0xAa", "label": "alpha", "is_known": "true"}
     assert rows[1]["is_known"] == "false"
     assert rows[1]["label"] == ""
-
-
-def test_cli_label_transfers_exits_0(tmp_path: Path) -> None:
-    smart = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B"
-    other = "0x1111111111111111111111111111111111111111"
-    xfer = tmp_path / "transfers.csv"
-    xfer.write_text(
-        "from,to,usd_value\n"
-        f"{smart},{other},150000\n"
-        f"{other},{other},50000\n",
-        encoding="utf-8",
-    )
-    wl = tmp_path / "watchlist.json"
-    wl.write_text(json.dumps({smart: "vitalik"}), encoding="utf-8")
-
-    result = _RUNNER.invoke(
-        app,
-        [
-            "label-transfers",
-            "--transfers",
-            str(xfer),
-            "--watchlist",
-            str(wl),
-            "--min-usd",
-            "100000",
-            "--known-only",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert "vitalik" in result.output
-    assert "150000" in result.output or "150000.0" in result.output
-
-
-def test_cli_label_transfers_missing_args() -> None:
-    result = _RUNNER.invoke(app, ["label-transfers"])
-    assert result.exit_code == 1
-    assert "required" in result.output.lower()
 
 
 @pytest.mark.asyncio

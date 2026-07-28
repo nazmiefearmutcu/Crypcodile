@@ -1,20 +1,19 @@
-"""Unit + CLI tests for offline MEV sandwich detection."""
+"""Unit tests for offline MEV sandwich detection.
+
+The four tests that drove ``mev-sandwich`` through the hand-written crypto Typer app left
+with it: the capability takes trade *rows* rather than a ``--trades`` file path, and
+``tests/capabilities/test_ops.py`` covers it end to end.
+"""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import polars as pl
-from typer.testing import CliRunner
 
 from crocodile.crypto.analytics.mev_sandwich import (
     MEVSandwichFilter,
     detect_sandwiches,
     prepare_trade_frame,
 )
-from crocodile.crypto.legacy.cli import app
-
-_RUNNER = CliRunner()
 
 _SANDWICH_ROWS = [
     {
@@ -100,40 +99,3 @@ def test_empty_frame() -> None:
     res = MEVSandwichFilter.detect_sandwiches(df)
     assert res.height == 0
     assert "is_sandwich" in res.columns
-
-
-def test_cli_mev_sandwich_csv(tmp_path: Path) -> None:
-    path = tmp_path / "trades.csv"
-    pl.DataFrame(_SANDWICH_ROWS).write_csv(path)
-
-    result = _RUNNER.invoke(app, ["mev-sandwich", "--trades", str(path)])
-    assert result.exit_code == 0, result.output
-    assert "is_sandwich" in result.output
-    assert "0xattacker" in result.output
-    assert "sandwich_legs: 3 / 4" in result.output
-
-
-def test_cli_mev_sandwich_json_sandwiches_only(tmp_path: Path) -> None:
-    path = tmp_path / "trades.json"
-    pl.DataFrame(_SANDWICH_ROWS).write_json(path)
-
-    result = _RUNNER.invoke(
-        app,
-        ["mev-sandwich", "--trades", str(path), "--sandwiches-only"],
-    )
-    assert result.exit_code == 0, result.output
-    assert "0xnormal" not in result.output
-    assert "0xvictim" in result.output
-    assert "sandwich_legs: 3 / 4" in result.output
-
-
-def test_cli_mev_sandwich_missing_args_exits_1() -> None:
-    result = _RUNNER.invoke(app, ["mev-sandwich"])
-    assert result.exit_code == 1
-    assert "Error" in result.output
-
-
-def test_cli_mev_sandwich_registered() -> None:
-    result = _RUNNER.invoke(app, ["--help"])
-    assert result.exit_code == 0
-    assert "mev-sandwich" in result.output

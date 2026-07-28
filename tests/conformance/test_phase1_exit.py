@@ -38,6 +38,31 @@ def test_the_package_tree_is_anchored_where_this_test_thinks_it_is() -> None:
     assert len(_package_files()) > 100, "package tree is implausibly small; check the anchor"
 
 
+def test_the_package_being_imported_is_the_package_being_scanned() -> None:
+    """The other half, and it is not hypothetical in a worktree.
+
+    Half the gates in this suite read the tree off disk and half of them ``import crocodile``.
+    Those are only the same subject when the interpreter resolves the package to *this*
+    checkout, and an editable install does not guarantee it: this repository's venv carries
+    a ``.pth`` naming one absolute source directory, so any interpreter started without
+    ``pythonpath`` reads whichever tree that file points at. A worktree, a second clone, or a
+    rebase in progress all make that a different tree — and a conformance suite that scans
+    one checkout while importing another is green about nothing in particular.
+
+    ``pyproject``'s ``pythonpath = ["src"]`` is what makes it come out right under pytest.
+    This is the assertion that says so out loud, so the day someone removes that line the
+    failure names the cause instead of appearing as an unrelated gate going strange.
+    """
+    import crocodile
+
+    imported = pathlib.Path(crocodile.__file__ or "").resolve().parent
+    assert imported == _SRC.resolve(), (
+        f"scanning {_SRC.resolve()} but importing {imported}. These gates would be measuring "
+        f"two different checkouts; check `pythonpath` in pyproject.toml and the editable "
+        f"install's .pth."
+    )
+
+
 def test_no_source_file_still_imports_the_old_packages() -> None:
     """Nothing under `crocodile` may still *depend* on `crypcodile` / `stockodile`.
 
@@ -167,6 +192,186 @@ _DELIBERATELY_DROPPED = {
     # `CHANNEL_SUCCESSORS`, so `channel=bar/` and `channel=option_quote/`
     # partitions still decode — the struct left, the on-disk vocabulary did not.
     "OptionQuote",
+    #
+    # ------------------------------------------------------------------
+    # Phase 2: the six hand-written surface stacks
+    # ------------------------------------------------------------------
+    # Everything below was a *handler* in one of the six deleted stacks, and
+    # every one of them is now generated. Read the wire names instead of this
+    # list: `tests/conformance/test_phase2_surface_parity.py` asserts, against a
+    # fixture frozen while all six were intact, that no command, route, tool or
+    # parameter a caller could reach stopped answering. That gate is the one
+    # that measures this deletion; these names are its implementation detail,
+    # and losing an implementation detail while the contract holds is the
+    # difference between a refactor and the seven silent losses above.
+    #
+    # 27 Typer command bodies. One per crypto CLI command, each a hand-written
+    # function that parsed its own options, opened its own Catalog and printed
+    # its own table. `surfaces/cli.py` synthesises all of them from
+    # `Capability.params` with no per-capability branch anywhere in it.
+    "basis_cmd",
+    "census_cmd",
+    "chaos_score_cmd",
+    "collect_market_cmd",
+    "data_coverage_cmd",
+    "funding_apr_cmd",
+    "funding_predict_cmd",
+    "gas_vol_cmd",
+    "iv_surface_cmd",
+    "label_transfers_cmd",
+    "lending_stress_cmd",
+    "liquidity_depth_cmd",
+    "list_exchanges_cmd",
+    "markets_cmd",
+    "mev_sandwich_cmd",
+    "ofi_cmd",
+    "open_interest_cmd",
+    "peg_deviation_cmd",
+    "resolve_symbols_cmd",
+    "risk_reversal_cmd",
+    "sequencer_latency_cmd",
+    "slippage_cmd",
+    "smart_money_cmd",
+    "term_structure_cmd",
+    "universe_cmd",
+    "vol_skew_cmd",
+    "whale_alerts_cmd",
+    # 33 MCP tool handlers. The same list a third time, as `elif tool_name ==`
+    # branches with per-branch argument unpacking and per-branch error strings.
+    # `surfaces/mcp.py::call_tool` is the whole of it now, and `surfaces/stdio.py`
+    # dispatches every tool through that one call.
+    "handle_calculate_ofi",
+    "handle_catalog_stats",
+    "handle_catalog_summary",
+    "handle_data_coverage",
+    "handle_detect_mev_sandwiches",
+    "handle_estimate_slippage",
+    "handle_get_chaos_score",
+    "handle_get_funding_prediction",
+    "handle_get_indicators",
+    "handle_get_iv_surface",
+    "handle_get_lending_stress",
+    "handle_get_liquidity_depth",
+    "handle_get_open_interest",
+    "handle_get_peg_deviation",
+    "handle_get_perp_basis",
+    "handle_get_risk_reversal",
+    "handle_get_sequencer_latency",
+    "handle_get_spot_future_basis",
+    "handle_get_spot_perp_basis",
+    "handle_get_term_structure",
+    "handle_get_vol_skew",
+    "handle_inventory_snapshot",
+    "handle_label_transfers",
+    "handle_list_all_exchanges",
+    "handle_list_data_channels",
+    "handle_list_dates",
+    "handle_list_exchanges_on_disk",
+    "handle_list_registered_exchanges",
+    "handle_list_symbols",
+    "handle_resolve_symbols",
+    "handle_search_symbols",
+    "handle_smart_money_summary",
+    "handle_track_whale_alerts",
+    # 11 FastAPI route bodies, the same list a fourth time. `surfaces/rest.py`
+    # generates one route per capability from the same struct MCP publishes as
+    # its inputSchema, which is what makes the two surfaces unable to disagree
+    # about what a caller may send.
+    "catalog_list_channels",
+    "catalog_list_dates",
+    "catalog_list_exchanges",
+    "catalog_list_symbols",
+    "catalog_search_symbols",
+    "exchanges",
+    "get_depth",
+    "query_lake",
+    "simulate_price_impact",
+    "custom_swagger_ui_html",
+    "sse_events",
+    # 6 pydantic bodies for the POST routes. Every capability is a GET with query
+    # parameters now — one rule, and a POST body was only ever how a hand-written
+    # route accepted a list before `build_params` learned to split one.
+    "GasVolPayload",
+    "LabelTransfersPayload",
+    "MevSandwichPayload",
+    "PriceImpactPayload",
+    "QueryPayload",
+    "SmartMoneyPayload",
+    # The x402 on-chain verification path. It gated exactly one route —
+    # `GET /api/v1/market-data`, the Base DEX price — by fetching a receipt over
+    # RPC with a five-attempt failover and matching a USDC Transfer log against a
+    # hardcoded contract, recipient and amount. That capability is now
+    # `onchain-price`, declared and served without a paywall, so the verifier has
+    # no room behind its door. The ledger it wrote to survives, because
+    # `simulate-payment` and `admin/payments` administer it; see
+    # `surfaces/payments.py`, which says the same thing at length.
+    "get_market_data",
+    "get_w3",
+    "switch_rpc_failover",
+    "is_connection_or_rate_limit_error",
+    "get_transaction_receipt_with_failover",
+    "get_transaction_with_failover",
+    "lifespan",
+    "PersistentDict",
+    "get_payments_file",
+    "load_payments_db",
+    "save_payments_db",
+    # The demo dashboard. `get_dashboard_html` read
+    # `api_portal/public/index.html` off disk and fell back to a 65-line literal
+    # whose own comment says it exists "satisfying E2E test string expectations".
+    # The Node portal it served went with the paid route it demonstrated;
+    # `surfaces/server.py::root_dashboard` is a landing page that links to the
+    # generated schema and therefore cannot go stale.
+    "get_dashboard_html",
+    # The interactive CLI. A wizard that prompted for a symbol, then a channel,
+    # then a time range, then confirmed — reachable only from a tty, and the
+    # reason the crypto CLI could not be driven by a script without
+    # `is_interactive_stdin` returning False. It has no projection because a
+    # prompt is not a parameter: the same request has to be expressible on a
+    # command line, in a query string and in a JSON schema.
+    "prompt_symbol",
+    "prompt_time_range_helper",
+    "prompt_with_autocomplete",
+    "select_collect_params_interactively",
+    "select_symbols_interactively",
+    "get_console",
+    # The CLI's own rendering and normalisation helpers, which the projection
+    # answers once for every capability instead of once per command:
+    # `make_sparkline`, `get_record_value` and `format_record_value` rendered the
+    # live `collect` dashboard; `expand_csv_options` and `unique_preserve` split
+    # repeated flags, which `build_params` now does for every sequence field; and
+    # `run_dashboard`/`MonitoringSink` were the dashboard itself.
+    "make_sparkline",
+    "get_record_value",
+    "format_record_value",
+    "expand_csv_options",
+    "unique_preserve",
+    "run_dashboard",
+    "MonitoringSink",
+    # `resolve_data_dir` walked `test_data`, the repo root and
+    # `~/Crypcodile/test_data` looking for a lake with channels in it, and
+    # answered from whichever it found when the one on the command line was
+    # empty. `tests/conformance/test_data_dir_resolution.py` is the gate that
+    # exists because of exactly this, and `Settings` is the one resolver now.
+    "resolve_data_dir",
+    # `normalize_user_symbol` and `resolve_input_symbols` guessed a venue for a
+    # bare symbol — `BTC` became `binance-usdm:BTCUSDT` under a derivative
+    # channel and `binance-spot:BTCUSDT` under a spot one, against an empty lake.
+    # `resolve-symbols` resolves against the lake's own inventory and raises when
+    # there is no match, which is the same question answered from evidence. The
+    # per-venue normalisation `collect` and `backfill` used is a real behavioural
+    # difference and `CollectParams`' docstring already records it as pending a
+    # lift into `crypto.instruments`.
+    "normalize_user_symbol",
+    "resolve_input_symbols",
+    # Three options-chain path helpers that existed to find the newest snapshot
+    # date by globbing the lake directory. `iv-surface`, `term-structure`,
+    # `vol-skew` and `risk-reversal` all take `at_ns` and read through
+    # `CapabilityContext.query`, so the glob has no caller.
+    "get_available_option_expiries",
+    "get_available_option_snapshots",
+    "get_available_option_underlyings",
+    "get_latest_options_chain_date_glob",
 }
 
 
@@ -242,7 +447,16 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # with them.
 # 429 → 428: the two data-dir resolvers in the crypto REST server became one, and
 # its import block was reformatted on the way past.
-_LEGACY_RUFF_BUDGET = 428
+# 428 → 240: Phase 2 deleted the six hand-written surface stacks — 15 899 lines,
+# and 188 of the findings were theirs. What is left is 238 in `crypto` and 2 in
+# `equity`, which is the shape the merge always had: the crypto fork is the older
+# and larger tree. Note the ratchet did *not* fall by the whole of what left,
+# because `crypto/legacy/mcp_server.py` did not entirely go — the two Base pool
+# readers moved to `crypto/exchanges/base_onchain/price.py`, and their findings
+# moved with them rather than being fixed. That is deliberate: this commit is a
+# deletion, and reformatting code on its way past is how a deletion stops being
+# reviewable.
+_LEGACY_RUFF_BUDGET = 240
 
 
 def _ruff(*paths: str) -> list[str]:

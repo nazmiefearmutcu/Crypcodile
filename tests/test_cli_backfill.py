@@ -1,11 +1,21 @@
-"""CLI tests for ``crypcodile backfill`` (historical REST data).
+"""``run_historical_backfill`` — the orchestrator, exercised without a command line.
 
-Strategy
---------
-- No live network: inject a ``BinanceBackfill`` with fixture-backed fetch
-  callbacks via ``backfill_factory`` on ``run_historical_backfill``, or patch
-  the CLI entry so the orchestrator uses mocked HTTP pages.
-- Unsupported exchange / channel must exit non-zero with a clear message.
+The CLI half of this file is gone. ``backfill`` is a capability now
+(:mod:`crocodile.capabilities.ops`), so the unsupported-exchange, missing-argument,
+inverted-range and writes-Parquet cases are no longer properties of a hand-written Typer
+command: ``tests/capabilities/test_ops.py`` pins the range guard and the unstarted-run
+contract, and ``tests/conformance/test_surfaces.py`` pins that the name is reachable on all
+three surfaces.
+
+Two affordances did not survive that move and are named here rather than quietly dropped:
+``--start``/``--end`` as aliases for ``--from``/``--to`` (the parameter is ``start_ns`` /
+``end_ns`` on every surface now), and the per-venue symbol normalisation that turned a bare
+``BTC`` into ``BTCUSDT`` for binance — ``CollectParams``' docstring records that the
+normaliser stayed behind in the legacy CLI module and that closing the gap means lifting it
+into ``crypto.instruments``.
+
+What is below reaches the orchestrator directly, which is where the behaviour actually
+lives, with fixture-backed fetch callbacks so no test touches the network.
 """
 
 from __future__ import annotations
@@ -13,14 +23,10 @@ from __future__ import annotations
 import json
 import pathlib
 from typing import Any
-from unittest.mock import patch
 
-from typer.testing import CliRunner
+import pytest
 
-from crocodile.crypto.legacy.cli import app
 from crocodile.crypto.exchanges.binance.backfill import BinanceBackfill
-
-_RUNNER = CliRunner()
 
 _FIXTURES = pathlib.Path(__file__).parent / "exchanges" / "binance" / "fixtures"
 
@@ -57,209 +63,10 @@ def _make_fixture_binance_backfill() -> BinanceBackfill:
     )
 
 
-# ─── unsupported / validation ────────────────────────────────────────────────
-
-
-def test_backfill_unsupported_exchange_exits_nonzero(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "backfill",
-            "--exchange", "coinbase",
-            "--channel", "trade",
-            "--symbols", "BTC-USD",
-            "--from", str(_START_NS),
-            "--to", str(_END_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code != 0
-    assert "Unsupported exchange" in result.output
-    assert "coinbase" in result.output
-
-
-def test_backfill_unknown_exchange_exits_nonzero(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "backfill",
-            "--exchange", "not-a-real-exchange",
-            "--channel", "trade",
-            "--symbols", "BTCUSDT",
-            "--from", str(_START_NS),
-            "--to", str(_END_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code != 0
-    assert "Unsupported exchange" in result.output
-    assert "binance" in result.output  # lists supported names
-
-
-def test_backfill_missing_args_exits_nonzero(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        ["backfill", "--exchange", "binance", "--data-dir", str(tmp_path)],
-    )
-    assert result.exit_code != 0
-    assert "required" in result.output.lower()
-
-
-def test_backfill_unsupported_channel_exits_nonzero(tmp_path: pathlib.Path) -> None:
-    """Binance has no funding REST backfill — must error clearly."""
-    result = _RUNNER.invoke(
-        app,
-        [
-            "backfill",
-            "--exchange", "binance",
-            "--channel", "funding",
-            "--symbols", "BTCUSDT",
-            "--from", str(_START_NS),
-            "--to", str(_END_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code != 0
-    assert "funding" in result.output.lower() or "not supported" in result.output.lower()
-
-
-def test_backfill_from_after_to_exits_nonzero(tmp_path: pathlib.Path) -> None:
-    result = _RUNNER.invoke(
-        app,
-        [
-            "backfill",
-            "--exchange", "binance",
-            "--channel", "trade",
-            "--symbols", "BTCUSDT",
-            "--from", str(_END_NS),
-            "--to", str(_START_NS),
-            "--data-dir", str(tmp_path),
-        ],
-    )
-    assert result.exit_code != 0
-    assert "from" in result.output.lower()
-
-
-# ─── binance happy path (mocked REST) ────────────────────────────────────────
-
-
-def test_backfill_binance_trade_writes_parquet(tmp_path: pathlib.Path) -> None:
-    """Binance trade backfill with fixture fetch writes Parquet under data_dir."""
-    from crocodile.crypto.client.backfill import run_historical_backfill as real_run
-
-    async def _run_with_factory(*args, **kwargs):
-        kwargs["backfill_factory"] = _make_fixture_binance_backfill
-        return await real_run(*args, **kwargs)
-
-    with patch("crocodile.crypto.legacy.cli.run_historical_backfill", side_effect=_run_with_factory):
-        result = _RUNNER.invoke(
-            app,
-            [
-                "backfill",
-                "--exchange", "binance",
-                "--channel", "trade",
-                "--symbols", "BTCUSDT",
-                "--from", str(_START_NS),
-                "--to", str(_END_NS),
-                "--data-dir", str(tmp_path),
-            ],
-        )
-
-    assert result.exit_code == 0, f"CLI exited {result.exit_code}:\n{result.output}"
-    assert "2 records" in result.output or "Backfill complete" in result.output
-    parquet_files = list(tmp_path.rglob("*.parquet"))
-    assert len(parquet_files) > 0, (
-        f"No Parquet files under {tmp_path}. Output:\n{result.output}"
-    )
-
-
-def test_backfill_binance_trade_start_end_aliases(tmp_path: pathlib.Path) -> None:
-    """``--start`` / ``--end`` are accepted as aliases for ``--from`` / ``--to``."""
-
-    def _factory() -> BinanceBackfill:
-        return _make_fixture_binance_backfill()
-
-    async def _run_with_factory(*args, **kwargs):
-        from crocodile.crypto.client.backfill import run_historical_backfill as real
-
-        kwargs["backfill_factory"] = _factory
-        return await real(*args, **kwargs)
-
-    with patch("crocodile.crypto.legacy.cli.run_historical_backfill", side_effect=_run_with_factory):
-        result = _RUNNER.invoke(
-            app,
-            [
-                "backfill",
-                "--exchange", "binance",
-                "--channel", "trade",
-                "--symbols", "BTCUSDT",
-                "--start", str(_START_NS),
-                "--end", str(_END_NS),
-                "--data-dir", str(tmp_path),
-            ],
-        )
-
-    assert result.exit_code == 0, f"CLI exited {result.exit_code}:\n{result.output}"
-    assert list(tmp_path.rglob("*.parquet"))
-
-
-def test_backfill_binance_symbol_normalize_btc(tmp_path: pathlib.Path) -> None:
-    """Bare ``BTC`` normalizes to ``BTCUSDT`` for binance before backfill."""
-    seen_symbols: list[str] = []
-
-    def _factory() -> BinanceBackfill:
-        page = _load_aggtrades()
-
-        async def fetch_aggtrades(
-            symbol: str,
-            from_id: int | None,
-            start_time_ms: int | None,
-            end_time_ms: int | None,
-            limit: int,
-        ) -> list[dict[str, Any]]:
-            seen_symbols.append(symbol)
-            if from_id is not None:
-                return []
-            return page
-
-        return BinanceBackfill(
-            fetch_aggtrades=fetch_aggtrades,
-            fetch_klines=None,
-            fetch_open_interest=None,
-            fetch_open_interest_hist=None,
-        )
-
-    async def _run_with_factory(*args, **kwargs):
-        from crocodile.crypto.client.backfill import run_historical_backfill as real
-
-        kwargs["backfill_factory"] = _factory
-        return await real(*args, **kwargs)
-
-    with patch("crocodile.crypto.legacy.cli.run_historical_backfill", side_effect=_run_with_factory):
-        result = _RUNNER.invoke(
-            app,
-            [
-                "backfill",
-                "--exchange", "binance",
-                "--channel", "trade",
-                "--symbols", "BTC",
-                "--from", str(_START_NS),
-                "--to", str(_END_NS),
-                "--data-dir", str(tmp_path),
-            ],
-        )
-
-    assert result.exit_code == 0, result.output
-    assert "BTCUSDT" in seen_symbols
-
-
-# ─── orchestrator unit (direct, no CLI) ──────────────────────────────────────
-
-
 async def test_run_historical_backfill_binance_direct(tmp_path: pathlib.Path) -> None:
     """``run_historical_backfill`` with injected BinanceBackfill writes rows."""
-    from crocodile.crypto.client.backfill import run_historical_backfill
     from crocodile.core.store.parquet_sink import ParquetSink
+    from crocodile.crypto.client.backfill import run_historical_backfill
 
     sink = ParquetSink(data_dir=tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
     count = await run_historical_backfill(
@@ -276,8 +83,8 @@ async def test_run_historical_backfill_binance_direct(tmp_path: pathlib.Path) ->
 
 
 async def test_run_historical_backfill_unsupported_exchange() -> None:
-    from crocodile.crypto.client.backfill import run_historical_backfill
     from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.client.backfill import run_historical_backfill
 
     sink = MemorySink()
     try:
@@ -293,3 +100,25 @@ async def test_run_historical_backfill_unsupported_exchange() -> None:
     except ValueError as exc:
         assert "Unsupported exchange" in str(exc)
         assert "coinbase" in str(exc)
+
+
+async def test_run_historical_backfill_unsupported_channel() -> None:
+    """Binance has no funding REST backfill, and the orchestrator says so by name.
+
+    Migrated from a CLI invocation: the guard is ``SUPPORTED_CHANNELS`` in
+    ``crypto.client.backfill`` and it is the only thing standing between a caller and a
+    silent empty result, so it is asserted where it lives rather than through a command
+    that no longer exists.
+    """
+    from crocodile.core.sink.memory import MemorySink
+    from crocodile.crypto.client.backfill import run_historical_backfill
+
+    with pytest.raises(ValueError, match="not supported"):
+        await run_historical_backfill(
+            exchange="binance",
+            channel="funding",
+            symbols=["BTCUSDT"],
+            start_ns=_START_NS,
+            end_ns=_END_NS,
+            sink=MemorySink(),
+        )

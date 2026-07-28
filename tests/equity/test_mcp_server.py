@@ -1,53 +1,44 @@
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+"""What is left of the equity MCP server: an async Web3 context manager, rehomed.
+
+The file this used to import — ``crocodile.equity.legacy.mcp_server`` — was a copy of the
+crypto one inside an equities library. Everything in it that answered a question is a
+capability now, projected by :mod:`crocodile.surfaces.mcp`, and Gate 4
+(``tests/conformance/test_surfaces.py``) owns the tool list. The only part that was not a
+hand-copy of something the registry declares is the pair of Base-mainnet pool readers,
+which moved to :mod:`crocodile.crypto.exchanges.base_onchain.price` — hence a test in the
+equity tree still naming a crypto module. It stays here rather than moving because this is
+the file that recorded the property, and ``tests/exchanges/base_onchain/test_servers.py``
+covers the two readers themselves but never constructs the real :class:`AsyncWeb3`.
+
+Two tests left with their subject. ``test_get_onchain_price_stock_fallback`` and
+``test_get_base_market_data_stock_fallback`` pinned the fork's yfinance branch: eight
+hardcoded tickers answered with ``pool_address="equity_feed"`` and reserves of ``0.0``, and
+a ninth fell through to a list of Base DEX pools. That branch was deliberately not carried
+across — ``search`` and ``indicators`` answer an equity question out of the lake, for every
+ticker — so there is nothing left for those two to assert against.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Skip on core-only installs BEFORE the yfinance sys.modules mock below: if the
-# crocodile.equity.legacy.mcp_server import fails mid-module, the mock is never restored and
-# poisons later-collected tests (test_proof/test_yahoo).
 pytest.importorskip("web3")
 
-# Mock yfinance to prevent importing pandas which is extremely slow in the test environment
-mock_yf = MagicMock()
-orig_yf = sys.modules.get("yfinance")
-sys.modules["yfinance"] = mock_yf
-
-from collections.abc import Generator  # noqa: E402
-from typing import Any  # noqa: E402
-
-from crocodile.equity.legacy.mcp_server import (  # noqa: E402
-    AsyncWeb3,
-    get_base_market_data,
-    get_onchain_price,
-)
-
-if orig_yf is not None:
-    sys.modules["yfinance"] = orig_yf
-else:
-    sys.modules.pop("yfinance", None)
+from crocodile.crypto.exchanges.base_onchain.price import AsyncWeb3
 
 
-
-class AwaitableValue:
-    def __init__(self, val: Any) -> None:
-        self.val = val
-
-    def __await__(self) -> Generator[Any, None, Any]:
-        async def _async_val() -> Any:
-            if isinstance(self.val, Exception):
-                raise self.val
-            return self.val
-
-        return _async_val().__await__()
-
-
-@pytest.mark.asyncio
 async def test_async_web3_export() -> None:
-    """Verify AsyncWeb3 is exported and can be instantiated."""
-    assert AsyncWeb3 is not None
-    # Verify we can use it as context manager
+    """``AsyncWeb3`` is importable, and leaving its ``async with`` disconnects the provider.
+
+    The disconnect is the whole reason for the subclass: every RPC call in ``price.py`` goes
+    through ``execute_with_retry_and_failover``, which opens one of these per attempt and
+    can try six times across two URLs. A context manager that did not close its provider
+    would leak a session per attempt.
+    """
     from web3.providers.async_base import AsyncBaseProvider
+
     mock_provider = MagicMock(spec=AsyncBaseProvider)
     mock_provider.disconnect = AsyncMock()
 
@@ -55,53 +46,3 @@ async def test_async_web3_export() -> None:
         assert w3 is not None
 
     mock_provider.disconnect.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_get_onchain_price_stock_fallback() -> None:
-    """Verify get_onchain_price falls back to yfinance for stock symbols."""
-    mock_ticker = MagicMock()
-    mock_history = MagicMock()
-    mock_history.empty = False
-    mock_close = MagicMock()
-    mock_close.iloc = [150.0]
-    mock_history.__getitem__.side_effect = lambda key: mock_close if key == "Close" else MagicMock()
-
-    mock_ticker.history.return_value = mock_history
-    with patch("yfinance.Ticker") as mock_ticker_class:
-        mock_ticker_class.return_value = mock_ticker
-
-        res = await get_onchain_price("AAPL")
-        assert res["symbol"] == "AAPL"
-        assert res["pool_address"] == "equity_feed"
-        assert res["price"] == 150.0
-        assert res["pool_type"] == "equity_market"
-
-
-@pytest.mark.asyncio
-async def test_get_base_market_data_stock_fallback() -> None:
-    """Verify get_base_market_data falls back to yfinance for stock symbols."""
-    mock_ticker = MagicMock()
-    mock_history = MagicMock()
-    mock_history.empty = False
-
-    # mock Close prices and Volumes
-    mock_close = MagicMock()
-    mock_close.iloc = [150.0]
-
-    mock_vol = MagicMock()
-    mock_vol.iloc = [7000000.0]
-
-    mock_history.__getitem__.side_effect = lambda key: (
-        mock_close if key == "Close" else (mock_vol if key == "Volume" else MagicMock())
-    )
-
-    mock_ticker.history.return_value = mock_history
-    with patch("yfinance.Ticker") as mock_ticker_class:
-        mock_ticker_class.return_value = mock_ticker
-
-        res = await get_base_market_data("AAPL/USD")
-        assert res["symbol"] == "AAPL-USD"
-        assert res["price"] == 150.0
-        assert res["volume_1h_base"] == 1000000.0
-        assert res["volume_1h_quote"] == 150000000.0

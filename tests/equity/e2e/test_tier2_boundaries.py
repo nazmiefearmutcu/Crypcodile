@@ -1,3 +1,21 @@
+"""Tier 2: boundaries and corner cases of the Base L2 connector.
+
+Four tests left with the x402 verification path, which the merge does not carry across.
+``test_t2_malformed_x402_signature`` and ``test_t2_x402_signature_eip712_parsing`` sent a
+garbled ``Payment-Signature`` header to ``GET /api/v1/market-data``;
+``test_t2_usdc_transfer_log_missing_topics`` and ``..._multi_transfer`` seeded a receipt
+whose Transfer logs were malformed or ambiguous and expected the redeem to refuse it. There
+is no paid route, no header, and no receipt matcher — see ``crocodile.surfaces.payments``
+for the argument. The one property of that family that survived, refusing a transaction
+hash the ledger has already settled, is pinned in
+``tests/equity/test_api_payment_security.py`` against the route that still writes the
+ledger.
+
+``test_t2_mcp_stdin_eof`` stays: it is about the stdio transport rather than about any
+tool, and ``crocodile.surfaces.stdio.serve_stdio`` still has to exit when its peer closes
+stdin.
+"""
+
 import asyncio
 import json
 
@@ -281,17 +299,6 @@ async def test_t2_malformed_json_rpc_responses(mock_rpc) -> None:
     await w3.provider.disconnect()
 
 
-# 10. Malformed x402 Header Signature
-@pytest.mark.asyncio
-async def test_t2_malformed_x402_signature(api_server) -> None:
-    headers = {"Payment-Signature": "garbled-json-string-here"}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC", headers=headers
-        ) as resp:
-            assert resp.status == 400
-
-
 # 11. JSON-RPC batch failures
 @pytest.mark.asyncio
 async def test_t2_json_rpc_batch_failures(mock_rpc) -> None:
@@ -421,103 +428,6 @@ async def test_t2_timestamp_drift() -> None:
     # the surviving crypto records call it source_ts. Neither connector treats
     # a far-future timestamp specially -- both emit sec * 1e9 unchanged.
     assert tickers[0].source_ts == 9999999999 * 1_000_000_000
-
-
-# 15. USDC transfer log missing parameters
-@pytest.mark.asyncio
-async def test_t2_usdc_transfer_log_missing_topics(mock_rpc, api_server) -> None:
-    rpc_url, _ = mock_rpc
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC") as resp:
-            pid = (await resp.json())["payment_required"]["payment_id"]
-
-    tx_hash = "0x" + "c" * 64
-    receipt_data = {
-        "transactionHash": tx_hash,
-        "status": 1,
-        "logs": [
-            {
-                "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
-                "topics": [],  # Missing transfer topic and recipient topic
-                "data": "0x" + (1000).to_bytes(32, "big").hex(),
-            }
-        ],
-    }
-    async with aiohttp.ClientSession() as session:
-        await session.post(f"{rpc_url}/control/receipt", json=receipt_data)
-        sig_payload = {"payment_id": pid, "tx_hash": tx_hash, "signature": "0xmock"}
-        headers = {"Payment-Signature": json.dumps(sig_payload)}
-        async with session.get(
-            f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC", headers=headers
-        ) as resp:
-            assert resp.status in (400, 402)
-
-
-# 16. USDC transfer log multi-transfer
-@pytest.mark.asyncio
-async def test_t2_usdc_transfer_log_multi_transfer(mock_rpc, api_server) -> None:
-    rpc_url, _ = mock_rpc
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC") as resp:
-            pid = (await resp.json())["payment_required"]["payment_id"]
-
-    from eth_account import Account
-    from eth_account.messages import encode_defunct
-
-    private_key = "0x" + "1" * 64
-    account = Account.from_key(private_key)
-    msg = encode_defunct(text=pid)
-    sig = account.sign_message(msg).signature.hex()
-    if not sig.startswith("0x"):
-        sig = "0x" + sig
-
-    tx_hash = "0x" + "d" * 64
-    usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913"
-    transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-    recipient_padded = "0x" + "70997970c51812dc3a010c7d01b50e0d17dc79c8".zfill(64)
-    amount_padded = (1000).to_bytes(32, "big").hex()
-
-    receipt_data = {
-        "transactionHash": tx_hash,
-        "status": 1,
-        "from": account.address,
-        "logs": [
-            {
-                # Arbitrary other transfer log first
-                "address": "0x4200000000000000000000000000000000000006",
-                "topics": [transfer_topic, "0x" + "a" * 64, recipient_padded],
-                "data": "0x" + amount_padded,
-            },
-            {
-                # Valid USDC transfer log second
-                "address": usdc_contract,
-                "topics": [transfer_topic, "0x" + "a" * 64, recipient_padded],
-                "data": "0x" + amount_padded,
-            },
-        ],
-    }
-
-    pool_data = {
-        "address": "0x0000000000000000000000000000000000000001",
-        "factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
-        "token0": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
-        "fee": 500,
-        "sqrtPriceX96": 2**96 * 2,
-        "tick": 0,
-        "liquidity": 10000000000,
-    }
-
-    async with aiohttp.ClientSession() as session:
-        await session.post(f"{rpc_url}/control/pool", json=pool_data)
-        await session.post(f"{rpc_url}/control/receipt", json=receipt_data)
-
-        sig_payload = {"payment_id": pid, "tx_hash": tx_hash, "signature": sig}
-        headers = {"Payment-Signature": json.dumps(sig_payload)}
-        async with session.get(
-            f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC", headers=headers
-        ) as resp:
-            assert resp.status == 200
 
 
 # 17. Aerodrome flipped address edge
@@ -848,16 +758,3 @@ async def test_t2_http_503_service_unavailable(mock_rpc) -> None:
     await transport.close()
 
 
-# 30. x402 signature EIP-712 parsing
-@pytest.mark.asyncio
-async def test_t2_x402_signature_eip712_parsing(api_server) -> None:
-    # Syntactically invalid EIP-712 payload
-    headers = {
-        # no signature field or bad formatting
-        "Payment-Signature": '{"payment_id": "123", "tx_hash": "abc"}'
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC", headers=headers
-        ) as resp:
-            assert resp.status == 400

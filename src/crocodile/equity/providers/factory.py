@@ -21,6 +21,43 @@ _REGISTRY: dict[str, type[Provider]] = {
 
 _VALID_NAMES = sorted(_REGISTRY)
 
+VALID_CHANNELS = ["trade", "quote", "bar", "ohlcv"]
+"""Channel names a caller may ask an equity provider for, widest first.
+
+``ohlcv`` is the surviving tag for a bar; ``bar`` is accepted because lakes and scripts
+still spell it that way and connectors that predate the struct collapse still answer to it
+(see :data:`crocodile.core.schema.enums.CHANNEL_SUCCESSORS`). This is a *vocabulary* — which
+names a user may type — not a read widening: a ``channel=bar/`` partition is read by asking
+for ``bar``. Rejecting ``ohlcv`` is what this list did before the two structs collapsed,
+which made stooq — the one provider that always emitted ``ohlcv`` — unreachable.
+
+It lives here rather than in a surface because it is a fact about what the providers in
+``_REGISTRY`` speak, and it outlived the CLI that used to hold it.
+"""
+
+
+def channels_for_provider(provider: str | None) -> list[str]:
+    """Return the channels *this* provider can serve, in :data:`VALID_CHANNELS` order.
+
+    The equity CLI's picker used to offer all four channels *after* the provider was
+    chosen, with no cross-check between the two lists: ``[3] google_finance`` then
+    ``[2] quote`` was a dead channel the tool walked the user into — a poll loop that
+    returns nothing. A connector that declares its servable set narrows the menu; one that
+    has not declared anything keeps the full vocabulary, so nothing is hidden on a guess.
+
+    ``bar`` stays on offer wherever ``ohlcv`` is: it is the retired spelling of the same
+    channel, and connectors that predate the struct collapse still accept it.
+    """
+    from crocodile.core.schema.enums import channel_predecessors
+
+    servable = supported_channels(provider) if provider else None
+    if servable is None:
+        return list(VALID_CHANNELS)
+    widened = set(servable)
+    if "ohlcv" in widened:
+        widened |= set(channel_predecessors("ohlcv"))
+    return [channel for channel in VALID_CHANNELS if channel in widened] or list(VALID_CHANNELS)
+
 
 def list_providers() -> list[str]:
     """Sorted names of the registered equity providers.

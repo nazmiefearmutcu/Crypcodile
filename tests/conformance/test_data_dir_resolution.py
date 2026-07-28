@@ -18,7 +18,10 @@ which is how the second one arrived.
 from __future__ import annotations
 
 import ast
+import inspect
 import pathlib
+
+from crocodile.core.config import Settings
 
 _REPO = pathlib.Path(__file__).resolve().parents[2]
 _SRC = _REPO / "src" / "crocodile"
@@ -113,19 +116,39 @@ def test_the_scanner_leaves_an_unrelated_directory_variable_alone() -> None:
     assert not _env_reads(ast.parse('os.getenv("STOCKODILE_HOME")'))
 
 
-def test_settings_is_actually_reachable_from_the_servers() -> None:
+def test_settings_is_actually_reachable_from_the_server() -> None:
     """The gate above passes trivially if nothing resolves a lake at all.
 
-    Both REST servers must expose a resolver that accepts a ``Settings`` — which is the
-    shape ``CapabilityContext`` needs — so that "one resolver" means one that something
-    can hand a configuration to, rather than one that reads the ambient environment.
+    There were two REST servers when this was written and each had to expose a resolver
+    that accepts a ``Settings`` — the shape ``CapabilityContext`` needs — so that "one
+    resolver" meant one something can hand a configuration to rather than one that reads
+    the ambient environment. Phase 2 collapsed both into
+    :func:`crocodile.surfaces.server.build_server`, so there is one to check; the property
+    is unchanged and is what keeps the scan above from being vacuous.
     """
     import inspect
 
-    from crocodile.crypto.legacy.api_server import _lake_dir as crypto_lake_dir
-    from crocodile.equity.legacy.api_server import _lake_dir as equity_lake_dir
+    from crocodile.surfaces.server import _lake_dir
 
-    for resolver in (crypto_lake_dir, equity_lake_dir):
-        params = inspect.signature(resolver).parameters
-        assert "settings" in params, f"{resolver.__module__} cannot be handed a Settings"
-        assert params["settings"].default is None
+    params = inspect.signature(_lake_dir).parameters
+    assert "settings" in params, "the server cannot be handed a Settings"
+    assert params["settings"].default is None
+
+
+def test_every_surface_resolves_the_lake_through_the_one_resolver() -> None:
+    """The other half: a surface must not reach around ``Settings`` to find the lake.
+
+    The scan above proves nothing outside ``core/config.py`` *reads the environment*. It
+    would not catch a surface that hardcoded ``Path("data")``, which is exactly what the
+    deleted CLIs did — ``--data-dir`` defaulted to a bare relative ``data`` and a helper
+    then walked three other directories looking for one with channels in it.
+    """
+    from crocodile.surfaces import dispatch, operate, server
+
+    assert dispatch.data_dir_for(Settings(data_dir=pathlib.Path("/x")), None) == pathlib.Path("/x")
+    assert dispatch.data_dir_for(Settings(data_dir=pathlib.Path("/x")), pathlib.Path("/y")) == (
+        pathlib.Path("/y")
+    )
+    for module in (operate, server):
+        source = pathlib.Path(inspect.getsourcefile(module) or "").read_text()
+        assert 'Path("data")' not in source, f"{module.__name__} hardcodes a lake root"

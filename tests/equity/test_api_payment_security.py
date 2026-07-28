@@ -1,325 +1,338 @@
-"""Unit tests for API payment gate, admin/metrics auth, and payments DB hardening."""
+"""The x402 ledger's two surviving routes: simulate a payment, and dump the ledger.
+
+These used to drive ``crocodile.equity.legacy.api_server``. The subject is now
+:func:`crocodile.surfaces.server.build_server` plus :mod:`crocodile.surfaces.payments`, and
+this file is the only coverage either has, so the properties that survived the merge are
+pinned here rather than assumed.
+
+Six tests left with the half of x402 that did not come across — the on-chain verification
+path. ``get_market_data`` fetched a USDC transfer receipt over RPC, matched the Transfer
+topic against a hardcoded contract, compared the amount to ``PRICE_USDC`` and only then
+served a Base DEX price. That verifier gated exactly one route, the route is not in the
+capability registry, and neither is carried across, so:
+
+* ``test_symbol_binding_on_redeem`` (the paid answer must be for the symbol that was paid
+  for), ``test_two_phase_refund_on_data_failure`` (a failed fetch refunds ``spent`` back to
+  ``paid``) and ``test_concurrent_double_redeem_one_wins`` all pinned redeeming a payment
+  for data. Nothing redeems anything now. The last one's *real* subject — read, decide and
+  write the ledger under one lock — moved to ``simulate-payment``, which is the remaining
+  route that does exactly that, and is kept below under that name.
+* ``test_metrics_token_enforced`` pinned ``METRICS_TOKEN`` / ``X-Metrics-Token`` on
+  ``/metrics``. The merged server serves ``/metrics`` unauthenticated; the token is gone.
+* ``test_allow_simulation_false_without_pytest`` pinned a branch that read ``sys.modules``
+  and enabled simulation whenever pytest was imported. The new helper reads one environment
+  variable and nothing else, so there is no pytest branch left to defeat.
+* ``test_default_payments_file_path`` pinned ``STOCKODILE_HOME`` / ``~/.stockodile``; see
+  ``tests/equity/test_path_defaults.py`` for why that root moved.
+
+``test_simulate_payment_rejects_a_reused_tx_hash`` is the one arrival: the replay check it
+asserts was pinned only by ``tests/equity/e2e/test_tier4_real_world.py``, through the
+deleted redeem path, and the check itself is still in ``simulate-payment``.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-# api_server needs web3 + fastapi (stockodile[full]); eth_account is imported directly.
-pytest.importorskip("web3")
+pytest.importorskip("fastapi")
 pytest.importorskip("eth_account")
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
 
-# api_server import pulls heavy deps; allow headroom under pytest-timeout thread mode
+# Building the app imports FastAPI and eth_account; allow headroom under pytest-timeout's
+# thread method.
 pytestmark = pytest.mark.timeout(120)
 
 
 @pytest.fixture()
 def payments_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the ledger at a file of this test's own and turn simulation on."""
     path = tmp_path / "payments_db.json"
     monkeypatch.setenv("PAYMENTS_FILE", str(path))
     monkeypatch.setenv("ALLOW_SIMULATION", "true")
-    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
-    monkeypatch.delenv("METRICS_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_API_KEY", raising=False)
     return path
 
 
 @pytest.fixture()
-def client(payments_file: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    # Import (or re-bind) after env is set so get_payments_file() picks up tmp path.
-    import crocodile.equity.legacy.api_server as api
+def client(payments_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """The deployable app, with a limiter of its own.
 
-    monkeypatch.setattr(api, "PAYMENTS_DB", api.PersistentDict())
-    # Avoid bleeding rate-limit state across tests
-    api.rate_limiter.requests.clear()
-    return TestClient(api.app)
+    ``server._RATE_LIMITER`` is module state shared by every app this process builds, so a
+    test that spends requests from it would bleed into the next one. The legacy fixture
+    cleared the global for the same reason; replacing it is the same fix without reaching
+    into the limiter's internals.
+    """
+    from crocodile.core.config import Settings
+    from crocodile.surfaces import payments, server
 
-
-def _sign_payment_id(payment_id: str, key: str = "0x" + "1" * 64) -> tuple[str, str]:
-    account = Account.from_key(key)
-    msg = encode_defunct(text=payment_id)
-    sig = account.sign_message(msg).signature.hex()
-    if not sig.startswith("0x"):
-        sig = "0x" + sig
-    return sig, account.address
-
-
-def test_allow_simulation_default_is_false() -> None:
-    """Default env value for ALLOW_SIMULATION must be false (not true)."""
-    import inspect
-
-    import crocodile.equity.legacy.api_server as api
-
-    # Prefer testing the helper if present; also assert source default.
-    assert hasattr(api, "_allow_simulation")
-    src = inspect.getsource(api._allow_simulation)
-    assert '"false"' in src or "'false'" in src
-    assert "true" not in src.split("ALLOW_SIMULATION")[1].split(")")[0] or (
-        'os.getenv("ALLOW_SIMULATION", "false")' in src
-        or "os.getenv('ALLOW_SIMULATION', 'false')" in src
+    monkeypatch.setattr(
+        server,
+        "_RATE_LIMITER",
+        payments.SlidingWindowRateLimiter(window_size=60.0, max_requests=100),
     )
+    lake = tmp_path / "lake"
+    lake.mkdir(parents=True, exist_ok=True)
+    return TestClient(server.build_server(settings=Settings(data_dir=lake)))
 
 
-def test_allow_simulation_false_without_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
-    import crocodile.equity.legacy.api_server as api
+def _sign(payment_id: str, key: str = "0x" + "1" * 64) -> tuple[str, str]:
+    account = Account.from_key(key)
+    signature = account.sign_message(encode_defunct(text=payment_id)).signature.hex()
+    if not signature.startswith("0x"):
+        signature = "0x" + signature
+    return signature, account.address
+
+
+def _seed(payments_file: Path, payment_id: str, record: dict[str, Any]) -> None:
+    """Put one row in the ledger.
+
+    The legacy tests minted a pending row by asking for the paid route and reading the 402
+    challenge back. There is no paid route to challenge anyone now, and the ledger is a file
+    with a documented shape, so the row is written directly.
+    """
+    ledger: dict[str, Any] = (
+        json.loads(payments_file.read_text()) if payments_file.exists() else {}
+    )
+    ledger[payment_id] = record
+    payments_file.parent.mkdir(parents=True, exist_ok=True)
+    payments_file.write_text(json.dumps(ledger))
+
+
+def _ledger(payments_file: Path) -> dict[str, Any]:
+    return dict(json.loads(payments_file.read_text()))
+
+
+# ---------------------------------------------------------------------------
+# Simulation is opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_allow_simulation_default_is_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset means off. Simulation marks a payment paid without one having been made.
+
+    Asserted by calling the helper rather than by reading its source, which is what the
+    legacy version did — a source scan passes just as happily on a default nobody reaches.
+    """
+    from crocodile.surfaces import server
 
     monkeypatch.delenv("ALLOW_SIMULATION", raising=False)
-    # Simulate production: no pytest module and no env override
-    modules_without_pytest = {k: v for k, v in sys.modules.items() if k != "pytest"}
-    monkeypatch.setattr(api.sys, "modules", modules_without_pytest)
-    assert api._allow_simulation() is False
+    assert server._allow_simulation() is False
 
     monkeypatch.setenv("ALLOW_SIMULATION", "true")
-    assert api._allow_simulation() is True
+    assert server._allow_simulation() is True
+
+
+def test_simulate_payment_disabled_when_allow_simulation_false(
+    client: TestClient, payments_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With simulation off the route refuses before it touches the ledger."""
+    monkeypatch.setenv("ALLOW_SIMULATION", "false")
+    _seed(payments_file, "pid-nosim", {"status": "pending"})
+    signature, _ = _sign("pid-nosim")
+
+    response = client.post(
+        "/api/v1/simulate-payment",
+        json={"payment_id": "pid-nosim", "tx_hash": "0xnosim", "signature": signature},
+    )
+    assert response.status_code == 400
+    detail = response.json()["detail"].lower()
+    assert "simulat" in detail or "disabled" in detail
+    assert _ledger(payments_file)["pid-nosim"]["status"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# The ledger refuses to be spent twice
+# ---------------------------------------------------------------------------
+
+
+def test_simulate_payment_rejects_spent(client: TestClient, payments_file: Path) -> None:
+    """A row that has already been consumed is not pending, and is refused."""
+    _seed(payments_file, "pid-spent", {"status": "pending"})
+    signature, signer = _sign("pid-spent")
+    payload = {"payment_id": "pid-spent", "tx_hash": "0xsim1", "signature": signature}
+
+    accepted = client.post("/api/v1/simulate-payment", json=payload)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["payment_record"]["sender"] == signer
+
+    record = _ledger(payments_file)["pid-spent"] | {"status": "spent"}
+    _seed(payments_file, "pid-spent", record)
+
+    refused = client.post(
+        "/api/v1/simulate-payment",
+        json={"payment_id": "pid-spent", "tx_hash": "0xsim2", "signature": signature},
+    )
+    assert refused.status_code == 400
+    detail = refused.json()["detail"].lower()
+    assert "spent" in detail or "already" in detail
+
+
+def test_simulate_payment_rejects_paid(client: TestClient, payments_file: Path) -> None:
+    """The same row cannot be marked paid twice, which is the double-credit case."""
+    _seed(payments_file, "pid-paid", {"status": "pending"})
+    signature, _ = _sign("pid-paid")
+
+    first = client.post(
+        "/api/v1/simulate-payment",
+        json={"payment_id": "pid-paid", "tx_hash": "0xpaid1", "signature": signature},
+    )
+    assert first.status_code == 200, first.text
+    assert _ledger(payments_file)["pid-paid"]["status"] == "paid"
+
+    second = client.post(
+        "/api/v1/simulate-payment",
+        json={"payment_id": "pid-paid", "tx_hash": "0xpaid2", "signature": signature},
+    )
+    assert second.status_code == 400
+    detail = second.json()["detail"].lower()
+    assert "paid" in detail or "already" in detail or "processed" in detail
+    # The refused call must not have overwritten the hash the accepted one recorded.
+    assert _ledger(payments_file)["pid-paid"]["tx_hash"] == "0xpaid1"
+
+
+def test_simulate_payment_rejects_a_reused_tx_hash(
+    client: TestClient, payments_file: Path
+) -> None:
+    """One transaction settles one payment id.
+
+    Without this a caller mints a second challenge and presents the same settled
+    transaction against it, paying once and being credited twice. The equity fork pinned it
+    only through the on-chain redeem path, which is gone; the check itself is still on the
+    route that writes the ledger.
+    """
+    _seed(payments_file, "pid-first", {"status": "pending"})
+    _seed(payments_file, "pid-second", {"status": "pending"})
+    tx_hash = "0x" + "e" * 64
+
+    first_sig, _ = _sign("pid-first")
+    accepted = client.post(
+        "/api/v1/simulate-payment",
+        json={"payment_id": "pid-first", "tx_hash": tx_hash, "signature": first_sig},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    second_sig, _ = _sign("pid-second")
+    replayed = client.post(
+        "/api/v1/simulate-payment",
+        json={"payment_id": "pid-second", "tx_hash": tx_hash, "signature": second_sig},
+    )
+    assert replayed.status_code == 400
+    assert "already processed" in replayed.json()["detail"].lower()
+    assert _ledger(payments_file)["pid-second"]["status"] == "pending"
+
+
+async def test_concurrent_simulate_one_wins(
+    payments_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two concurrent claims on one pending id: exactly one 200, one 400, final ``paid``.
+
+    Read-decide-write is one step or it is not safe, and this is the property the deleted
+    ``test_concurrent_double_redeem_one_wins`` was really about — the redeem route is gone,
+    the lock and the race are not. Uses ``httpx.AsyncClient`` because ``TestClient``
+    serialises requests across threads and so cannot exercise an :class:`asyncio.Lock` at
+    all.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from crocodile.core.config import Settings
+    from crocodile.surfaces import payments, server
+
+    monkeypatch.setattr(
+        server,
+        "_RATE_LIMITER",
+        payments.SlidingWindowRateLimiter(window_size=60.0, max_requests=100),
+    )
+    lake = tmp_path / "lake"
+    lake.mkdir(parents=True, exist_ok=True)
+    app = server.build_server(settings=Settings(data_dir=lake))
+
+    _seed(payments_file, "pid-race", {"status": "pending"})
+    signature, _ = _sign("pid-race")
+    payload = {"payment_id": "pid-race", "tx_hash": "0xrace", "signature": signature}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        first, second = await asyncio.gather(
+            ac.post("/api/v1/simulate-payment", json=payload),
+            ac.post("/api/v1/simulate-payment", json=payload),
+        )
+
+    assert sorted([first.status_code, second.status_code]) == [200, 400]
+    assert _ledger(payments_file)["pid-race"]["status"] == "paid"
+
+
+# ---------------------------------------------------------------------------
+# The ledger dump is behind a key, and says nothing when there is none
+# ---------------------------------------------------------------------------
 
 
 def test_admin_payments_hidden_without_token(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
-    resp = client.get("/api/v1/admin/payments")
-    assert resp.status_code == 404
+    """404, not 401: a 401 tells an unauthenticated caller the route is worth guessing at."""
+    monkeypatch.delenv("ADMIN_API_KEY", raising=False)
+    assert client.get("/api/v1/admin/payments").status_code == 404
 
 
 def test_admin_payments_requires_correct_token(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, payments_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ADMIN_TOKEN", "secret-admin")
-    resp = client.get("/api/v1/admin/payments")
-    assert resp.status_code == 401
+    """``ADMIN_API_KEY`` / ``X-Admin-Key``, which is what the crypto fork used.
 
-    resp = client.get("/api/v1/admin/payments", headers={"X-Admin-Token": "wrong"})
-    assert resp.status_code == 401
-
-    resp = client.get("/api/v1/admin/payments", headers={"X-Admin-Token": "secret-admin"})
-    assert resp.status_code == 200
-    assert isinstance(resp.json(), dict)
-
-
-def test_simulate_payment_rejects_spent(client: TestClient) -> None:
-    import crocodile.equity.legacy.api_server as api
-
-    # Create pending payment via market-data gate
-    r = client.get("/api/v1/market-data", params={"symbol": "cbBTC-USDC"})
-    assert r.status_code == 402
-    pid = r.json()["payment_id"]
-    sig, _ = _sign_payment_id(pid)
-    payload = {"payment_id": pid, "tx_hash": "0xsim1", "signature": sig}
-
-    r = client.post("/api/v1/simulate-payment", json=payload)
-    assert r.status_code == 200
-
-    # Manually mark spent and attempt re-simulate
-    rec = api.PAYMENTS_DB[pid]
-    rec["status"] = "spent"
-    api.PAYMENTS_DB[pid] = rec
-
-    r = client.post(
-        "/api/v1/simulate-payment",
-        json={"payment_id": pid, "tx_hash": "0xsim2", "signature": sig},
-    )
-    assert r.status_code == 400
-    assert "spent" in r.json()["detail"].lower() or "already" in r.json()["detail"].lower()
-
-
-def test_simulate_payment_rejects_paid(client: TestClient) -> None:
-    r = client.get("/api/v1/market-data", params={"symbol": "ETH-USDC"})
-    assert r.status_code == 402
-    pid = r.json()["payment_id"]
-    sig, _ = _sign_payment_id(pid)
-    payload = {"payment_id": pid, "tx_hash": "0xpaid1", "signature": sig}
-
-    r = client.post("/api/v1/simulate-payment", json=payload)
-    assert r.status_code == 200
-
-    r = client.post(
-        "/api/v1/simulate-payment",
-        json={"payment_id": pid, "tx_hash": "0xpaid2", "signature": sig},
-    )
-    assert r.status_code == 400
-    detail = r.json()["detail"].lower()
-    assert "paid" in detail or "already" in detail or "processed" in detail
-
-
-def test_symbol_binding_on_redeem(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    import crocodile.equity.legacy.api_server as api
-
-    r = client.get("/api/v1/market-data", params={"symbol": "cbBTC-USDC"})
-    assert r.status_code == 402
-    pid = r.json()["payment_id"]
-    sig, _ = _sign_payment_id(pid)
-    payload = {"payment_id": pid, "tx_hash": "0xbind1", "signature": sig}
-    assert client.post("/api/v1/simulate-payment", json=payload).status_code == 200
-
-    async def fake_price(symbol: str, rpc_url: str | None = None) -> dict[str, Any]:
-        return {"symbol": symbol, "price": 1.0}
-
-    monkeypatch.setattr(api, "get_onchain_price", fake_price)
-
-    # Wrong symbol must be rejected
-    r = client.get(
-        "/api/v1/market-data",
-        params={"symbol": "OTHER-USDC"},
-        headers={"Payment-Signature": json.dumps(payload)},
-    )
-    assert r.status_code == 400
-    assert "symbol" in r.json()["detail"].lower()
-
-    # Correct symbol should succeed (mocked price)
-    r = client.get(
-        "/api/v1/market-data",
-        params={"symbol": "cbBTC-USDC"},
-        headers={"Payment-Signature": json.dumps(payload)},
-    )
-    assert r.status_code == 200
-    assert r.json()["status"] == "success"
-
-    # Payment is spent — cannot reuse
-    r = client.get(
-        "/api/v1/market-data",
-        params={"symbol": "cbBTC-USDC"},
-        headers={"Payment-Signature": json.dumps(payload)},
-    )
-    assert r.status_code == 400
-    assert "spent" in r.json()["detail"].lower()
-
-
-def test_two_phase_refund_on_data_failure(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import crocodile.equity.legacy.api_server as api
-
-    r = client.get("/api/v1/market-data", params={"symbol": "cbBTC-USDC"})
-    pid = r.json()["payment_id"]
-    sig, _ = _sign_payment_id(pid)
-    payload = {"payment_id": pid, "tx_hash": "0xrefund1", "signature": sig}
-    assert client.post("/api/v1/simulate-payment", json=payload).status_code == 200
-
-    async def boom(symbol: str, rpc_url: str | None = None) -> dict[str, Any]:
-        return {"error": "rpc down"}
-
-    monkeypatch.setattr(api, "get_onchain_price", boom)
-
-    r = client.get(
-        "/api/v1/market-data",
-        params={"symbol": "cbBTC-USDC"},
-        headers={"Payment-Signature": json.dumps(payload)},
-    )
-    assert r.status_code == 500
-
-    rec = api.PAYMENTS_DB[pid]
-    # Should be refunded to paid (not spent) so client can retry
-    assert rec["status"] == "paid"
-
-
-async def test_concurrent_double_redeem_one_wins(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Two concurrent redeems of the same paid payment: exactly one 200, one 400, final spent.
-
-    Uses httpx.AsyncClient so both ASGI requests share one event loop (TestClient
-    serializes portal.call across threads and cannot exercise asyncio.Lock races).
+    The equity fork spelled these ``ADMIN_TOKEN`` / ``X-Admin-Token``; one route survived
+    the merge and it is the crypto spelling, so an equity deployment renames its variable.
+    ``Authorization: Bearer`` is accepted too, which neither fork's *equity* route was.
     """
-    from httpx import ASGITransport, AsyncClient
+    monkeypatch.setenv("ADMIN_API_KEY", "secret-admin")
+    _seed(payments_file, "pid-listed", {"status": "pending"})
 
-    import crocodile.equity.legacy.api_server as api
+    assert client.get("/api/v1/admin/payments").status_code == 401
+    assert client.get(
+        "/api/v1/admin/payments", headers={"X-Admin-Key": "wrong"}
+    ).status_code == 401
 
-    r = client.get("/api/v1/market-data", params={"symbol": "cbBTC-USDC"})
-    assert r.status_code == 402
-    pid = r.json()["payment_id"]
-    sig, _ = _sign_payment_id(pid)
-    payload = {"payment_id": pid, "tx_hash": "0xconcurrent1", "signature": sig}
-    assert client.post("/api/v1/simulate-payment", json=payload).status_code == 200
+    allowed = client.get("/api/v1/admin/payments", headers={"X-Admin-Key": "secret-admin"})
+    assert allowed.status_code == 200
+    assert allowed.json()["pid-listed"]["status"] == "pending"
 
-    async def slow_price(symbol: str, rpc_url: str | None = None) -> dict[str, Any]:
-        # Yield so the second concurrent claim can observe redeeming/spent.
-        await asyncio.sleep(0.15)
-        return {"symbol": symbol, "price": 42.0}
-
-    monkeypatch.setattr(api, "get_onchain_price", slow_price)
-
-    headers = {"Payment-Signature": json.dumps(payload)}
-    params = {"symbol": "cbBTC-USDC"}
-
-    transport = ASGITransport(app=api.app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        r1, r2 = await asyncio.gather(
-            ac.get("/api/v1/market-data", params=params, headers=headers),
-            ac.get("/api/v1/market-data", params=params, headers=headers),
-        )
-
-    codes = sorted([r1.status_code, r2.status_code])
-    assert codes == [200, 400], f"expected one 200 and one 400, got {codes}"
-    assert api.PAYMENTS_DB[pid]["status"] == "spent"
+    bearer = client.get(
+        "/api/v1/admin/payments", headers={"Authorization": "Bearer secret-admin"}
+    )
+    assert bearer.status_code == 200
 
 
-def test_simulate_payment_disabled_when_allow_simulation_false(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """I6: when simulation is disallowed, POST /simulate-payment returns 400."""
-    import crocodile.equity.legacy.api_server as api
-
-    monkeypatch.setattr(api, "_allow_simulation", lambda: False)
-
-    r = client.get("/api/v1/market-data", params={"symbol": "ETH-USDC"})
-    assert r.status_code == 402
-    pid = r.json()["payment_id"]
-    sig, _ = _sign_payment_id(pid)
-    payload = {"payment_id": pid, "tx_hash": "0xnosim", "signature": sig}
-
-    r = client.post("/api/v1/simulate-payment", json=payload)
-    assert r.status_code == 400
-    assert "simulat" in r.json()["detail"].lower() or "disabled" in r.json()["detail"].lower()
+# ---------------------------------------------------------------------------
+# Telemetry, and the ledger's own durability
+# ---------------------------------------------------------------------------
 
 
-def test_metrics_token_enforced(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("METRICS_TOKEN", "m-secret")
-    r = client.get("/metrics")
-    assert r.status_code == 401
+def test_metrics_open_without_token(client: TestClient) -> None:
+    """``/metrics`` answers unauthenticated, and publishes the uptime gauge.
 
-    r = client.get("/metrics", headers={"X-Metrics-Token": "m-secret"})
-    assert r.status_code == 200
-    assert "stockodile_uptime_seconds" in r.text
-
-    r = client.get("/metrics", headers={"Authorization": "Bearer m-secret"})
-    assert r.status_code == 200
-
-
-def test_metrics_open_without_token(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("METRICS_TOKEN", raising=False)
-    r = client.get("/metrics")
-    assert r.status_code == 200
+    The gauge assertion is the surviving half of ``test_metrics_token_enforced``: the token
+    is gone, the exposition it was guarding is not, and it is spelled ``crocodile_`` now
+    rather than ``stockodile_``.
+    """
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "crocodile_uptime_seconds" in response.text
+    assert "stockodile_uptime_seconds" not in response.text
 
 
-def test_atomic_save_uses_replace(payments_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import crocodile.equity.legacy.api_server as api
+def test_atomic_save_uses_replace(payments_file: Path) -> None:
+    """A reader never observes a half-written ledger, and no ``.tmp`` is left behind."""
+    from crocodile.surfaces.payments import PaymentsStore
 
-    monkeypatch.setenv("PAYMENTS_FILE", str(payments_file))
-    data = {"abc": {"status": "pending", "symbol": "X"}}
-    api._save_db_file(data)
+    record = {"status": "pending", "symbol": "X"}
+    asyncio.run(PaymentsStore().set("abc", record))
+
     assert payments_file.exists()
     assert not Path(str(payments_file) + ".tmp").exists()
-    loaded = json.loads(payments_file.read_text())
-    assert loaded == data
-
-
-def test_default_payments_file_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    import crocodile.equity.legacy.api_server as api
-
-    monkeypatch.delenv("STOCKODILE_HOME", raising=False)
-    path = api._default_payments_file()
-    assert path.endswith(os.path.join(".stockodile", "payments_db.json"))
-    assert not path.startswith("/Users/nazmi/Stockodile/")
-
-    monkeypatch.setenv("STOCKODILE_HOME", "/tmp/stockodile-home")
-    path = api._default_payments_file()
-    assert path == os.path.join("/tmp/stockodile-home", "payments_db.json")
+    assert json.loads(payments_file.read_text()) == {"abc": record}

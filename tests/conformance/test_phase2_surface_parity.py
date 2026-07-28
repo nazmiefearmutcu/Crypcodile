@@ -84,6 +84,36 @@ _INFRASTRUCTURE: dict[str, str] = {
     "api": "Launcher: binds the REST server to --host/--port. Same relationship.",
     "update": "Self-update via pip. Acts on the installation, not on market data.",
     "shell": "Starts the interactive REPL that dispatches the other commands.",
+    "migrate-lake": (
+        "Renames `exchange=` and `provider=` partition directories to `source=` without "
+        "opening a Parquet file. `crocodile.capabilities.ops._why_migrate_lake_is_"
+        "infrastructure` is the long form and was written by the batch that declined to "
+        "declare it: no asset class, because it renames both legacy prefixes in one pass "
+        "over one lake; no parameter schema, because its only input is the lake root; and "
+        "no honest `prov`, because all four levels are false statements about a directory "
+        "that moved. It is hand-written in `surfaces/operate.py`, and now covers both "
+        "prefixes rather than only crypto's, which closes the asymmetry that argument ends "
+        "on."
+    ),
+    "capabilities": (
+        "Reclassified here at Phase 2's exit, against this list's own prior note, and the "
+        "argument that moved it is the registry's own vocabulary rather than the "
+        "product/process axis. Judged the way `migrate-lake` was judged in the same merge, "
+        "it fails all three tests: no asset class, an empty parameter schema, and no "
+        "provenance — `NATIVE` would claim a venue reported the list, `DERIVED` that it was "
+        "computed from records, `SYNTHETIC` that it was modelled, `UNAVAILABLE` that it is "
+        "a typed hole, and it is a list of the names this build answers to. A provenance "
+        "chosen because the field is required is the first decorative provenance in the "
+        "tree, which is exactly the reason `migrate-lake` is not declared either.\n\n"
+        "The prior note's objection was not that the classification was wrong but that it "
+        "'would license deleting the one route whose whole job is saying what exists'. That "
+        "is an argument about a licence, and it is answered by a test rather than by a "
+        "classification: `tests/surfaces/test_operational_routes.py` asserts the route is "
+        "served, that its `rest` list is exactly what the app mounts, and that its "
+        "`mcp_tools_hint` equals `mcp.tool_names()` — which is a stronger guarantee than "
+        "this gate ever gave it, because this gate only ever asked whether the *name* "
+        "answered and could not have caught the drift that made the old route wrong."
+    ),
     "flowmap": "Launcher: opens the PyQt6 flowmap window. A GUI entry point, not a query.",
     "gas-tracker": (
         "Launcher: opens the PyQt6 gas-tracker window and takes no parameters. Note "
@@ -95,15 +125,16 @@ _INFRASTRUCTURE: dict[str, str] = {
 }
 """Wire entries that exist but are not capabilities, each with the argument for why.
 
-Deliberately **not** here: ``GET /api/v1/capabilities``. It is a hardcoded hand-copy of the
-capability list — two Python lists maintained by hand next to the routes and tools they
-claim to describe — and it has already drifted: ``_CAPABILITIES_MCP_TOOLS_HINT`` names 36
-tools while ``TOOLS`` declares 37, so ``list_all_exchanges`` exists and self-description
-does not mention it. That drift is an argument for keeping the route, not for dropping it.
-Unlike ``health`` or ``metrics``, it answers a question about the *product* rather than the
-*process*, it is the route an agent calls first, and the projection is what finally makes it
-true: derived from :data:`REGISTRY`, it cannot drift from what is served. Classifying it as
-infrastructure would license deleting the one route whose whole job is saying what exists.
+``capabilities`` was deliberately **not** here until Phase 2's exit, on the argument that it
+answers a question about the *product* rather than the *process* and that dropping it would
+lose the route an agent calls first. Both halves of that were right and neither was the
+question: what it is not is a capability, by the same three tests ``migrate-lake`` was
+judged under, and what keeps a route alive is a test rather than a classification. Its entry
+above carries the whole reasoning, and ``tests/surfaces/test_operational_routes.py`` carries
+the guarantee. The route is still served, and is now derived from :data:`REGISTRY` rather
+than hand-copied beside it — which is what fixes the drift that prompted the original note
+(``_CAPABILITIES_MCP_TOOLS_HINT`` named 36 tools while ``TOOLS`` declared 37, so
+``list_all_exchanges`` existed and the self-description did not mention it).
 """
 
 
@@ -120,6 +151,146 @@ _NAME_RENAMES: dict[str, tuple[str, str]] = {
         "The `get_` prefix is an MCP naming habit, not a second capability; `Capability.name` "
         "is one string for all three surfaces, so the prefix has to resolve away somewhere.",
     ),
+    # ---------------------------------------------------------------------
+    # MCP's verb prefix. Nineteen entries, one argument, stated once here and
+    # referred to by each.
+    # ---------------------------------------------------------------------
+    # `get_funding_apr` above is the first of these and carries the reasoning: MCP tool
+    # names were written as verb phrases because a tool is something an agent *does*, while
+    # `Capability.name` is one string for all three surfaces and a REST path segment cannot
+    # be a verb phrase. Each entry below is the same fact for one more tool, and each was
+    # checked rather than pattern-matched — `_mechanical_name` deliberately does not strip
+    # the prefix, because two of these do not resolve the way the spelling suggests:
+    # `list_all_exchanges` is `markets`, not `list-exchanges`, and `get_spot_perp_basis` is
+    # `basis`, not `perp-basis`. A mechanical rule would have silently equated both pairs
+    # with the wrong capability, which is a rename that loses a capability while reading
+    # green — the exact failure this gate exists for.
+    "calculate-ofi": (
+        "ofi",
+        "Same inputs (symbol, range, interval) and the same per-bin imbalance from the same "
+        "lake query as the `ofi` command and the `GET /api/v1/ofi` route.",
+    ),
+    "detect-mev-sandwiches": (
+        "mev-sandwich",
+        "Both take a trade sequence and return the legs flagged as a sandwich; the tool "
+        "spelling is plural because it names the act of detecting rather than the pattern.",
+    ),
+    "estimate-slippage": (
+        "slippage",
+        "Takes symbol, side and size and walks the stored book, which is what the `slippage` "
+        "command and route do. Note this makes three spellings for one capability — with "
+        "`simulate-price-impact` below — and the registry already carries that one as an "
+        "alias, so only this one needed an entry.",
+    ),
+    "get-chaos-score": (
+        "chaos-score",
+        "The same four supplied readings and the same [0, 100] composite; the tool takes no "
+        "lake and neither does the command.",
+    ),
+    "get-funding-prediction": (
+        "funding-predict",
+        "One capability whose two spellings differ in more than the prefix: the tool says "
+        "`prediction` and the command says `predict`. Same `rates` and `window_size` inputs "
+        "and the same forecast, so it is a naming habit twice over, not a second thing.",
+    ),
+    "get-indicators": ("indicators", "Same symbol, range, interval, indicator and period."),
+    "get-iv-surface": ("iv-surface", "Same underlying and instant; same cross-section."),
+    "get-lending-stress": (
+        "lending-stress",
+        "Same four supplied position numbers and the same health factor before and after "
+        "the haircut.",
+    ),
+    "get-liquidity-depth": (
+        "liquidity-depth",
+        "Same symbol; same bid and ask size within 1, 2 and 5 percent of mid.",
+    ),
+    "get-open-interest": (
+        "open-interest",
+        "Same symbol filter and range, and the same cross-venue forward-filled aggregate.",
+    ),
+    "get-peg-deviation": (
+        "peg-deviation",
+        "Same price, threshold and target; same deviation from the peg.",
+    ),
+    "get-perp-basis": (
+        "perp-basis",
+        "Same perpetual symbol and range; mark against index per ticker update.",
+    ),
+    "get-risk-reversal": (
+        "risk-reversal",
+        "Same underlying, expiry, instant, rate and target delta; same risk reversal and "
+        "butterfly off the skew.",
+    ),
+    "get-sequencer-latency": (
+        "sequencer-latency",
+        "Same exchange; same block-production intervals and ingestion delay.",
+    ),
+    "get-spot-future-basis": (
+        "spot-future-basis",
+        "Same future, spot, range and expiry; the same ASOF join.",
+    ),
+    "get-spot-perp-basis": (
+        "basis",
+        "The one entry here whose target is not the tool's name with the verb removed. The "
+        "tool takes `spot_symbol` and `perp_symbol`, which is exactly `basis`'s parameter "
+        "pair and exactly what `GET /api/v1/basis` and the `basis` command take. "
+        "`perp-basis` is a *different* capability — mark against index for one contract, no "
+        "spot leg — and stripping `get_` mechanically would have folded this into it and "
+        "lost the spot-perp join while the gate stayed green.",
+    ),
+    "get-term-structure": (
+        "term-structure",
+        "Same underlying, instant and rate; the same ATM term structure.",
+    ),
+    "get-vol-skew": (
+        "vol-skew",
+        "Same underlying, expiry, instant and rate; the same per-strike IV and delta.",
+    ),
+    "list-all-exchanges": (
+        "markets",
+        "The second entry whose target is not the obvious one. The tool's own docstring says "
+        "'Mirrors CLI `markets`' and it returns native connectors, ccxt venues and their "
+        "union — which is `markets`' summary word for word. `list-exchanges` is the "
+        "*registry* of hand-written connectors and is what `list_registered_exchanges` "
+        "below resolves to; the two answer different questions and the difference is the "
+        "ccxt venues.",
+    ),
+    "list-registered-exchanges": (
+        "list-exchanges",
+        "Both return `crocodile.crypto.exchanges.factory.list_exchanges()` and neither "
+        "touches the lake or the network. The MCP spelling says `registered` because that "
+        "tool sits next to `list_exchanges_on_disk`, which is the lake-side question and is "
+        "already an alias of `catalog-exchanges`.",
+    ),
+    "smart-money-summary": (
+        "smart-money",
+        "Same transfers and watchlist in, same capital-flow summary out; `summary` describes "
+        "the return shape rather than a second capability.",
+    ),
+    "track-whale-alerts": (
+        "whale-alerts",
+        "Same symbol, range and USD threshold; the same trades and liquidations over it.",
+    ),
+    "get-onchain-price": (
+        "onchain-price",
+        "The same verb prefix once more. Declared at Phase 2's exit rather than ported with "
+        "the other 47 — see `crocodile.capabilities.onchain` — which is why this entry "
+        "exists at all.",
+    ),
+    "get-base-market-data": (
+        "base-market-data",
+        "Same again. Kept distinct from `onchain-price` because it additionally scans ~1 800 "
+        "blocks of swap logs, which is a different cost and was a different tool.",
+    ),
+    "market-data": (
+        "onchain-price",
+        "The equity fork's `GET /api/v1/market-data`, whose handler was 380 lines of x402 "
+        "payment gate wrapped around one call to `get_onchain_price(symbol)`. The payment "
+        "gate is the surface's business — the two routes that administer its ledger are on "
+        "`_INFRASTRUCTURE` for that reason — and the answer behind it is this capability. "
+        "Note it was served under this name on the *equity* surface while reading a Base "
+        "DEX pool; that the name resolves crypto-ward is the fork residue, not the rename.",
+    ),
     "simulate-price-impact": (
         "slippage",
         "`GET /api/v1/slippage` and `POST /api/v1/simulate-price-impact` walk the same stored "
@@ -128,6 +299,24 @@ _NAME_RENAMES: dict[str, tuple[str, str]] = {
         "exposed, which is evidence about equity having almost no surface rather than about "
         "the name. Already settled in the registry: `slippage` names the measurement and "
         "carries `simulate-price-impact` in `aliases`.",
+    ),
+    "catalog-search": (
+        "search",
+        "`GET /api/v1/catalog/search` and the MCP tool `search_symbols` take the same four "
+        "inputs — `q`, `channel`, `exchange`, `limit` — and return the same ranked rows from "
+        "the same inventory. The path put it under `catalog/` because it sat beside the "
+        "seven other `catalog/*` routes; the registry spells the family with a hyphen "
+        "(`catalog-symbols`, `catalog-dates`) and this one is not part of it — it searches "
+        "the inventory rather than listing a partition, which is why the CLI always called "
+        "it `search` and why `search_symbols` is already an alias.",
+    ),
+    "exchanges": (
+        "list-exchanges",
+        "`GET /api/v1/exchanges` returns `list_exchanges()` from the factory registry and "
+        "says so in its own docstring, which is the whole of `list-exchanges`. The bare "
+        "path was the only spelling REST had; the CLI command and the registry both say "
+        "`list-exchanges`, which distinguishes it from `catalog-exchanges` — the partitions "
+        "actually on disk — in a way the bare word does not.",
     ),
 }
 """Wire name a surface exposed → (the one capability it is, the argument that it is one).
@@ -165,6 +354,80 @@ _PARAM_RENAMES: dict[tuple[str | None, str], tuple[str, str]] = {
         "body-level alias for one quantity, written into the fork rather than into a schema. "
         "One name for one quantity, and `size` is the one the registry's SlippageParams uses.",
     ),
+    (None, "at"): (
+        "at_ns",
+        "The third instance of the unit-suffix pattern `--from`/`--to` set. `iv-surface`, "
+        "`term-structure`, `vol-skew` and `risk-reversal` each take `--at` on the CLI and "
+        "`at` on REST and MCP, documented as nanoseconds UTC, and the registry spells it "
+        "`at_ns` because a bare `at` does not say what unit it is in.",
+    ),
+    ("backfill", "exchange"): (
+        "source",
+        "The merged partition key. Crypto lakes wrote `exchange={venue}/` and equity lakes "
+        "`provider={name}/`; both are `source={name}/` now, and one `backfill` command "
+        "serving both markets cannot call the same slot by the losing name of either fork.",
+    ),
+    ("collect", "exchange"): ("sources", "Same key as `backfill --exchange`; plural because "
+        "`collect` always accepted the flag repeatedly to subscribe to several venues."),
+    ("collect", "provider"): ("sources", "The equity fork's spelling of the same key; see "
+        "`backfill --exchange`. That the two forks called one slot `exchange` and `provider` "
+        "is the whole reason the partition key was merged."),
+    ("collect-market", "exchange"): ("sources", "Same as `collect --exchange`."),
+    ("collect", "dlq_report"): (
+        "dlq_report_path",
+        "Both name a file to write the dead-letter report to; the registry suffixes it "
+        "`_path` for the same reason it suffixes `_ns` — the bare name reads as a boolean.",
+    ),
+    ("collect-market", "dlq_report"): ("dlq_report_path", "Same option; see `collect`."),
+    ("collect-market", "all"): (
+        "all_symbols",
+        "`--all` meant 'every symbol in the venue's universe', next to `--top N` which means "
+        "'the busiest N'. A bare `all` beside `top` and `quote` does not say all *what*.",
+    ),
+    ("collect-market", "kind"): (
+        "kinds",
+        "Declared repeatable on the CLI — `--kind spot --kind perp` — so it selected a set "
+        "from the start, and REST took it comma-separated. Plural is what it always was.",
+    ),
+    ("universe", "kind"): ("kinds", "The same repeatable option on the same instrument "
+        "kinds; see `collect-market --kind`."),
+    ("census", "venue"): (
+        "venues",
+        "Repeatable on the CLI for the same reason: a census over several venues is the "
+        "normal call, and the singular spelling described one flag rather than one venue.",
+    ),
+    ("funding-predict", "window"): (
+        "window_size",
+        "The rolling window the forecast averages over. MCP already spelled it "
+        "`window_size`; the CLI's `--window` is the same integer and the same average.",
+    ),
+    ("basis", "spot"): (
+        "spot_symbol",
+        "REST and MCP already spelled both legs `spot_symbol`/`perp_symbol`; only the CLI "
+        "shortened them, and a bare `--spot` beside `--perp` and `--future` reads as a mode "
+        "flag rather than as the symbol it takes.",
+    ),
+    ("basis", "perp"): ("perp_symbol", "The other leg of the same pair; see `basis --spot`."),
+    ("spot-future-basis", "spot"): ("spot_symbol", "Same pair, other capability."),
+    ("spot-future-basis", "future"): ("future_symbol", "Same pair, other capability."),
+    ("perp-basis", "perp_symbol"): (
+        "symbol",
+        "`perp-basis` compares one contract's mark against its own index, so there is only "
+        "one symbol and nothing for the qualifier to distinguish it from. The qualifier is "
+        "load-bearing on `basis` and `spot-future-basis`, which take two.",
+    ),
+    ("catalog-scan", "symbol"): (
+        "symbols",
+        "`GET /api/v1/catalog/scan?symbol=` was documented as comma-separated and the CLI's "
+        "`--symbols` was already plural, so the route's singular spelling was the odd one "
+        "out rather than a narrower parameter.",
+    ),
+    ("resample", "fill"): (
+        "fill_empty",
+        "The equity CLI's `--fill` and its own `--fill-empty` on `indicators` are one flag: "
+        "both are passed straight to `client.resample(..., fill_empty=)`. The longer "
+        "spelling wins because `fill` alone does not say fill *what*.",
+    ),
     ("open-interest", "symbol"): (
         "symbols",
         "The CLI's `--symbol` is documented as a *substring filter* — 'e.g. BTC. Omit to "
@@ -182,7 +445,86 @@ Parameter names are compared lowercased with ``-`` folded to ``_`` and any leadi
 stripped, so ``--min-usd`` and ``min_usd`` need no entry.
 """
 
+_PARAM_BECAME_A_CAPABILITY: dict[tuple[str, str], tuple[str, str]] = {
+    ("catalog", "symbols"): (
+        "catalog-symbols",
+        "A second capability wearing a boolean. `catalog --symbols` did not narrow the "
+        "channel listing; it *replaced* it, printing the lake's distinct symbols instead — "
+        "which is `catalog-symbols`, a command the same CLI already had. One flag selecting "
+        "between two measurements is the multiplexer shape this port is undoing, and the "
+        "flag cannot survive as a parameter because there is no parameter it corresponds "
+        "to: the answer it selected is a capability of its own.",
+    ),
+    ("basis", "future"): (
+        "spot-future-basis",
+        "The crypto CLI's `basis` was three measurements behind one command, selected by "
+        "which pair of legs you named: `--spot --perp` is spot against perpetual mark, "
+        "`--perp` alone is mark against index, `--spot --future --expiry` is spot against a "
+        "dated future. The registry split them into `basis`, `perp-basis` and "
+        "`spot-future-basis`, which is why REST already served all three on separate paths. "
+        "`--future` names the far leg of the third one and is its `future_symbol`.",
+    ),
+    ("basis", "expiry_ns"): (
+        "spot-future-basis",
+        "The other half of the same mode: a dated future has an expiry and the other two "
+        "measurements have nothing to put in it. It is `spot-future-basis`'s `expiry_ns`.",
+    ),
+    ("indicators", "fill_empty"): (
+        "resample",
+        "The equity `indicators` command resampled the bars and *then* applied the "
+        "indicator, and `--fill-empty` governed the first step — its body passes the flag "
+        "to `client.resample(...)` and nothing else reads it. Resampling is its own "
+        "capability, and the flag went with the step it belongs to rather than staying on "
+        "a command that no longer performs it.",
+    ),
+}
+"""(capability, parameter as frozen) → (the capability that now accepts it, why).
+
+A fourth shape the two rename ledgers cannot express: the parameter did not vanish and was
+not renamed, it moved to a *sibling* capability, because the command that carried it was
+doing two things. Given its own ledger rather than folded into ``_AMBIENT_PARAMETERS``
+because the claims are opposite — an ambient parameter is one no capability should carry,
+and every one of these is carried by a capability that is named right here and asserted to
+be reachable. That assertion is what makes this stricter than an exemption rather than
+looser: ``test_a_parameter_that_moved_landed_somewhere_reachable`` fails if the named
+capability is not served on the surface the parameter was frozen on.
+"""
+
 _AMBIENT_PARAMETERS: dict[str, str] = {
+    "output": (
+        "Where to write the answer, which is the surface's question and not the "
+        "measurement's. `census --output FILE` wrote the same census the command otherwise "
+        "printed; a REST caller redirects a response body and an MCP caller does not have "
+        "the concept. Carrying it would put a filesystem path in the schema all three "
+        "surfaces publish."
+    ),
+    "json": (
+        "How to render, not what to ask. `census --json` printed the same object as a JSON "
+        "document instead of a table — which is what REST and MCP do unconditionally, and "
+        "what `ReturnKind` already tells the CLI."
+    ),
+    "symbols_only": (
+        "The same rendering question in the other direction: `universe --symbols-only` "
+        "printed one column of the rows the command already returned. A caller selects "
+        "columns from a result; it does not ask the venue a different question."
+    ),
+    "file": (
+        "Reading the input off disk rather than being given it. `funding-predict --file` "
+        "loaded a rate history from a CSV and handed it to the same forecast `--rates` "
+        "feeds; `FundingPredictParams.rates` is the parameter, and a path is how one "
+        "surface out of three happened to obtain it. A path in the shared schema is also a "
+        "path a network caller would be asking the *server* to open."
+    ),
+    "gas_file": ("The same, for `gas-vol`'s gas series; the parameter is `gas`."),
+    "vol_file": ("The same, for `gas-vol`'s volatility series; the parameter is `vol`."),
+    "persist": (
+        "Whether reading the ladder also writes it into the lake — a decision about what "
+        "*this surface* is allowed to do, which is why it sits beside `readonly` on "
+        "`CapabilityContext` rather than in a schema. As a parameter it would let a caller "
+        "of the network surfaces turn a GET into a write, and both of them are readonly by "
+        "construction; the capability that puts records in the lake is `collect`."
+    ),
+    "no_persist": ("The other half of the same boolean pair; see `persist`."),
     "data_dir": (
         "Where the lake is, not what to ask it. Every lake-touching command carries "
         "`--data-dir`; it is deployment configuration, and `Settings` is now the one place "
@@ -622,13 +964,44 @@ def test_no_wire_parameter_disappeared() -> None:
             continue
         for param in params:
             canonical = _canonical_param(name, param)
-            if canonical not in _AMBIENT_PARAMETERS and canonical not in served[kind][name]:
+            if canonical in _AMBIENT_PARAMETERS or (name, canonical) in _PARAM_BECAME_A_CAPABILITY:
+                continue
+            if canonical not in served[kind][name]:
                 lost.append(f"{fork}.{kind} {raw!r} {param!r} → {name}.{canonical}")
     assert not lost, (
         f"{len(lost)} parameters accepted before Phase 2 and accepted nowhere now: "
         f"{sorted(lost)}. Either carry them onto the capability's params struct or add a "
-        "justified entry to _PARAM_RENAMES or _AMBIENT_PARAMETERS."
+        "justified entry to _PARAM_RENAMES, _PARAM_BECAME_A_CAPABILITY or "
+        "_AMBIENT_PARAMETERS."
     )
+
+
+def test_a_parameter_that_moved_landed_somewhere_reachable() -> None:
+    """``_PARAM_BECAME_A_CAPABILITY`` must name a capability that is actually served.
+
+    Without this the ledger would be an exemption list wearing a redirect: "it moved" is
+    only a defence if the place it moved to answers. Every entry names a capability, and
+    every one of those has to be reachable on the same surface kind the parameter was frozen
+    on — which is the property the per-kind resolution above exists to keep.
+    """
+    served = _served()
+    frozen_kinds: dict[str, set[str]] = {}
+    for _fork, kind, _raw, name, params in _frozen_entries():
+        for param in params:
+            frozen_kinds.setdefault(f"{name}.{_canonical_param(name, param)}", set()).add(kind)
+
+    stale: list[str] = []
+    for (name, param), (target, why) in _PARAM_BECAME_A_CAPABILITY.items():
+        entry = f"_PARAM_BECAME_A_CAPABILITY[{name!r}, {param!r}]"
+        assert why.strip(), f"the move of {name}.{param} carries no justification"
+        kinds = frozen_kinds.get(f"{name}.{param}")
+        if not kinds:
+            stale.append(f"{entry}: no surface ever accepted that parameter on {name}")
+            continue
+        for kind in kinds:
+            if target not in served[kind]:
+                stale.append(f"{entry} → {target}: not served on the {kind} surface")
+    assert not stale, f"parameters recorded as moved with nowhere to have moved to: {stale}"
 
 
 # ---------------------------------------------------------------------------

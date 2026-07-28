@@ -39,16 +39,25 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
         
         # Isolate the payment DB file for each test function
         payments_file = tmp_path / f"payments_db_{attempt}.json"
-        
+
+        # The lake the server reads. `build_server` resolves it through Settings, whose
+        # data_dir defaults to a relative "data" that may not exist; point it at a real
+        # empty directory so /api/v1/health and /api/v1/ready answer instead of reporting
+        # lake_unavailable.
+        lake_dir = tmp_path / f"lake_{attempt}"
+        lake_dir.mkdir(parents=True, exist_ok=True)
+
         # Run API server subprocess overriding BASE_RPC_URL and setting PYTHONPATH
         env = os.environ.copy()
         env["BASE_RPC_URL"] = rpc_url
         env["PYTHONPATH"] = os.path.abspath("src")
         env["PAYMENTS_FILE"] = str(payments_file)
         env["ALLOW_SIMULATION"] = "true"
-        
+        env["CROCODILE_DATA_DIR"] = str(lake_dir)
+
+        # `build_server` is a factory, not a module-level app, so uvicorn needs --factory.
         proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "crocodile.crypto.legacy.api_server:app", "--host", "127.0.0.1", "--port", str(port)],
+            [sys.executable, "-m", "uvicorn", "crocodile.surfaces.server:build_server", "--factory", "--host", "127.0.0.1", "--port", str(port)],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -91,15 +100,21 @@ def api_server(mock_rpc, tmp_path) -> Generator[str, None, None]:
         raise RuntimeError("API server failed to start on any ports after multiple retries.")
 
 @pytest.fixture(scope="function")
-def mcp_server_client(mock_rpc) -> Generator[subprocess.Popen, None, None]:
+def mcp_server_client(mock_rpc, tmp_path) -> Generator[subprocess.Popen, None, None]:
     rpc_url, _ = mock_rpc
+    lake_dir = tmp_path / "mcp_lake"
+    lake_dir.mkdir(parents=True, exist_ok=True)
+
     env = os.environ.copy()
     env["BASE_RPC_URL"] = rpc_url
     env["PYTHONPATH"] = os.path.abspath("src")
-    
-    # Run MCP server subprocess (over stdin/stdout) using the cli entrypoint
+    # Tools resolve their lake through Settings; give the subprocess a real empty one so a
+    # tools/call answers with rows instead of failing to open a relative "data" directory.
+    env["CROCODILE_DATA_DIR"] = str(lake_dir)
+
+    # Run MCP server subprocess (over stdin/stdout) using the console-script entrypoint
     proc = subprocess.Popen(
-        [sys.executable, "-m", "crocodile.crypto.legacy.cli", "mcp"],
+        [sys.executable, "-m", "crocodile.surfaces.entrypoint", "mcp"],
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

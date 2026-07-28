@@ -1,9 +1,14 @@
+"""Unit tests for the smart-money watchlist tracker.
+
+The two tests that drove ``smart-money`` through the hand-written crypto Typer app left
+with it: the capability takes transfer rows and a watchlist object rather than the two
+file paths that CLI read, and ``tests/capabilities/test_analytics.py`` covers it.
+"""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-
-from typer.testing import CliRunner
 
 from crocodile.crypto.analytics.smart_money import (
     SmartMoneyTracker,
@@ -12,9 +17,6 @@ from crocodile.crypto.analytics.smart_money import (
     summarize_smart_money,
     transfers_from_rows,
 )
-from crocodile.crypto.legacy.cli import app
-
-_RUNNER = CliRunner()
 
 
 def test_smart_money_tracker() -> None:
@@ -139,31 +141,3 @@ def test_summarize_smart_money_with_labels() -> None:
     assert rows[0]["total_volume_usd"] == 140.0
     assert rows[0]["tx_count"] == 2
     assert rows[0]["label"] == "vitalik"
-
-
-def test_cli_smart_money_exits_0(tmp_path: Path) -> None:
-    smart = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B"
-    other = "0x1111111111111111111111111111111111111111"
-    xfer = tmp_path / "transfers.csv"
-    xfer.write_text(
-        "from,to,usd_value,timestamp\n"
-        f"{smart},{other},50000,1000\n"
-        f"{other},{smart},20000,2000\n",
-        encoding="utf-8",
-    )
-    wl = tmp_path / "watchlist.json"
-    wl.write_text(json.dumps({smart: "vitalik"}), encoding="utf-8")
-
-    result = _RUNNER.invoke(
-        app,
-        ["smart-money", "--transfers", str(xfer), "--watchlist", str(wl)],
-    )
-    assert result.exit_code == 0, result.output
-    assert "vitalik" in result.output or "net_flow_usd" in result.output
-    assert "30000" in result.output or "-30000" in result.output
-
-
-def test_cli_smart_money_missing_args() -> None:
-    result = _RUNNER.invoke(app, ["smart-money"])
-    assert result.exit_code == 1
-    assert "required" in result.output.lower()

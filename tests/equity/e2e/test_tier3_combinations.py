@@ -1,3 +1,13 @@
+"""Tier 3: two features at once, where the interaction is the thing being tested.
+
+Two tests left with the surfaces they combined. ``test_t3_payment_gating_plus_fast_blocks``
+paired the x402 gate on ``GET /api/v1/market-data`` with rapid block production; the gate
+and the route are gone together (``crocodile.surfaces.payments``).
+``test_t3_mcp_price_fetching_plus_rate_limiting`` drove ``get_onchain_price`` as a tool on
+the deleted equity MCP server; that reader is the ``onchain-price`` capability now, and
+reaching it through a projection belongs to ``tests/surfaces/test_end_to_end.py``.
+"""
+
 import asyncio
 import json
 
@@ -101,119 +111,6 @@ async def test_t3_custom_symbol_plus_retries(mock_rpc) -> None:
             break
     finally:
         await transport.close()
-
-
-# 3. x402 Payment Gating + Fast Block Production
-@pytest.mark.asyncio
-async def test_t3_payment_gating_plus_fast_blocks(mock_rpc, api_server) -> None:
-    rpc_url, _ = mock_rpc
-    async with aiohttp.ClientSession() as session:
-        # Step 1: Initial call to retrieve payment ID
-        async with session.get(f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC") as resp:
-            assert resp.status == 402
-            pid = (await resp.json())["payment_required"]["payment_id"]
-
-    from eth_account import Account
-    from eth_account.messages import encode_defunct
-
-    private_key = "0x" + "1" * 64
-    account = Account.from_key(private_key)
-    msg = encode_defunct(text=pid)
-    sig = account.sign_message(msg).signature.hex()
-    if not sig.startswith("0x"):
-        sig = "0x" + sig
-
-    tx_hash = "0x" + "e" * 64
-    usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913"
-    transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-    recipient_padded = "0x" + "70997970c51812dc3a010c7d01b50e0d17dc79c8".zfill(64)
-    amount_padded = (1000).to_bytes(32, "big").hex()
-
-    receipt_data = {
-        "transactionHash": tx_hash,
-        "status": 1,
-        "from": account.address,
-        "logs": [
-            {
-                "address": usdc_contract,
-                "topics": [transfer_topic, "0x" + "a" * 64, recipient_padded],
-                "data": "0x" + amount_padded,
-            }
-        ],
-    }
-
-    pool_data = {
-        "address": "0x0000000000000000000000000000000000000001",
-        "factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
-        "token0": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
-        "fee": 500,
-        "sqrtPriceX96": 2**96 * 2,
-        "tick": 0,
-        "liquidity": 10000000000,
-    }
-
-    async with aiohttp.ClientSession() as session:
-        # Seed the receipt
-        await session.post(f"{rpc_url}/control/receipt", json=receipt_data)
-        await session.post(f"{rpc_url}/control/pool", json=pool_data)
-
-        # Advance block height to simulate fast block production
-        await session.post(f"{rpc_url}/control/block", json={"block_number": 1200})
-
-        sig_payload = {"payment_id": pid, "tx_hash": tx_hash, "signature": sig}
-        headers = {"Payment-Signature": json.dumps(sig_payload)}
-
-        async with session.get(
-            f"{api_server}/api/v1/market-data?symbol=cbBTC-USDC", headers=headers
-        ) as resp:
-            assert resp.status == 200
-            data = await resp.json()
-            assert data["status"] == "success"
-
-
-# 4. MCP Price fetching + RPC Rate Limiting
-@pytest.mark.asyncio
-async def test_t3_mcp_price_fetching_plus_rate_limiting(mcp_server_client, mock_rpc) -> None:
-    rpc_url, _ = mock_rpc
-    proc = mcp_server_client
-
-    pool_data = {
-        "address": "0x0000000000000000000000000000000000000001",
-        "factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
-        "token0": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913",
-        "fee": 500,
-        "sqrtPriceX96": 2**96 * 2,
-        "tick": 0,
-        "liquidity": 10000000000,
-    }
-    async with aiohttp.ClientSession() as session:
-        await session.post(f"{rpc_url}/control/pool", json=pool_data)
-        # Intermittent 429 rate limit
-        await session.post(
-            f"{rpc_url}/control/behavior", json={"status_code": 429, "error_count": 1}
-        )
-
-    req = {
-        "jsonrpc": "2.0",
-        "id": 105,
-        "method": "tools/call",
-        "params": {"name": "get_onchain_price", "arguments": {"symbol": "cbBTC-USDC"}},
-    }
-    proc.stdin.write(json.dumps(req) + "\n")
-    proc.stdin.flush()
-
-    loop = asyncio.get_running_loop()
-    response_line = await loop.run_in_executor(None, proc.stdout.readline)
-    assert response_line
-
-    resp_data = json.loads(response_line.strip())
-    assert resp_data["jsonrpc"] == "2.0"
-    content = resp_data["result"]["content"][0]["text"]
-    result = json.loads(content)
-    assert "error" not in result
-    assert result["price"] == 25.0
 
 
 # 5. Synthetic Depth + Custom Decimal Pool

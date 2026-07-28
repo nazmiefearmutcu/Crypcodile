@@ -26,15 +26,26 @@ def _warn(old: str, new: str, package: str) -> None:
 
 def crypcodile_main() -> None:
     """Deprecated alias for the `crocodile` command."""
-    from crocodile.crypto.legacy.cli import main
+    from crocodile.surfaces.entrypoint import main
 
     _warn("crypcodile", "crocodile", "crocodile.crypto")
     main()
 
 
 def stockodile_main() -> None:
-    """Deprecated alias for the `crocodile-equity` command."""
-    from crocodile.equity.legacy.cli import main
+    """Deprecated alias for the `crocodile` command.
 
-    _warn("stockodile", "crocodile-equity", "crocodile.equity")
+    Phase 1 pointed this at `crocodile-equity`, and Phase 2 removed that command:
+    one CLI now covers both asset classes. Anyone who followed the previous
+    notice needs to be told the name they were sent to is gone too, which is why
+    it is still spelled out here rather than quietly replaced.
+    """
+    from crocodile.surfaces.entrypoint import main
+
+    _warn("stockodile", "crocodile", "crocodile.equity")
+    print(
+        "note: `crocodile-equity` is gone as well — one command now covers both "
+        "asset classes. Pass `--asset-class equity` when the symbol does not say.",
+        file=sys.stderr,
+    )
     main()

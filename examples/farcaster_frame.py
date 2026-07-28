@@ -23,7 +23,7 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from crocodile.crypto.exchanges.base_onchain.connector import POOL_SPECS
-from crocodile.crypto.legacy.mcp_server import get_base_market_data
+from crocodile.crypto.exchanges.base_onchain.price import get_base_market_data
 
 app = FastAPI(
     title="Crypcodile Farcaster Frame",
