@@ -256,7 +256,16 @@ class SecEdgarClient:
             resp: aiohttp.ClientResponse | None = None
             try:
                 session = self._get_session()
-                resp = await session.get(url, headers=headers, timeout=None)
+                # `timeout` is deliberately not passed. `ClientSession._request` treats its
+                # parameter as sentinel-or-override, and `None` is an override: it builds
+                # `ClientTimeout(total=None)`, which is no deadline at all on any of the
+                # three axes. The old spelling passed `timeout=client_timeout` with
+                # `client_timeout` defaulted to `None` at both call sites, so the
+                # `ClientTimeout(total=60.0, connect=10.0, sock_read=30.0)` that
+                # `_get_session` builds was discarded on every request and a stalled EDGAR
+                # connection hung until the socket died. Omitting the argument is what
+                # applies it.
+                resp = await session.get(url, headers=headers)
                 if resp.status in (403, 429):
                     attempts += 1
                     if attempts > _MAX_REQUEST_ATTEMPTS:

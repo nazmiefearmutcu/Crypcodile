@@ -328,3 +328,63 @@ async def test_a_status_the_server_meant_is_not_retried() -> None:
             await client._request_text("https://www.sec.gov/missing.xml")
 
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_own_deadlines_are_the_ones_that_apply() -> None:
+    """`timeout=None` is an override meaning *no* deadline, not "use the session's".
+
+    `ClientSession._request` takes `timeout: ClientTimeout | _SENTINEL = sentinel` and
+    only falls back to `self._timeout` when the argument is the sentinel. Anything else,
+    `None` included, is coerced: `ClientTimeout(total=None)` — no total, no connect, no
+    sock_read. The request passed `timeout=client_timeout` with `client_timeout`
+    defaulting to `None` at both call sites, so the
+    `ClientTimeout(total=60.0, connect=10.0, sock_read=30.0)` that `_get_session` builds
+    was thrown away on every single request.
+
+    Which makes this the foundation the two tests above stand on: a timeout that is caught
+    and retried is worth nothing if no timeout is ever armed.
+    """
+    client = SecEdgarClient()
+    seen: list[dict[str, object]] = []
+
+    class _Response:
+        status = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def read(self) -> bytes:
+            return b"{}"
+
+    class _Session:
+        closed = False
+
+        async def get(self, _url: str, **kwargs: object) -> _Response:
+            seen.append(kwargs)
+            return _Response()
+
+    with patch.object(client, "_get_session", return_value=_Session()):
+        await client._request_bytes("https://www.sec.gov/anything.json")
+
+    assert len(seen) == 1
+    # Before: `{"headers": {...}, "timeout": None}` — and `None` disarms all three axes.
+    assert "timeout" not in seen[0], (
+        "passing timeout at all overrides the session's; None means no deadline"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_session_is_built_with_the_deadlines_this_module_intends() -> None:
+    """The values the test above keeps armed, asserted where they are declared."""
+    client = SecEdgarClient()
+    session = client._get_session()
+    try:
+        assert session.timeout.total == 60.0
+        assert session.timeout.connect == 10.0
+        assert session.timeout.sock_read == 30.0
+    finally:
+        await session.close()
