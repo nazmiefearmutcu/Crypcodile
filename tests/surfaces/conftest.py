@@ -189,9 +189,18 @@ def _equity_depth_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
         async def snapshot(self, symbol: str) -> DepthProfile:
             return profile
 
-    monkeypatch.setattr(
-        "crocodile.capabilities.analytics.select_depth_source", lambda **_: _FixedLadder()
-    )
+    # Both importers, not one. ``market`` binds its own name for ``depth`` and only
+    # ``analytics`` was stubbed, so "*no* test in this package should be making that call"
+    # was true of two capabilities out of three: driving ``depth``/equity reached Yahoo and
+    # came back with ``YahooError``, which is a bare ``Exception`` subclass outside the
+    # Crocodile hierarchy and therefore unclassified on every surface — a 500 on REST. That
+    # is a real finding about the provider's error type and it is not this fixture's to fix;
+    # what is this fixture's is that the finding was invisible because the call was never
+    # made from here.
+    for module in ("analytics", "market"):
+        monkeypatch.setattr(
+            f"crocodile.capabilities.{module}.select_depth_source", lambda **_: _FixedLadder()
+        )
 @dataclasses.dataclass(frozen=True)
 class FakeSubscription:
     """Shaped like :class:`~crocodile.capabilities.ops.Subscription`, connecting to nothing.
