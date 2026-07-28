@@ -448,15 +448,22 @@ def test_the_dropped_list_is_not_quietly_hoarding_names() -> None:
 # 429 → 428: the two data-dir resolvers in the crypto REST server became one, and
 # its import block was reformatted on the way past.
 # 428 → 240: Phase 2 deleted the six hand-written surface stacks — 15 899 lines,
-# and 188 of the findings were theirs. What is left is 238 in `crypto` and 2 in
-# `equity`, which is the shape the merge always had: the crypto fork is the older
-# and larger tree. Note the ratchet did *not* fall by the whole of what left,
-# because `crypto/legacy/mcp_server.py` did not entirely go — the two Base pool
-# readers moved to `crypto/exchanges/base_onchain/price.py`, and their findings
-# moved with them rather than being fixed. That is deliberate: this commit is a
-# deletion, and reformatting code on its way past is how a deletion stops being
-# reviewable.
-_LEGACY_RUFF_BUDGET = 240
+# and 188 of the findings were theirs. Note the ratchet did *not* fall by the
+# whole of what left, because `crypto/legacy/mcp_server.py` did not entirely go —
+# the two Base pool readers moved to `crypto/exchanges/base_onchain/price.py`, and
+# their findings moved with them rather than being fixed. That is deliberate: this
+# commit is a deletion, and reformatting code on its way past is how a deletion
+# stops being reviewable.
+# 240 → 222: no fix, a measurement. The line above used to add that "what is left
+# is 238 in `crypto` and 2 in `equity`" — and the merge then took 18 more out of
+# `crypto` without anybody lowering the cap, so the tree sat at 222 under a budget
+# of 240 with room for 18 new findings to land green. That is the exact condition
+# the 431 → 430 step was taken to remove, and it had reappeared behind a sentence
+# that described the split instead of asserting it. The composition is no longer
+# written here for the same reason: it is `_ruff("src/crocodile/crypto")` and
+# `_ruff("src/crocodile/equity")`, and a prose copy of a number only ever goes out
+# of date in the direction that loosens the gate.
+_LEGACY_RUFF_BUDGET = 222
 
 
 def _ruff(*paths: str) -> list[str]:
@@ -478,6 +485,10 @@ _CLEAN_PACKAGES = (
     "src/crocodile/contrib",
     "src/crocodile/capabilities",
     "src/crocodile/surfaces",
+    "src/crocodile/__init__.py",
+    "src/crocodile/_deprecated_cli.py",
+    "src/crypcodile",
+    "src/stockodile",
 )
 
 
@@ -488,14 +499,38 @@ def test_the_merged_core_is_lint_clean() -> None:
 
 
 def test_every_package_is_covered_by_one_of_the_two_lint_gates() -> None:
-    """A package on neither list is lint-unchecked, and nothing would say so."""
-    gated = {pathlib.PurePath(p).name for p in _CLEAN_PACKAGES} | {"crypto", "equity"}
-    packages = {
-        path.name
-        for path in _SRC.iterdir()
-        if path.is_dir() and (path / "__init__.py").is_file() and path.name != "__pycache__"
+    """A package on neither list is lint-unchecked, and nothing would say so.
+
+    This walked ``src/crocodile`` and therefore could not see the thing it was written to
+    catch. ``src/`` holds three top-level packages, not one: the ``crypcodile`` and
+    ``stockodile`` deprecation shims sit beside ``crocodile``, on neither list, and each
+    carried a finding that no gate in the tree had ever counted — ``ruff check src`` read
+    224 while both gates together accounted for 222. A coverage test scoped one directory
+    below the thing it claims to cover is the same vacuous shape as a gate over an empty
+    registry: green, and about nothing.
+
+    So the subject is ``src`` itself, and it recurses far enough to find a package that is
+    neither top-level nor inside one of the listed roots.
+    """
+    gated = {
+        pathlib.PurePath(p)
+        for p in (*_CLEAN_PACKAGES, "src/crocodile/crypto", "src/crocodile/equity")
     }
-    assert packages <= gated, f"packages under no ruff gate: {sorted(packages - gated)}"
+    src = _SRC.parent
+    ungated = sorted(
+        str(rel)
+        for module in src.rglob("*.py")
+        if "__pycache__" not in module.parts
+        for rel in [module.relative_to(src.parent)]
+        if not any(root == rel or root in pathlib.PurePath(rel).parents for root in gated)
+    )
+    assert not ungated, (
+        f"{len(ungated)} file(s) under no ruff gate: {ungated[:10]}. Add each to "
+        f"_CLEAN_PACKAGES (held to zero) or to the legacy ratchet — a file on neither is "
+        f"lint-unchecked and nothing else in the tree would report it. Files, not "
+        f"packages: `src/crocodile/_deprecated_cli.py` is in no subpackage and was "
+        f"invisible to the version of this test that walked directories."
+    )
 
 
 def test_the_legacy_surfaces_do_not_get_worse() -> None:

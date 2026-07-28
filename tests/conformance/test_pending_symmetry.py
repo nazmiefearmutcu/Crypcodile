@@ -1,9 +1,11 @@
 """The rules that keep the two symmetry ledgers honest, and stop either becoming a hiding place.
 
-Phase 2 registers 48 crypto capabilities whose equity halves arrive in Phase 3. Without
-somewhere honest to record that, the port has only dishonest options: leave them out of the
-registry (and the surfaces stop being projections of it), or park them on ``IRREDUCIBLE``
-(and claim the market cannot have an equity analogue, which is false and permanent).
+Phase 2 registered 49 capabilities — 47 ported by the four batch modules plus the two the
+parity gate found at its exit — whose crypto halves worked and whose equity halves arrived
+in Phase 3. Without somewhere honest to record that, the port had only dishonest options:
+leave them out of the registry (and the surfaces stop being projections of it), or park
+them on ``IRREDUCIBLE`` (and claim the market cannot have an equity analogue, which is
+false and permanent).
 
 ``PENDING_SYMMETRY`` is the honest option, and it is only honest while these hold.
 

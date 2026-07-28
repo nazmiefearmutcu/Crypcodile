@@ -242,9 +242,13 @@ def resolve_asset_class(
        markets refuse for the same reason and more sharply: one request has one
        implementation, so resolving by position would send the equity symbols into the
        crypto one, which answers plausibly and empty.
-    3. Whether there is a choice at all. A capability with one implementation — which is
-       what every entry on ``PENDING_SYMMETRY`` looks like until Phase 3 — has nothing to
-       decide.
+    3. Whether there is a choice at all. A capability with one implementation has nothing
+       to decide. This step reads ``cap.impls`` and neither ledger, which is what keeps it
+       correct as the ledgers move: today the single-implementation set is exactly the
+       seven names on ``IRREDUCIBLE``, and while ``PENDING_SYMMETRY`` holds anything its
+       entries look identical from here. ``tests/conformance/test_gates.py``'s
+       ``test_gate2_every_capability_is_symmetric`` is what ties the two together — a
+       one-implementation capability on neither ledger fails there, not here.
 
     Anything else refuses, naming the option that settles it. Defaulting to crypto here
     would make every unrecognised equity symbol quietly return an empty crypto answer.

@@ -106,7 +106,14 @@ def make_provider(
     Parameters
     ----------
     provider:
-        Lowercase provider name. Valid values: ``alpaca``, ``finnhub``.
+        Lowercase provider name. Valid values: ``alpaca``, ``finnhub``,
+        ``google_finance``, ``msn_money``, ``stooq`` — ``_REGISTRY`` below spelled out,
+        with ``tests/conformance/test_prose_counts.py`` asserting the two agree. The
+        keyless reference sources (``openfigi``, ``sec_edgar``, ``tiingo``, ``treasury``,
+        ``yahoo``) are deliberately *not* here: they are plain clients rather than
+        supervised run loops, and adding one would also add its channel to
+        :data:`VALID_CHANNELS`, which is the CLI's channel menu for every provider — see
+        :mod:`crocodile.equity.providers.treasury.client` for that argument in full.
     symbols:
         List of symbol strings to subscribe to.
     channels:

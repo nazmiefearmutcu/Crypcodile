@@ -7,12 +7,13 @@ Treasury publishes one CSV per calendar year, updated once per business day at a
 3:30pm ET, over plain HTTP with no subscription and no stream. A connector shaped for that
 loop would implement ``normalize`` as ``return ()``, ``_subscribe`` as ``pass`` and
 ``list_instruments`` over a fixed table — which is what ``stooq`` had to do, and it is
-three no-ops standing in for a contract this source does not have. The three equity
-reference sources that were already in this position — ``sec_edgar``, ``tiingo`` and
+three no-ops standing in for a contract this source does not have. The equity reference
+sources that were already in this position — ``openfigi``, ``sec_edgar``, ``tiingo`` and
 ``yahoo`` — are all plain clients in exactly this shape, and between them they publish the
-``corp_action`` and ``options_chain`` rows the equity carry reads on its other legs. This
-is the fourth, and it is deliberately the same shape as its three siblings rather than a
-fifth entry in ``providers.factory._REGISTRY``: adding one there would also mean adding
+``corp_action`` and ``options_chain`` rows the equity carry reads on its other legs, and
+the identifiers the universe merges on. This is the fifth, and it is deliberately the same
+shape as its four siblings rather than a sixth entry in the five-name
+``providers.factory._REGISTRY``: adding one there would also mean adding
 ``macro_series`` to :data:`~crocodile.equity.providers.factory.VALID_CHANNELS`, and that
 list is the CLI's channel menu for *every* provider — including the ones that declare
 nothing and therefore get the whole vocabulary offered to them. Offering ``macro_series``

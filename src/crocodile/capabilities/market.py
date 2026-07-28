@@ -1028,22 +1028,18 @@ DEPTH = declare(
 # somebody has to look at both halves of a departure.
 PENDING_SYMMETRY.update(
     {
-        # An equity venue list and an equity instrument universe both fall out of the same
-        # reference data, so both wait on the same method.
-        # The census counts a venue universe and a coin universe. Its equity form counts
-        # what M3 resolves.
+        # This block is empty, and every paragraph in it is written in the past tense on
+        # purpose: it is the record of what the ledger held and how each entry left, kept
+        # because the arguments outlived the entries. Anything still scheduled would appear
+        # as a live mapping below, not as a sentence.
+        #
+        # An equity venue list and an equity instrument universe both fell out of the same
+        # reference data, so both waited on the same method — see M3 at the end of this
+        # block, which is what closed them and the census with them.
         # `open-interest` was here against M2 and is repaid: the equity half sums the
         # stored Yahoo chain's per-contract `openInterest` per underlying, which is what
         # M2 specified, and both halves now widen their samples through the one function
         # in `core.analytics.open_interest` so the two boards are the same table.
-        # `depth` is the one entry whose direction the ledger cannot express, and it is
-        # recorded here rather than left to be discovered. Every method in SPEC_METHODS
-        # closes an *equity* gap; `depth`'s missing half is the **crypto** one, because the
-        # equity half is what already ships. M6 — "equity depth from the synthetic VAP
-        # ladder, upgraded by Alpaca L1 when keyed" — is a description of
-        # `equity/depth/select.py`, which this module declares, so M6 is already spent and
-        # cannot be what closes this.
-        #
         # `depth` was here too, mapped to M6, and it is the entry this block should be read
         # backwards from. It was the one whose *direction* the ledger could not express:
         # every method in SPEC_METHODS closes an equity gap, and depth's missing half was

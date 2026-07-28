@@ -1,11 +1,15 @@
 """Capabilities that move data, plus the names no equity analogue can have.
 
 Owns ``collect``, ``collect-market``, ``backfill``, ``replay``, ``export`` and
-``resample``, and five of the six entries of :data:`IRREDUCIBLE
+``resample``, and five of the seven entries of :data:`IRREDUCIBLE
 <crocodile.core.capability.IRREDUCIBLE>` — ``gas-vol``, ``mev-sandwich``,
 ``sequencer-latency``, ``peg-deviation`` and ``lending-stress``. Those five are declared
 here so the exemption list and the declarations it exempts can be read side by side; the
-justification stays on ``IRREDUCIBLE``, where the gate looks for it.
+justification stays on ``IRREDUCIBLE``, where the gate looks for it. The other two,
+``onchain-price`` and ``base-market-data``, are declared in
+:mod:`crocodile.capabilities.onchain` — so every name on the list is a declared capability,
+which is the state ``tests/capabilities/test_ops.py`` asserts and which it did not have
+while ``gas-tracker`` sat there.
 
 Two names this batch was asked to port are deliberately **not** declared, and each refusal
 is argued where the declaration would have gone: ``gas-tracker`` (a Qt window, not a
@@ -494,10 +498,12 @@ def lending_stress(ctx: CapabilityContext, params: LendingStressParams) -> dict[
 def _why_gas_tracker_is_not_a_capability() -> str:
     """Return the argument for leaving ``gas-tracker`` undeclared, so a test can assert it.
 
-    ``gas-tracker`` is on :data:`~crocodile.core.capability.IRREDUCIBLE` and has no
-    declaration here, which is a contradiction on the face of it — the exemption list names
-    something the registry will never contain. The resolution is that it was never a
-    capability:
+    ``gas-tracker`` **was** on :data:`~crocodile.core.capability.IRREDUCIBLE` with no
+    declaration here, which was a contradiction on the face of it — the exemption list
+    named something the registry would never contain. This is the argument that got it
+    removed, kept rather than deleted with the entry because the next reader of
+    :data:`UNDECLARED` is someone asking why the name is not in the registry. It was never
+    a capability:
 
     * It takes **no parameters**. The CLI command has zero options; there is no schema for
       the three surfaces to share.
@@ -518,10 +524,17 @@ def _why_gas_tracker_is_not_a_capability() -> str:
     ``IRREDUCIBLE``. That inconsistency is the evidence: the two were classified together
     as launchers by the survey, and only one of them picked up an exemption it never needed.
 
-    The entry is left in place because ``core/capability.py`` is not this batch's to edit
-    and because removing a name from ``IRREDUCIBLE`` is a claim of its own. The
-    recommendation to the coordinator is to drop it, at which point the list is five names
-    and every one of them is declared below.
+    The entry was left in place at first because ``core/capability.py`` was not this
+    batch's to edit and because removing a name from ``IRREDUCIBLE`` is a claim of its own.
+    The recommendation went to the coordinator and was taken: ``gas-tracker`` is off the
+    list, and a comment where it stood records why. What remains on ``IRREDUCIBLE`` is
+    seven names, five declared below and two in
+    :mod:`crocodile.capabilities.onchain` — every one of them a capability, which is the
+    property that makes the list checkable at all.
+
+    ``tests/capabilities/test_ops.py`` pins the resolution rather than this paragraph:
+    ``gas-tracker`` absent from ``IRREDUCIBLE``, ``REGISTRY`` and ``PENDING_SYMMETRY``,
+    present in :data:`UNDECLARED`, and this docstring non-empty.
     """
     return "gas-tracker launches a Qt window: no params, no return, no provenance, no class"
 
@@ -1455,8 +1468,9 @@ is the shape of the seven capabilities Phase 1 lost. Declining is allowed; decli
 quietly is not, so each entry points at the function holding the argument and a test
 asserts both that the name is absent from the registry and that the argument is there.
 
-``gas-tracker`` is additionally on :data:`~crocodile.core.capability.IRREDUCIBLE`, which
-this batch does not own. Leaving the entry there while declaring nothing is the reported
-state, not the intended end state — see
-:func:`_why_gas_tracker_is_not_a_capability`.
+``gas-tracker`` was additionally on :data:`~crocodile.core.capability.IRREDUCIBLE`, which
+this batch does not own, so the contradiction was reported rather than fixed here. The
+coordinator dropped it; the name is now on this ledger and on no other, which is what a
+declined launcher should look like. See :func:`_why_gas_tracker_is_not_a_capability` for
+the argument and ``tests/capabilities/test_ops.py`` for the assertion.
 """

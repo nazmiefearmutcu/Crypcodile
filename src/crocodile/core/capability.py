@@ -423,9 +423,10 @@ all.
 PENDING_SYMMETRY: Final[dict[str, str]] = {}
 """Capabilities that are asymmetric *on schedule*, mapped to the method that closes them.
 
-Phase 2 ports 48 crypto capabilities into :data:`REGISTRY`, and their equity halves are
-Phase 3 work. That leaves the symmetry gate three possible futures and two of them are
-lies:
+Phase 2 put 49 capabilities into :data:`REGISTRY` — 47 ported off the legacy surfaces by
+the four batch modules, plus the two the parity gate found at its exit — with their crypto
+halves working and their equity halves Phase 3 work. That leaves the symmetry gate three
+possible futures and two of them are lies:
 
 - **Do not register them until both halves exist.** The registry stops describing the
   product, and the surfaces cannot be projections of it, which is the whole of Phase 2.
@@ -444,17 +445,30 @@ The rules, each enforced by a gate in ``tests/conformance/test_pending_symmetry.
 4. it must be **empty** at Phase 3's exit, which is what makes it a schedule rather than a
    second exemption list.
 
-**This dict is not empty at runtime, whatever the line above it says.** It ships with 21
-entries, none of them written here: :mod:`crocodile.capabilities.analytics`,
+**The ``{}`` above is a declaration, not the runtime value, and no sentence here states
+what the runtime value is.** :mod:`crocodile.capabilities.analytics`,
 :mod:`~crocodile.capabilities.market` and :mod:`~crocodile.capabilities.ops` each call
-``update()`` on it at import time, because four batches editing one dict in this shared
-module is four merge conflicts in one file. The declaration site therefore shows ``{}`` to
-anyone reading it, which is how "Empty today" survived here for a whole phase after it
-stopped being true — and it is why the count is pinned in
-``tests/conformance/test_pending_symmetry.py`` (``_LEDGER_AS_SHIPPED``) rather than
-asserted in prose. Phase 2 fills it as it ports and Phase 3 empties it again; the count
-only ever moving in those two directions is the property worth watching, and that test is
-what watches it.
+``update()`` on this dict at import time, because four batches editing one dict in this
+shared module is four merge conflicts in one file. So the declaration site shows ``{}``
+whatever the ledger actually holds, and a reader who takes it at face value is wrong by
+exactly the number of entries the batches added.
+
+That gap has now produced the same defect twice, in opposite directions. "Empty today"
+survived here for a whole phase while the batches filled the ledger to 21 entries. The
+correction stated that count in the present tense — and then outlived the entries: Phase 3
+discharged M1 through M8, every one of them left, and a paragraph written to stop a stale
+count had become one. A sentence naming a number this module cannot see will go stale on
+whichever side the ledger next moves, so this one names none.
+
+What checks the number instead: ``_LEDGER_AS_SHIPPED`` in
+``tests/conformance/test_pending_symmetry.py`` pins the contents entry by entry, and
+``test_phase_3_exit_the_ledger_must_be_empty`` asserts the exit criterion against the live
+dict. Between them the count is measured on every run.
+
+The hazard this paragraph exists for does *not* go away while the ledger is empty — it is
+dormant, which is worse, because the next reader sees ``{}`` and a docstring that agrees
+with it. The moment a batch module schedules a capability again, this line still reads
+``{}``, and the only things that will notice are the two tests above.
 """
 
 

@@ -576,10 +576,14 @@ def equity_forward_basis(
     **Why a missing curve means no rows rather than an undiscounted forward.** Setting
     ``r = 0`` gives ``F = K + (C - P)``, which is a perfectly computable number and a
     slightly wrong one — and nothing on the row would distinguish it from the same answer
-    in a genuinely zero-rate market. This capability is scheduled against M5 *because* it
-    needs the financing leg; emitting rows without one would make that schedule's own
-    justification false. The absence is reported by the empty result, which is the
-    empty-result contract every function in this family already shares.
+    in a genuinely zero-rate market. ``perp-basis`` was scheduled against M5 *because* it
+    needed the financing leg, and M5 — the Treasury curve — is what discharged it and took
+    it off ``PENDING_SYMMETRY``. Emitting rows without a curve would have made that
+    schedule's own justification false while it stood, and it would make the *repayment*
+    false now: the entry left on the claim that this function reads a real rate, so a run
+    with no curve has to report that rather than paper over it. The absence is reported by
+    the empty result, which is the empty-result contract every function in this family
+    already shares.
 
     The nearest expiry strictly after the snapshot is used, and within it the strike
     closest to the cash price. Parity holds at every strike, so the choice is about noise
