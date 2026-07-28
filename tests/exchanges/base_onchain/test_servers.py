@@ -11,7 +11,7 @@ because dispatch is now :func:`crocodile.surfaces.mcp.call_tool`, covered by
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from crocodile.core.errors import ConnectorError, FatalConnectorError
+from crocodile.core.errors import ConnectorError, CrocodileError
 from crocodile.crypto.exchanges.base_onchain.price import get_base_market_data, get_onchain_price
 
 
@@ -112,11 +112,16 @@ async def test_get_onchain_price_refuses_an_unsupported_symbol() -> None:
     Returning ``{"error": …}`` made a refusal indistinguishable from a reading to every
     caller above it. ``onchain-price`` declares ``prov=NATIVE``, so the CLI exited 0 with the
     dict printed as the answer and REST answered 200 with
-    ``{"result":{"error":…},"provenance":{"prov":"native"}}``. Fatal because no retry helps:
-    the pool is not in ``POOL_SPECS``.
+    ``{"result":{"error":…},"provenance":{"prov":"native"}}``.
+
+    ``ValueError`` and not a connector error: the pool is not in ``POOL_SPECS``, so the
+    caller named one this build does not serve and the message lists the ones it does. The
+    surfaces map ``ValueError`` to 400; an unclassified ``CrocodileError`` falls to 500,
+    which would report a caller's typo as our outage and as worth retrying.
     """
-    with pytest.raises(FatalConnectorError, match="not supported"):
+    with pytest.raises(ValueError, match="not supported") as caught:
         await get_onchain_price("UNKNOWN-SYMBOL")
+    assert not isinstance(caught.value, CrocodileError)
 
 
 @pytest.mark.asyncio
