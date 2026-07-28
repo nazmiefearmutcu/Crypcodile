@@ -10,6 +10,7 @@ import ast
 import inspect
 import operator
 import pathlib
+import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from typing import NamedTuple, get_args
@@ -911,6 +912,21 @@ FABRICATION_BLIND_SPOTS: dict[str, tuple[str, str]] = {
         "An attribute of a dataclass, a `NamedTuple` field, a dict built by a function: the "
         "scanner cannot see into any of them to learn the value is a constant.",
     ),
+    "an invented scale over a real reading": (
+        "def f(payload):\n    return Trade(amount=float(payload['size']) / 1e9)",
+        "A divisor is not the measurement, so the expression is not constant-foldable and "
+        "the scanner reads the whole thing as a reading — correctly, for every honest "
+        "adapter, since a fixed-point payload has to be scaled by something and the "
+        "something is always a literal. `gmx_synthetix/connector.py` shipped "
+        "`entryFundingRate / 1e9` under the comment `# illustrative scale`; GMX v1's "
+        "`FUNDING_RATE_PRECISION` is 1e6, so the divisor was out by a thousand and nothing "
+        "in this file could see it. Closing this would need a per-venue table of the real "
+        "constants, which is a different kind of gate: this one reads source, and the "
+        "answer is on a chain. What the review reached for instead was the comment, and a "
+        "comment is not a declaration — hence "
+        "`test_gate3b_a_scale_is_not_licensed_by_calling_it_illustrative`, which bans the "
+        "licence without pretending to know the number.",
+    ),
 }
 """What this scanner does **not** see, each with a probe proving it is still not seen.
 
@@ -1546,6 +1562,7 @@ def test_gate3b_the_blind_spot_list_is_the_set_that_was_measured() -> None:
         "a default argument",
         "a helper's return value",
         "a name assigned a constant on one branch",
+        "an invented scale over a real reading",
     ], (
         "the blind-spot list changed. Adding one is a limit worth documenting; removing one "
         "means the scanner now sees that spelling, which "
@@ -1555,6 +1572,103 @@ def test_gate3b_the_blind_spot_list_is_the_set_that_was_measured() -> None:
     for blind_spot, (probe, why) in FABRICATION_BLIND_SPOTS.items():
         assert probe.strip(), f"{blind_spot} carries no probe, so nothing checks it is open"
         assert why.strip(), f"{blind_spot} carries no argument for why it is left open"
+
+
+_LICENCE_WORDS = ("illustrative", "placeholder", "approximate", "assumed", "rough", "guess")
+"""Words that turn a number nobody measured into a number somebody signed off."""
+
+_SCALE_EXPR = re.compile(
+    r"(?:[*/]\s*(?:\d[\d_]*\.?[\d_]*|\.\d[\d_]*)(?:[eE][-+]?\d+)?)"
+    r"|(?:(?:\d[\d_]*\.?[\d_]*|\.\d[\d_]*)(?:[eE][-+]?\d+)?\s*[*/])"
+)
+"""A numeric literal multiplying or dividing something — the shape a scale factor has."""
+
+
+def _licensed_scale(code: str, comment: str) -> bool:
+    """True when a trailing comment excuses a numeric scale on its own line.
+
+    Both halves are required, and narrowly. The word alone catches three lines in
+    ``base_onchain`` that annotate a URL and two event-topic hashes — real questions, and
+    not this one; a gate that reports them here is a gate that gets read as noise. The
+    expression alone is every honest fixed-point conversion in the tree, which is most of
+    the on-chain connectors.
+    """
+    return bool(_SCALE_EXPR.search(code)) and any(w in comment.lower() for w in _LICENCE_WORDS)
+
+
+_SCALE_LICENCES: dict[str, tuple[str, str]] = {
+    "the gmx line as it shipped": (
+        'funding_rate = float(decoded.args["entryFundingRate"]) / 1e9 ',
+        " illustrative scale",
+    ),
+    "a factor rather than a divisor": ("qty = raw * 1e-8 ", " assumed decimals"),
+}
+"""Lines this rule must flag, the first of them verbatim from the tree it was written for."""
+
+_HONEST_SCALES: dict[str, tuple[str, str]] = {
+    "a cited constant": (
+        "price = float(args['price']) / 1e30 ",
+        " PRICE_PRECISION, GMX v1 Vault.sol",
+    ),
+    "a candid word about something that is not a scale": (
+        'ws_url = "wss://base-rpc.publicnode.com" ',
+        " placeholder",
+    ),
+    "a bare conversion": ("ns = ms * 1_000_000", ""),
+}
+"""Lines it must leave alone, so the rule is a filter and not a ban on arithmetic."""
+
+
+@pytest.mark.parametrize("case", sorted(_SCALE_LICENCES), ids=lambda k: k.replace(" ", "_"))
+def test_gate3b_the_scale_rule_flags_a_licence(case: str) -> None:
+    """Guard the guard: a rule narrowed until it matches nothing is a rule that passes."""
+    code, comment = _SCALE_LICENCES[case]
+    assert _licensed_scale(code, comment), f"{case!r} went unflagged"
+
+
+@pytest.mark.parametrize("case", sorted(_HONEST_SCALES), ids=lambda k: k.replace(" ", "_"))
+def test_gate3b_the_scale_rule_leaves_an_argued_constant_alone(case: str) -> None:
+    code, comment = _HONEST_SCALES[case]
+    assert not _licensed_scale(code, comment), f"{case!r} was flagged"
+
+
+def test_gate3b_a_scale_is_not_licensed_by_calling_it_illustrative() -> None:
+    """A trailing comment is not a declaration, however candid it sounds.
+
+    ``gmx_synthetix/connector.py`` carried
+    ``float(decoded.args["entryFundingRate"]) / 1e9 # illustrative scale``, and the comment
+    is the whole of why it survived review: it reads as a decision that was taken and
+    recorded, so nobody asked what the real divisor was. It is 1e6 — GMX v1's
+    ``FUNDING_RATE_PRECISION`` — and the quantity was not a funding rate at any divisor,
+    being one endpoint of a difference between cumulative indices.
+
+    The fabrication scanner above cannot reach this shape at all; that limit is declared in
+    :data:`FABRICATION_BLIND_SPOTS` under ``an invented scale over a real reading``. What
+    this rule can do is shut the door the comment opened. A number this codebase cannot
+    justify belongs in :data:`FABRICATES_MEASUREMENTS` with its argument, or belongs
+    nowhere.
+
+    Only *trailing* comments are read — a comment sharing its line with code, which is the
+    form that annotates an expression and so reads as permission for it. A standalone
+    comment saying what a previous fabrication was and why it went is documentation, and
+    the module this rule was written for now holds exactly such a paragraph.
+    """
+    offences: list[str] = []
+    for path in sorted(_source_root().rglob("*.py")):
+        for index, text in enumerate(path.read_text().splitlines(), start=1):
+            code, sep, comment = text.partition("#")
+            if not sep or not code.strip():
+                continue
+            if _licensed_scale(code, comment):
+                relative = path.relative_to(_source_root()).as_posix()
+                offences.append(f"{relative}:{index} — {comment.strip()!r}")
+    assert not offences, (
+        f"a comment standing in for a measurement: {offences}. If the value is right, say "
+        f"what makes it right and cite the source; if it cannot be determined, the record "
+        f"should not carry it. FABRICATES_MEASUREMENTS is where a number nobody measured "
+        f"is declared, next to the argument for it — a comment beside the expression is "
+        f"read as a decision already taken."
+    )
 
 
 def test_gate3b_the_scanner_records_whether_the_fabricating_record_states_prov() -> None:

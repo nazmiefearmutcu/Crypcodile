@@ -140,7 +140,24 @@ def test_gmx_liquidate_position() -> None:
     assert abs(rec.amount - 0.04) < 1e-9
     assert rec.side == Side.SELL
 
-def test_gmx_update_position() -> None:
+def test_gmx_update_position_publishes_no_funding_rate() -> None:
+    """Migrated: this used to assert ``rec.funding_rate == 123456 / 1e9``.
+
+    It pinned the number the connector happened to compute, which is the one thing a test
+    over a fabricated scale cannot be allowed to do — it makes the invention load-bearing.
+    The divisor was annotated ``# illustrative scale`` and 1e9 is not a GMX constant:
+    GMX v1's Vault declares ``FUNDING_RATE_PRECISION = 1000000``, so it was out by a
+    thousand.
+
+    The scale is not the reason nothing is emitted now. ``entryFundingRate`` is a snapshot
+    of a cumulative index taken when a position opened, and ``getFundingFee`` computes
+    funding as the *difference* between two such snapshots over
+    ``FUNDING_RATE_PRECISION``. One log carries one endpoint, and the other endpoint is
+    keyed by collateral token — which this event does not carry. Neither does it carry
+    ``indexToken``, so the record it used to emit was attributed to ``gmx:unknown``: a
+    since-listing accrual, at a divisor off by 1000, against no instrument, in a field
+    ``apr_from_rate`` multiplies by 1095.
+    """
     registry = InstrumentRegistry()
     sink = MemorySink()
     connector = GMXSynthetixConnector(
@@ -164,11 +181,13 @@ def test_gmx_update_position() -> None:
     
     msg = {"protocol": "gmx", "topics": ["0xUpdatePositionTopic"], "data": "0x"}
     records = list(connector.normalize(msg, 123456789))
-    
-    assert len(records) == 1
-    rec = records[0]
-    assert isinstance(rec, Funding)
-    assert rec.funding_rate == 123456 / 1e9
+
+    assert records == [], (
+        "an UpdatePosition log states a position's size, collateral and marks, and this "
+        "connector has no canonical record for a position; a Funding it cannot compute is "
+        "worse than none, because a zero-argument number annualizes just as smoothly as a "
+        "real one"
+    )
 
 def test_synthetix_position_modified() -> None:
     registry = InstrumentRegistry()

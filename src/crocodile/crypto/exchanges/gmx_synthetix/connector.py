@@ -421,17 +421,41 @@ class GMXSynthetixConnector(Connector):
                 side=side,
             )
         elif event_name_found == "UpdatePosition":
-            # entryFundingRate is uint256
-            funding_rate = float(decoded.args["entryFundingRate"]) / 1e9 # illustrative scale
-            yield Funding(
-                source="gmx",
-                symbol=symbol,
-                symbol_raw=raw_symbol,
-                source_ts=local_ts,
-                local_ts=local_ts,
-                asset_class=AssetClass.CRYPTO,
-                funding_rate=funding_rate,
-            )
+            # No record. `UpdatePosition` used to yield a `Funding` whose rate was
+            # `entryFundingRate / 1e9`, annotated `# illustrative scale` — a number
+            # nobody had measured, wearing a comment as its licence. Three things were
+            # wrong with it and only the first is a scale:
+            #
+            # 1e9 is not a GMX constant. GMX v1's Vault declares
+            # `FUNDING_RATE_PRECISION = 1000000`, and its `getFundingFee` is
+            # `size * (cumulativeFundingRates[token] - entryFundingRate) /
+            # FUNDING_RATE_PRECISION`. So the divisor is 1e6 and the shipped one was out
+            # by a thousand. (The 1e30 divisors on the price and size branches above are
+            # right: `PRICE_PRECISION` is 1e30 in the same contract.)
+            #
+            # But `getFundingFee` also says what the quantity *is*: `entryFundingRate` is
+            # a snapshot of a running cumulative index at the moment the position was
+            # opened, and funding is the *difference* between two such snapshots. A
+            # single log carries one endpoint. No divisor turns one endpoint of a
+            # difference into a per-interval rate, so this is not a scale bug with a
+            # correct answer available — `Funding.funding_rate` is the wrong field for
+            # this number at every scale. Shipping it meant
+            # `apr_from_rate(rate, 8)` multiplied a since-listing accrual by 1095.
+            #
+            # The other endpoint is not recoverable here either. It is
+            # `cumulativeFundingRates[collateralToken]`, per collateral token, and the
+            # `UpdatePosition` ABI above carries no token at all — which is also why the
+            # `symbol` on the record it used to emit was `gmx:unknown`, since
+            # `raw_symbol` reads `indexToken` and this event has none.
+            #
+            # Emitting nothing is the honest encoding: the log states a position's size,
+            # collateral, average price, mark price and realised PnL, and this connector
+            # has no canonical record for a position. The blind spot that let a fabricated
+            # divisor through the fabrication gate — a constant applied to a real payload
+            # reading is not constant-foldable, so the scanner cannot see it — is declared
+            # in `FABRICATION_BLIND_SPOTS` with a probe, rather than left for the next
+            # comment to license.
+            return
 
     def _normalize_synthetix(self, msg: dict[str, Any], local_ts: int) -> Iterable[Record]:
         log_obj = reconstruct_log(msg)
