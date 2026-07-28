@@ -294,7 +294,6 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 
 _LEDGER_AS_SHIPPED: dict[str, str] = {
     "basis": "M5",
-    "census": "M3",
     "chaos-score": "M6",
     "collect-market": "M3",
     "depth": "M6",
@@ -303,7 +302,6 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "iv-surface": "M1",
     "label-transfers": "M4",
     "liquidity-depth": "M6",
-    "markets": "M3",
     "ofi": "M7",
     "open-interest": "M2",
     "perp-basis": "M5",
@@ -311,19 +309,28 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "smart-money": "M4",
     "spot-future-basis": "M5",
     "term-structure": "M1",
-    "universe": "M3",
     "vol-skew": "M1",
     "whale-alerts": "M4",
 }
-"""The 21 entries Phase 2 closed with, pinned so the ledger's size is a watched number.
+"""What is still scheduled, pinned so the ledger's size is a watched number.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was
 watching. Two things made that hard to see. The declaration in ``core/capability.py`` reads
-``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; the 21 live
+``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; the live
 entries are assembled at import time by three batch modules calling ``update()`` on it. And
 :func:`test_phase_3_exit_the_ledger_must_be_empty` skipped whenever the ledger was
 non-empty, so it was green at 21 and would have been green at 48.
+
+Phase 2 closed with 21. Eighteen are left: M3 took ``markets``, ``universe`` and ``census``,
+which waited on one piece of reference data and left when it arrived
+(``crocodile.equity.reference.universe``, the SEC EDGAR x OpenFIGI x Tiingo merge the method
+names). ``collect-market`` is scheduled against the same method and resolves against the same
+universe, and it is still here because its equity half is a separate change. That is the
+direction this pin exists to make visible, and it is only visible because deleting a name here
+and deleting it from its batch module is one commit:
+:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails in both
+directions if either half is done alone.
 
 Pinned here rather than beside the declaration for the reason the batches write it here:
 ``core/capability.py`` is shared and this is a test's assertion about a fact, not a fact.
