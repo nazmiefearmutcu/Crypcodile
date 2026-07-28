@@ -241,9 +241,16 @@ async def _live_fetch_trades(  # pragma: no cover
     end_ts_ms: int,
     count: int,
     start_ts_ms: int,
+    *,
+    rest_base: str = "https://www.deribit.com/api/v2",
     session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Fetch one trades page from the Deribit REST API."""
+    # ``rest_base`` was used in the body and not declared, while ``make_live_backfill``
+    # binds it with ``functools.partial`` — so every ``backfill --channel trade`` raised
+    # ``TypeError: unexpected keyword argument 'rest_base'`` before any I/O happened. The two
+    # siblings below declare it; only this one did not, and ``# pragma: no cover`` is why no
+    # test noticed. Keyword-only, exactly as they are.
     from crocodile.core.connector import http_get_helper
 
     params: dict[str, Any] = {

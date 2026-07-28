@@ -585,3 +585,33 @@ async def test_backfill_funding_breaks_on_first_record_below_start_ns() -> None:
     assert len(fetch_calls) == 1, (
         f"Expected 1 HTTP call (early break) but got {len(fetch_calls)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The live wiring, which no test could reach
+# ---------------------------------------------------------------------------
+
+
+def test_every_live_fetcher_accepts_the_rest_base_the_factory_binds() -> None:
+    """``backfill --channel trade`` raised ``TypeError`` before any I/O happened.
+
+    Same defect as Deribit's, in the same shape: ``make_live_backfill`` binds ``rest_base``
+    into every fetcher with ``functools.partial`` and ``_live_fetch_trades`` used the name
+    without declaring it, so the partial rejected the keyword at call time. The other two
+    fetchers here declared it, which is what makes this a typo rather than a design.
+
+    Bound rather than called: binding raises the identical ``TypeError`` and calling is a
+    network request.
+    """
+    import inspect
+
+    from crocodile.crypto.exchanges.okx.backfill import make_live_backfill
+
+    backfill = make_live_backfill(rest_base="https://example.invalid")
+    inspect.signature(backfill._fetch_trades).bind("BTC-USDT-SWAP", "SWAP", None, None, 100)
+    assert backfill._fetch_funding is not None
+    inspect.signature(backfill._fetch_funding).bind("BTC-USDT-SWAP", "SWAP", None, None, 100)
+    assert backfill._fetch_open_interest is not None
+    inspect.signature(backfill._fetch_open_interest).bind(
+        "BTC-USDT-SWAP", "SWAP", "5m", None, None, 100
+    )
