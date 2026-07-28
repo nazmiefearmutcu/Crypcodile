@@ -157,9 +157,98 @@ def test_rest_returns_rows_and_a_provenance_block(
 def test_rest_publishes_the_row_ceiling_it_applied(
     lake: pathlib.Path, indicator_query: dict[str, str]
 ) -> None:
-    """A cap nobody is told about turns a truncated answer into a wrong one."""
+    """A cap nobody is told about turns a truncated answer into a wrong one.
+
+    Kept as the *statement* of the claim; ``test_the_published_row_ceiling_is_the_one_the
+    _answer_got`` below is what measures it. This one asserted the published number equalled
+    the constant, on a capability that applied no ceiling, against a forty-row lake — three
+    ways of being unable to fail at once — and the exit review found the number was false for
+    30 of the 33 ``TABLE`` capabilities while this stayed green.
+    """
     body = _client(lake).get("/api/v1/indicators", params=indicator_query).json()
     assert body["provenance"]["row_limit"] == dispatch.NETWORK_ROW_LIMIT
+    assert "truncated" not in body, "forty trades cannot reach a ten-thousand-row ceiling"
+
+
+@pytest.mark.parametrize("surface", ["rest", "mcp"])
+def test_the_published_row_ceiling_is_the_one_the_answer_got(
+    oversized_lake: pathlib.Path, surface: str
+) -> None:
+    """Driven over a lake bigger than the cap, which is the only way this can fail.
+
+    ``resample`` is the probe because it reads through ``Catalog.scan`` and therefore never
+    meets :meth:`CapabilityContext.query <crocodile.core.capability.CapabilityContext.query>`'s
+    LIMIT wrapper — the same shape as ``indicators``, ``ofi``, ``funding-apr``,
+    ``spot-future-basis``, ``open-interest`` and ``whale-alerts``. Before the fix this
+    answered 12 000 rows and 3.5 MB under ``provenance.row_limit: 10000``.
+    """
+    from tests.surfaces.conftest import OVERSIZED_ROWS
+
+    request = {
+        "symbol": SYMBOL,
+        "start_ns": str(START_NS),
+        "end_ns": str(START_NS + OVERSIZED_ROWS * 60 * 1_000_000_000),
+        "interval": "1m",
+        "asset_class": "crypto",
+    }
+    body = (
+        _client(oversized_lake).get("/api/v1/resample", params=request).json()
+        if surface == "rest"
+        else mcp.call_tool("resample", dict(request), settings=_settings(oversized_lake))
+    )
+    ceiling = body["provenance"]["row_limit"]
+    assert ceiling == dispatch.NETWORK_ROW_LIMIT
+    assert len(body["rows"]) == ceiling, (
+        f"{surface} published a ceiling of {ceiling} and returned {len(body['rows'])} rows"
+    )
+    assert body["truncated"] is True, "a cut answer has to say it was cut"
+
+
+def test_every_table_capability_is_subject_to_the_ceiling_not_only_the_three_that_read_sql(
+    oversized_lake: pathlib.Path,
+) -> None:
+    """The projection applies the cap, so no implementation can be the one that forgets.
+
+    Stated against ``dispatch.payload`` directly and over every ``TABLE`` capability in the
+    registry, because the defect was never about one capability: it was that the ceiling
+    lived in three implementations instead of in the one place every answer passes through.
+    A frame is manufactured here rather than read, so the assertion is about the projection
+    and stays true for a capability that has not been written yet.
+    """
+    import polars as pl
+
+    from crocodile.core.capability import REGISTRY, ReturnKind
+
+    dispatch.wire_names()
+    oversized = pl.DataFrame({"n": list(range(dispatch.NETWORK_ROW_LIMIT + 500))})
+    tables = [cap for cap in REGISTRY.values() if cap.returns is ReturnKind.TABLE]
+    assert len(tables) > 1, "nothing declares TABLE; this gate would prove nothing"
+    for cap in tables:
+        body = dispatch.payload(cap, oversized, row_limit=dispatch.NETWORK_ROW_LIMIT)
+        assert len(body["rows"]) == dispatch.NETWORK_ROW_LIMIT, cap.name
+        assert body["truncated"] is True, cap.name
+
+
+def test_the_cli_is_not_capped_and_does_not_claim_to_be(
+    oversized_lake: pathlib.Path,
+) -> None:
+    """The ceiling is a property of the network surfaces, and stays one.
+
+    The CLI runs on the machine that owns the lake, so it returns everything — and publishes
+    no ``row_limit``, because a ceiling nobody applied is exactly the false claim being
+    fixed, pointed the other way.
+    """
+    from tests.surfaces.conftest import OVERSIZED_ROWS
+
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["resample", "--symbol", SYMBOL, "--start-ns", str(START_NS), "--end-ns",
+         str(START_NS + OVERSIZED_ROWS * 60 * 1_000_000_000), "--interval", "1m",
+         "--asset-class", "crypto", "--data-dir", str(oversized_lake)],
+    )
+    assert result.exit_code == 0, result.output
+    # Polars groups the row count in its frame header: ``shape: (12_000, 15)``.
+    assert f"({OVERSIZED_ROWS:_}," in result.output, result.output[:400]
 
 
 def test_rest_maps_a_bad_parameter_to_400(lake: pathlib.Path) -> None:

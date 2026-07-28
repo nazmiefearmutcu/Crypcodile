@@ -105,7 +105,7 @@ def call_tool(
             row_limit=dispatch.NETWORK_ROW_LIMIT,
         )
         result = dispatch.drive(dispatch.invoke(cap, ctx, params), row_limit=ctx.row_limit)
-        body = dispatch.payload(cap, result)
+        body = dispatch.payload(cap, result, row_limit=ctx.row_limit)
         body["provenance"] = dispatch.provenance_block(cap, ctx)
         warning = dispatch.warning_for(cap, ctx)
         if warning:

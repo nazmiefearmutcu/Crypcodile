@@ -147,7 +147,17 @@ def _openapi_responses(cap: Capability) -> dict[str, Any]:
     from crocodile.core.capability import ReturnKind
 
     payload: dict[str, Any] = (
-        {"rows": {"type": "array", "items": {"type": "object"}}}
+        {
+            "rows": {"type": "array", "items": {"type": "object"}},
+            "truncated": {
+                "type": "boolean",
+                "description": (
+                    "Present and true when the answer was cut at provenance.row_limit. "
+                    "Absent means the rows are the whole answer — which is what tells a "
+                    "caller who received exactly row_limit rows which of the two they have."
+                ),
+            },
+        }
         if cap.returns is ReturnKind.TABLE
         else {"result": {"description": "The single value or object this capability returns."}}
     )
@@ -268,7 +278,7 @@ def _handler(
                 # routes mapped these the same way.
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-            body = dispatch.payload(cap, result)
+            body = dispatch.payload(cap, result, row_limit=ctx.row_limit)
             body["provenance"] = dispatch.provenance_block(cap, ctx)
             warning = dispatch.warning_for(cap, ctx)
             if warning:

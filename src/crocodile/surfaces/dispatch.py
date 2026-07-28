@@ -612,6 +612,15 @@ def provenance_block(cap: Capability, ctx: CapabilityContext) -> dict[str, Any]:
     if ctx.row_limit is not None:
         # Published so a truncated answer reads as a stated ceiling rather than as the
         # whole lake. The legacy REST server wrapped a LIMIT and said nothing.
+        #
+        # It says "at most this many rows are in the answer", and until :func:`payload`
+        # started enforcing it that was false for 30 of the 33 TABLE capabilities: only
+        # ``query``, ``catalog-scan`` and ``replay`` reached a cap at all — the first two
+        # through :meth:`CapabilityContext.query`'s LIMIT wrapper, the third through
+        # :func:`drive`'s islice — and every other implementation built its own statement or
+        # went through ``Catalog.scan``, so ``GET /api/v1/resample`` answered twelve thousand
+        # rows over a published ceiling of ten thousand. The OpenAPI document repeated the
+        # claim to every generated client.
         block["row_limit"] = ctx.row_limit
     return block
 
@@ -717,8 +726,8 @@ def _jsonable(value: Any) -> Any:
     return _jsonable(builtin) if type(builtin) is not type(value) else builtin
 
 
-def payload(cap: Capability, result: Any) -> dict[str, Any]:
-    """Shape a return value according to :attr:`Capability.returns`.
+def payload(cap: Capability, result: Any, *, row_limit: int | None = None) -> dict[str, Any]:
+    """Shape a return value according to :attr:`Capability.returns`, under this surface's cap.
 
     A ``TABLE`` becomes ``rows``, a ``SCALAR`` becomes ``result``. The distinction is read
     off the declaration rather than off the value's Python type, which is what stops a
@@ -727,13 +736,70 @@ def payload(cap: Capability, result: Any) -> dict[str, Any]:
 
     Whatever comes out is plain JSON data all the way down, because the three surfaces do not
     share an encoder and the one thing they must share is what they are asked to encode.
+
+    ``row_limit`` is where the network surfaces' published ceiling is *made true*, and the
+    choice of this function over the read is the whole of the argument. Two designs were on
+    the table:
+
+    *Push the cap into the read.* Strictly better as work: rows that are never returned are
+    never computed. It requires every implementation to reach the lake through
+    :meth:`CapabilityContext.query <crocodile.core.capability.CapabilityContext.query>`, and
+    30 of the 33 ``TABLE`` capabilities do not — ``open-interest`` hands a catalog to an
+    aggregator that owns its statement, ``resample`` and ``replay`` go through
+    ``Catalog.scan``, ``depth`` walks a network ladder, ``ofi`` computes over a frame. Doing
+    it would mean editing 30 implementations across four batch modules, each edit a chance
+    for one capability's numbers to change quietly, and — this is the part that decides it —
+    it would leave the property as **30 separate claims**, each of which can be forgotten
+    again by the next implementation. Being forgotten 30 times is how the defect arrived.
+
+    *Cap every answer where every answer passes.* This. One place, one gate, and the claim
+    ``provenance.row_limit`` makes is enforced by construction rather than by 30 authors
+    remembering. The cost is stated rather than hidden: the frame is computed in full and
+    then cut, so the ceiling is a bound on the *response*, not on the work. Bounding the work
+    is what an implementation's own ``limit`` parameter is for — ``catalog-scan``, ``replay``
+    and ``export`` each take one — and pushing the cap deeper later is a pure optimisation
+    that cannot change what the published number means, because the number already means what
+    it says.
+
+    ``truncated`` is added only when the cap actually bound. Without it a caller who receives
+    exactly ``row_limit`` rows cannot tell a full answer of that size from a cut one, which is
+    the ambiguity the published ceiling exists to remove.
     """
+    truncated = False
+    if cap.returns is ReturnKind.TABLE:
+        result, truncated = _under_ceiling(result, row_limit)
     rows = _rows(result)
     if cap.returns is ReturnKind.TABLE:
-        return {"rows": rows if rows is not None else _encodable(cap, result)}
+        body: dict[str, Any] = {"rows": rows if rows is not None else _encodable(cap, result)}
+        if truncated:
+            body["truncated"] = True
+        return body
     if rows is not None:
         return {"result": rows[0] if rows else None}
     return {"result": _encodable(cap, result)}
+
+
+def _under_ceiling(result: Any, row_limit: int | None) -> tuple[Any, bool]:
+    """Cut ``result`` to ``row_limit`` rows, and say whether that changed anything.
+
+    Cutting the *frame* rather than the converted dicts, because ``_rows`` walks every cell
+    of every row through :func:`_jsonable` and the rows past the ceiling are being thrown
+    away: a 12 000-row answer under a 10 000 ceiling would otherwise pay for 12 000
+    conversions to publish 10 000. ``head`` is polars' own slice and copies no data.
+
+    A list is handled beside the frame because a ``TABLE`` implementation is allowed to return
+    one — nothing in the registry declares that it returns a frame — and a ceiling that only
+    holds for the common representation is a ceiling with an undocumented exception in it.
+    """
+    if row_limit is None:
+        return result, False
+    head = getattr(result, "head", None)
+    height = getattr(result, "height", None)
+    if callable(head) and isinstance(height, int):
+        return (head(row_limit), True) if height > row_limit else (result, False)
+    if isinstance(result, list) and len(result) > row_limit:
+        return result[:row_limit], True
+    return result, False
 
 
 def _encodable(cap: Capability, result: Any) -> Any:
