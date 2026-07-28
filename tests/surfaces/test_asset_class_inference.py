@@ -11,18 +11,31 @@ So ``?symbol=deribit:BTC-PERPETUAL`` answered 200 and ``?symbols=deribit:BTC-PER
 answered 400 *cannot tell which market*, for the same symbol, on the same lake. Loud, but it
 made six capabilities unreachable without an out-of-band parameter the symbol already
 determines.
+
+It then happened again, silently, and the second time is why the last section of this file
+exists. ``basis`` and ``spot-future-basis`` spell their legs ``spot_symbol``,
+``perp_symbol`` and ``future_symbol``. While they were crypto-only they resolved by "there
+is only one implementation"; the moment they grew equity halves — in a branch that touches
+neither the dispatcher nor this file — that step stopped applying and both went unreachable
+on CLI, REST and MCP at once. The list below was the *evidence* for the first fix and could
+not notice the second: it names six capabilities by hand and nothing re-derives it.
+
+So the population is derived from the registry instead, and the answer a capability gives is
+checked rather than assumed.
 """
 
 from __future__ import annotations
 
 import pathlib
-from typing import Any
+from types import UnionType
+from typing import Any, Literal, Union, get_args, get_origin
 
+import msgspec
 import pytest
 from typer.testing import CliRunner
 
 from crocodile.capabilities import load_all
-from crocodile.core.capability import IRREDUCIBLE, REGISTRY, AssetClass
+from crocodile.core.capability import IRREDUCIBLE, REGISTRY, AssetClass, Capability
 from crocodile.core.config import Settings
 from crocodile.core.errors import CapabilityUnavailable
 from crocodile.surfaces import cli, dispatch, mcp, rest
@@ -186,3 +199,246 @@ def test_a_field_that_is_not_a_symbol_is_not_read_as_one() -> None:
     query = dispatch.resolve("query")
     params = dispatch.build_params(query, {"sql": "SELECT 'binance:BTC' AS note"})
     assert dispatch.symbol_hints(params) == ()
+
+
+def test_a_symbol_shaped_field_that_cannot_hold_a_string_is_not_a_symbol() -> None:
+    """``collect-market`` carries ``all_symbols`` and ``max_symbols``, and has no symbol.
+
+    The name convention alone would say it does, which would exempt it from the sweep below
+    — the one check that would catch the *next* capability whose leg is spelled something
+    the convention does not cover.
+    """
+    assert dispatch.symbol_field_names(dispatch.resolve("collect-market").params) == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# The sweep: every capability with a choice to make, asked to make it
+# ---------------------------------------------------------------------------
+
+
+_NO_CANONICAL_SYMBOL: dict[str, str] = {
+    # The subject is a store, a venue list or a free-text query — there is no instrument in
+    # the request to read a source off, so naming the market is genuinely the caller's job.
+    **dict.fromkeys(
+        (
+            "catalog",
+            "catalog-channels",
+            "catalog-dates",
+            "catalog-exchanges",
+            "catalog-inventory",
+            "catalog-stats",
+            "catalog-summary",
+            "catalog-symbols",
+            "census",
+            "list-exchanges",
+            "markets",
+            "query",
+            "search",
+            "universe",
+            "collect-market",
+        ),
+        "asks about a store or a venue, not about an instrument. Some of these do carry a "
+        "bare `source` or `exchange` field, which is market evidence of a different kind — "
+        "a source name rather than a `source:RAW` symbol — and reading it would be a "
+        "separate rule with its own failure modes (an optional filter deciding which "
+        "implementation runs). This gate is about symbols.",
+    ),
+    # Pure functions over caller-supplied numbers. `caller_supplied` is their provenance
+    # basis for the same reason: nothing in the request came out of a lake.
+    **dict.fromkeys(
+        ("chaos-score", "funding-predict", "label-transfers", "smart-money"),
+        "takes measurements the caller produced, not an instrument this engine stores. "
+        "There is no symbol because there is no lookup.",
+    ),
+    # The options family keys on `underlying`, which is the *asset* an option is written on
+    # — `BTC`, `AAPL` — and is stored on `OptionsChain.underlying` in exactly that
+    # unqualified form. It is not `source:RAW` and carries no source, so there is nothing
+    # for `resolve_asset_class` to look up; renaming it `underlying_symbol` would make this
+    # gate pass while the lookup still failed, which is the worse outcome.
+    **dict.fromkeys(
+        ("iv-surface", "term-structure", "vol-skew", "risk-reversal"),
+        "keys on `underlying`, which is an asset name and not a canonical symbol: "
+        "`OptionsChain.underlying` stores `BTC` and `AAPL`, with no source to resolve.",
+    ),
+}
+"""Two-implementation capabilities that carry no canonical symbol, and why.
+
+An entry silences the sweep, which is why the argument is mandatory — the same discipline
+:data:`crocodile.core.capability.IRREDUCIBLE` and ``CONSTANT_BY_DEFINITION`` carry. A new
+capability that spells its leg something the convention does not cover lands here with no
+argument to write, which is the moment somebody has to decide rather than discover.
+"""
+
+
+def _multi_impl() -> list[str]:
+    load_all()
+    return sorted(name for name, cap in REGISTRY.items() if len(cap.impls) > 1)
+
+
+def _sample(annotation: Any) -> Any:
+    """A value of the declared type, for a field the sweep does not care about.
+
+    Enough to get past ``build_params``; ``resolve_asset_class`` runs before any
+    implementation does, so nothing here has to be semantically valid.
+    """
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return get_args(annotation)[0]
+    if origin in (Union, UnionType):
+        return _sample(next(a for a in get_args(annotation) if a is not type(None)))
+    if origin in (list, tuple, set, frozenset):
+        args = [a for a in get_args(annotation) if a is not Ellipsis]
+        return [_sample(args[0])] if args else []
+    if origin is dict:
+        return {}
+    if annotation is bool:
+        return False
+    if annotation is int:
+        return 0
+    if annotation is float:
+        return 0.0
+    return "x"
+
+
+def _request(cap: Capability) -> dict[str, Any]:
+    """A minimal request for ``cap`` with one canonical crypto symbol in every symbol field.
+
+    Derived from the params struct rather than written out per capability, which is the
+    difference between this and :data:`_ARGUMENTS` above: a capability that grows a second
+    leg gets swept without anybody remembering to extend a table.
+    """
+    symbols = dispatch.symbol_field_names(cap.params)
+    values: dict[str, Any] = {}
+    for field in msgspec.structs.fields(cap.params):
+        if field.name in symbols:
+            values[field.name] = [SYMBOL] if field.name in _sequence(cap) else SYMBOL
+        elif field.required:
+            values[field.name] = _sample(field.type)
+    return values
+
+
+def _sequence(cap: Capability) -> frozenset[str]:
+    from crocodile.surfaces.dispatch import _sequence_fields
+
+    return _sequence_fields(cap.params)
+
+
+@pytest.mark.parametrize("name", _multi_impl())
+def test_a_capability_with_a_choice_to_make_can_make_it_from_its_symbols(name: str) -> None:
+    """Every two-implementation capability either reads its market off a symbol, or argues.
+
+    This is the check that was missing both times. ``_SYMBOL_FIELDS`` was widened once by
+    hand and went stale again on the next capability to grow a second implementation, and
+    nothing in either branch's diff could have shown it: one branch owned the dispatcher,
+    the other owned the capability. The subject here is the registry, so a capability that
+    becomes two-implementation is swept the moment it does.
+    """
+    cap = dispatch.resolve(name)
+    fields = dispatch.symbol_field_names(cap.params)
+    if not fields:
+        assert name in _NO_CANONICAL_SYMBOL, (
+            f"{name} has {len(cap.impls)} implementations and no field this dispatcher "
+            f"reads a symbol off, so it cannot be called without --asset-class. Either its "
+            f"symbol is spelled something `symbol_field_names` does not recognise, or it "
+            f"genuinely has none — say which in _NO_CANONICAL_SYMBOL."
+        )
+        assert _NO_CANONICAL_SYMBOL[name].strip(), f"{name} is exempted with no argument"
+        return
+    params = dispatch.build_params(cap, _request(cap))
+    hints = dispatch.symbol_hints(params)
+    assert set(hints) == {SYMBOL}, (
+        f"{name} declares {sorted(fields)} and symbol_hints returned {hints}"
+    )
+    assert dispatch.resolve_asset_class(cap, symbols=hints) is AssetClass.CRYPTO
+
+
+def test_the_exemption_list_holds_no_stale_entry() -> None:
+    """A capability that gained a symbol, or lost its second implementation, must not keep
+    an exemption it no longer needs — that is how a list starts describing a tree that has
+    moved."""
+    swept = set(_multi_impl())
+    stale = sorted(
+        name
+        for name in _NO_CANONICAL_SYMBOL
+        if name not in swept
+        or dispatch.symbol_field_names(dispatch.resolve(name).params)
+    )
+    assert not stale, f"_NO_CANONICAL_SYMBOL names capabilities that no longer need it: {stale}"
+
+
+def test_the_sweep_has_subjects_on_both_sides() -> None:
+    """Deriving a population means the test quietly stops testing if it empties.
+
+    Both halves matter: no symbol-bearing capability and the resolution assertion never
+    runs; no exempt one and the argument requirement never runs.
+    """
+    swept = _multi_impl()
+    assert swept, "no capability has two implementations, so this sweep has no subject"
+    with_symbols = [
+        name for name in swept if dispatch.symbol_field_names(dispatch.resolve(name).params)
+    ]
+    assert with_symbols, "no two-implementation capability carries a symbol"
+    assert _NO_CANONICAL_SYMBOL, "no capability is exempt, so the argument gate is vacuous"
+
+
+@pytest.mark.parametrize("name", ["basis", "spot-future-basis"])
+def test_the_two_capabilities_the_merge_made_unreachable_resolve_from_their_legs(
+    name: str,
+) -> None:
+    """The regression itself, pinned by name as well as by the sweep.
+
+    ``crocodile basis --spot-symbol deribit:BTC-SPOT --perp-symbol deribit:BTC-PERPETUAL``
+    exited with *cannot tell which market 'basis' should serve*, and
+    ``GET /api/v1/basis?spot_symbol=…`` answered 400, while ``/api/v1/perp-basis?symbol=…``
+    answered 200 for the same lake — the difference being only how the leg is spelled. The
+    field names are a pinned pre-merge contract
+    (``tests/conformance/premerge_phase2_surface.json`` records ``get_spot_perp_basis`` and
+    ``get_spot_future_basis`` taking exactly these), so the spelling was never the thing to
+    change.
+    """
+    cap = dispatch.resolve(name)
+    assert len(cap.impls) > 1, f"{name} would have nothing to infer"
+    assert dispatch.symbol_field_names(cap.params) >= {"spot_symbol"}
+    params = dispatch.build_params(cap, _request(cap))
+    assert dispatch.resolve_asset_class(
+        cap, symbols=dispatch.symbol_hints(params)
+    ) is AssetClass.CRYPTO
+
+
+def test_rest_serves_a_basis_request_without_being_told_the_market(lake: pathlib.Path) -> None:
+    response = _client(lake).get(
+        "/api/v1/basis",
+        params={
+            "spot_symbol": SYMBOL,
+            "perp_symbol": SYMBOL,
+            "start_ns": START_NS,
+            "end_ns": END_NS,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["provenance"]["asset_class"] == "crypto"
+
+
+def test_the_cli_serves_a_spot_future_basis_request_without_being_told_the_market(
+    lake: pathlib.Path,
+) -> None:
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["spot-future-basis", "--future-symbol", SYMBOL, "--spot-symbol", SYMBOL,
+         "--start-ns", str(START_NS), "--end-ns", str(END_NS), "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_mcp_serves_a_basis_request_without_being_told_the_market(lake: pathlib.Path) -> None:
+    body = mcp.call_tool(
+        "basis",
+        {
+            "spot_symbol": SYMBOL,
+            "perp_symbol": SYMBOL,
+            "start_ns": START_NS,
+            "end_ns": END_NS,
+        },
+        settings=_settings(lake),
+    )
+    assert body["provenance"]["asset_class"] == "crypto"
