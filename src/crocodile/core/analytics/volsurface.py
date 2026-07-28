@@ -523,8 +523,9 @@ def _fit_by_expiry(
     one. Zero is the case this function already declined — nothing to seed a calibration
     with. More than one is the case it used to answer by taking ``underlying_prices[0]``,
     which is not a choice between candidates but the frame's iteration order deciding a
-    number: measured, a neighbouring strike's ``fitted_iv`` moved 46% depending on which
-    sibling's spot won.
+    number. Reading one three-strike expiry through ``_snapshot`` in the two orders it is
+    free to return, the strike-90 ``fitted_iv`` came back 0.462445 and 0.508161 — 9.9%
+    apart, with neither that strike nor its own spot changing between the reads.
 
     Two alternatives were available and are worse. Fitting each stated spot separately
     turns a chain assembled from quotes observed milliseconds apart into a set of
