@@ -295,16 +295,13 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 _LEDGER_AS_SHIPPED: dict[str, str] = {
     "basis": "M5",
     "census": "M3",
-    "chaos-score": "M6",
     "collect-market": "M3",
     "depth": "M6",
     "funding-apr": "M5",
     "funding-predict": "M5",
     "iv-surface": "M1",
     "label-transfers": "M4",
-    "liquidity-depth": "M6",
     "markets": "M3",
-    "ofi": "M7",
     "open-interest": "M2",
     "perp-basis": "M5",
     "risk-reversal": "M1",
@@ -315,7 +312,19 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "vol-skew": "M1",
     "whale-alerts": "M4",
 }
-"""The 21 entries Phase 2 closed with, pinned so the ledger's size is a watched number.
+"""What the ledger holds right now, pinned so its size is a watched number.
+
+Phase 2 closed with 21 entries and Phase 3 empties it one method at a time; each name
+leaves in the same commit that gives its capability an equity implementation, which is the
+only way an entry is allowed to leave. The hoarding rule one test up fails on a settled name
+that stays here, and :func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold`
+fails on a departed name that is not deleted here too, so the two halves of the change
+cannot be made separately — and a *new* entry cannot be added without someone writing it
+down either. ``liquidity-depth`` and ``chaos-score`` (M6) and ``ofi`` (M7) left that way.
+
+No count is written into this docstring on purpose. Several agents empty this dict in
+parallel and a sentence naming a number is a merge conflict that resolves to a lie; the
+number that matters is the length of the literal below, which is what the test reads.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was

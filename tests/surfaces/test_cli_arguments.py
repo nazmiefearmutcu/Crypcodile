@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
 from typer.testing import CliRunner
 
 from crocodile.surfaces import cli, dispatch
@@ -127,7 +128,16 @@ def test_a_modelled_answer_still_announces_itself(lake: pathlib.Path) -> None:
 
     ``chaos-score`` is chosen because it is ``SYNTHETIC`` by declaration and computes over
     four numbers the caller supplies, so the assertion is about the banner rather than about
-    whichever data source a modelled implementation happens to read this month.
+    whichever data source a modelled implementation happens to read this month. The set
+    comparison below is why it keeps working after Phase 3: the equity half is SYNTHETIC too,
+    so the banner is owed whichever market answers.
+
+    ``--asset-class`` is named because it now has to be. This capability has no symbol
+    parameter, so ``resolve_asset_class`` has nothing to infer from, and until its equity
+    half landed the answer fell out of there being only one implementation. Two
+    implementations and no symbol is exactly the ambiguity that function refuses rather than
+    guesses at — defaulting to crypto would send an equity request into the crypto
+    composite, which answers plausibly and with the wrong terms.
     """
     from crocodile.core.schema.provenance import Provenance
 
@@ -138,11 +148,33 @@ def test_a_modelled_answer_still_announces_itself(lake: pathlib.Path) -> None:
         cli.build_app(),
         ["chaos-score", "--volatility", "0.4", "--stablecoin-deviation", "0.01",
          "--orderbook-imbalance", "0.2", "--sequencer-delay", "1.5",
-         "--data-dir", str(lake)],
+         "--asset-class", "crypto", "--data-dir", str(lake)],
     )
     assert result.exit_code == 0, result.output
     assert "SYNTHETIC" in result.stderr
     assert "chaos-score" in result.stderr
+
+
+def test_a_symmetric_capability_with_no_symbol_asks_which_market_it_serves(
+    lake: pathlib.Path,
+) -> None:
+    """The other side of the line above, kept so the refusal is a behaviour and not a gap.
+
+    ``chaos-score`` gained an equity half in Phase 3 and has no symbol to resolve by, which
+    makes it the one capability where omitting ``--asset-class`` cannot be answered. The
+    failure has to be a refusal that names the option: silently picking one market would give
+    a caller a number built from four terms they did not mean, on the same scale and under
+    the same name as the one they did.
+    """
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["chaos-score", "--volatility", "0.4", "--stablecoin-deviation", "0.01",
+         "--orderbook-imbalance", "0.2", "--sequencer-delay", "1.5",
+         "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 1
+    assert "cannot tell which market" in result.stderr
+    assert "crypto" in result.stderr and "equity" in result.stderr
 
 
 def test_the_network_surfaces_still_carry_every_warning(lake: pathlib.Path) -> None:
@@ -170,12 +202,70 @@ def test_the_network_surfaces_still_carry_every_warning(lake: pathlib.Path) -> N
 
 
 def test_stdout_stays_machine_readable_while_a_banner_is_printed(lake: pathlib.Path) -> None:
-    """The reason the banner is on stderr at all: ``| jq`` must keep working."""
+    """The reason the banner is on stderr at all: ``| jq`` must keep working.
+
+    Pinned on the crypto half, which returns the index alone. The equity half returns an
+    object carrying the same index plus the weight each term received, because its weights
+    depend on how many readings were finite — see ``crocodile.equity.analytics.chaos``. Both
+    are JSON on stdout and a banner on stderr, which is the property this test is about; the
+    scalar is asserted here rather than the shape, so the market has to be named.
+    """
     result = CliRunner().invoke(
         cli.build_app(),
         ["chaos-score", "--volatility", "0.4", "--stablecoin-deviation", "0.01",
          "--orderbook-imbalance", "0.2", "--sequencer-delay", "1.5",
-         "--data-dir", str(lake)],
+         "--asset-class", "crypto", "--data-dir", str(lake)],
     )
     assert result.stderr, "this capability is modelled and must say so"
     assert 0.0 <= json.loads(result.stdout) <= 100.0
+
+
+def test_the_equity_composite_reaches_stdout_as_json_with_its_weights(
+    lake: pathlib.Path,
+) -> None:
+    """The equity half's answer has to survive the projection, not only the unit test.
+
+    A capability returning a mapping under ``ReturnKind.SCALAR`` is the shape
+    ``risk-reversal`` already ships, and this asserts the CLI renders it the same way: the
+    banner on stderr, one JSON document on stdout, weights included — which is the whole
+    reason the equity half returns an object rather than a number.
+    """
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["chaos-score", "--volatility", "0.4", "--stablecoin-deviation", "0.01",
+         "--orderbook-imbalance", "0.2", "--sequencer-delay", "1.5",
+         "--asset-class", "equity", "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "SYNTHETIC" in result.stderr
+    payload = json.loads(result.stdout)
+    assert 0.0 <= payload["chaos_score"] <= 100.0
+    assert sum(term["weight"] for term in payload["terms"].values()) == pytest.approx(1.0)
+
+
+def test_a_dropped_equity_term_crosses_the_wire_as_null_rather_than_as_a_nan_token(
+    lake: pathlib.Path,
+) -> None:
+    """The equity composite's "no reading" state has to survive the projection's encoder.
+
+    JSON has no NaN, and ``json.dumps`` emits a bare ``NaN`` token that most clients reject
+    as malformed — which is what the projection's ``_jsonable`` walk exists to stop. A term
+    that was excluded therefore reaches a caller as ``null`` with a zero weight, and the
+    three that were read carry a third of the index each. Asserting it here rather than only
+    in the unit test is the difference between the behaviour existing and the behaviour being
+    reachable: a caller who cannot parse the answer has not been told anything.
+    """
+    result = CliRunner().invoke(
+        cli.build_app(),
+        ["chaos-score", "--volatility", "nan", "--stablecoin-deviation", "0.01",
+         "--orderbook-imbalance", "1.0", "--sequencer-delay", "5.0",
+         "--asset-class", "equity", "--data-dir", str(lake)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "NaN" not in result.stdout
+    payload = json.loads(result.stdout)
+    volatility = payload["terms"]["volatility"]
+    assert volatility["supplied"] is None
+    assert volatility["normalised"] is None
+    assert volatility["weight"] == 0.0
+    assert payload["terms"]["sequencer_delay"]["weight"] == pytest.approx(1.0 / 3.0)

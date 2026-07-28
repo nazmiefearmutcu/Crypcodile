@@ -35,7 +35,7 @@ means making it once, in the open.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 import msgspec
 import polars as pl
@@ -82,6 +82,11 @@ from crocodile.crypto.analytics.volsurface import (
     vol_skew as _vol_skew,
 )
 from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.equity.analytics.chaos import (
+    chaos_score_equities as _chaos_score_equities,
+)
+from crocodile.equity.analytics.liquidity_depth import liquidity_depth_from_profile
+from crocodile.equity.analytics.ofi import calculate_quote_ofi
 from crocodile.equity.depth import select_depth_source
 
 __all__ = [
@@ -337,10 +342,16 @@ class OfiParams(msgspec.Struct, frozen=True):
     (mcp_server.py:1369). So one value is written five times across two surfaces and the
     third asks the caller for a number nobody has to think about; ``1m`` wins.
 
-    That ``indicators`` defaults to ``1d`` is not a contradiction. OFI bins book-snapshot
-    deltas, where a day-wide bin sums a day of top-of-book churn into one number, and
-    ``indicators`` bins trades into candles, where a minute-wide bin is a different chart.
-    The default belongs to the measurement, not to the word ``interval``.
+    That ``indicators`` defaults to ``1d`` is not a contradiction. OFI bins top-of-book
+    revisions, where a day-wide bin sums a day of churn into one number, and ``indicators``
+    bins trades into candles, where a minute-wide bin is a different chart. The default
+    belongs to the measurement, not to the word ``interval``.
+
+    "Top-of-book revisions" is now literally what both halves consume, and it is why the
+    default survived Phase 3 without a second thought: crypto differences consecutive
+    ``book_snapshot`` rows and equity differences consecutive ``quote`` rows, and a minute of
+    quote churn is the same kind of quantity as a minute of book churn. A parameter whose
+    meaning changed per asset class would be the divergence one shared struct exists to stop.
     """
 
     symbol: str
@@ -382,6 +393,11 @@ class LiquidityDepthParams(msgspec.Struct, frozen=True):
     mcp_server.py:1668), because ``calculate_block_liquidity_depth`` scans from zero to now
     and buckets by ``sequence_id`` rather than by time. Adding a window here would be a
     parameter the implementation cannot honour.
+
+    The equity half cannot honour one either, for the opposite reason: it snapshots a live
+    ladder rather than scanning stored ones, so there is one observation and it is now. Two
+    implementations that cannot take a window, for two different reasons, is still one
+    schema — which is what kept this struct at a single field through Phase 3.
     """
 
     symbol: str
@@ -435,6 +451,17 @@ class ChaosScoreParams(msgspec.Struct, frozen=True):
 
     So ``crocodile chaos-score`` with no options stops printing 0.0 and starts saying which
     reading it is missing.
+
+    **The field names are the crypto half's and two of them mean something else for
+    equities.** One capability has one parameter struct, which is half of what full API
+    symmetry means, so renaming a field per asset class was never available; what the equity
+    half does instead is re-specify the subject and keep the slot. ``stablecoin_deviation``
+    is read as the fraction by which a price has departed from the LULD reference its price
+    band is measured against, and ``sequencer_delay`` as consolidated-tape latency in
+    seconds. The other two are unchanged in kind. Each equity reading's unit — and the
+    argument for why neither re-specification disproves an ``IRREDUCIBLE`` entry — is in
+    :mod:`crocodile.equity.analytics.chaos`, and the equity result repeats it per term so a
+    caller does not have to go there to read their own answer.
     """
 
     volatility: float
@@ -634,9 +661,76 @@ def ofi(ctx: CapabilityContext, params: OfiParams) -> pl.DataFrame:
     )
 
 
+def ofi_equities(ctx: CapabilityContext, params: OfiParams) -> pl.DataFrame:
+    """The same imbalance, differenced over stored L1 quotes instead of book snapshots.
+
+    A separate adapter because the two asset classes read different channels — ``quote``
+    against ``book_snapshot`` — and for no other reason: the statistic itself is one
+    function, :func:`~crocodile.core.analytics.ofi.ofi_increment`, which both halves call.
+    Binding ``fn=ofi`` for equities as well would have been the ``slippage`` defect exactly:
+    one object reading a channel no equity provider writes, under a declaration naming a
+    basis its code path could not reach.
+
+    The four returned columns are the crypto half's four, so a caller who asked for ``ofi``
+    does not have to know which market answered in order to read the answer.
+    """
+    return calculate_quote_ofi(
+        ctx.catalog,
+        params.symbol,
+        params.start_ns,
+        params.end_ns,
+        params.interval,
+    )
+
+
 def liquidity_depth(ctx: CapabilityContext, params: LiquidityDepthParams) -> pl.DataFrame:
     """Cumulative bid and ask size within 1, 2 and 5 percent of mid, per book sequence."""
     return calculate_block_liquidity_depth(ctx.catalog, params.symbol)
+
+
+_LADDER_BINS: Final[int] = 40
+"""Price buckets the equity ladder is built from, and the number of levels kept per side.
+
+The synthetic source's own defaults are 40 bins and ``top_n=10``, which ``depth`` and
+``slippage`` both take, and which this capability cannot. Those two report the top of a
+ladder and a walk from the touch, so ten levels is an answer; a band sum is *cumulative*,
+so a ladder truncated before the band edge under-reports the very quantity being asked for,
+silently and by an amount that depends on how wide the session's range happened to be. On a
+day whose range is 2 %, forty buckets span 2 % and ten of them span about half a percent —
+so the default would have truncated even the 1 % band. Asking for every bucket the profile
+has is what makes the sums cover the whole ladder.
+
+Ignored by the Alpaca L1 branch, which has one level per side and nothing to bin; see
+:func:`~crocodile.equity.depth.select.select_depth_source`.
+"""
+
+
+def liquidity_depth_equities(
+    ctx: CapabilityContext, params: LiquidityDepthParams
+) -> pl.DataFrame:
+    """Band depth over the equity ladder, from real L1 when keyed and a modelled one when not.
+
+    This is what M6 was the binding constraint for. Cumulative size within a percent band is
+    meaningless without both sides of a book, and equities had no book at all until
+    :func:`~crocodile.equity.depth.select_depth_source` existed; the ladder it produces is
+    the one ``depth`` and ``slippage`` already serve, so the three capabilities now read one
+    book rather than three.
+
+    The declaration's ``prov`` is the ceiling — ``DERIVED``/``alpaca_l1``, the same pair
+    ``depth`` and ``slippage`` declare, because there is one book to have a ceiling over.
+    Which of the two branches actually ran is not asserted here: it is on the profile's own
+    tail, measured by ``provenance_fields`` when the ladder was built, and
+    :func:`~crocodile.equity.analytics.liquidity_depth.liquidity_depth_from_profile` carries
+    those four fields onto the row. A frame of sizes with no tail would leave a caller unable
+    to tell resting quotes from traded volume standing in for them.
+
+    Reaches the network rather than the lake, like ``depth`` and ``slippage``, so the
+    coroutine is driven by :func:`~crocodile.core.capability.run_to_completion` — the caller
+    may or may not own an event loop and one declaration has to answer on all three surfaces.
+    """
+    source = select_depth_source(bins=_LADDER_BINS, top_n=_LADDER_BINS)
+    profile = run_to_completion(lambda: source.snapshot(params.symbol))
+    return liquidity_depth_from_profile(profile)
 
 
 def whale_alerts(ctx: CapabilityContext, params: WhaleAlertsParams) -> pl.DataFrame:
@@ -709,6 +803,37 @@ def chaos_score(ctx: CapabilityContext, params: ChaosScoreParams) -> float:
     five-field object is not a scalar.
     """
     return calculate_chaos_score(
+        volatility=params.volatility,
+        stablecoin_deviation=params.stablecoin_deviation,
+        orderbook_imbalance=params.orderbook_imbalance,
+        sequencer_delay=params.sequencer_delay,
+    )
+
+
+def chaos_score_equities(ctx: CapabilityContext, params: ChaosScoreParams) -> dict[str, Any]:
+    """The same index over the equity readings of the same four slots, plus its weights.
+
+    Two of the four fields name phenomena this registry calls irreducible, so their equity
+    readings are re-specified rather than ported —
+    ``stablecoin_deviation`` becomes departure from the LULD reference price and
+    ``sequencer_delay`` becomes consolidated-tape latency. The argument for each, and for
+    why neither disproves an ``IRREDUCIBLE`` entry, is in
+    :mod:`crocodile.equity.analytics.chaos`; it is there rather than here because it is a
+    claim about the market, not about this adapter.
+
+    Returns an object where the crypto half returns a bare float, and the difference is the
+    weighting. Both halves weigh four readings at 0.25 and produce the same number for the
+    same finite inputs — pinned by a test, because an equality asserted in prose is an
+    equality that drifts. They part on a reading that is not a finite number: the crypto half
+    scores a NaN volatility, deviation or delay as 0.0 and a NaN imbalance as 1.0, which is
+    two opposite inventions from one absence, while this half drops the term and divides the
+    index between the ones that were read. That matters more here than it would there
+    because this tree's equity analytics *return* NaN as their "not enough data" answer, so a
+    caller piping ``calculate_realized_volatility`` into this capability is the expected path
+    rather than an edge case. A data-dependent weight has to be published to be checkable,
+    which is why it is in the result; a constant one has nothing to say.
+    """
+    return _chaos_score_equities(
         volatility=params.volatility,
         stablecoin_deviation=params.stablecoin_deviation,
         orderbook_imbalance=params.orderbook_imbalance,
@@ -951,6 +1076,12 @@ OFI = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(fn=ofi, prov=Provenance.DERIVED, basis="native"),
+            # The same pair as crypto, and for the same reason: every number the increment
+            # consumes — two prices and two sizes — was published by the provider on the
+            # `quote` channel, which is what `native` names, and differencing consecutive
+            # ones into an imbalance is this implementation's own work, which is what makes
+            # the result DERIVED. The split `indicators` makes, one channel over.
+            AssetClass.EQUITY: Impl(fn=ofi_equities, prov=Provenance.DERIVED, basis="native"),
         },
     )
 )
@@ -959,12 +1090,30 @@ OFI = declare(
 LIQUIDITY_DEPTH = declare(
     Capability(
         name="liquidity-depth",
-        summary="Bid and ask size within 1, 2 and 5 percent of mid, per book sequence.",
+        # "per book sequence" was true while only crypto implemented this, and it named the
+        # crypto row key — `sequence_id` — in the one sentence all three surfaces publish as
+        # help. The equity half has no sequence to be per, so the summary now says what both
+        # halves do and each frame names its own row key in its own column.
+        summary="Bid and ask size within 1, 2 and 5 percent of the reference price.",
         params=LiquidityDepthParams,
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(
                 fn=liquidity_depth, prov=Provenance.DERIVED, basis="native"
+            ),
+            # `DERIVED`/`alpaca_l1`, the pair `depth` and `slippage` already declare over
+            # this same `select_depth_source` ladder. `Impl.prov` is a ceiling, so it names
+            # the best branch the switch can take rather than the branch a keyless
+            # deployment gets; the branch that actually ran is measured on the returned
+            # row's own `prov_*` columns, carried across from the profile.
+            #
+            # Not `native`, which is what the crypto half declares: crypto's inputs are a
+            # venue's own published book, and neither equity branch is that. L1 is a quote
+            # reshaped into a ladder and the keyless branch is traded volume standing in for
+            # resting size — the distinction `alpaca_l1` and `yahoo_1m_vap` are registered
+            # to keep, and which a shared `native` would erase.
+            AssetClass.EQUITY: Impl(
+                fn=liquidity_depth_equities, prov=Provenance.DERIVED, basis="alpaca_l1"
             ),
         },
     )
@@ -1038,6 +1187,16 @@ CHAOS_SCORE = declare(
             AssetClass.CRYPTO: Impl(
                 fn=chaos_score, prov=Provenance.SYNTHETIC, basis="caller_supplied"
             ),
+            # The same pair, and both halves of it for the same reasons. SYNTHETIC because
+            # an index is modelled from a different data class than any of its terms, and no
+            # market publishes one; `caller_supplied` because all four readings arrive in
+            # `params`. Re-specifying two of the four terms for equities changes what the
+            # numbers mean and changes neither of those facts — a re-specified term is still
+            # a number the caller typed in, and a composite of four of them is still an index
+            # nobody quotes.
+            AssetClass.EQUITY: Impl(
+                fn=chaos_score_equities, prov=Provenance.SYNTHETIC, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -1067,14 +1226,13 @@ PENDING_SYMMETRY.update(
         "term-structure": "M1",
         "vol-skew": "M1",
         "risk-reversal": "M1",
-        # M7 — order-flow imbalance from L1 quote changes, which is this measurement's
-        # equity form: the crypto implementation differences consecutive top-of-book
-        # snapshots, and an equity quote stream is the same two prices and two sizes.
-        "ofi": "M7",
-        # M6 — depth. The crypto implementation reads a real ladder out of `book_snapshot`;
-        # equity has no ladder until the synthetic VAP profile and its Alpaca L1 upgrade
-        # exist, and cumulative size within a percent band is meaningless without one.
-        "liquidity-depth": "M6",
+        # M7 closed `ofi` and M6 closed `liquidity-depth` and `chaos-score`; their entries
+        # are gone rather than annotated, which is what the ledger's hoarding rule asks for
+        # — a name whose equity half has landed has to leave, or a later commit deleting
+        # that half again is invisible because the name was already excused. The three
+        # arguments those entries carried now live where the work does: `ofi_equities` and
+        # `liquidity_depth_equities` above, and `crocodile.equity.analytics.chaos` for the
+        # composite, whose two re-specified terms needed more room than a ledger comment.
         # M4 — the equity form of "who is moving size" is a filing, not a transfer:
         # Form 4 for insiders and 13F-HR for institutions. `whale-alerts` becomes large
         # reported transactions, `smart-money` becomes per-filer flow, and
@@ -1083,14 +1241,5 @@ PENDING_SYMMETRY.update(
         "whale-alerts": "M4",
         "smart-money": "M4",
         "label-transfers": "M4",
-        # M6, and this is the batch's one uncomfortable mapping — no single spec method
-        # covers a composite. Of the four terms, volatility is computable from equity bars
-        # today, and `stablecoin_deviation` and `sequencer_delay` name phenomena this same
-        # registry calls IRREDUCIBLE, so their equity readings have to be re-specified
-        # rather than ported. What blocks an equity chaos score *mechanically* is the one
-        # term neither available nor re-definable without new data: order-book imbalance
-        # needs both sides' resting size, which is precisely what M6 delivers. M6 is named
-        # because it is the binding constraint, not because it is the whole of the work.
-        "chaos-score": "M6",
     }
 )
