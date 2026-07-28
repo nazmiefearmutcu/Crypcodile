@@ -294,11 +294,8 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 
 _LEDGER_AS_SHIPPED: dict[str, str] = {
     "census": "M3",
-    "chaos-score": "M6",
     "collect-market": "M3",
-    "liquidity-depth": "M6",
     "markets": "M3",
-    "ofi": "M7",
     "universe": "M3",
 }
 """What the ledger holds right now, pinned so its size is a watched number.

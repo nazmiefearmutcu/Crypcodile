@@ -56,6 +56,7 @@ from crocodile.core.schema.records import (
     InsiderTransaction,
     Liquidation,
     OptionsChain,
+    Quote,
     Trade,
 )
 from crocodile.core.store.catalog import Catalog
@@ -668,6 +669,12 @@ _SYMMETRIC = frozenset(
         "whale-alerts",
         "smart-money",
         "label-transfers",
+        # Phase 3, this batch: M7 gave `ofi` an equity quote stream to difference, and M6
+        # gave `liquidity-depth` a ladder to sum bands over — which is also what unblocked
+        # `chaos-score`'s order-book term and with it the whole composite.
+        "ofi",
+        "liquidity-depth",
+        "chaos-score",
     }
 )
 """Names this batch owns that no longer need a schedule, and why each stopped needing one.
@@ -1826,3 +1833,261 @@ def test_label_transfers_for_equities_names_an_institutional_filer_from_the_row_
     )[0]
     assert watched["is_known"] is True
     assert watched["from_label"] == "the whale"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: the three equity halves M6 and M7 close
+# ---------------------------------------------------------------------------
+
+
+def _equity_call(name: str, ctx: CapabilityContext, params: Any) -> Any:
+    """Invoke the equity implementation through the registry, as a surface would."""
+    return REGISTRY[name].impls[AssetClass.EQUITY].fn(ctx, params)
+
+
+_TICKER = "AAPL"
+
+
+def _quote(index: int, bid_px: float, bid_sz: float, ask_px: float, ask_sz: float) -> Quote:
+    ts = _BASE_NS + index * _SEC_NS
+    return Quote(
+        source="alpaca",
+        symbol=_TICKER,
+        symbol_raw=_TICKER,
+        source_ts=ts,
+        local_ts=ts,
+        asset_class=AssetClass.EQUITY,
+        bid_px=bid_px,
+        bid_sz=bid_sz,
+        ask_px=ask_px,
+        ask_sz=ask_sz,
+    )
+
+
+@pytest.fixture
+def quote_ctx(tmp_path: Path) -> CapabilityContext:
+    """An equity context over a lake holding three consecutive quotes."""
+    load_all()
+    asyncio.run(
+        _write(
+            tmp_path,
+            [
+                _quote(0, 100.0, 2.0, 101.0, 1.0),
+                _quote(1, 100.0, 3.0, 101.0, 2.0),
+                _quote(2, 101.0, 4.0, 102.0, 1.0),
+            ],
+        )
+    )
+    return CapabilityContext(
+        catalog=Catalog(tmp_path),
+        settings=Settings(data_dir=tmp_path),
+        asset_class=AssetClass.EQUITY,
+    )
+
+
+def test_ofi_for_equities_differences_the_quote_stream_the_lake_actually_holds(
+    quote_ctx: CapabilityContext,
+) -> None:
+    """M7, through the registry rather than through the analytics function.
+
+    A capability wired to the wrong callable, or to one reading a channel no equity provider
+    writes, fails here rather than on whichever surface projects it first — which is exactly
+    how ``slippage``'s equity half shipped for a phase.
+    """
+    rows = _equity_call("ofi", quote_ctx, OfiParams(_TICKER, _BASE_NS, _BASE_NS + 10 * _SEC_NS))
+    assert rows.columns == ["timestamp", "best_bid", "best_ask", "ofi"]
+    assert len(rows) == 1
+    # Step one is size-only (+1 bid, +1 ask, so 0.0); step two improves both prices
+    # (+4 bid, -2 ask, so 6.0). One 1m bin holds both.
+    assert rows["ofi"][0] == pytest.approx(6.0)
+    assert rows["best_bid"][0] == pytest.approx(101.0)
+
+
+def test_the_two_asset_classes_of_ofi_are_not_the_same_function() -> None:
+    """One statistic, two channels, and therefore two callables.
+
+    The crypto adapter reads ``book_snapshot`` and no equity provider writes one, so binding
+    it for both would be ``slippage``'s defect repeated: a declaration naming a basis whose
+    code path cannot execute. What *is* shared is the arithmetic, one level down, and that
+    sharing is pinned in ``tests/equity/test_ofi.py`` by running both and comparing frames.
+    """
+    load_all()
+    impls = REGISTRY["ofi"].impls
+    assert impls[AssetClass.CRYPTO].fn is not impls[AssetClass.EQUITY].fn
+    assert impls[AssetClass.EQUITY].basis == "native"
+    assert impls[AssetClass.EQUITY].prov is Provenance.DERIVED
+
+
+def _tailed_profile(basis: str, inputs: dict[str, int]) -> DepthProfile:
+    tail = provenance_fields(basis, inputs)
+    return DepthProfile(
+        source="synth",
+        symbol=f"synth:{_TICKER}",
+        symbol_raw=_TICKER,
+        local_ts=_BASE_NS,
+        source_ts=None,
+        asset_class=AssetClass.EQUITY,
+        bids=[(99.0, 100.0), (98.0, 200.0)],
+        asks=[(101.0, 50.0), (102.0, 200.0)],
+        reference_price=100.0,
+        depth=4,
+        prov=tail.prov,
+        prov_basis=tail.prov_basis,
+        prov_confidence=tail.prov_confidence,
+        prov_inputs=tail.prov_inputs,
+    )
+
+
+def test_liquidity_depth_for_equities_sums_the_ladder_m6_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M6, through the registry: bands over the same book ``depth`` and ``slippage`` read."""
+    monkeypatch.setattr(
+        "crocodile.capabilities.analytics.select_depth_source",
+        lambda **_: _StubDepthSource(_tailed_profile("yahoo_1m_vap", {"n_volume_bars": 390})),
+    )
+    rows = _equity_call(
+        "liquidity-depth", _equity_ctx(tmp_path), LiquidityDepthParams(symbol=_TICKER)
+    )
+    assert len(rows) == 1
+    row = rows.row(0, named=True)
+    assert row["reference_price"] == pytest.approx(100.0)
+    assert row["bid_depth_1pct"] == pytest.approx(100.0)
+    assert row["ask_depth_1pct"] == pytest.approx(50.0)
+    assert row["bid_depth_2pct"] == pytest.approx(300.0)
+    assert row["ask_depth_2pct"] == pytest.approx(250.0)
+
+
+def test_the_equity_band_row_says_which_branch_of_the_ladder_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declaration is a ceiling; only the row can be a measurement.
+
+    Both branches are exercised because the difference between them is the difference
+    between resting quotes and traded volume standing in for them — and the declaration says
+    ``alpaca_l1`` either way, by design, because ``Impl.prov`` is documented as a maximum.
+    """
+    def _fixed(basis: str, inputs: dict[str, int]) -> Any:
+        def _select(**_: Any) -> _StubDepthSource:
+            return _StubDepthSource(_tailed_profile(basis, inputs))
+
+        return _select
+
+    for basis, inputs, level in (
+        ("yahoo_1m_vap", {"n_volume_bars": 195}, Provenance.SYNTHETIC),
+        ("alpaca_l1", {"n_quoted_sides": 2}, Provenance.DERIVED),
+    ):
+        monkeypatch.setattr(
+            "crocodile.capabilities.analytics.select_depth_source", _fixed(basis, inputs)
+        )
+        row = _equity_call(
+            "liquidity-depth", _equity_ctx(tmp_path), LiquidityDepthParams(symbol=_TICKER)
+        ).row(0, named=True)
+        assert row["prov"] == level.value
+        assert row["prov_basis"] == basis
+    load_all()
+    assert REGISTRY["liquidity-depth"].impls[AssetClass.EQUITY].basis == "alpaca_l1"
+
+
+def test_the_band_sums_ask_for_the_whole_ladder_and_not_the_top_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cumulative sum over a truncated ladder under-reports the quantity it names.
+
+    ``depth`` and ``slippage`` take the synthetic source's ``top_n=10`` default because they
+    report the top of a ladder and a walk from the touch, where ten levels is an answer. A
+    band sum is not: on a session whose range is 2 %, forty buckets span 2 % and ten of them
+    span about half a percent, so the default would silently truncate even the 1 % band — by
+    an amount that depends on how wide the day happened to be.
+    """
+    captured: dict[str, Any] = {}
+
+    def _record(**kwargs: Any) -> _StubDepthSource:
+        captured.update(kwargs)
+        return _StubDepthSource(_tailed_profile("alpaca_l1", {"n_quoted_sides": 2}))
+
+    monkeypatch.setattr("crocodile.capabilities.analytics.select_depth_source", _record)
+    _equity_call("liquidity-depth", _equity_ctx(tmp_path), LiquidityDepthParams(symbol=_TICKER))
+    assert captured["top_n"] == captured["bins"], (
+        f"asked for {captured['top_n']} of {captured['bins']} buckets; a band sum over a "
+        f"truncated ladder is a sum over a sample, and nothing in the answer would say so"
+    )
+
+
+def test_liquidity_depth_declares_the_same_ceiling_as_depth_over_the_same_equity_book() -> None:
+    """Three capabilities, one ``select_depth_source``, one ceiling between them.
+
+    ``slippage`` and ``depth`` already had to be reconciled after two batches declared
+    opposite ends of one range over this book. A third reader arriving with a third opinion
+    is the same defect with more places to look, so it is asserted rather than remembered.
+    """
+    load_all()
+    bands = REGISTRY["liquidity-depth"].impls[AssetClass.EQUITY]
+    for name in ("depth", "slippage"):
+        other = REGISTRY[name].impls[AssetClass.EQUITY]
+        assert (bands.prov, bands.basis) == (other.prov, other.basis), name
+
+
+def test_chaos_score_for_equities_publishes_the_weights_its_index_was_built_from(
+    tmp_path: Path,
+) -> None:
+    """Two of the four terms are re-specified for equities and one may have no reading.
+
+    A composite that keeps its name and scale while silently dropping a term is the quiet
+    dishonesty this registry's gates exist to catch, so the weights are in the answer. With
+    four finite readings they are 0.25 each and the number is the crypto half's.
+    """
+    ctx = _equity_ctx(tmp_path)
+    params = ChaosScoreParams(
+        volatility=0.1,
+        stablecoin_deviation=0.01,
+        orderbook_imbalance=1.0,
+        sequencer_delay=5.0,
+    )
+    result = _equity_call("chaos-score", ctx, params)
+    assert result["chaos_score"] == pytest.approx(_call("chaos-score", ctx, params), rel=1e-12)
+    assert {name: term["weight"] for name, term in result["terms"].items()} == {
+        "volatility": pytest.approx(0.25),
+        "stablecoin_deviation": pytest.approx(0.25),
+        "orderbook_imbalance": pytest.approx(0.25),
+        "sequencer_delay": pytest.approx(0.25),
+    }
+
+
+def test_the_equity_composite_drops_a_reading_the_crypto_one_would_have_invented(
+    tmp_path: Path,
+) -> None:
+    """The one behavioural divergence between the halves, through the registry.
+
+    The crypto half maps a NaN volatility to 0.0 and a NaN imbalance to 1.0 — two opposite
+    inventions from one absence. The equity half drops the term and divides the index
+    between the readings that exist, which matters because this tree's equity analytics
+    return NaN as their "not enough data" answer.
+    """
+    ctx = _equity_ctx(tmp_path)
+    params = ChaosScoreParams(
+        volatility=float("nan"),
+        stablecoin_deviation=0.01,
+        orderbook_imbalance=1.0,
+        sequencer_delay=5.0,
+    )
+    result = _equity_call("chaos-score", ctx, params)
+    assert result["terms"]["volatility"]["weight"] == 0.0
+    assert result["chaos_score"] > _call("chaos-score", ctx, params)
+
+
+def test_the_three_capabilities_this_phase_closed_left_the_ledger() -> None:
+    """The ledger's hoarding rule, asserted with these three names rather than in general.
+
+    A settled entry that stays makes a later deletion of the equity half invisible, because
+    the name was already excused. ``depth`` is deliberately absent from this list rather than
+    asserted to still be on the ledger: its gap runs the other way — the crypto half is the
+    missing one — and it belongs to whoever closes that, so pinning its state here would make
+    this test fail on their work rather than on this batch's.
+    """
+    from crocodile.core.capability import PENDING_SYMMETRY
+
+    load_all()
+    for name in ("ofi", "liquidity-depth", "chaos-score"):
+        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+        assert name not in PENDING_SYMMETRY
