@@ -344,7 +344,11 @@ class SequencerLatencyParams(msgspec.Struct, frozen=True):
     route's floor was one.
     """
 
-    exchange: str = "base_onchain"
+    source: str = "base_onchain"
+    """Which chain's records to summarise, under the lake's own partition key.
+
+    ``--exchange`` on the wire; ``source`` here, matching ``collect``/``backfill`` and the
+    ``source=`` directory the filter actually selects."""
 
 
 def sequencer_latency(ctx: CapabilityContext, params: SequencerLatencyParams) -> pl.DataFrame:
@@ -355,8 +359,8 @@ def sequencer_latency(ctx: CapabilityContext, params: SequencerLatencyParams) ->
     and without it the query filters on a source no record carries and reports an empty
     lake.
     """
-    exchange = params.exchange.strip() or "base_onchain"
-    return calculate_sequencer_latency(ctx.catalog, exchange)
+    source = params.source.strip() or "base_onchain"
+    return calculate_sequencer_latency(ctx.catalog, source)
 
 
 class PegDeviationParams(msgspec.Struct, frozen=True):
@@ -764,9 +768,27 @@ class CollectMarketParams(msgspec.Struct, frozen=True):
     channels: tuple[str, ...]
     top: int | None = None
     all_symbols: bool = False
-    quote: str | None = "USDT"
+    quote: str | None = None
+    """Quote-currency filter. ``None`` means every quote.
+
+    ``"USDT"`` here and ``None`` on ``universe`` was one venue answered two ways by two
+    batches. ``UniverseParams.quote`` argues ``None`` is the only safe value — an
+    unasked-for filter that silently empties a market is worse than no filter — and it is
+    right about this capability too: on Coinbase USD, Bitstamp EUR or Upbit KRW,
+    ``collect-market --all-symbols`` raised "no symbols matched the requested market slice"
+    while ``universe`` enumerated the same venue.
+    """
+
     kinds: tuple[str, ...] = ()
-    limit: int = 500
+    max_symbols: int = 500
+    """Cap on how many symbols the ``all_symbols`` slice subscribes to.
+
+    ``limit`` in every other batch is a cap on *rows returned*; here it decided how much of
+    a venue's market is watched, which is a different question wearing the same word.
+    ``--all-symbols`` on a 2 000-market venue collected 500 of them and nothing in the
+    request or the result said so. ``limit`` still resolves on the wire, through
+    ``_PARAM_RENAMES``.
+    """
     poll_interval: float = 2.0
     use_ws: bool = False
     book_depth: int = 50
@@ -820,7 +842,7 @@ def collect_market(ctx: CapabilityContext, params: CollectMarketParams) -> Subsc
             else:
                 instruments = await exchange_instruments(source)
                 matched = filter_instruments(instruments, kinds=kinds, quote=quote)
-                symbols = [i.symbol_raw for i in matched][: params.limit]
+                symbols = [i.symbol_raw for i in matched][: params.max_symbols]
             if symbols:
                 resolved[source] = symbols
         if not resolved:
@@ -895,7 +917,16 @@ class BackfillParams(msgspec.Struct, frozen=True):
     category: str = "linear"
     inst_type: str = "SWAP"
     interval: str = "1m"
-    period: str = "5m"
+    oi_period: str = "5m"
+    """Binance's open-interest history bucket width, as that endpoint spells it.
+
+    ``period`` until an exit review found it colliding: ops meant ``str = "5m"``, a venue's
+    bucket, and analytics meant ``int = 14``, a count of bars an indicator looks back over.
+    Two batches, one word, two concepts — and REST coerces with ``strict=False``, so
+    ``?period=14`` on ``backfill`` arrived as the string ``"14"`` and went to Binance as a
+    bucket width, which is an error nowhere along the path. ``period`` means the indicator
+    lookback everywhere now; this one says which series it buckets.
+    """
 
 
 def _check_backfill_range(params: BackfillParams) -> None:
@@ -933,7 +964,7 @@ def backfill(ctx: CapabilityContext, params: BackfillParams) -> Coroutine[Any, A
         category=params.category,
         inst_type=params.inst_type,
         interval=params.interval,
-        period=params.period,
+        period=params.oi_period,
     )
 
 

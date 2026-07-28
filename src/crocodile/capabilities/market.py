@@ -133,8 +133,12 @@ class UniverseParams(msgspec.Struct, frozen=True):
     renders this answer, not a different answer.
     """
 
-    exchange: str
-    """Venue id, native or ccxt."""
+    source: str
+    """Venue id, native or ccxt.
+
+    ``source``, which is the lake's merged partition key and what the ops batch already
+    called it. This struct said ``exchange`` — the crypto fork's word, which has no meaning
+    on the equity half this capability inherits when M3 lands."""
 
     top: int | None = None
     """Rank by 24 h quote volume and return the top N, instead of enumerating."""
@@ -336,7 +340,7 @@ def universe(ctx: CapabilityContext, params: UniverseParams) -> pl.DataFrame:
     top = params.top
     if top is not None:
         symbols = run_to_completion(
-            lambda: top_symbols_by_volume(params.exchange, top, quote=params.quote, kinds=kinds)
+            lambda: top_symbols_by_volume(params.source, top, quote=params.quote, kinds=kinds)
         )
         return pl.DataFrame(
             [
@@ -347,7 +351,7 @@ def universe(ctx: CapabilityContext, params: UniverseParams) -> pl.DataFrame:
         )
 
     instruments = filter_instruments(
-        run_to_completion(lambda: exchange_instruments(params.exchange)),
+        run_to_completion(lambda: exchange_instruments(params.source)),
         kinds=kinds,
         quote=params.quote,
     )

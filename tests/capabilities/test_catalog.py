@@ -345,7 +345,7 @@ async def test_catalog_symbols_lists_every_symbol_sorted(lake: pathlib.Path) -> 
 async def test_catalog_symbols_filters_by_channel_and_exchange(lake: pathlib.Path) -> None:
     ctx = _ctx(lake)
     assert batch.catalog_symbols(ctx, batch.CatalogFilterParams(channel="book_snapshot")) == [_BTC]
-    assert batch.catalog_symbols(ctx, batch.CatalogFilterParams(exchange="binance-spot")) == [
+    assert batch.catalog_symbols(ctx, batch.CatalogFilterParams(source="binance-spot")) == [
         _BINANCE_BTC
     ]
 
@@ -359,7 +359,7 @@ async def test_a_blank_filter_is_no_filter_rather_than_no_results(lake: pathlib.
     """
     ctx = _ctx(lake)
     everything = batch.catalog_symbols(ctx, batch.CatalogFilterParams())
-    assert batch.catalog_symbols(ctx, batch.CatalogFilterParams(channel="", exchange="  ")) == (
+    assert batch.catalog_symbols(ctx, batch.CatalogFilterParams(channel="", source="  ")) == (
         everything
     )
     assert len(batch.catalog_inventory(ctx, batch.CatalogFilterParams(channel=" "))) == len(
@@ -722,7 +722,7 @@ async def test_the_equity_implementation_answers_against_equity_rows(lake: pathl
     ctx = _ctx(lake, asset_class=AssetClass.EQUITY)
     for name, params in (
         ("catalog-symbols", batch.CatalogFilterParams(channel="ohlcv")),
-        ("catalog-inventory", batch.CatalogFilterParams(exchange="yahoo")),
+        ("catalog-inventory", batch.CatalogFilterParams(source="yahoo")),
     ):
         result = REGISTRY[name].impls[AssetClass.EQUITY].fn(ctx, params)
         assert len(result) == 1

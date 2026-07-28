@@ -350,7 +350,7 @@ def test_sequencer_latency_summarises_production_interval_and_ingestion_delay(
     ]
     asyncio.run(_write(lake, records))
 
-    out = ops.sequencer_latency(ctx, ops.SequencerLatencyParams(exchange="base_onchain"))
+    out = ops.sequencer_latency(ctx, ops.SequencerLatencyParams(source="base_onchain"))
     assert out["metric"].to_list() == ["production_interval", "ingestion_delay"]
     by_metric = dict(zip(out["metric"].to_list(), out["avg_seconds"].to_list(), strict=True))
     assert by_metric["production_interval"] == pytest.approx(1.0)
@@ -365,7 +365,7 @@ def test_sequencer_latency_reads_a_blank_exchange_as_the_default_chain(
     Both the CLI and the REST route normalised it, and without that the query filters on a
     source no record carries and an operator reads an empty lake instead of a typo.
     """
-    empty = ops.sequencer_latency(ctx, ops.SequencerLatencyParams(exchange="   "))
+    empty = ops.sequencer_latency(ctx, ops.SequencerLatencyParams(source="   "))
     assert empty.columns == ["metric", "avg_seconds", "max_seconds", "std_seconds"]
 
 

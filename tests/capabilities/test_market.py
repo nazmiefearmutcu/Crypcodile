@@ -233,7 +233,7 @@ def _venue_instruments(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_universe_enumerates_a_venue_into_one_row_per_instrument(_venue_instruments: None) -> None:
-    rows = market.universe(_ctx(), market.UniverseParams(exchange="binance")).to_dicts()
+    rows = market.universe(_ctx(), market.UniverseParams(source="binance")).to_dicts()
     assert rows == [
         {"symbol": "BTCUSDT", "kind": "spot", "base": "BTC", "quote": "USDT", "rank": None},
         {"symbol": "ETHUSDT", "kind": "spot", "base": "ETH", "quote": "USDT", "rank": None},
@@ -243,13 +243,13 @@ def test_universe_enumerates_a_venue_into_one_row_per_instrument(_venue_instrume
 
 def test_universe_applies_the_kind_and_quote_filters(_venue_instruments: None) -> None:
     frame = market.universe(
-        _ctx(), market.UniverseParams(exchange="binance", kinds=("spot",), quote="usdt")
+        _ctx(), market.UniverseParams(source="binance", kinds=("spot",), quote="usdt")
     )
     assert frame["symbol"].to_list() == ["BTCUSDT", "ETHUSDT"]
 
 
 def test_universe_caps_the_enumerated_rows_at_the_limit(_venue_instruments: None) -> None:
-    frame = market.universe(_ctx(), market.UniverseParams(exchange="binance", limit=1))
+    frame = market.universe(_ctx(), market.UniverseParams(source="binance", limit=1))
     assert frame["symbol"].to_list() == ["BTCUSDT"]
 
 
@@ -261,7 +261,7 @@ def test_universe_does_not_filter_by_quote_when_none_was_asked_for(
     An unrequested filter that silently empties a USD-quoted venue is worse than no filter,
     and the CLI passed its own ``None`` straight through for exactly that reason.
     """
-    frame = market.universe(_ctx(), market.UniverseParams(exchange="binance"))
+    frame = market.universe(_ctx(), market.UniverseParams(source="binance"))
     assert "USD" in frame["quote"].to_list()
 
 
@@ -274,7 +274,7 @@ def test_universe_ranks_by_volume_when_top_is_set(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(market, "top_symbols_by_volume", _fake)
     rows = market.universe(
         _ctx(),
-        market.UniverseParams(exchange="binance", top=2, quote="USDT", kinds=("spot",)),
+        market.UniverseParams(source="binance", top=2, quote="USDT", kinds=("spot",)),
     ).to_dicts()
     assert [(row["symbol"], row["rank"]) for row in rows] == [("BTC/USDT", 1), ("ETH/USDT", 2)]
 
@@ -293,8 +293,8 @@ def test_universe_returns_the_same_columns_from_either_branch(
         return ["BTC/USDT"]
 
     monkeypatch.setattr(market, "top_symbols_by_volume", _fake)
-    enumerated = market.universe(_ctx(), market.UniverseParams(exchange="binance"))
-    ranked = market.universe(_ctx(), market.UniverseParams(exchange="binance", top=1))
+    enumerated = market.universe(_ctx(), market.UniverseParams(source="binance"))
+    ranked = market.universe(_ctx(), market.UniverseParams(source="binance", top=1))
     assert enumerated.columns == ranked.columns
     assert enumerated.schema == ranked.schema
     assert enumerated["rank"].null_count() == enumerated.height
@@ -304,7 +304,7 @@ def test_universe_returns_the_same_columns_from_either_branch(
 def test_universe_rejects_an_unknown_kind_instead_of_matching_nothing() -> None:
     """A typo must not read as a venue with no perpetuals."""
     with pytest.raises(ValueError, match="unknown instrument kind"):
-        market.universe(_ctx(), market.UniverseParams(exchange="binance", kinds=("perp",)))
+        market.universe(_ctx(), market.UniverseParams(source="binance", kinds=("perp",)))
 
 
 # ---------------------------------------------------------------------------

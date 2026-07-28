@@ -410,6 +410,34 @@ _PARAM_RENAMES: dict[tuple[str | None, str], tuple[str, str]] = {
         "`backfill --exchange`. That the two forks called one slot `exchange` and `provider` "
         "is the whole reason the partition key was merged."),
     ("collect-market", "exchange"): ("sources", "Same as `collect --exchange`."),
+    (None, "exchange"): (
+        "source",
+        "The same merged partition key as `backfill --exchange`, applied to the five "
+        "capabilities that filter by one venue rather than subscribing to several: "
+        "`universe`, `sequencer-latency`, `catalog-inventory`, `catalog-symbols`, "
+        "`data-coverage` and `search`. Two batches shipped `exchange` and one shipped "
+        "`source`, so one CLI offered `collect --source binance` beside `catalog-symbols "
+        "--exchange binance` for the same venue — and `exchange` cannot describe `stooq` or "
+        "`alpaca`, which is why the lake stopped using it. Written as a `None` key because "
+        "it now holds everywhere the per-capability entries above do not override it.",
+    ),
+    ("collect-market", "limit"): (
+        "max_symbols",
+        "`limit` means a cap on rows returned in every other batch — `replay`, `export`, "
+        "`search`, `catalog-scan`, `universe`. On `collect-market` it capped how many "
+        "symbols the `--all` slice *subscribes to*, so `--all` on a 2 000-market venue "
+        "collected 500 and neither the request nor the result said so. Same word, different "
+        "question; the question gets its own word.",
+    ),
+    ("backfill", "period"): (
+        "oi_period",
+        "`period` was `str = \"5m\"` here — Binance's open-interest history bucket — and "
+        "`int = 14` on `indicators`, a count of bars an indicator looks back over. REST "
+        "coerces with `strict=False`, so `?period=14` on `backfill` became the string "
+        "`\"14\"` and reached the venue as a bucket width, which nothing along the path "
+        "reads as an error. `period` keeps the meaning five capabilities share; the venue's "
+        "bucket says which series it buckets.",
+    ),
     ("collect", "dlq_report"): (
         "dlq_report_path",
         "Both name a file to write the dead-letter report to; the registry suffixes it "
