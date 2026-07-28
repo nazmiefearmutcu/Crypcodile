@@ -487,9 +487,8 @@ class Catalog:
             ORDER BY local_ts
             {limit_clause}
         """
-        result = self._conn.execute(
-            sql, params
-        )  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+        result = self._conn.execute(sql, params)
         df = result.pl()
         # Normalise: return a bare schemaless DataFrame when no rows match so
         # both empty-result paths have the same shape (consistent contract).
@@ -1024,9 +1023,8 @@ class Catalog:
             {body}
         """
         try:
-            self._conn.execute(
-                sql
-            )  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # noqa: E501
+            self._conn.execute(sql)
         except Exception as exc:
             self._view_groups.pop(channel, None)
             self._registered_channels.discard(channel)
