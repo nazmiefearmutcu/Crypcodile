@@ -50,6 +50,68 @@ _XSL_RENDERED_PREFIX = "xsl"
 directory whose name starts with this — ``xslF345X03/wf-form4_1234.xml`` — and the raw XML
 at the same basename in the filing's root. ``primaryDocument`` in the submissions index
 names the rendered one, which parses as HTML and yields no transactions at all."""
+COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+"""SEC's registrant-to-ticker index. Keyless, one file, no pagination.
+
+Named here rather than inlined because two callers now read it: :meth:`
+SecEdgarClient.fetch_ticker_map`, which wants the ticker-to-CIK direction, and
+:meth:`SecEdgarClient.fetch_company_tickers`, which wants the rows themselves. One URL
+with two spellings is one URL that can be changed in one of them.
+"""
+
+
+class SecCompanyTicker(msgspec.Struct, frozen=True):
+    """One row of ``company_tickers.json``: a registrant, a ticker and the legal name.
+
+    The name is what makes this worth having as a struct rather than as the two dicts
+    :meth:`SecEdgarClient.fetch_ticker_map` builds. Those dicts drop ``title``, which is the
+    only registrant-attested company name in the tree — Tiingo's supported-tickers file
+    carries no name at all and OpenFIGI's is a security description rather than the filer's
+    legal name — so the equity reference merge had nothing to fill
+    :attr:`crocodile.core.schema.records.Instrument.name` from until this stopped being
+    discarded at parse time.
+    """
+
+    cik: int
+    ticker: str
+    title: str | None = None
+
+
+def parse_company_tickers(data: Any) -> list[SecCompanyTicker]:
+    """Turn the decoded ``company_tickers.json`` payload into rows.
+
+    Separate from the fetch so the parse is exercisable against a fixture rather than
+    against sec.gov. The payload is a JSON *object* whose keys are row indices as strings —
+    not an array — which is the shape :meth:`SecEdgarClient.fetch_ticker_map` already
+    assumes and the reason anything but a ``dict`` yields nothing rather than raising: a
+    schema change should empty the universe loudly downstream, not crash the parse with a
+    ``TypeError`` that says nothing about SEC.
+
+    A row missing ``cik_str`` or ``ticker`` is skipped. Those two are the identity; a row
+    without them names nothing that can be merged against.
+    """
+    if not isinstance(data, dict):
+        return []
+    rows: list[SecCompanyTicker] = []
+    for item in data.values():
+        if not isinstance(item, dict):
+            continue
+        cik_raw, ticker_raw = item.get("cik_str"), item.get("ticker")
+        if cik_raw is None or not ticker_raw:
+            continue
+        try:
+            cik = int(cik_raw)
+        except (TypeError, ValueError):
+            continue
+        title = item.get("title")
+        rows.append(
+            SecCompanyTicker(
+                cik=cik,
+                ticker=str(ticker_raw).upper(),
+                title=str(title) if title else None,
+            )
+        )
+    return rows
 
 
 def _safe_float(val: Any) -> float | None:
@@ -231,25 +293,25 @@ class SecEdgarClient:
             return int(symbol_upper.replace("CIK", ""))
         except ValueError as err:
             raise ValueError(f"Unknown symbol or CIK: {symbol}") from err
+    async def fetch_company_tickers(self) -> list[SecCompanyTicker]:
+        """Fetch SEC's registrant index as rows, names included.
+
+        Keyless: ``company_tickers.json`` is a static file and needs no token, only the
+        User-Agent every SEC request carries. That is what lets the equity universe resolve
+        without a credential, which is the half of the product promise the merge keeps
+        insisting on.
+        """
+        return parse_company_tickers(await self._request_json(COMPANY_TICKERS_URL))
 
     async def fetch_ticker_map(self) -> None:
         """Fetch the ticker-to-CIK mapping from the SEC website."""
-        url = "https://www.sec.gov/files/company_tickers.json"
-        data = await self._request_json(url)
-
         ticker_to_cik: dict[str, int] = {}
         cik_to_tickers: dict[int, list[str]] = {}
         cik_to_primary_ticker: dict[int, str] = {}
 
-        if isinstance(data, dict):
-            for item in data.values():
-                cik = int(item["cik_str"])
-                ticker = str(item["ticker"]).upper()
-
-                ticker_to_cik[ticker] = cik
-                if cik not in cik_to_tickers:
-                    cik_to_tickers[cik] = []
-                cik_to_tickers[cik].append(ticker)
+        for row in await self.fetch_company_tickers():
+            ticker_to_cik[row.ticker] = row.cik
+            cik_to_tickers.setdefault(row.cik, []).append(row.ticker)
 
         for cik, tickers in cik_to_tickers.items():
             cik_to_primary_ticker[cik] = tickers[0]

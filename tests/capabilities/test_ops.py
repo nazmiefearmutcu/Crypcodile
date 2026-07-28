@@ -29,9 +29,10 @@ from crocodile.core.capability import (
     ReturnKind,
 )
 from crocodile.core.config import Settings
+from crocodile.core.errors import ConfigError
 from crocodile.core.schema.enums import Side
 from crocodile.core.schema.provenance import Provenance, registered_bases
-from crocodile.core.schema.records import BookTicker, Record, Trade
+from crocodile.core.schema.records import OHLCV, BookTicker, Record, Trade
 from crocodile.core.sink.base import Sink
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
@@ -217,17 +218,23 @@ def test_migrate_lake_is_infrastructure_and_stays_out_of_the_registry() -> None:
     assert (ops._why_migrate_lake_is_infrastructure.__doc__ or "").strip()
 
 
-def test_collect_market_is_scheduled_against_the_method_that_closes_it() -> None:
-    """The asymmetry is a schedule, not a market property: no equity source enumerates a
-    universe yet, and M3 is the method that will."""
-    assert PENDING_SYMMETRY.get("collect-market") == "M3"
+def test_collect_market_left_the_ledger_when_the_method_that_closes_it_landed() -> None:
+    """It was scheduled against M3 because nothing enumerated an equity universe.
+
+    Something does now — ``crocodile.equity.reference.universe``, which is M3's
+    SEC EDGAR x OpenFIGI x Tiingo merge — so the entry had to go: a name whose equity half
+    has landed and whose schedule survives is the hoarding
+    ``test_the_ledger_is_not_hoarding_capabilities_that_became_symmetric`` exists to catch,
+    and it would make a later *removal* of the equity half invisible.
+    """
+    assert "collect-market" not in PENDING_SYMMETRY
     assert "M3" in SPEC_METHODS
     assert "collect-market" not in IRREDUCIBLE
-    assert set(REGISTRY["collect-market"].impls) == {AssetClass.CRYPTO}
+    assert set(REGISTRY["collect-market"].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
 
 
 def test_the_capabilities_that_serve_both_markets_declare_both_halves() -> None:
-    for name in ("collect", "backfill", "replay", "export", "resample"):
+    for name in ("collect", "collect-market", "backfill", "replay", "export", "resample"):
         assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}, name
 
 
@@ -646,6 +653,294 @@ def test_collect_market_refuses_a_read_only_surface(readonly_ctx: CapabilityCont
 
 
 # ---------------------------------------------------------------------------
+# collect-market, the equity half M3 landed
+# ---------------------------------------------------------------------------
+# The reference resolution and the ranking are tested where they live —
+# `tests/equity/test_reference_universe.py` — so what these exercise is the adapter's own
+# division of labour: what it refuses synchronously, and what it resolves inside the run.
+
+
+_SEC_AGENT = "Crocodile-Test/1.0 (tests@example.com)"
+
+
+@pytest.fixture
+def equity_ctx(lake: Path) -> Iterator[CapabilityContext]:
+    """A trusted equity context whose lake holds two symbols' worth of daily bars.
+
+    The bars are the point: the ``top`` slice ranks on this deployment's own stored volume,
+    so an equity ``collect-market`` needs a lake with something in it before it can name a
+    single symbol.
+    """
+
+    async def _write() -> None:
+        sink = ParquetSink(lake, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for offset, (symbol, volume) in enumerate({"AAPL": 100.0, "MSFT": 900.0}.items()):
+            await sink.put(
+                OHLCV(
+                    source="stooq",
+                    symbol=symbol,
+                    symbol_raw=symbol,
+                    source_ts=_BASE_NS + offset,
+                    local_ts=_BASE_NS + offset,
+                    asset_class=AssetClass.EQUITY,
+                    interval="1d",
+                    open=1.0,
+                    high=2.0,
+                    low=0.5,
+                    close=1.5,
+                    volume=volume,
+                )
+            )
+        await sink.flush()
+
+    asyncio.run(_write())
+    catalog = Catalog(lake)
+    try:
+        yield CapabilityContext(
+            catalog=catalog,
+            settings=Settings(data_dir=lake, sec_user_agent=_SEC_AGENT),
+            asset_class=AssetClass.EQUITY,
+        )
+    finally:
+        catalog.close()
+
+
+def _equity_market_params(**overrides: Any) -> ops.CollectMarketParams:
+    fields: dict[str, Any] = {"sources": ("stooq",), "channels": ("ohlcv",), "top": 2}
+    fields.update(overrides)
+    return ops.CollectMarketParams(**fields)
+
+
+@pytest.fixture
+def _equity_universe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three listings standing in for the two bulk reference downloads."""
+    from crocodile.equity.providers.sec_edgar.client import SecCompanyTicker
+    from crocodile.equity.providers.tiingo.client import TiingoTicker
+    from crocodile.equity.reference import universe as reference
+
+    rows = [("AAPL", "Stock"), ("MSFT", "Stock"), ("SPY", "ETF")]
+    evidence = reference.ReferenceEvidence(
+        as_of_ns=_BASE_NS,
+        by_source={
+            reference.SOURCE_SEC: reference.instruments_from_sec(
+                [
+                    SecCompanyTicker(cik=index + 1, ticker=ticker, title=ticker)
+                    for index, (ticker, _) in enumerate(rows)
+                ],
+                as_of_ns=_BASE_NS,
+            ),
+            reference.SOURCE_TIINGO: reference.instruments_from_tiingo(
+                [
+                    TiingoTicker(
+                        ticker=ticker,
+                        exchange="NASDAQ",
+                        asset_type=asset_type,
+                        price_currency="USD",
+                        start_date="1990-01-02",
+                        end_date="2024-01-01",
+                    )
+                    for ticker, asset_type in rows
+                ],
+                as_of_ns=_BASE_NS,
+            ),
+        },
+        currency=dict.fromkeys((ticker for ticker, _ in rows), "USD"),
+    )
+
+    async def _fake(**kwargs: Any) -> Any:
+        assert kwargs["sec_user_agent"] == _SEC_AGENT
+        return evidence
+
+    monkeypatch.setattr(reference, "fetch_bulk_evidence", _fake)
+
+
+def _symbols_the_run_resolved(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Capture the symbol list ``begin()`` builds, without opening a socket for it."""
+    seen: list[list[str]] = []
+
+    def _make_provider(*, symbols: list[str], **_: Any) -> Any:
+        seen.append(list(symbols))
+        raise _StopBeforeConnecting
+
+    async def _never_collect(*_: Any, **__: Any) -> None:  # pragma: no cover
+        raise AssertionError("the run must not reach the collector in these tests")
+
+    from crocodile.equity.providers import factory as equity_factory
+
+    monkeypatch.setattr(equity_factory, "make_provider", _make_provider)
+    monkeypatch.setattr(ops, "collect_equity", _never_collect)
+    return seen
+
+
+class _StopBeforeConnecting(Exception):
+    """Raised by the fake provider factory once the symbol list has been observed."""
+
+
+def test_equity_collect_market_judges_everything_it_can_before_a_subscription_exists(
+    equity_ctx: CapabilityContext, _equity_universe: None
+) -> None:
+    sub = ops.collect_market_equities(equity_ctx, _equity_market_params())
+    assert isinstance(sub, ops.Subscription)
+    assert sub.sources == ("stooq",)
+    assert sub.channels == ("ohlcv",)
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        pytest.param({"top": None}, "either top", id="neither_slice"),
+        pytest.param({"all_symbols": True}, "not both", id="both_slices"),
+        pytest.param({"channels": ()}, "channels", id="no_channels"),
+        pytest.param({"sources": ()}, "sources", id="no_sources"),
+        pytest.param({"kinds": ("perpetual",)}, "unknown instrument kind", id="a_crypto_kind"),
+    ],
+)
+def test_equity_collect_market_rejects_a_malformed_slice_up_front(
+    equity_ctx: CapabilityContext, params: dict[str, Any], message: str
+) -> None:
+    """Same division as the crypto half: resolving is asynchronous, refusing is not."""
+    with pytest.raises(ValueError, match=message):
+        ops.collect_market_equities(equity_ctx, _equity_market_params(**params))
+
+
+def test_equity_collect_market_refuses_a_missing_sec_contact_string_before_awaiting(
+    lake: Path,
+) -> None:
+    """Configuration must not first fail on an await inside somebody else's event loop."""
+    catalog = Catalog(lake)
+    try:
+        ctx = CapabilityContext(
+            catalog=catalog, settings=Settings(data_dir=lake), asset_class=AssetClass.EQUITY
+        )
+        with pytest.raises(ConfigError, match="CROCODILE_SEC_USER_AGENT"):
+            ops.collect_market_equities(ctx, _equity_market_params())
+    finally:
+        catalog.close()
+
+
+def test_equity_collect_market_refuses_a_read_only_surface(readonly_ctx: CapabilityContext) -> None:
+    with pytest.raises(PermissionError, match="read-only"):
+        ops.collect_market_equities(readonly_ctx, _equity_market_params())
+
+
+def test_the_top_slice_resolves_the_most_traded_symbols_in_this_lake(
+    equity_ctx: CapabilityContext, _equity_universe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ranking's source, named and asserted: the lake's own stored ohlcv bars.
+
+    MSFT leads AAPL because of what was collected, and SPY — which nothing has been collected
+    for — falls out of a two-symbol slice rather than displacing a symbol there is evidence
+    for.
+    """
+    seen = _symbols_the_run_resolved(monkeypatch)
+    sub = ops.collect_market_equities(equity_ctx, _equity_market_params(top=2))
+    with pytest.raises(_StopBeforeConnecting):
+        asyncio.run(sub.begin())
+    assert seen == [["MSFT", "AAPL"]]
+
+
+def test_the_top_slice_refuses_a_lake_with_no_bars_to_rank(
+    lake: Path, _equity_universe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An arbitrary N tickers wearing the word "top" is the answer this refuses to give."""
+    _symbols_the_run_resolved(monkeypatch)
+    catalog = Catalog(lake)
+    try:
+        ctx = CapabilityContext(
+            catalog=catalog,
+            settings=Settings(data_dir=lake, sec_user_agent=_SEC_AGENT),
+            asset_class=AssetClass.EQUITY,
+        )
+        sub = ops.collect_market_equities(ctx, _equity_market_params(top=2))
+        with pytest.raises(ValueError, match="collect or backfill"):
+            asyncio.run(sub.begin())
+    finally:
+        catalog.close()
+
+
+def test_the_all_slice_is_capped_on_a_volume_ordered_list_rather_than_an_alphabetical_one(
+    equity_ctx: CapabilityContext, _equity_universe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``max_symbols`` caps how much of a market is watched, which is what its docstring is about.
+
+    Over a merged reference universe the natural order is alphabetical, so a cap of two would
+    subscribe to AAPL and MSFT by spelling rather than by liquidity — and on a real universe
+    it would be five hundred tickers beginning with A. Ordering by the same evidence first is
+    what makes the cap take the part of the market anyone meant.
+    """
+    seen = _symbols_the_run_resolved(monkeypatch)
+    sub = ops.collect_market_equities(
+        equity_ctx, _equity_market_params(top=None, all_symbols=True, max_symbols=2)
+    )
+    with pytest.raises(_StopBeforeConnecting):
+        asyncio.run(sub.begin())
+    assert seen == [["MSFT", "AAPL"]]
+
+
+def test_the_all_slice_still_answers_when_the_lake_has_no_evidence(
+    lake: Path, _equity_universe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ticker order is what is left when nothing better exists, not the default.
+
+    The ``all`` slice is defined without the ranking, so it degrades rather than refusing —
+    which is the opposite call from ``top``, whose whole meaning is the ordering.
+    """
+    seen = _symbols_the_run_resolved(monkeypatch)
+    catalog = Catalog(lake)
+    try:
+        ctx = CapabilityContext(
+            catalog=catalog,
+            settings=Settings(data_dir=lake, sec_user_agent=_SEC_AGENT),
+            asset_class=AssetClass.EQUITY,
+        )
+        sub = ops.collect_market_equities(
+            ctx, _equity_market_params(top=None, all_symbols=True, max_symbols=3)
+        )
+        with pytest.raises(_StopBeforeConnecting):
+            asyncio.run(sub.begin())
+    finally:
+        catalog.close()
+    assert seen == [["AAPL", "MSFT", "SPY"]]
+
+
+def test_the_kind_filter_narrows_the_slice_in_the_equitys_own_vocabulary(
+    equity_ctx: CapabilityContext, _equity_universe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = _symbols_the_run_resolved(monkeypatch)
+    sub = ops.collect_market_equities(
+        equity_ctx, _equity_market_params(top=None, all_symbols=True, kinds=("ETF",))
+    )
+    with pytest.raises(_StopBeforeConnecting):
+        asyncio.run(sub.begin())
+    assert seen == [["SPY"]]
+
+
+def test_a_slice_that_matches_nothing_says_so_rather_than_subscribing_to_an_empty_list(
+    equity_ctx: CapabilityContext, _equity_universe: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty subscription reads to a caller as a run that started and ended."""
+    _symbols_the_run_resolved(monkeypatch)
+    sub = ops.collect_market_equities(
+        equity_ctx, _equity_market_params(top=None, all_symbols=True, quote="JPY")
+    )
+    with pytest.raises(ValueError, match="no symbols matched"):
+        asyncio.run(sub.begin())
+
+
+def test_the_equity_half_declares_the_merge_its_symbol_list_rests_on() -> None:
+    """NATIVE with a basis that is not ``native``, which is the honest pair.
+
+    What it writes is what a provider streamed, unaltered — the ceiling ``collect`` reaches
+    on both sides. What it *rests on* is a symbol set merged out of three registries and a
+    ranking computed from stored bars, and no venue published either.
+    """
+    impl = REGISTRY["collect-market"].impls[AssetClass.EQUITY]
+    assert impl.fn is ops.collect_market_equities
+    assert impl.prov is Provenance.NATIVE
+    assert impl.basis == "reference_merge"
+
+
+# ---------------------------------------------------------------------------
 # backfill
 # ---------------------------------------------------------------------------
 
@@ -932,6 +1227,10 @@ def test_every_capability_that_writes_outside_the_process_refuses_a_read_only_su
         "collect": _collect_params(),
         "collect_equities": _collect_params(sources=("stooq",)),
         "collect_market": _market_params(),
+        # The fifth writer, arriving with M3. Added here rather than only in its own test for
+        # the reason this census exists: the named tests are how the fourth one came to have
+        # none at all.
+        "collect_market_equities": _equity_market_params(),
         "backfill": _backfill_params(),
         "backfill_equities": _backfill_params(),
         "export": ops.ExportParams(

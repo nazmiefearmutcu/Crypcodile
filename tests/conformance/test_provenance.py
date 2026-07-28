@@ -26,6 +26,7 @@ _EXPECTED_BASES = frozenset(
         "ohlcv_from_ohlcv",
         "ohlcv_from_quotes",
         "ohlcv_from_trades",
+        "reference_merge",
         "scraped_last_price",
         "unavailable",
         "yahoo_1m_vap",
@@ -805,3 +806,50 @@ def test_neither_filing_basis_is_the_flat_native_one_they_would_otherwise_have_u
     assert confidence_for("native", {}) == 1.0
     assert confidence_for("sec_form4", {"n_reported_amounts": 1}) < confidence_for("native", {})
     assert confidence_for("sec_13f_hr", {"disclosure_lag_days": 45}) < confidence_for("native", {})
+# reference_merge — the basis the equity universe M3 resolves rests on
+# ---------------------------------------------------------------------------
+
+
+def test_reference_merge_counts_the_registries_that_agreed():
+    """``n_sources / 3``, and the three points on it that mean something.
+
+    One source is a listing nobody else confirmed, two is the keyless bulk pair, three is a
+    row SEC, Tiingo and OpenFIGI all name. The number is what separates them on a row a
+    consumer is filtering, and it is the reason the enrichment step can be bounded at all.
+    """
+    assert confidence_for("reference_merge", {"n_sources": 0}) == 0.0
+    assert confidence_for("reference_merge", {"n_sources": 1}) == pytest.approx(1 / 3)
+    assert confidence_for("reference_merge", {"n_sources": 2}) == pytest.approx(2 / 3)
+    assert confidence_for("reference_merge", {"n_sources": 3}) == 1.0
+
+
+def test_reference_merge_is_derived_because_no_registry_published_the_merged_row():
+    """Nothing on it is modelled — every field was published by one of the three — but the
+    identity that joins a registrant to a listing to a global identifier is this engine's."""
+    assert level_for("reference_merge") is Provenance.DERIVED
+    assert provenance_fields("reference_merge", {"n_sources": 3}).prov_inputs == ["instrument"]
+
+
+def test_reference_merge_refuses_a_count_no_run_could_have_produced():
+    """A fourth attestation would mean a fourth source, and the method names three.
+
+    Accepting it would silently return a confidence above 1.0's meaning, or clamp to it and
+    report a four-source row as identical to a three-source one.
+    """
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("reference_merge", {"n_sources": 4})
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("reference_merge", {"n_sources": -1})
+    with pytest.raises(ConfidenceInputError):
+        confidence_for("reference_merge", {})
+
+
+def test_reference_merge_denominator_is_the_method_rather_than_the_run():
+    """The ``yahoo_1m_vap`` argument, one axis over, asserted rather than only written down.
+
+    Dividing by "sources this run consulted" would score a keyless run — which skips OpenFIGI
+    across the bulk universe by design — at 1.0 for every row, reporting a two-registrar
+    identity as fully attested. A session contains three attestations whether or not any given
+    run fetched them.
+    """
+    assert confidence_for("reference_merge", {"n_sources": 2}) < 1.0

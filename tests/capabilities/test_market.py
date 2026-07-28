@@ -30,12 +30,18 @@ from crocodile.core.capability import (
     run_to_completion,
 )
 from crocodile.core.config import Settings
+from crocodile.core.errors import ConfigError
 from crocodile.core.schema.provenance import Provenance, level_for, provenance_fields
 from crocodile.core.schema.records import DepthProfile, OpenInterest, OptionsChain
+from crocodile.core.schema.records import OHLCV, DepthProfile, OpenInterest
 from crocodile.core.store.catalog import Catalog
 from crocodile.core.store.parquet_sink import ParquetSink
 from crocodile.core.util.time import now_ns
 from crocodile.crypto.instruments.registry import Instrument, Kind
+from crocodile.equity.providers.openfigi.models import FigiRecord
+from crocodile.equity.providers.sec_edgar.client import SecCompanyTicker
+from crocodile.equity.providers.tiingo.client import TiingoTicker
+from crocodile.equity.reference import universe as reference
 
 _BASE_NS = 1_704_067_200_000_000_000
 
@@ -364,6 +370,418 @@ def test_census_stamps_the_snapshot_from_the_clock_rather_than_from_a_parameter(
 
 
 # ---------------------------------------------------------------------------
+# M3 — the equity halves of markets, universe and census
+# ---------------------------------------------------------------------------
+# The reference resolution is exercised on its own in
+# `tests/equity/test_reference_universe.py`; what these test is the adapter over it — the
+# framing, the filters and the two refusals. `fetch_bulk_evidence` is replaced at the module
+# boundary for the reason every other network edge in this file is: a test that fetched
+# sec.gov would fail on a plane and go green or red on whatever NASDAQ listed this morning.
+
+_SEC_AGENT = "Crocodile-Test/1.0 (tests@example.com)"
+"""SEC blocks a request that does not say who is making it, and the adapters refuse to
+invent one — so every equity context here carries a real-shaped contact string."""
+
+
+def _equity_ctx(catalog: Any = None, sec_user_agent: str | None = _SEC_AGENT) -> CapabilityContext:
+    return CapabilityContext(
+        catalog=catalog,
+        settings=Settings(sec_user_agent=sec_user_agent),
+        asset_class=AssetClass.EQUITY,
+    )
+
+
+def _listing_rows(
+    *tickers: tuple[str, str, str, str],
+) -> reference.ReferenceEvidence:
+    """Build evidence directly, as ``(ticker, exchange, assetType, currency)`` tuples.
+
+    Both bulk sources name every ticker, which is the two-attestation state a keyless run
+    actually produces — so ``prov_confidence`` here is 0.67 unless a test adds FIGI.
+    """
+    return reference.ReferenceEvidence(
+        as_of_ns=_BASE_NS,
+        by_source={
+            reference.SOURCE_SEC: reference.instruments_from_sec(
+                [
+                    SecCompanyTicker(cik=index + 1, ticker=ticker, title=f"{ticker} Inc.")
+                    for index, (ticker, _, _, _) in enumerate(tickers)
+                ],
+                as_of_ns=_BASE_NS,
+            ),
+            reference.SOURCE_TIINGO: reference.instruments_from_tiingo(
+                [
+                    TiingoTicker(
+                        ticker=ticker,
+                        exchange=exchange,
+                        asset_type=asset_type,
+                        price_currency=currency,
+                        start_date="1990-01-02",
+                        end_date="2024-01-01",
+                    )
+                    for ticker, exchange, asset_type, currency in tickers
+                ],
+                as_of_ns=_BASE_NS,
+            ),
+        },
+        currency={ticker: currency for ticker, _, _, currency in tickers},
+    )
+
+
+@pytest.fixture
+def _reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A three-venue, four-listing universe standing in for the two bulk downloads."""
+    evidence = _listing_rows(
+        ("AAPL", "NASDAQ", "Stock", "USD"),
+        ("MSFT", "NASDAQ", "Stock", "USD"),
+        ("SPY", "NYSE ARCA", "ETF", "USD"),
+        ("SHOP", "TSX", "Stock", "CAD"),
+    )
+
+    async def _fake(**kwargs: Any) -> reference.ReferenceEvidence:
+        assert kwargs["sec_user_agent"] == _SEC_AGENT, "the contact string must reach the client"
+        return evidence
+
+    monkeypatch.setattr(market.reference, "fetch_bulk_evidence", _fake)
+
+    async def _no_figi(*_: Any, **__: Any) -> dict[str, list[Any]]:
+        return {}
+
+    monkeypatch.setattr(market.reference, "fetch_figi", _no_figi)
+
+
+def _lake_with_bars(tmp_path: Path, volumes: dict[str, float]) -> Catalog:
+    """A lake holding one 1d bar per symbol, which is what the volume ranking reads."""
+
+    async def _write() -> None:
+        sink = ParquetSink(tmp_path, max_buffer_rows=10_000, flush_interval_seconds=9999)
+        for offset, (symbol, volume) in enumerate(volumes.items()):
+            await sink.put(
+                OHLCV(
+                    source="stooq",
+                    symbol=symbol,
+                    symbol_raw=symbol,
+                    source_ts=_BASE_NS + offset,
+                    local_ts=_BASE_NS + offset,
+                    asset_class=AssetClass.EQUITY,
+                    interval="1d",
+                    open=1.0,
+                    high=2.0,
+                    low=0.5,
+                    close=1.5,
+                    volume=volume,
+                )
+            )
+        await sink.flush()
+
+    asyncio.run(_write())
+    return Catalog(tmp_path)
+
+
+# markets
+
+
+def test_equity_markets_lists_the_venues_the_reference_data_names(_reference: None) -> None:
+    """The row source is the resolved universe, so a venue exists because a listing says so."""
+    rows = market.markets_equities(_equity_ctx(), market.MarketsParams()).to_dicts()
+    assert rows == [
+        {"venue": "NASDAQ", "native": True, "ccxt": False},
+        {"venue": "NYSE ARCA", "native": True, "ccxt": False},
+        {"venue": "TSX", "native": True, "ccxt": False},
+    ]
+
+
+def test_equity_markets_filters_by_substring_case_insensitively(_reference: None) -> None:
+    frame = market.markets_equities(_equity_ctx(), market.MarketsParams(search="nas"))
+    assert frame["venue"].to_list() == ["NASDAQ"]
+
+
+def test_equity_markets_answers_the_ccxt_filter_with_nothing_because_that_is_the_answer(
+    _reference: None,
+) -> None:
+    """ccxt is a cryptocurrency exchange library and reaches no equity venue at any version.
+
+    Empty here is a statement about the tier, not a filter that failed to match — which is
+    why the columns are still present for a caller that selects on them.
+    """
+    frame = market.markets_equities(_equity_ctx(), market.MarketsParams(ccxt_only=True))
+    assert frame.height == 0
+    assert frame.columns == ["venue", "native", "ccxt"]
+
+
+def test_equity_markets_keeps_everything_under_the_native_filter(_reference: None) -> None:
+    """One connector tier, and it is the hand-written one; ``--native-only`` narrows nothing."""
+    unfiltered = market.markets_equities(_equity_ctx(), market.MarketsParams())
+    native = market.markets_equities(_equity_ctx(), market.MarketsParams(native_only=True))
+    assert native["venue"].to_list() == unfiltered["venue"].to_list()
+
+
+def test_both_halves_of_markets_return_the_same_columns(_reference: None, _two_tiers: None) -> None:
+    """A projection renders one capability; two column sets would make that impossible."""
+    crypto = market.markets(_ctx(), market.MarketsParams())
+    equity = market.markets_equities(_equity_ctx(), market.MarketsParams())
+    assert crypto.columns == equity.columns
+    assert crypto.schema == equity.schema
+
+
+# universe
+
+
+def test_equity_universe_enumerates_one_exchange_into_one_row_per_listing(
+    _reference: None,
+) -> None:
+    """``source`` is a venue on both sides, which is what makes this the same capability.
+
+    ``base`` and ``quote`` decompose the instrument into what you acquire and what you pay
+    with — AAPL for dollars, exactly as BTCUSDT is BTC for USDT.
+    """
+    rows = market.universe_equities(
+        _equity_ctx(), market.UniverseParams(source="NASDAQ")
+    ).to_dicts()
+    assert rows == [
+        {"symbol": "AAPL", "kind": "CS", "base": "AAPL", "quote": "USD", "rank": None},
+        {"symbol": "MSFT", "kind": "CS", "base": "MSFT", "quote": "USD", "rank": None},
+    ]
+
+
+def test_equity_universe_applies_the_kind_and_currency_filters(_reference: None) -> None:
+    etfs = market.universe_equities(
+        _equity_ctx(), market.UniverseParams(source="NYSE ARCA", kinds=("ETF",))
+    )
+    assert etfs["symbol"].to_list() == ["SPY"]
+
+    wrong_currency = market.universe_equities(
+        _equity_ctx(), market.UniverseParams(source="TSX", quote="USD")
+    )
+    assert wrong_currency.height == 0
+
+
+def test_equity_universe_caps_the_enumerated_rows_at_the_limit(_reference: None) -> None:
+    frame = market.universe_equities(
+        _equity_ctx(), market.UniverseParams(source="NASDAQ", limit=1)
+    )
+    assert frame["symbol"].to_list() == ["AAPL"]
+
+
+def test_equity_universe_rejects_an_unknown_kind_instead_of_matching_nothing(
+    _reference: None,
+) -> None:
+    """A crypto kind is a typo here, and a typo must not read as a venue with no ETFs."""
+    with pytest.raises(ValueError, match="unknown instrument kind"):
+        market.universe_equities(
+            _equity_ctx(), market.UniverseParams(source="NASDAQ", kinds=("perpetual",))
+        )
+
+
+def test_equity_universe_ranks_by_the_volume_stored_in_this_lake(
+    _reference: None, tmp_path: Path
+) -> None:
+    """The ranking's data source, asserted: this deployment's own ``channel=ohlcv/`` bars.
+
+    There is no free whole-market equity volume board to rank against, so the honest source
+    is the one the lake already holds — and MSFT outranks AAPL here because of what was
+    collected, which is exactly the claim the capability makes.
+    """
+    catalog = _lake_with_bars(tmp_path, {"AAPL": 100.0, "MSFT": 900.0})
+    rows = market.universe_equities(
+        _equity_ctx(catalog), market.UniverseParams(source="NASDAQ", top=2)
+    ).to_dicts()
+    assert [(row["symbol"], row["rank"]) for row in rows] == [("MSFT", 1), ("AAPL", 2)]
+
+
+def test_equity_universe_refuses_to_rank_against_a_lake_with_no_bars(
+    _reference: None, tmp_path: Path
+) -> None:
+    """An arbitrary N tickers wearing the word "top" is worse than a refusal that says why."""
+    with pytest.raises(ValueError, match="collect or backfill"):
+        market.universe_equities(
+            _equity_ctx(Catalog(tmp_path)), market.UniverseParams(source="NASDAQ", top=2)
+        )
+
+
+def test_equity_universe_returns_the_same_columns_from_either_branch(
+    _reference: None, tmp_path: Path
+) -> None:
+    catalog = _lake_with_bars(tmp_path, {"AAPL": 100.0, "MSFT": 900.0})
+    enumerated = market.universe_equities(
+        _equity_ctx(catalog), market.UniverseParams(source="NASDAQ")
+    )
+    ranked = market.universe_equities(
+        _equity_ctx(catalog), market.UniverseParams(source="NASDAQ", top=1)
+    )
+    assert enumerated.columns == ranked.columns
+    assert enumerated.schema == ranked.schema
+    assert enumerated["rank"].null_count() == enumerated.height
+
+
+def test_both_halves_of_universe_return_the_same_columns(
+    _reference: None, _venue_instruments: None
+) -> None:
+    crypto = market.universe(_ctx(), market.UniverseParams(source="binance"))
+    equity = market.universe_equities(_equity_ctx(), market.UniverseParams(source="NASDAQ"))
+    assert crypto.columns == equity.columns
+    assert crypto.schema == equity.schema
+
+
+def test_equity_universe_enriches_the_slice_it_returns_with_openfigi(
+    _reference: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enrichment is applied after the slice is chosen, which is what bounds the third source.
+
+    Asking OpenFIGI about ninety thousand tickers to return two of them would spend the whole
+    keyless allowance on rows nobody requested. The confidence is what reports the difference:
+    a bulk row is attested twice, an enriched one three times.
+    """
+    asked: list[list[str]] = []
+
+    async def _figi(symbols: Any, **_: Any) -> dict[str, list[FigiRecord]]:
+        asked.append(list(symbols))
+        return {
+            symbol: [FigiRecord(figi=f"BBG{symbol}", ticker=symbol, exch_code="UW")]
+            for symbol in symbols
+        }
+
+    monkeypatch.setattr(market.reference, "fetch_figi", _figi)
+    frame = market.universe_equities(_equity_ctx(), market.UniverseParams(source="NASDAQ"))
+    assert asked == [["AAPL", "MSFT"]], "only the returned slice, never the whole universe"
+    assert frame["symbol"].to_list() == ["AAPL", "MSFT"]
+
+
+def test_a_slice_past_the_openfigi_burst_is_returned_unenriched_rather_than_half_enriched(
+    _reference: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half a slice at three attestations and half at two would make the confidence a report
+    on where a batch boundary fell, and a caller comparing two rows would read a difference in
+    coverage that is really a difference in position."""
+    monkeypatch.setattr(market, "_FIGI_KEYLESS_BURST", 1)
+
+    async def _never(*_: Any, **__: Any) -> dict[str, list[FigiRecord]]:  # pragma: no cover
+        raise AssertionError("a slice over budget must not be enriched at all")
+
+    monkeypatch.setattr(market.reference, "fetch_figi", _never)
+    frame = market.universe_equities(_equity_ctx(), market.UniverseParams(source="NASDAQ"))
+    assert frame["symbol"].to_list() == ["AAPL", "MSFT"]
+
+
+def test_a_key_raises_the_enrichment_budget_and_buys_no_extra_fields() -> None:
+    """The two OpenFIGI tiers differ in throughput and in nothing else."""
+    assert market._figi_budget(Settings()) == market._FIGI_KEYLESS_BURST
+    assert market._figi_budget(Settings(openfigi_api_key="k")) == market._FIGI_KEYED_BURST
+    assert market._FIGI_KEYED_BURST > market._FIGI_KEYLESS_BURST
+
+
+# census
+
+
+def test_equity_census_counts_the_venues_and_the_listings_m3_resolves(_reference: None) -> None:
+    """The crypto census counts a venue universe and a coin universe; this counts listings."""
+    snapshot = market.census_equities(_equity_ctx(), market.CensusParams())
+    assert snapshot["venues"]["enumerated"] == 3
+    assert snapshot["venues"]["total_markets"] == 4
+    assert snapshot["venues"]["by_kind"]["CS"] == 3
+    assert snapshot["venues"]["by_kind"]["ETF"] == 1
+    assert snapshot["venues"]["rows"][0]["exchange"] == "NASDAQ"
+    assert snapshot["venues"]["rows"][0]["markets"] == 2
+    assert snapshot["securities"]["resolved"] == 4
+    assert snapshot["securities"]["with_cik"] == 4
+
+
+def test_equity_census_reports_how_many_registries_agreed(_reference: None) -> None:
+    """The number the crypto census has no question for, and the reason it is worth having.
+
+    One authority per venue can only report what it found; three overlapping authorities can
+    be asked how much of the market they agree exists.
+    """
+    snapshot = market.census_equities(_equity_ctx(), market.CensusParams())
+    assert snapshot["securities"]["attested_by"] == {
+        "one_source": 0,
+        "two_sources": 4,
+        "three_sources": 0,
+    }
+    assert snapshot["securities"]["by_source"] == {"tiingo": 4, "openfigi": 0, "sec_edgar": 4}
+
+
+def test_equity_census_restricts_the_count_to_the_venues_it_was_given(_reference: None) -> None:
+    snapshot = market.census_equities(_equity_ctx(), market.CensusParams(venues=("NASDAQ",)))
+    assert snapshot["venues"]["enumerated"] == 1
+    assert snapshot["securities"]["resolved"] == 2
+
+
+def test_equity_census_mirrors_the_crypto_connector_block(_reference: None) -> None:
+    """Field for field, so one projection can render either snapshot."""
+    from crocodile.equity.providers.factory import list_providers
+
+    snapshot = market.census_equities(_equity_ctx(), market.CensusParams())
+    assert set(snapshot["connectors"]) == {
+        "native",
+        "native_count",
+        "ccxt_count",
+        "total_reachable",
+    }
+    assert snapshot["connectors"]["native"] == sorted(list_providers())
+    assert snapshot["connectors"]["ccxt_count"] == 0
+
+
+def test_equity_census_ignores_the_coin_page_count_rather_than_refusing_it(
+    _reference: None,
+) -> None:
+    """There is no coin universe here to page through, and a caller who omits it pays nothing.
+
+    The same resolution ``CollectParams`` makes for ``dlq_report_path``.
+    """
+    paged = market.census_equities(_equity_ctx(), market.CensusParams(coin_pages=9))
+    plain = market.census_equities(_equity_ctx(), market.CensusParams())
+    assert paged["securities"] == plain["securities"]
+
+
+def test_equity_census_stamps_the_snapshot_from_the_clock(
+    _reference: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(market, "now_ns", lambda: _BASE_NS)
+    assert market.census_equities(_equity_ctx(), market.CensusParams())["generated_ns"] == _BASE_NS
+
+
+# The refusal all three share
+
+
+@pytest.mark.parametrize(
+    ("adapter", "params"),
+    [
+        ("markets_equities", market.MarketsParams()),
+        ("universe_equities", market.UniverseParams(source="NASDAQ")),
+        ("census_equities", market.CensusParams()),
+    ],
+)
+def test_every_equity_half_refuses_to_invent_a_contact_string_for_sec(
+    adapter: str, params: Any, _reference: None
+) -> None:
+    """SEC's condition is that the User-Agent identify someone contactable, and it blocks
+    requests carrying none. ``SecEdgarClient``'s default satisfies the string check with a
+    dead mailbox, which is the silent failure ``Settings.sec_user_agent`` was written about.
+    """
+    with pytest.raises(ConfigError, match="CROCODILE_SEC_USER_AGENT"):
+        getattr(market, adapter)(_equity_ctx(sec_user_agent=None), params)
+
+
+# The declarations these adapters landed
+
+
+def test_the_three_equity_halves_declare_the_merge_they_rest_on() -> None:
+    """``prov`` is the ceiling and ``basis`` names the inputs; both moved off the crypto pair.
+
+    DERIVED because no registry published the merged row, and ``reference_merge`` because
+    the inputs are three registries reconciled rather than one venue's own market list.
+    ``native`` there would claim a venue reported the universe, which is the one thing no
+    equity source does.
+    """
+    for name in ("markets", "universe", "census"):
+        impl = REGISTRY[name].impls[AssetClass.EQUITY]
+        assert impl.prov is Provenance.DERIVED, name
+        assert impl.basis == "reference_merge", name
+        assert level_for(impl.basis) is Provenance.DERIVED
+
+
+# ---------------------------------------------------------------------------
 # open-interest — the one capability whose input is the lake, so it gets a real one
 # ---------------------------------------------------------------------------
 
@@ -544,19 +962,22 @@ def test_depth_was_the_capability_whose_missing_half_was_the_crypto_one() -> Non
     Every entry in ``SPEC_METHODS`` closes an *equity* gap, so while ``depth`` was
     asymmetric it was scheduled against M6, the only method that named depth at all, and M6
     describes the equity half that already shipped. That mismatch is what M8 was written
-    for. The three still scheduled here run the usual direction, which is what makes ``depth``
-    worth a test of its own rather than a line in the parametrised sweep: it is the one whose
-    two implementations are asymmetric in *kind*, one reaching a vendor and one reading the
-    lake, and asserting they are both present is the cheapest way to notice if either leaves.
+    for. Every other name in this batch ran the usual direction and every one of them has
+    landed, which is what makes ``depth`` worth a test of its own rather than a line in the
+    parametrised sweep: it is the one whose two implementations are asymmetric in *kind*, one
+    reaching a vendor and one reading the lake, and asserting both are present is the cheapest
+    way to notice if either leaves.
+
+    The loop below is over the whole batch rather than over the names that happened to be
+    scheduled when this was written. A test narrowed to "what is still crypto-only" has to be
+    edited every time a half lands, and an edit that narrows is indistinguishable from an edit
+    that gives up.
     """
     assert set(REGISTRY["depth"].impls) == {AssetClass.EQUITY, AssetClass.CRYPTO}
     assert "depth" not in PENDING_SYMMETRY
-    for name in ("markets", "universe", "census"):
-        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO}
-    # `open-interest` was in that list until M2 landed, and is out of it because the
-    # asymmetry is gone rather than because the test was narrowed: it is the batch's one
-    # settled name, and the assertion below is what makes leaving it here a failure.
-    assert set(REGISTRY["open-interest"].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
+    for name in _MARKET_CAPABILITIES:
+        assert set(REGISTRY[name].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}, name
+        assert name not in PENDING_SYMMETRY, name
 
 
 def _book_frame(*, local_ts: int) -> pl.DataFrame:
@@ -645,6 +1066,9 @@ def test_the_two_halves_share_one_parameter_struct() -> None:
     assert cap.params is market.DepthParams
     fields = {f.name for f in msgspec.structs.fields(cap.params)}
     assert fields == {"symbol", "method", "bins", "top_n", "as_of_ns", "max_age_ns"}
+    # One struct for two halves is the assertion; that both halves now exist is what makes
+    # it a statement about a shared schema rather than about a schema with one reader.
+    assert set(REGISTRY["depth"].impls) == {AssetClass.CRYPTO, AssetClass.EQUITY}
 
 
 # ---------------------------------------------------------------------------
@@ -681,11 +1105,10 @@ def test_the_ledger_schedules_every_asymmetric_capability_in_this_batch() -> Non
     scheduled = {
         name: PENDING_SYMMETRY[name] for name in _MARKET_CAPABILITIES if name in PENDING_SYMMETRY
     }
-    assert scheduled == {
-        "markets": "M3",
-        "universe": "M3",
-        "census": "M3",
-    }
+    # Empty, and asserted as a dict rather than with `not scheduled` so a regression names
+    # the capability that came back. Five of the six left through M2, M3 and M8;
+    # `list-exchanges` never needed an entry.
+    assert scheduled == {}
     for method in scheduled.values():
         assert method in SPEC_METHODS
     for name in _MARKET_CAPABILITIES:
@@ -753,12 +1176,6 @@ def _equity_lake(tmp_path: Path) -> Catalog:
 
     asyncio.run(_write())
     return Catalog(tmp_path)
-
-
-def _equity_ctx(catalog: Catalog) -> CapabilityContext:
-    return CapabilityContext(
-        catalog=catalog, settings=Settings(), asset_class=AssetClass.EQUITY
-    )
 
 
 def _call_open_interest(catalog: Catalog, params: market.OpenInterestParams) -> pl.DataFrame:

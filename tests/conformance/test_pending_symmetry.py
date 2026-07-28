@@ -292,36 +292,40 @@ def test_the_four_gates_the_review_ran_no_longer_all_pass(_isolate: None) -> Non
 # Phase 3's exit criterion, asserted here so it cannot be forgotten there.
 # ---------------------------------------------------------------------------
 
-_LEDGER_AS_SHIPPED: dict[str, str] = {
-    "census": "M3",
-    "collect-market": "M3",
-    "markets": "M3",
-    "universe": "M3",
-}
-"""What the ledger holds right now, pinned so its size is a watched number.
+_LEDGER_AS_SHIPPED: dict[str, str] = {}
+"""The ledger is empty, and this pin is what makes the emptiness an assertion.
 
-Phase 2 closed with 21 entries and Phase 3 empties it one method at a time. Each name
-leaves in the same commit that gives its capability the implementation it was missing,
-which is the only way an entry is allowed to leave: delete it from
-``capabilities.analytics`` alone and this pin names a capability that is no longer
-scheduled; delete it from here alone and a schedule survives that nothing records. Both
-deletions in one commit is the only state
-:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` accepts, and it
-fails in *both* directions, so a half-done deletion is as red as an undeclared addition.
+Phase 2 closed with 21 entries. Phase 3 emptied it one method at a time, each name leaving
+in the same commit that gave its capability the implementation it was missing: the options
+family and ``open-interest`` off M1 and M2; ``whale-alerts``, ``smart-money`` and
+``label-transfers`` off M4, which left together because the method that closes them is one
+piece of work; the five spread capabilities off M5; ``liquidity-depth`` and ``chaos-score``
+off M6 and ``ofi`` off M7; ``depth`` off M8, the one whose missing half ran crypto-ward; and
+last ``markets``, ``universe``, ``census`` and ``collect-market`` off M3, all four of which
+waited on one piece of reference data and left when it arrived.
+
+That one-commit rule is the whole mechanism: delete a name from a batch module alone and
+this pin names a capability that is no longer scheduled; delete it from here alone and a
+schedule survives that nothing records.
+:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` fails in both
+directions, so a half-done deletion is as red as an undeclared addition.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was
 watching. Two things made that hard to see. The declaration in ``core/capability.py`` reads
-``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict; every live
-entry is assembled at import time by three batch modules calling ``update()`` on it. And
+``PENDING_SYMMETRY = {}``, so the module a reviewer opens shows an empty dict while three
+batch modules assembled 21 live entries into it at import time. And
 :func:`test_phase_3_exit_the_ledger_must_be_empty` skipped whenever the ledger was
-non-empty, so it was green at 21 and would have been green at 48.
+non-empty, so it was green at 21 and would have been green at 48. That skip was then
+conditioned on this pin — which fixed the growth case and left one hole open at the far
+end, because an empty ledger equals an empty pin and the test would have skipped at the
+finish line too. See that function.
 
-No count is written into this docstring, on purpose. Several agents empty this dict in
+No count is written into this docstring, on purpose. Several agents emptied this dict in
 parallel and a sentence naming a number is a merge conflict that resolves to a lie — this
-paragraph said "It is 16" and then "It is 10" across two merges, each true for exactly one
-commit. The number that matters is the length of the literal above, which is what the test
-reads.
+paragraph said "It is 16", then "It is 10", then "It is 7" across three merges, each true
+for exactly one commit. The number that matters is the length of the literal above, which
+is what the tests read.
 
 Pinned here rather than beside the declaration for the reason the batches write it here:
 ``core/capability.py`` is shared and this is a test's assertion about a fact, not a fact.
@@ -361,23 +365,32 @@ def test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold() -> None:
 
 
 def test_phase_3_exit_the_ledger_must_be_empty() -> None:
-    """Skipped only while the ledger is exactly what Phase 2 pinned, and it says so.
+    """The exit criterion, asserted — and the skip that would have swallowed it, removed.
 
-    Written now rather than then: the reason a schedule works is that the assertion which
-    retires it already exists. But the version that shipped skipped on ``if
-    PENDING_SYMMETRY``, which made it unfailable — green at 21 entries and equally green at
-    48, so the one test named for Phase 3's exit criterion could not report the ledger
-    moving away from it. The skip is now conditioned on the pin, so the only state that
-    silences this test is the state a reviewer already agreed to.
+    This test has now been wrong twice in the same direction, which is why the history is
+    kept rather than the fix alone.
+
+    The version Phase 2 shipped skipped on ``if PENDING_SYMMETRY``. That made it unfailable:
+    green at 21 entries and equally green at 48, so the one test named for Phase 3's exit
+    criterion could not report the ledger moving *away* from it. An exit review caught that
+    and conditioned the skip on ``PENDING_SYMMETRY == _LEDGER_AS_SHIPPED``, so the only
+    silencing state was one a reviewer had agreed to.
+
+    That closed the growth case and left the far end open, and the far end is here. An empty
+    ledger equals an empty pin, so ``{} == {}`` is true and the conditioned skip fires at the
+    finish line — the test would have abstained on exactly the state it was written to
+    assert, reporting "0 capabilities still scheduled" as a skip rather than as a pass. The
+    same shape both times: a gate that is green because it did not run.
+
+    So there is no skip. While the ledger is non-empty and matches its pin, that is a *fail*
+    with a legible message, which is the honest report of "Phase 3 is not finished" — a
+    schedule is not a reason for its own deadline to stay quiet. What retires the schedule is
+    an assertion that has always been able to fail.
     """
-    if PENDING_SYMMETRY == _LEDGER_AS_SHIPPED:
-        pytest.skip(
-            f"Phase 2/3 in progress: {len(PENDING_SYMMETRY)} capabilities still scheduled, "
-            f"exactly the set pinned in _LEDGER_AS_SHIPPED "
-            f"({', '.join(f'{k}→{v}' for k, v in sorted(PENDING_SYMMETRY.items()))})"
-        )
     assert not PENDING_SYMMETRY, (
-        f"the ledger no longer matches the pin and is not empty either: "
-        f"{dict(sorted(PENDING_SYMMETRY.items()))}. See "
-        f"test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold for what moved."
+        f"{len(PENDING_SYMMETRY)} capabilities are still scheduled: "
+        f"{', '.join(f'{k}→{v}' for k, v in sorted(PENDING_SYMMETRY.items()))}. "
+        f"Phase 3 ends when this dict is empty; each name leaves in the commit that gives "
+        f"its capability the implementation it was missing, and leaves _LEDGER_AS_SHIPPED "
+        f"in the same one."
     )

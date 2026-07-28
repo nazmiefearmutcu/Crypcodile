@@ -35,11 +35,23 @@ from outside the context is the pair of Alpaca keys, and that read happens insid
 ``select_depth_source``; see :func:`depth`.
 
 The equity halves of this family are where :data:`SPEC_METHODS
-<crocodile.core.capability.SPEC_METHODS>` M2 and M3 land, and the block at the foot of this
-module is where each of them is scheduled. ``list-exchanges`` needs no entry — both markets
-can already answer it — and ``depth`` needed one the ledger could not express, because its
-missing half was the crypto one. M8 closed it; the block records how, since the shape of
-that argument outlives the entry it retired.
+<crocodile.core.capability.SPEC_METHODS>` M2 and M3 landed, and the block at the foot of this
+module is the record of what left and why. Every entry is gone: ``open-interest`` off M2,
+``markets``, ``universe`` and ``census`` off M3 — all three answering out of
+:mod:`crocodile.equity.reference.universe` — and ``depth`` off M8, which is the one the
+ledger could not express because its missing half was the crypto one. ``list-exchanges``
+never needed an entry; both markets could always answer it.
+
+A fifth question this batch had to answer, once M3 gave it two adapters per capability rather
+than one: **an asymmetric capability resolves its own asset class and a symmetric one does
+not.** ``crocodile.surfaces.dispatch.resolve_asset_class`` falls through to "there is only one
+implementation, so there is nothing to decide" — and four capabilities here just stopped
+having one. None of ``MarketsParams``, ``UniverseParams``, ``CensusParams`` or
+``OpenInterestParams`` carries a ``symbol`` field, so nothing about a request for them is
+evidence about a market, and callers name ``--asset-class`` explicitly from here on. That is
+the documented step 3 of that function's order working as designed rather than a regression:
+the alternative is defaulting to crypto, which would answer an equity request with a crypto
+venue list and no error.
 """
 
 from __future__ import annotations
@@ -60,6 +72,8 @@ from crocodile.core.capability import (
     declare,
     run_to_completion,
 )
+from crocodile.core.config import Settings
+from crocodile.core.schema.enums import SecurityType
 from crocodile.core.schema.provenance import Provenance
 from crocodile.core.schema.records import DepthProfile
 from crocodile.core.util.time import now_ns
@@ -76,6 +90,7 @@ from crocodile.crypto.instruments.universe import (
 from crocodile.equity.analytics.oi_aggregator import aggregate_option_open_interest
 from crocodile.equity.depth import select_depth_source
 from crocodile.equity.providers import factory as provider_factory
+from crocodile.equity.reference import universe as reference
 
 __all__ = [
     "CENSUS",
@@ -113,7 +128,7 @@ class ListExchangesParams(msgspec.Struct, frozen=True):
 
 
 class MarketsParams(msgspec.Struct, frozen=True):
-    """Parameters for ``markets``. One struct, which the equity half inherits when M3 lands."""
+    """Parameters for ``markets``. One struct, and the equity half M3 landed inherits it."""
 
     search: str | None = None
     """Case-insensitive substring filter on the venue id. ``None`` means every venue."""
@@ -132,7 +147,7 @@ class MarketsParams(msgspec.Struct, frozen=True):
 
 
 class UniverseParams(msgspec.Struct, frozen=True):
-    """Parameters for ``universe``. One struct, which the equity half inherits when M3 lands.
+    """Parameters for ``universe``. One struct, and the equity half M3 landed inherits it.
 
     ``--symbols-only`` is absent: printing bare symbols instead of a table is how a CLI
     renders this answer, not a different answer.
@@ -143,10 +158,20 @@ class UniverseParams(msgspec.Struct, frozen=True):
 
     ``source``, which is the lake's merged partition key and what the ops batch already
     called it. This struct said ``exchange`` — the crypto fork's word, which has no meaning
-    on the equity half this capability inherits when M3 lands."""
+    on the equity half M3 landed, where a `source` is an exchange rather than a venue and
+    a `quote` is the currency a listing is priced in."""
 
     top: int | None = None
-    """Rank by 24 h quote volume and return the top N, instead of enumerating."""
+    """Rank by traded volume and return the top N, instead of enumerating.
+
+    The two halves rank on different evidence because the two markets publish different
+    things. A crypto venue serves its own 24 h quote volume from ``fetch_tickers``; no equity
+    exchange serves a free whole-market volume board at all, so the equity half ranks on the
+    bars this lake has already stored — see
+    :data:`~crocodile.equity.reference.universe.VOLUME_RANK_SQL`, which names that source and
+    argues the statistic. Same question, same column, and each market answered with what it
+    actually has rather than one of them answered with a guess.
+    """
 
     quote: str | None = None
     """Quote-currency filter, e.g. ``USDT``. ``None`` means every quote.
@@ -159,15 +184,22 @@ class UniverseParams(msgspec.Struct, frozen=True):
     """
 
     kinds: tuple[str, ...] = ()
-    """Instrument kinds to keep: ``spot``/``perpetual``/``future``/``option``. Empty means
-    every kind. An unrecognised name raises, rather than quietly matching nothing."""
+    """Instrument kinds to keep. Empty means every kind.
+
+    ``spot``/``perpetual``/``future``/``option`` for crypto and the
+    :class:`~crocodile.core.schema.enums.SecurityType` names — ``CS``, ``ETF``, ``ADR`` and
+    the rest — for equities. One field asking each market its own question, which is what
+    ``source`` already does: a shared parameter schema is a shared set of *questions*, and a
+    perpetual swap is not a thing an exchange lists. An unrecognised name raises on both
+    sides, rather than quietly matching nothing.
+    """
 
     limit: int = 50
     """Cap on enumerated rows. Ignored when ``top`` is set, which caps itself."""
 
 
 class CensusParams(msgspec.Struct, frozen=True):
-    """Parameters for ``census``. One struct, which the equity half inherits when M3 lands.
+    """Parameters for ``census``. One struct, and the equity half M3 landed inherits it.
 
     The CLI's ``--output`` and ``--json`` are absent on purpose: they name files to write,
     which is a surface's business, and ``render_terminal`` / ``render_html`` are pure
@@ -541,6 +573,305 @@ def depth_crypto(ctx: CapabilityContext, params: DepthParams) -> DepthProfile:
     )
 
 
+# ---------------------------------------------------------------------------
+# M3 — the equity halves of `markets`, `universe` and `census`
+# ---------------------------------------------------------------------------
+# All three answer one question the crypto side gets from a venue's own API and equities
+# have no single API for: what is listed, where, and in what. The resolution lives in
+# `crocodile.equity.reference.universe`, which merges SEC EDGAR, Tiingo and OpenFIGI through
+# `CoverageResolver`; the three adapters below are argument shuffling and framing over it.
+#
+# One difference from the crypto halves is worth naming rather than leaving to be found.
+# Crypto's `markets` is a pure function of the *build* — it lists the connectors this binary
+# registers and touches nothing. Its equity twin cannot be: an equity venue list is data, not
+# a build fact, because no equity venue ships a connector here and the only thing that knows
+# NASDAQ exists is the reference data. So the equity half reaches the network where the
+# crypto half does not, and the two are symmetric in what they answer rather than in what
+# they cost.
+
+_FIGI_KEYLESS_BURST: Final[int] = 250
+"""Tickers OpenFIGI's keyless tier maps before its own limiter starts pacing.
+
+Twenty-five requests of ten jobs, both read off ``OpenFigiClient.__init__`` rather than
+chosen here: that constructor sets ``capacity=25`` and ``_batch_size=10`` when it has no key.
+Beyond the burst the limiter refills at twenty-five a minute, so a thousand-ticker slice
+would take the better part of an hour — which is why enrichment stops at the burst instead of
+turning a table request into a batch job.
+"""
+
+_FIGI_KEYED_BURST: Final[int] = 2500
+"""The same arithmetic with a key: twenty-five requests of a hundred jobs.
+
+The key buys throughput and no fields, so a slice past this line is not missing data that a
+credential would have revealed — it is missing the third attestation, and
+``reference_merge``'s confidence reports 0.67 for exactly that.
+"""
+
+_EQUITY_VENUE_IS_CCXT: Final[bool] = False
+"""Whether a ccxt connector serves an equity venue. It does not, and that is a fact.
+
+Spelled as a name so the column below is not a bare ``False`` a reader has to guess at. ccxt
+is a cryptocurrency exchange library; it reaches no equity venue at any version, so
+``markets --ccxt-only`` returning nothing for equities is an answer rather than an empty
+result that reads like a broken filter.
+"""
+
+_EQUITY_VENUE_IS_NATIVE: Final[bool] = True
+"""Whether a hand-written connector serves an equity venue. It does, for all of them.
+
+The flag means "served by a hand-written connector rather than by a generic library", and
+the equity side has only the hand-written tier — the five providers ``list-exchanges``
+returns. Constant for this asset class and not for the other, which is what the column is
+for: it distinguishes two tiers, and equities have one.
+"""
+
+
+def _reference_evidence(ctx: CapabilityContext) -> reference.ReferenceEvidence:
+    """Fetch the two whole-universe reference sources, stamped with one instant.
+
+    The SEC contact string is validated before anything is built — see
+    :func:`~crocodile.equity.reference.universe.require_sec_user_agent`, which argues why a
+    missing one is a refusal rather than a default.
+
+    The clock is read here for the reason :func:`census` reads it here: when a snapshot was
+    taken is not something a user chooses, and the resolution underneath takes the instant as
+    a parameter so it stays deterministic under test.
+    """
+    agent = reference.require_sec_user_agent(ctx.settings)
+    return run_to_completion(
+        lambda: reference.fetch_bulk_evidence(as_of_ns=now_ns(), sec_user_agent=agent)
+    )
+
+
+def _volume_evidence(ctx: CapabilityContext) -> dict[str, float]:
+    """Read per-symbol traded volume out of the lake, or ``{}`` when the lake holds no bars."""
+    return reference.volume_by_symbol(ctx.query, channels=ctx.catalog.list_channels())
+
+
+def _figi_budget(settings: Settings) -> int:
+    """How many tickers this deployment will enrich in one request, keyed or not."""
+    return _FIGI_KEYED_BURST if settings.openfigi_api_key else _FIGI_KEYLESS_BURST
+
+
+def _enriched(
+    ctx: CapabilityContext,
+    evidence: reference.ReferenceEvidence,
+    listings: list[reference.Listing],
+) -> list[reference.Listing]:
+    """Add OpenFIGI's identifiers to the slice being returned, if it fits in one burst.
+
+    Enrichment is applied *after* the slice is chosen rather than across the universe, which
+    is the whole reason the third source can be in the method at all: OpenFIGI is per-symbol,
+    so enriching ninety thousand tickers to return fifty of them would be ninety thousand
+    tickers of rate limit spent on a table nobody asked for.
+
+    A slice larger than the budget is returned un-enriched rather than partially enriched.
+    Half a slice at three attestations and half at two would make ``prov_confidence`` a
+    report on where a batch boundary fell, and a caller comparing two rows would read a
+    difference in coverage that is really a difference in position.
+
+    The original order is restored afterwards because the merge sorts by ticker and the
+    caller may have asked for a ranking.
+    """
+    symbols = [listing.symbol for listing in listings]
+    if not symbols or len(symbols) > _figi_budget(ctx.settings):
+        return listings
+    matches = run_to_completion(
+        lambda: reference.fetch_figi(symbols, api_key=ctx.settings.openfigi_api_key)
+    )
+    if not matches:
+        return listings
+    position = {symbol: index for index, symbol in enumerate(symbols)}
+    enriched = evidence.restricted(symbols).with_figi(matches).merged()
+    enriched.sort(key=lambda listing: position.get(listing.symbol, len(position)))
+    return enriched
+
+
+def markets_equities(ctx: CapabilityContext, params: MarketsParams) -> pl.DataFrame:
+    """Every venue the resolved equity reference data names, tagged by connector tier.
+
+    The row source is the merged universe rather than a hand-kept exchange list, which is the
+    point: a venue is here because a listing says it exists, so a new exchange appears the
+    day the reference data names one and a dead one leaves when nothing is listed on it any
+    more. The names are whatever won the merge — Tiingo's exchange labels for anything it
+    lists, OpenFIGI's exchange codes for the rest — and
+    :data:`~crocodile.equity.reference.universe.REFERENCE_PRIORITY` argues that ordering.
+
+    The two flags are constant for this asset class and that is an answer rather than
+    padding; see :data:`_EQUITY_VENUE_IS_NATIVE` and :data:`_EQUITY_VENUE_IS_CCXT`. Both
+    filters therefore keep working and mean what they say: ``--native-only`` keeps
+    everything and ``--ccxt-only`` keeps nothing, because ccxt reaches no equity venue.
+    """
+    needle = params.search.lower() if params.search is not None else None
+    # Both tier filters are applied structurally rather than one being left implicit, so that
+    # the day either constant stops being constant the filters follow it instead of quietly
+    # disagreeing with the column they read.
+    if (params.ccxt_only and not _EQUITY_VENUE_IS_CCXT) or (
+        params.native_only and not _EQUITY_VENUE_IS_NATIVE
+    ):
+        return pl.DataFrame([], schema=_MARKETS_SCHEMA)
+
+    venues = sorted(
+        {
+            listing.instrument.exchange
+            for listing in _reference_evidence(ctx).merged()
+            if listing.instrument.exchange
+        }
+    )
+    return pl.DataFrame(
+        [
+            {
+                "venue": venue,
+                "native": _EQUITY_VENUE_IS_NATIVE,
+                "ccxt": _EQUITY_VENUE_IS_CCXT,
+            }
+            for venue in venues
+            if needle is None or needle in venue.lower()
+        ],
+        schema=_MARKETS_SCHEMA,
+    )
+
+
+def universe_equities(ctx: CapabilityContext, params: UniverseParams) -> pl.DataFrame:
+    """Enumerate — or volume-rank — one equity venue's listed set, from merged reference data.
+
+    ``source`` is an exchange rather than a data vendor, which is what makes this the same
+    capability as its crypto twin: ``markets`` lists venues and ``universe`` enumerates one of
+    them, on both sides. Naming a *provider* here would have made the pair incoherent —
+    ``list-exchanges`` is already the capability that lists equity vendors.
+
+    The five columns are the crypto schema and mean the same things. ``base`` and ``quote``
+    decompose the instrument into what you acquire and what you pay with: on Binance
+    ``BTCUSDT`` that is BTC and USDT, and on NASDAQ ``AAPL`` priced in dollars it is AAPL and
+    USD. The decomposition is trivial for a security and it is still the same decomposition,
+    which is why the column is filled rather than nulled. ``kind`` carries a
+    :class:`~crocodile.core.schema.enums.SecurityType` where the crypto half carries a
+    ``Kind`` — the same column asking each market its own question, exactly as ``source``
+    does.
+
+    ``rank`` is filled only on the ``top`` branch, which is the crypto contract: the
+    enumerating branch returns the universe in ticker order and observes no ranking, and a
+    null says the path did not observe it rather than that the venue has none.
+    """
+    kinds = reference.parse_kinds(params.kinds)
+    evidence = _reference_evidence(ctx)
+    listings = reference.filter_listings(
+        evidence.merged(), exchange=params.source, kinds=kinds, currency=params.quote
+    )
+
+    if params.top is not None:
+        volumes = _volume_evidence(ctx)
+        if not volumes:
+            raise ValueError(
+                "ranking equities by traded volume reads this lake's own stored ohlcv bars "
+                "and it holds none, so there is nothing to rank; collect or backfill the "
+                "ohlcv channel first, or drop --top to enumerate the universe instead"
+            )
+        selected = reference.rank_listings(listings, volumes)[: params.top]
+        ranks: list[int | None] = list(range(1, len(selected) + 1))
+    else:
+        selected = listings[: params.limit]
+        ranks = [None] * len(selected)
+
+    return pl.DataFrame(
+        [
+            {
+                "symbol": listing.symbol,
+                "kind": listing.instrument.security_type.value
+                if listing.instrument.security_type is not None
+                else None,
+                "base": listing.symbol,
+                "quote": listing.currency,
+                "rank": rank,
+            }
+            for listing, rank in zip(_enriched(ctx, evidence, selected), ranks, strict=True)
+        ],
+        schema=_UNIVERSE_SCHEMA,
+    )
+
+
+def census_equities(ctx: CapabilityContext, params: CensusParams) -> dict[str, Any]:
+    """Snapshot the whole equity market — venues, listings, attestation — from keyless sources.
+
+    The crypto census counts a venue universe and a coin universe. This counts a venue
+    universe and a *listing* universe, and adds the one number the crypto side has no
+    question for: how many registries agreed about each identity. That is not decoration.
+    The crypto census enumerates one authority per venue and can only report what it found;
+    this one enumerates three overlapping authorities, so "how much of the market do all
+    three agree exists" is a real measurement of the market's own reference data, and it is
+    the number that says whether a universe is trustworthy enough to trade off.
+
+    ``connectors`` mirrors the crypto block field for field so a projection can render either
+    snapshot, with ``ccxt_count`` a structural zero for the reason
+    :data:`_EQUITY_VENUE_IS_CCXT` gives.
+
+    ``venues`` accepts the same filter the crypto half does: naming venues restricts the
+    count to them. ``coin_pages`` has no equity meaning and is ignored, on the argument
+    ``CollectParams`` makes for ``dlq_report_path`` — an optional parameter costs a caller
+    who omits it nothing, and there is no coin universe here to page through.
+
+    Nothing here is enriched with OpenFIGI. A census counts the whole universe and OpenFIGI
+    is per-symbol, so every row is attested by the two bulk sources and the ``two_sources``
+    bucket is where the mass sits; a deployment that wants three-source counts is asking for
+    a ninety-thousand-ticker mapping job, which is not a capability call.
+    """
+    listings = _reference_evidence(ctx).merged()
+    wanted = {venue.strip().upper() for venue in params.venues}
+    if wanted:
+        listings = [
+            listing
+            for listing in listings
+            if (listing.instrument.exchange or "").upper() in wanted
+        ]
+
+    kind_keys = [member.value for member in SecurityType]
+    by_venue: dict[str, dict[str, int]] = {}
+    for listing in listings:
+        venue = listing.instrument.exchange or ""
+        counts = by_venue.setdefault(venue, dict.fromkeys(kind_keys, 0))
+        kind = listing.instrument.security_type or SecurityType.UNKNOWN
+        counts[kind.value] += 1
+
+    # Sorted on the counts rather than on the built rows: `markets` is an ``int`` here and an
+    # ``object`` once it is a value in a heterogeneous dict, and a key function that has to
+    # coerce it back is a key function that would silently accept a string.
+    ordered = sorted(by_venue.items(), key=lambda item: (-sum(item[1].values()), item[0]))
+    rows: list[dict[str, Any]] = [
+        {"exchange": venue, "markets": sum(counts.values()), **counts} for venue, counts in ordered
+    ]
+    providers = provider_factory.list_providers()
+
+    return {
+        "generated_ns": now_ns(),
+        "connectors": {
+            "native": sorted(providers),
+            "native_count": len(providers),
+            "ccxt_count": 0,
+            "total_reachable": len(providers),
+        },
+        "venues": {
+            "enumerated": len(ordered),
+            "total_markets": sum(sum(counts.values()) for _, counts in ordered),
+            "by_kind": {key: sum(counts[key] for _, counts in ordered) for key in kind_keys},
+            "rows": rows,
+        },
+        "securities": {
+            "resolved": len(listings),
+            "by_source": {
+                source: sum(1 for listing in listings if source in listing.sources)
+                for source in reference.REFERENCE_PRIORITY
+            },
+            "attested_by": {
+                "one_source": sum(1 for listing in listings if len(listing.sources) == 1),
+                "two_sources": sum(1 for listing in listings if len(listing.sources) == 2),
+                "three_sources": sum(1 for listing in listings if len(listing.sources) == 3),
+            },
+            "with_cik": sum(1 for listing in listings if listing.instrument.cik),
+            "with_figi": sum(1 for listing in listings if listing.instrument.figi),
+        },
+    }
+
+
 LIST_EXCHANGES = declare(
     Capability(
         name="list-exchanges",
@@ -568,6 +899,14 @@ MARKETS = declare(
         returns=ReturnKind.TABLE,
         impls={
             AssetClass.CRYPTO: Impl(fn=markets, prov=Provenance.NATIVE, basis="native"),
+            # DERIVED where crypto is NATIVE, and the split is the same one `census` makes
+            # against `universe`: the crypto venue list is this build's own connector
+            # registry, read rather than reconstructed, while the equity one is the distinct
+            # set of exchange names left standing after three registries were merged. No
+            # registry publishes "the list of equity venues"; this computes it.
+            AssetClass.EQUITY: Impl(
+                fn=markets_equities, prov=Provenance.DERIVED, basis="reference_merge"
+            ),
         },
     )
 )
@@ -584,6 +923,14 @@ UNIVERSE = declare(
             # live. Ranking sorts them; a sort adds no modelling, so the ceiling stays where
             # the venue put it.
             AssetClass.CRYPTO: Impl(fn=universe, prov=Provenance.NATIVE, basis="native"),
+            # The equity rows are nobody's published market list — they are one assembled
+            # from three registries under a stated priority, which is what `reference_merge`
+            # names and why the ceiling is DERIVED rather than the NATIVE its twin reaches.
+            # The ranked branch does not lower it further: ranking sorts rows by evidence
+            # already in the lake and adds no modelling, exactly as on the crypto side.
+            AssetClass.EQUITY: Impl(
+                fn=universe_equities, prov=Provenance.DERIVED, basis="reference_merge"
+            ),
         },
     )
 )
@@ -601,6 +948,13 @@ CENSUS = declare(
             # the rows any one of them published. Its inputs are all natively reported,
             # which is what `basis` names — the same split `indicators` makes.
             AssetClass.CRYPTO: Impl(fn=census, prov=Provenance.DERIVED, basis="native"),
+            # DERIVED on both sides, and the `basis` is where they differ. Crypto's inputs
+            # are natively reported — one venue's own market list, CoinGecko's own totals —
+            # so it names `native`. This one counts a universe that had to be resolved
+            # before it could be counted, so its inputs rest on the merge and it says so.
+            AssetClass.EQUITY: Impl(
+                fn=census_equities, prov=Provenance.DERIVED, basis="reference_merge"
+            ),
         },
     )
 )
@@ -663,19 +1017,32 @@ DEPTH = declare(
 # four agents write these in parallel, and one file would serialise them behind one set of
 # merge conflicts. `declare()` and this assignment are both idempotent, so a module body
 # that runs twice leaves the same ledger.
+#
+# `markets`, `universe` and `census` were here against M3 and have left, which is the ledger
+# working rather than the ledger shrinking: all three fell out of one piece of reference data,
+# so they were scheduled together and they closed together. What closed them is
+# `crocodile.equity.reference.universe` — SEC EDGAR x OpenFIGI x Tiingo merged by
+# `CoverageResolver`, which is M3 word for word. The matching lines in
+# `tests/conformance/test_pending_symmetry.py::_LEDGER_AS_SHIPPED` went in the same commit,
+# because a gate there asserts the two agree and a schedule only means something while
+# somebody has to look at both halves of a departure.
 PENDING_SYMMETRY.update(
     {
         # An equity venue list and an equity instrument universe both fall out of the same
         # reference data, so both wait on the same method.
-        "markets": "M3",
-        "universe": "M3",
         # The census counts a venue universe and a coin universe. Its equity form counts
         # what M3 resolves.
-        "census": "M3",
         # `open-interest` was here against M2 and is repaid: the equity half sums the
         # stored Yahoo chain's per-contract `openInterest` per underlying, which is what
         # M2 specified, and both halves now widen their samples through the one function
         # in `core.analytics.open_interest` so the two boards are the same table.
+        # `depth` is the one entry whose direction the ledger cannot express, and it is
+        # recorded here rather than left to be discovered. Every method in SPEC_METHODS
+        # closes an *equity* gap; `depth`'s missing half is the **crypto** one, because the
+        # equity half is what already ships. M6 — "equity depth from the synthetic VAP
+        # ladder, upgraded by Alpaca L1 when keyed" — is a description of
+        # `equity/depth/select.py`, which this module declares, so M6 is already spent and
+        # cannot be what closes this.
         #
         # `depth` was here too, mapped to M6, and it is the entry this block should be read
         # backwards from. It was the one whose *direction* the ledger could not express:
@@ -702,5 +1069,17 @@ PENDING_SYMMETRY.update(
         # would have claimed the venue published this ladder and `book_resample` measures a
         # boundary lookahead a slice has none of — both true when it was written, and
         # neither an argument for inventing a number.
+        #
+        # M3 closed the last three — `markets`, `universe` and `census` — and with them
+        # this module's ledger. All three answer out of
+        # `crocodile.equity.reference.universe`, which merges SEC EDGAR, Tiingo and
+        # OpenFIGI through `CoverageResolver`, because no equity venue ships a connector
+        # here and the only thing that knows NASDAQ exists is the reference data. So the
+        # equity halves reach the network where the crypto halves read the build, and the
+        # two are symmetric in what they answer rather than in what they cost.
+        #
+        # The update below therefore adds nothing. It is kept, with its notes, because
+        # this block is the record of what this batch owed and how each debt was paid;
+        # deleting it would leave the ledger's own gates asserting over a silence.
     }
 )
