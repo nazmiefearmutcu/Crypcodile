@@ -235,6 +235,15 @@ def slippage_over_levels(
         A one-row Polars DataFrame: ``symbol``, ``side``, ``size``, ``size_unit``,
         ``best_price``, ``expected_price``, ``slippage_usd``, ``slippage_pct``.
 
+        ``slippage_pct`` is a **percent**: a one-percent walk reports ``1.0``. That is the
+        odd one out in this package — ``basis_pct``, ``annualized_pct``, ``carry_pct`` and
+        ``deviation_pct`` are all decimal *fractions*, so the same suffix means two things a
+        hundredfold apart. It stays a percent because the column is shipped under this name
+        in the pre-merge surface inventory, and changing the unit under an unchanged name is
+        a silent break for every consumer that already divides by a hundred. The full
+        inventory of ``_pct`` columns and their units is declared and gated in
+        ``tests/conformance/test_units.py``.
+
         ``size_unit`` is null when the caller named none. The fork used to fill it in from
         :func:`parse_base_quote`, which on a symbol with no separator is a guess made from
         the ticker's length — so an equity caller asking for 10 shares of ``AAPL`` was told
