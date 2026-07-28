@@ -301,21 +301,26 @@ _LEDGER_AS_SHIPPED: dict[str, str] = {
     "funding-apr": "M5",
     "funding-predict": "M5",
     "iv-surface": "M1",
-    "label-transfers": "M4",
     "liquidity-depth": "M6",
     "markets": "M3",
     "ofi": "M7",
     "open-interest": "M2",
     "perp-basis": "M5",
     "risk-reversal": "M1",
-    "smart-money": "M4",
     "spot-future-basis": "M5",
     "term-structure": "M1",
     "universe": "M3",
     "vol-skew": "M1",
-    "whale-alerts": "M4",
 }
-"""The 21 entries Phase 2 closed with, pinned so the ledger's size is a watched number.
+"""The 21 entries Phase 2 closed with, less the ones Phase 3 has repaid. 18 remain.
+
+M4 was the first to land: ``whale-alerts``, ``smart-money`` and ``label-transfers`` left
+together, because the method that closes them is one piece of work — a Form 4 ownership
+parser and a 13F-HR information-table parser — and none of the three has an equity half
+without it. Their entries are deleted here in the same commit that deletes them from
+``PENDING_SYMMETRY.update({...})`` in ``crocodile.capabilities.analytics``, which is what
+:func:`test_the_ledger_holds_exactly_the_entries_it_was_pinned_to_hold` is for: it fails in
+*both* directions, so a half-done deletion is as red as an undeclared addition.
 
 ``PENDING_SYMMETRY``'s own docstring says "the count only ever moving in those two
 directions is the property worth watching", and until an exit review looked, nothing was

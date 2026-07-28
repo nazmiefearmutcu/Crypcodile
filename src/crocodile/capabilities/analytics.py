@@ -82,6 +82,12 @@ from crocodile.crypto.analytics.volsurface import (
     vol_skew as _vol_skew,
 )
 from crocodile.crypto.analytics.whale import track_whale_alerts
+from crocodile.equity.analytics.filings import (
+    filing_flows,
+    label_filing_parties,
+    resolve_watched_filers,
+    track_filing_whales,
+)
 from crocodile.equity.depth import select_depth_source
 
 __all__ = [
@@ -367,6 +373,19 @@ class WhaleAlertsParams(msgspec.Struct, frozen=True):
     This does change ``GET /whale-alerts?symbol=X`` with no ``min_usd``: it stops returning
     every trade and starts returning whales. A caller who wanted the tape asks for ``trade``
     rows; a caller who wanted whales was being lied to.
+
+    The same 100 000 serves equities, where the rows are reported Form 4 transactions rather
+    than prints. It is not a translated threshold — a dollar of disclosed insider selling and
+    a dollar of perpetual notional are both a dollar — but it does select differently: a
+    six-figure open-market purchase by an officer is a common filing where a six-figure
+    print is a common trade, so the equity result set is sparser at the same setting. That is
+    the market differing, not the parameter.
+
+    ``start_ns``/``end_ns`` bound the *transaction* date for equities rather than the
+    ingestion instant, which is a difference in what the window means and is argued at
+    :func:`~crocodile.equity.analytics.filings.track_filing_whales`: a decade of filings
+    arrives in one fetch carrying one ``local_ts``, so a window over that would answer with
+    all of history or none of it.
     """
 
     symbol: str
@@ -400,6 +419,31 @@ class SmartMoneyParams(msgspec.Struct, frozen=True):
     ``normalize_watchlist`` accepts an ``addr -> label`` map, a bare address list, and the
     nested ``{"watchlist": ...}`` / ``{"labels": ...}`` / ``{"addresses": [...]}`` shapes,
     and narrowing it here would reject documents the legacy endpoint accepted.
+
+    **What a row is, for equities.** One struct serves both asset classes, and this is the
+    field where the two markets put different documents into one name. A crypto row is a
+    transfer: a sender, a recipient, a USD value. An equity row is a *filing* row as the
+    ``insider`` and ``holding_13f`` channels store it — a Form 4 transaction, keyed on
+    ``insider_name``/``insider_cik``, or a 13F position, keyed on
+    ``manager_name``/``manager_cik``. Both may be handed in together and the implementation
+    routes each on the field that identifies it, so no third parameter naming the form is
+    needed; a parameter like that would be a schema difference between the asset classes,
+    which is the one thing :attr:`Capability.params` exists to prevent.
+
+    The name ``transfers`` is kept for equities even though a filing is not a transfer. A
+    renamed field is a different wire schema, and identical parameter schemas are half of
+    what this registry means by symmetry — so the honest place to say "these are filings" is
+    this docstring, not a second spelling of the field.
+
+    An equity ``watchlist`` may key on either handle a filing carries: the CIK
+    (``{"0001051401": "Apple CEO"}``) or the reported name
+    (``{"COOK TIMOTHY D": "Apple CEO"}``). Both are matched case-insensitively and both
+    resolve onto the same filer.
+
+    **One quarter of 13F rows nets to nothing, on purpose.** An information table states a
+    position, and a flow is the difference between two of them; the earliest table for a
+    given filer and CUSIP is a baseline, not a purchase. A caller who supplies a single
+    quarter gets no institutional flow because none was observed.
     """
 
     transfers: tuple[dict[str, Any], ...]
@@ -414,6 +458,15 @@ class LabelTransfersParams(msgspec.Struct, frozen=True):
     deciding. ``min_usd=None`` is not ``min_usd=0.0``: ``None`` skips the filter entirely
     while ``0.0`` runs it and drops every row whose ``usd_value`` is missing or unparseable,
     which is a different result on the same input.
+
+    ``transfers`` and ``watchlist`` mean for equities exactly what they mean on
+    :class:`SmartMoneyParams`, which has the argument for keeping the crypto spelling over
+    filing rows.
+
+    That ``min_usd=0.0`` distinction bites harder here than on the crypto side, because
+    Form 4 states no price for a gift or an award: those rows have no notional at all, so
+    ``0.0`` removes a whole class of real filings that ``None`` keeps. It is the same rule
+    applied to a source that exercises it more often, not a different one.
     """
 
     transfers: tuple[dict[str, Any], ...]
@@ -700,6 +753,101 @@ def label_transfers(ctx: CapabilityContext, params: LabelTransfersParams) -> lis
     return labelled
 
 
+def whale_alerts_filings(ctx: CapabilityContext, params: WhaleAlertsParams) -> pl.DataFrame:
+    """Reported insider transactions above the threshold — the equity form of a whale print.
+
+    The crypto half asks the tape who moved size. US equities have no tape for that: the
+    only public record of a large, attributable trade in a listed stock is a *disclosure*,
+    and Section 16(a) is the one that produces it within days rather than quarters. So the
+    equity implementation reads Form 4 out of the ``insider`` channel and thresholds the
+    notional it reports, which is the same question — what cleared this size, which way, and
+    when — answered from the only source that answers it.
+
+    **13F-HR is deliberately not read here**, even though M4 adds its parser. An information
+    table reports a *position* at quarter end, with no side and no date for any of the
+    trades behind it, so a row of it cannot fill ``side`` or ``timestamp`` without inventing
+    both. Reporting a $2bn holding as a whale alert would answer "who holds size" under a
+    name that promises "who moved it". The 13F half of M4 lands in ``smart-money`` instead,
+    where the difference between two consecutive tables *is* a flow — see
+    :func:`~crocodile.equity.analytics.filings.filing_flows`.
+
+    ``ctx.catalog`` rather than ``ctx.query``, which is the handoff ``open-interest``
+    documents in :mod:`crocodile.capabilities.market` and the one the crypto half of this
+    capability already makes: the SQL is fixed and internal to the analytics function, so
+    there is no caller-supplied string to vet, and a surface row cap would turn a threshold
+    query into a silently partial answer.
+    """
+    return track_filing_whales(
+        ctx.catalog,
+        params.symbol,
+        params.start_ns,
+        params.end_ns,
+        params.min_usd,
+    )
+
+
+def smart_money_filings(ctx: CapabilityContext, params: SmartMoneyParams) -> list[dict[str, Any]]:
+    """Net flow, volume and last activity per watched filer, over supplied filing rows.
+
+    Reaches ``summarize_smart_money`` — the same tracker the crypto half runs — rather than
+    reimplementing the netting, because the arithmetic was never the crypto-specific part.
+    What is crypto-specific is the *shape* of an input row, and
+    :func:`~crocodile.equity.analytics.filings.filing_flows` is the whole of the
+    translation: an insider acquisition becomes value moving from the issuer to the filer, a
+    disposition the reverse, and a change in a 13F position between two consecutive
+    quarter-ends becomes a flow of the difference. A single quarter of holdings yields no
+    flow at all, which is the true answer — a change cannot be observed before the first
+    observation — and that function's docstring argues it.
+
+    ``resolve_watched_filers`` sits between the watchlist and the tracker because a filing
+    names its party twice, by CIK and by name, and a watchlist is entitled to use either.
+    Handing the tracker the raw watchlist would silently match one spelling and miss the
+    other, which is the asymmetry that shape of bug always has: it looks like the filer did
+    nothing.
+    """
+    rows = list(params.transfers)
+    watchlist = normalize_watchlist(params.watchlist)
+    return summarize_smart_money(filing_flows(rows), resolve_watched_filers(rows, watchlist))
+
+
+def label_transfers_filings(
+    ctx: CapabilityContext, params: LabelTransfersParams
+) -> list[dict[str, Any]]:
+    """Annotate filing rows with watchlist labels — the join equity serves better than crypto.
+
+    Same order as the crypto half, and for the same reason: filter by notional, then label,
+    then drop the unknowns if asked. ``known_only`` is the one step that is genuinely
+    ordered, because it reads ``is_known``, which does not exist until the labeller has
+    written it.
+
+    ``filter_transfers_by_usd`` is reused unchanged and needs no adaptation: it already reads
+    ``usd_value``, ``amount`` and ``value`` in that order, and a filing row states ``value``.
+    A Form 4 gift, which reports shares and no price, therefore has no notional and lands
+    below every threshold rather than above the zero one — the same treatment a transfer with
+    an unparseable ``usd_value`` gets. It is imported inside the function for the reason the
+    crypto adapter gives: its module imports ``web3`` and ``eth_abi`` at module scope, and a
+    top-level import here would make the whole registry unimportable on a base install.
+
+    What differs from the crypto half is the label an *unmatched* party gets, and this is the
+    claim the ledger comment above ``PENDING_SYMMETRY`` made when it said a CIK is already a
+    label. On the crypto side an address off the watchlist gets ``""``, because a hex string
+    is all there is. A filing arrives carrying the filer's own reported name and a CIK that
+    never changes spelling, so every row comes back labelled and a watchlist is an
+    *enrichment* rather than the only thing standing between the caller and an opaque
+    string. ``is_known`` keeps meaning "matched the watchlist" and nothing wider, or
+    ``known_only`` would quietly stop filtering.
+    """
+    from crocodile.crypto.analytics.whale_transfers import filter_transfers_by_usd
+
+    rows: list[dict[str, Any]] = list(params.transfers)
+    if params.min_usd is not None:
+        rows = filter_transfers_by_usd(rows, params.min_usd)
+    labelled = label_filing_parties(rows, normalize_watchlist(params.watchlist))
+    if params.known_only:
+        return [row for row in labelled if row.get("is_known")]
+    return labelled
+
+
 def chaos_score(ctx: CapabilityContext, params: ChaosScoreParams) -> float:
     """Blend four stress readings into one soft-thresholded index in ``[0, 100]``.
 
@@ -981,6 +1129,20 @@ WHALE_ALERTS = declare(
             AssetClass.CRYPTO: Impl(
                 fn=whale_alerts, prov=Provenance.DERIVED, basis="native"
             ),
+            # DERIVED over `sec_form4`, which is the same relationship the crypto entry has
+            # to `native`: the venue — here the filer, through EDGAR — reported the shares,
+            # the price and the date, and the threshold and the notional are this
+            # implementation's own arithmetic over them.
+            #
+            # The basis is `sec_form4` and not `native` because `native`'s registered
+            # confidence is a flat 1.0 "by definition", and a Form 4 line is not always
+            # fully reported: `transactionPricePerShare` is blank on a gift and on an award,
+            # and this capability thresholds on exactly the notional that box is half of. A
+            # row that could not be priced would otherwise reach the lake claiming the same
+            # sampling adequacy as one that could.
+            AssetClass.EQUITY: Impl(
+                fn=whale_alerts_filings, prov=Provenance.DERIVED, basis="sec_form4"
+            ),
         },
     )
 )
@@ -1000,6 +1162,19 @@ SMART_MONEY = declare(
             AssetClass.CRYPTO: Impl(
                 fn=smart_money, prov=Provenance.DERIVED, basis="caller_supplied"
             ),
+            # The identical pair, and identical for a reason rather than by copying. The
+            # rows arrive in `params` for equities exactly as they do for crypto — that is
+            # what the shared params struct means — so nothing this implementation reads
+            # came out of the lake, and `caller_supplied` is the basis that says so without
+            # claiming a venue reported it. Every output field is still a sum or a max, so
+            # the level is DERIVED.
+            #
+            # Note this is *not* `sec_form4`, even though the rows will usually have come
+            # from that parser: a basis names where this implementation's inputs came from,
+            # and this one cannot check that the dicts it was handed are filings at all.
+            AssetClass.EQUITY: Impl(
+                fn=smart_money_filings, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
         },
     )
 )
@@ -1014,6 +1189,14 @@ LABEL_TRANSFERS = declare(
         impls={
             AssetClass.CRYPTO: Impl(
                 fn=label_transfers, prov=Provenance.DERIVED, basis="caller_supplied"
+            ),
+            # `caller_supplied` for the reason `smart-money`'s equity entry gives. This is
+            # also the capability the M4 ledger entry singled out as the one equity serves
+            # *better*, and the difference is in the answer rather than in this declaration:
+            # a filing row carries a CIK and a reported name, so every row comes back
+            # labelled instead of only the watchlisted ones.
+            AssetClass.EQUITY: Impl(
+                fn=label_transfers_filings, prov=Provenance.DERIVED, basis="caller_supplied"
             ),
         },
     )
@@ -1075,14 +1258,16 @@ PENDING_SYMMETRY.update(
         # equity has no ladder until the synthetic VAP profile and its Alpaca L1 upgrade
         # exist, and cumulative size within a percent band is meaningless without one.
         "liquidity-depth": "M6",
-        # M4 — the equity form of "who is moving size" is a filing, not a transfer:
-        # Form 4 for insiders and 13F-HR for institutions. `whale-alerts` becomes large
-        # reported transactions, `smart-money` becomes per-filer flow, and
-        # `label-transfers` becomes the same watchlist join against named filers, which is
-        # the one place equity is *better* served — a CIK is already a label.
-        "whale-alerts": "M4",
-        "smart-money": "M4",
-        "label-transfers": "M4",
+        # M4 is closed and its three names have left this ledger. The argument that stood
+        # here is kept because it turned out to be the whole design and not a plan: the
+        # equity form of "who is moving size" is a filing rather than a transfer, so
+        # `whale-alerts` reads Form 4 as large reported transactions, `smart-money` nets
+        # per-filer flow — from dated insider lines, and from the difference between two
+        # consecutive 13F information tables, since one table is a position and not a flow
+        # — and `label-transfers` is the same watchlist join against named filers. The last
+        # of the three is where the claim that a CIK is already a label was cashed: every
+        # equity row comes back labelled, because the filing carries the filer's own name
+        # and a stable id, where an unwatched Ethereum address carries neither.
         # M6, and this is the batch's one uncomfortable mapping — no single spec method
         # covers a composite. Of the four terms, volatility is computable from equity bars
         # today, and `stablecoin_deviation` and `sequencer_delay` name phenomena this same
