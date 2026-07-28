@@ -185,7 +185,11 @@ async def test_t4_mcp_driven_autonomous_agent_loop(mcp_server_client) -> None:
     # Every capability answer carries its provenance; an agent reading a modelled number is
     # told so by the same block.
     assert content["provenance"]["capability"] == "query"
-    assert content["provenance"]["asset_class"] == "crypto"
+    # ``any``, not the ``crypto`` this request named. ``query`` reads the lake as a lake —
+    # one implementation for both classes, never consulting ``ctx.asset_class`` — so the
+    # class the caller had to supply selected nothing, and echoing it back would report an
+    # input as a property of the answer. See ``Capability.cross_market``.
+    assert content["provenance"]["asset_class"] == "any"
 
 # 5. Multi-pool Concurrent Ingestion under Stress
 @pytest.mark.asyncio
